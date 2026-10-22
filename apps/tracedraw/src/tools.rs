@@ -113,7 +113,7 @@ pub const GROUPS: &[ToolGroup] = &[
         hidden: false,
     },
     ToolGroup {
-        tools: &[Tool::Crop, Tool::Knife, Tool::SegmentDelete, Tool::Eraser],
+        tools: &[Tool::Crop, Tool::Eraser, Tool::SegmentDelete, Tool::Knife],
         hidden: false,
     },
     ToolGroup {

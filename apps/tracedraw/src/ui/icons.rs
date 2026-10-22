@@ -325,6 +325,19 @@ pub fn tool_color(tool: Tool, plain: Color32) -> Color32 {
     }
 }
 
+/// A craft knife in the 16 by 16 grid, moved by `(ox, oy)` and scaled by
+/// `f` about the origin: the Knife icon, and the small one of Segment
+/// Delete.
+fn knife(ic: &Ic, ox: f32, oy: f32, f: f32, s: Stroke, color: Color32) {
+    let p = |x: f32, y: f32| (ox + x * f, oy + y * f);
+    // Handle.
+    ic.fill(&[p(1.5, 13.0), p(3.0, 14.5), p(7.0, 10.5), p(5.5, 9.0)], color);
+    // Collar.
+    ic.line(p(5.0, 8.0).0, p(5.0, 8.0).1, p(8.0, 11.0).0, p(8.0, 11.0).1, s);
+    // Blade: a straight back to the tip, then the slanted edge.
+    ic.closed(&[p(6.0, 8.5), p(14.5, 1.5), p(9.5, 10.0), p(7.5, 10.0)], s);
+}
+
 pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
     // Stroke weights follow the icon size (1.25 and 0.9 px at 16 px).
     let k = r.width() / 16.0;
@@ -469,31 +482,27 @@ pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
             ic.line(11.0, 5.0, 11.0, 14.5, w);
         }
         Tool::Knife => {
-            // Blade with a straight spine and a curved cutting edge, handle at lower left.
-            ic.fill(&[(2.0, 14.0), (4.5, 11.5), (6.5, 13.5), (4.0, 15.0)], color);
-            let mut blade = vec![(5.5, 10.5), (13.5, 2.5), (14.5, 3.5)];
-            blade.extend(ic.arc(14.5, 10.5, 7.0, 7.0, -FRAC_PI_2, -PI * 0.85, 6));
-            blade.push((7.5, 12.5));
-            ic.closed(&blade, s);
+            // A craft knife laid diagonally: solid handle at the lower left,
+            // a collar, and a slanted blade up to the tip.
+            knife(&ic, 0.0, 0.0, 1.0, s, color);
         }
         Tool::SegmentDelete => {
-            // Curve with its middle segment faded out and marked with an X.
-            let a = ic.arc(8.0, 14.0, 9.0, 8.0, PI * 1.08, PI * 1.35, 6);
-            let b = ic.arc(8.0, 14.0, 9.0, 8.0, PI * 1.35, PI * 1.65, 6);
-            let c = ic.arc(8.0, 14.0, 9.0, 8.0, PI * 1.65, PI * 1.92, 6);
-            ic.open(&a, s);
-            ic.open(&b, faint_stroke);
-            ic.open(&c, s);
-            ic.dot(a[a.len() - 1].0, a[a.len() - 1].1);
-            ic.dot(c[0].0, c[0].1);
-            ic.line(6.0, 10.0, 10.0, 14.0, s);
-            ic.line(10.0, 10.0, 6.0, 14.0, s);
+            // A dashed marquee in the accent colour, and a small knife over
+            // its lower right corner: the stretches it cuts away.
+            let mark = Stroke::new(1.1 * k, accent);
+            ic.dashed(1.5, 1.5, 10.5, 1.5, 1.4, mark);
+            ic.dashed(1.5, 1.5, 1.5, 10.5, 1.4, mark);
+            ic.dashed(10.5, 1.5, 10.5, 6.0, 1.4, mark);
+            ic.dashed(1.5, 10.5, 6.0, 10.5, 1.4, mark);
+            knife(&ic, 4.5, 4.5, 0.72, s, color);
         }
         Tool::Eraser => {
-            // Tilted eraser block with a darker rubbing end and the surface line.
-            ic.closed(&[(3.0, 10.0), (10.0, 3.0), (14.0, 7.0), (7.0, 14.0)], s);
-            ic.fill(&[(3.0, 10.0), (6.0, 7.0), (10.0, 11.0), (7.0, 14.0)], color);
-            ic.line(2.0, 15.0, 14.0, 15.0, thin);
+            // A tilted eraser block: the sleeve outlined, the rubbing end
+            // solid, over the line it rubs out.
+            ic.closed(&[(2.5, 10.5), (9.5, 3.5), (14.0, 8.0), (7.0, 15.0)], s);
+            ic.fill(&[(2.5, 10.5), (5.5, 7.5), (10.0, 12.0), (7.0, 15.0)], color);
+            ic.line(5.5, 7.5, 10.0, 12.0, s);
+            ic.line(9.0, 15.0, 15.0, 15.0, thin);
         }
 
         // Zoom group.
