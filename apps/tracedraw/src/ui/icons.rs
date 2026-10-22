@@ -331,9 +331,13 @@ pub fn tool_color(tool: Tool, plain: Color32) -> Color32 {
 fn knife(ic: &Ic, ox: f32, oy: f32, f: f32, s: Stroke, color: Color32) {
     let p = |x: f32, y: f32| (ox + x * f, oy + y * f);
     // Handle.
-    ic.fill(&[p(1.5, 13.0), p(3.0, 14.5), p(7.0, 10.5), p(5.5, 9.0)], color);
+    ic.fill(
+        &[p(1.5, 13.0), p(3.0, 14.5), p(7.0, 10.5), p(5.5, 9.0)],
+        color,
+    );
     // Collar.
-    ic.line(p(5.0, 8.0).0, p(5.0, 8.0).1, p(8.0, 11.0).0, p(8.0, 11.0).1, s);
+    let (a, b) = (p(5.0, 8.0), p(8.0, 11.0));
+    ic.line(a.0, a.1, b.0, b.1, s);
     // Blade: a straight back to the tip, then the slanted edge.
     ic.closed(&[p(6.0, 8.5), p(14.5, 1.5), p(9.5, 10.0), p(7.5, 10.0)], s);
 }
