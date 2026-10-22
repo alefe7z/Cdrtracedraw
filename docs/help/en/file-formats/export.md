@@ -13,8 +13,7 @@ preview on the left and the settings on the right.
 3. Set the format's options (below).
 4. Tick **Selected only** to export only the selection, or **All pages** to
    export every page.
-5. Click [[dialog.ok]] and choose where to save. In the browser, the file is
-   downloaded.
+5. Click [[dialog.ok]] and choose where to save.
 
 The dialog box estimates the size of the file. With **Do not show filter
 dialog** ticked, the next export goes straight to the file with the same

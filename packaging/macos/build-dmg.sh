@@ -9,6 +9,8 @@ rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 sed "s/__VERSION__/$VERSION/g" "$ROOT/packaging/macos/Info.plist" > "$APP/Contents/Info.plist"
 cp "$BIN/tracedraw" "$BIN/tracedraw-cli" "$APP/Contents/MacOS/"
 chmod +x "$APP/Contents/MacOS/"*
+# The Help, opened from disk (scripts/help/help_site.py builds it).
+cp -R "$BIN/help" "$APP/Contents/Resources/help"
 
 # Icon: build .icns from the PNG set.
 ICONSET="$ROOT/dist/tracedraw.iconset"; rm -rf "$ICONSET"; mkdir -p "$ICONSET"

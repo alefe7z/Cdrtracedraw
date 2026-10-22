@@ -94,9 +94,6 @@ pub fn system_profiles() -> Vec<FoundProfile> {
             });
         }
     }
-    if crate::files::WEB {
-        return out;
-    }
     for d in profile_dirs() {
         walk(&d, 0, &mut out);
     }

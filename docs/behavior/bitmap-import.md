@@ -13,8 +13,7 @@ since it was last seen is read again on the spot, as Update from Link
 does (`App::watch_linked_bitmaps`; one undo step per change, the status
 bar says "Bitmap updated from its file"). So a save in the outside
 editor shows in the drawing at once. A file seen for the first time is
-only remembered; a file that cannot be read is left alone. The browser
-has no files to watch
+only remembered; a file that cannot be read is left alone
 (`clipboard::linked_watch_tests::a_linked_bitmap_is_read_again_when_its_file_changes`).
 
 ## Size

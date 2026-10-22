@@ -1961,7 +1961,6 @@ fn for_rows(
     if w == 0 {
         return;
     }
-    #[cfg(not(target_arch = "wasm32"))]
     {
         let threads = std::thread::available_parallelism()
             .map(|n| n.get())

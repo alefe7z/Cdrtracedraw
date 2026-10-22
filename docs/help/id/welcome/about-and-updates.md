@@ -1,8 +1,6 @@
-# Tentang CD Draw dan pembaruan
+# Tentang CD Draw
 
-CD Draw gratis dan sumber terbuka. Halaman ini menjelaskan cara melihat versi
-yang Anda miliki, cara mendapatkan versi yang lebih baru, dan tempat meminta
-bantuan.
+CD Draw gratis dan sumber terbuka. Halaman ini menjelaskan cara melihat versi yang Anda miliki.
 
 ## Kotak Tentang {#about}
 
@@ -11,46 +9,6 @@ penulis, lisensi, tautan ke kode sumber, dan bahan pembuat program. Tekan
 [[dialog.close]], <kbd>Enter</kbd>, atau <kbd>Esc</kbd> untuk menutupnya.
 
 ![Kotak Tentang CD Draw](../../img/welcome-about-and-updates-about.png)
-
-## Memeriksa pembaruan {#updates}
-
-Di desktop, CD Draw dapat memberi tahu Anda saat versi yang lebih baru
-dirilis.
-
-Untuk memeriksa sekarang:
-
-1. Pilih [[menu.help > menu.help.updates]].
-2. CD Draw menanyakan versi terbaru ke halaman rilis proyek dan mengatakan
-   apakah versi itu lebih baru dari milik Anda. Versi uji dan build harian
-   tidak pernah ditawarkan.
-3. Bila ada versi yang lebih baru, pilih tindakannya:
-   - **Unduh** membuka unduhan file untuk sistem Anda (penginstal atau arsip
-     portabel di Windows, image disk untuk prosesor Mac Anda, AppImage atau
-     arsip di Linux). Penginstal sistem Anda lalu melakukan instalasi.
-   - **Catatan rilis** membuka daftar perubahan versi itu.
-   - **Lewati versi ini** berhenti menawarkan versi itu.
-   - [[dialog.close]] menutup kotak.
-
-Saat CD Draw berjalan sebagai AppImage Linux, kotak ini juga dapat
-menawarkan **Instal**: ia mengunduh AppImage baru di samping yang Anda jalankan,
-memeriksa bahwa unduhan lengkap dan asli, lalu menaruhnya menggantikan file
-lama. Versi baru dimulai saat Anda membuka CD Draw berikutnya. Jika ada yang
-tidak cocok, file lama tetap seperti semula dan kotak memberi tahu alasannya.
-
-Jika pemeriksaan gagal (misalnya tanpa koneksi internet), kotak memberitahukan
-hal itu dan menawarkan halaman rilis.
-
-![Kotak Pembaruan](../../img/welcome-about-and-updates-updates.png)
-
-### Memeriksa otomatis {#automatic-check}
-
-[[menu.tools > menu.tools.options > menu.tools.options_global]], halaman
-[[options.general]], memiliki pengaturan untuk memeriksa pembaruan saat mulai.
-Awalnya aktif: sekali sehari CD Draw memeriksa diam-diam saat mulai dan hanya
-memberi tahu bila ada versi lebih baru yang belum Anda lewati.
-
-> **Catatan:** Versi peramban selalu yang terbaru. Di sana,
-> [[menu.help > menu.help.updates]] membuka halaman rilis.
 
 ## Layar Sambutan {#welcome-screen}
 
@@ -63,11 +21,5 @@ dari templat, membaca berita, dan menemukan materi belajar. Pilih
 dan [[menu.help.user_guide]] membuka halaman belajarnya, dan
 [[menu.help.whats_new]] beritanya.
 
-## Komunitas dan dukungan {#community}
-
-- [[menu.help > menu.help.community]] membuka forum diskusi proyek, tempat
-  Anda dapat bertanya dan berbagi ide.
-- [[menu.help > menu.help.support]] membuka pelacak masalah, tempat Anda dapat
-  melaporkan masalah.
-- [[menu.help > menu.help.message_settings]] membuka opsi tempat pesan
-  CD Draw diatur.
+[[menu.help > menu.help.message_settings]] membuka opsi tempat pesan
+CD Draw diatur.

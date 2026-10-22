@@ -12,8 +12,6 @@ find out what changed and lists the highlights of the latest versions.
   command, beside the arrow of a submenu that leads to one, and over the
   title of a menu that holds one. The marks go away when you turn the
   command off, and the command is off again the next time CD Draw starts.
-- The complete list of changes of every version is in the project's
-  [change log](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md).
 
 ## Highlights of recent versions {#highlights}
 

@@ -529,10 +529,9 @@ pub fn effective_line(lines: &[u32], line: u32) -> Option<u32> {
 }
 
 impl crate::app::App {
-    /// Scripts panel, Debug: run the panel's script with its breakpoints
-    /// (desktop; the browser has no worker threads).
+    /// Scripts panel, Debug: run the panel's script with its breakpoints.
     pub fn start_script_debug(&mut self) {
-        if self.script_debug.is_some() || crate::files::WEB {
+        if self.script_debug.is_some() {
             return;
         }
         let src = self.script_source.clone();

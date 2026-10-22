@@ -218,9 +218,6 @@ pub fn built_in_size(i: usize) -> Option<Size> {
 /// The user's templates: the `.tdt` files of `dir`, by name.
 pub fn user_templates(dir: Option<PathBuf>) -> Vec<Template> {
     let mut out = Vec::new();
-    if crate::files::WEB {
-        return out;
-    }
     let Some(dir) = dir else { return out };
     let Ok(rd) = std::fs::read_dir(&dir) else {
         return out;

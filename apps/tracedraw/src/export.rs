@@ -343,12 +343,6 @@ pub fn print(app: &mut App, st: &PrintState) -> Result<String, String> {
         _ => {
             let pdf = tracedraw_io::pdf::document_to_pdf(&doc);
             let name = format!("{stem}.pdf");
-            if crate::files::WEB {
-                // In a browser the PDF is downloaded; its viewer prints it.
-                let path = std::path::PathBuf::from("/download").join(&name);
-                crate::files::write(&path, pdf).map_err(|e| e.to_string())?;
-                return Ok(trf("status.print_sent", &[("path", &name)]));
-            }
             match &st.printer {
                 Some(printer) => print_on(printer, &name, pdf, st.copies, st.collate, &stem),
                 None => print_through_viewer(&name, pdf),
@@ -375,7 +369,6 @@ fn print_on(
     Ok(trf("status.print_sent_printer", &[("name", printer)]))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn print_through_viewer(name: &str, pdf: Vec<u8>) -> Result<String, String> {
     let dir = std::env::temp_dir().join("tracedraw-print");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -386,11 +379,6 @@ fn print_through_viewer(name: &str, pdf: Vec<u8>) -> Result<String, String> {
         "status.print_sent",
         &[("path", &path.display().to_string())],
     ))
-}
-
-#[cfg(target_arch = "wasm32")]
-fn print_through_viewer(name: &str, _pdf: Vec<u8>) -> Result<String, String> {
-    Ok(trf("status.print_sent", &[("path", name)]))
 }
 
 /// The sheets repeated for `copies` copies: whole sets one after the other
@@ -828,11 +816,6 @@ impl App {
     /// Open a web page in the system browser (a new tab in the browser
     /// build).
     pub fn open_url(&mut self, url: &str) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            crate::web::open_url(url);
-            return;
-        }
         #[allow(unreachable_code)]
         if let Err(e) = open_with_system(Path::new(url)) {
             self.status = e;
@@ -861,18 +844,6 @@ impl App {
     /// File > Send To: write the document as PDF into `target` and report
     /// where it went.
     pub fn send_to(&mut self, target: SendTarget) {
-        if crate::files::WEB {
-            // No folders in a browser: every target is a PDF download.
-            let name = self.send_to_file_name();
-            let pdf = tracedraw_io::pdf::document_to_pdf(self.engine.document());
-            let path = std::path::PathBuf::from("/download").join(&name);
-            self.status = match crate::files::write(&path, pdf) {
-                Ok(()) => trf("status.sent_to", &[("path", &name)]),
-                Err(e) => trf("status.export_failed", &[("e", &e.to_string())]),
-            };
-            let _ = target;
-            return;
-        }
         let Some(dir) = target.dir() else {
             self.status = tr("status.send_to_no_folder");
             return;

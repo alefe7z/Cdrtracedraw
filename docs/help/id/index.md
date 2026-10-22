@@ -3,8 +3,7 @@
 CD Draw adalah program gambar vektor gratis dan sumber terbuka. Dengannya
 Anda menggambar ilustrasi, logo, diagram, tata letak, dan karya cetak dari
 bentuk, garis, dan teks yang tetap tajam di ukuran apa pun, serta
-menggabungkannya dengan bitmap. Program yang sama berjalan di Windows, macOS,
-dan Linux serta di peramban web.
+menggabungkannya dengan bitmap. Program ini berjalan di Windows, macOS, dan Linux sepenuhnya secara luring.
 
 Bantuan ini menjelaskan cara melakukan sesuatu di CD Draw, langkah demi
 langkah, dan fungsi setiap kotak dialog, panel, dan alat.
@@ -21,8 +20,7 @@ Daftar isi di kiri mengikuti cara Anda bekerja:
   serta **Bitmap** mencakup sisa pekerjaan menggambar.
 - **Pencetakan**, **Grafis web**, dan **Format file** membahas cara
   mengeluarkan karya Anda dari CD Draw.
-- **Kustomisasi dan otomatisasi** membahas opsi, ruang kerja, skrip, dan fitur
-  AI, sedangkan **Referensi** mencantumkan setiap perintah menu, alat, panel,
+- **Kustomisasi dan otomatisasi** membahas opsi, ruang kerja, dan skrip, sedangkan **Referensi** mencantumkan setiap perintah menu, alat, panel,
   dan pintasan keyboard.
 
 Gunakan tab **Cari** untuk menemukan halaman lewat kata apa pun di dalamnya,

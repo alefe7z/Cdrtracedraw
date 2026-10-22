@@ -7,8 +7,6 @@
 ![全局选项的常规页面](../../img/customize-global-options-general.png)
 
 - [[options.language]]：界面的语言。本帮助以相同的语言打开。
-- [[options.check_updates]]（打开）：请参阅 [检查更新](../welcome/about-and-updates.md#updates)。
-- [[options.agents]]：[[options.mcp_window]] 允许此计算机上的 AI 助手编辑打开的绘图；请参阅 [脚本](scripts.md#mcp)。
 - [[options.reset_all]]：请参阅 [重置设置](reset-settings.md)。
 
 ## 打印 {#printing}
@@ -41,4 +39,4 @@
 
 ![全局选项的文件位置页面](../../img/customize-global-options-file-locations.png)
 
-显示首选项和自动备份的存放位置。如果程序旁有 `tracedraw-settings` 文件夹（便携版），首选项就保存在其中，否则保存在系统存放程序设置的位置；浏览器版本将其保存在浏览器中。
+显示首选项和自动备份的存放位置。

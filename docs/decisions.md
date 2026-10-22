@@ -126,7 +126,7 @@ and the formulas we use before the code lands.
 Visual regression with a tolerance, round trips and performance numbers
 are tests that run in CI; see `docs/acceptance.md`.
 
-## D13. The browser build is the same code
+## D13. The browser build is the same code (withdrawn by D14)
 
 The web version is the desktop app compiled to `wasm32-unknown-unknown`,
 not a second front end. Platform differences sit behind two small
@@ -135,3 +135,15 @@ system natively; uploads kept in memory and downloads in a browser) and
 `web.rs` (start-up on a canvas, downloads, local storage, the shortcut
 guard). Fonts are bundled at build time because browsers expose no
 system fonts; only freely redistributable fonts are bundled (`web/FONTS.md`).
+
+## D14. Desktop only, offline only (2026-10-22)
+
+CD Draw is a desktop program that never touches the network. The browser
+build, the AI services (AI Drawing, AI Generate, AI Remove Background),
+File > GitHub, Help > Updates and the daily update check, and the MCP
+server and its local port were removed, with the HTTP client (`ureq`) and
+every TLS dependency. The Help is built from `docs/help` and installed
+with the program, and opens from disk. `files.rs` stays as the one place
+for file access and dialogs, now desktop only. Preferences that older
+versions wrote for the removed features are read and dropped, so stored
+API keys and tokens are not written back.

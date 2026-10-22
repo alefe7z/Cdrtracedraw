@@ -81,9 +81,6 @@ impl Default for ExportState {
     }
 }
 
-/// Where a `.cdr` file that does not open right is sent in.
-pub const CDR_ISSUE: &str = "https://github.com/alefe7z/Cdrtracedraw/issues/new?template=cdr_file.yml";
-
 pub const PDF_STANDARDS: [&str; 4] = ["PDF 1.4", "PDF/X-1a:2003", "PDF/X-3:2003", "PDF/X-4"];
 
 impl ExportState {
@@ -625,8 +622,6 @@ pub enum Dialog {
     /// At start-up: drawings a session that ended without closing left in
     /// the auto-backup folder (see `recovery.rs`).
     Recover(Vec<crate::recovery::Found>),
-    /// Help > Updates: where the check stands, and a newer release.
-    Updates,
     /// After a drawing opens: objects that could not be read, fonts that
     /// are not installed (Options > Global > Warnings).
     OpenNotes(OpenNotes),
@@ -678,13 +673,6 @@ pub enum Dialog {
     PaletteEditor(PaletteEditorState),
     NewDocument(crate::new_document::NewDocState),
     About,
-    /// File > GitHub.
-    GithubOpen(crate::github::GithubForm),
-    GithubSave(crate::github::GithubForm),
-    GithubHistory,
-    /// The browser version, each time the page opens: the same program
-    /// compiled for the browser, what is slower there, the desktop app.
-    WebNotice,
     TimeTracker(crate::ui::time_tracker::TrackerDialog),
     Preflight(crate::ui::preflight_dialog::PreflightState),
     PublishPdf(Box<crate::ui::publish_pdf::PublishState>),
@@ -1245,158 +1233,6 @@ pub fn show(app: &mut App, ctx: &Context) {
                 None => {}
             }
         }
-        Dialog::Updates => {
-            use crate::updates::UpdateState;
-            let version = env!("CARGO_PKG_VERSION");
-            let close_label = tr("dialog.close");
-            let install = app.installer.get();
-            match app.updates.get() {
-                UpdateState::Available(r) if install != crate::updates::InstallState::Idle => {
-                    use crate::updates::InstallState;
-                    let (text, buttons): (String, Vec<String>) = match &install {
-                        InstallState::Downloading { done, total } => {
-                            ctx.request_repaint_after(std::time::Duration::from_millis(200));
-                            let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
-                            (
-                                trf(
-                                    "updates.downloading",
-                                    &[
-                                        ("new", &r.version),
-                                        ("done", &mb(*done)),
-                                        ("total", &mb(*total)),
-                                    ],
-                                ),
-                                vec![close_label.clone()],
-                            )
-                        }
-                        InstallState::Installed(v) => (
-                            trf("updates.installed", &[("new", v)]),
-                            vec![close_label.clone()],
-                        ),
-                        InstallState::Failed(e) => (
-                            trf("updates.install_failed", &[("error", e)]),
-                            vec![tr("updates.download"), close_label.clone()],
-                        ),
-                        InstallState::Idle => (String::new(), vec![close_label.clone()]),
-                    };
-                    let labels: Vec<&str> = buttons.iter().map(String::as_str).collect();
-                    match crate::ui::chrome::message_box(
-                        ctx,
-                        crate::ui::chrome::MessageIcon::Info,
-                        &text,
-                        &labels,
-                    ) {
-                        Some(0) if matches!(install, InstallState::Failed(_)) => {
-                            let url = r.download.clone().unwrap_or_else(|| r.page.clone());
-                            app.open_url(&url);
-                            close = true;
-                        }
-                        Some(_) => close = true,
-                        None => {}
-                    }
-                }
-                UpdateState::Idle | UpdateState::Checking => {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
-                    if crate::ui::chrome::message_box(
-                        ctx,
-                        crate::ui::chrome::MessageIcon::Busy,
-                        &tr("updates.checking"),
-                        &[&tr("dialog.cancel")],
-                    )
-                    .is_some()
-                    {
-                        close = true;
-                    }
-                }
-                UpdateState::Latest => {
-                    let text = trf("updates.latest", &[("version", version)]);
-                    if crate::ui::chrome::message_box(
-                        ctx,
-                        crate::ui::chrome::MessageIcon::Info,
-                        &text,
-                        &[&close_label],
-                    )
-                    .is_some()
-                    {
-                        close = true;
-                    }
-                }
-                UpdateState::Available(r) => {
-                    let text = trf(
-                        "updates.available",
-                        &[("new", &r.version), ("version", version)],
-                    );
-                    let (download, notes, skip) = (
-                        tr("updates.download"),
-                        tr("updates.notes"),
-                        tr("updates.skip"),
-                    );
-                    // A running AppImage can be replaced in place.
-                    let target = crate::updates::appimage_target();
-                    let in_place = r.appimage.clone().zip(target);
-                    let install_label = tr("updates.install");
-                    let mut labels: Vec<&str> = Vec::new();
-                    if in_place.is_some() {
-                        labels.push(&install_label);
-                    }
-                    labels.extend([download.as_str(), &notes, &skip, &close_label]);
-                    let first = usize::from(in_place.is_some());
-                    match crate::ui::chrome::message_box(
-                        ctx,
-                        crate::ui::chrome::MessageIcon::Info,
-                        &text,
-                        &labels,
-                    )
-                    .map(|i| {
-                        if in_place.is_some() && i == 0 {
-                            usize::MAX
-                        } else {
-                            i - first
-                        }
-                    }) {
-                        Some(usize::MAX) => {
-                            if let Some((package, target)) = in_place {
-                                app.installer.start(
-                                    r.version.clone(),
-                                    package,
-                                    target,
-                                    Some(ctx.clone()),
-                                );
-                            }
-                        }
-                        Some(0) => {
-                            let url = r.download.clone().unwrap_or_else(|| r.page.clone());
-                            app.open_url(&url);
-                            close = true;
-                        }
-                        Some(1) => app.open_url(&r.page),
-                        Some(2) => {
-                            app.settings.skipped_update = r.version.clone();
-                            close = true;
-                        }
-                        Some(_) => close = true,
-                        None => {}
-                    }
-                }
-                UpdateState::Failed(e) => {
-                    let text = trf("updates.failed", &[("error", &e)]);
-                    let open = tr("updates.open_releases");
-                    match crate::ui::chrome::message_box(
-                        ctx,
-                        crate::ui::chrome::MessageIcon::Info,
-                        &text,
-                        &[&open, &close_label],
-                    ) {
-                        Some(0) => {
-                            app.open_url(crate::updates::RELEASES_PAGE);
-                            close = true;
-                        }
-                        Some(_) => close = true,
-                        None => {}
-                    }
-                }
-            }
-        }
         Dialog::Recover(found) => {
             let n = found.iter().map(|f| f.backups.len()).sum::<usize>();
             let names: Vec<String> = found
@@ -1446,13 +1282,7 @@ pub fn show(app: &mut App, ctx: &Context) {
         }
         Dialog::OpenNotes(notes) => {
             let ok = tr("dialog.ok");
-            let report = tr("notes.report");
-            // Unread objects: a way to send the file in.
-            let buttons: Vec<&str> = if notes.unread > 0 {
-                vec![&ok, &report]
-            } else {
-                vec![&ok]
-            };
+            let buttons: Vec<&str> = vec![&ok];
             let text = notes.text();
             let picked = crate::ui::chrome::message_box_check(
                 ctx,
@@ -1462,7 +1292,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                 &tr("notes.dont_show"),
                 &mut notes.dont_show,
             );
-            if let Some(i) = picked {
+            if picked.is_some() {
                 if notes.dont_show {
                     if notes.unread > 0 {
                         app.settings.warnings.unread_objects = false;
@@ -1471,9 +1301,6 @@ pub fn show(app: &mut App, ctx: &Context) {
                         app.settings.warnings.missing_fonts = false;
                     }
                     app.settings.save();
-                }
-                if i == 1 && notes.unread > 0 {
-                    app.open_url(crate::ui::dialogs::CDR_ISSUE);
                 }
                 close = true;
             }
@@ -1508,9 +1335,6 @@ pub fn show(app: &mut App, ctx: &Context) {
         Dialog::Export(st) => export_dialog(app, ctx, st, &mut close),
         Dialog::Print(st) => print_dialog(app, ctx, st, &mut close),
         Dialog::PrintMerge(st) => print_merge_dialog(app, ctx, st, &mut close),
-        Dialog::GithubOpen(f) => crate::ui::github_dialogs::open_dialog(app, ctx, f, &mut close),
-        Dialog::GithubSave(f) => crate::ui::github_dialogs::save_dialog(app, ctx, f, &mut close),
-        Dialog::GithubHistory => crate::ui::github_dialogs::history_dialog(app, ctx, &mut close),
         Dialog::CreatePattern { vector } => {
             window(ctx, tr("dialog.create_pattern")).show(ctx, |ui| {
                 ui.label(tr("dialog.create_pattern_type"));
@@ -1952,23 +1776,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                 }
             });
         }
-        Dialog::About => crate::ui::about::about_dialog(app, ctx, &mut close),
-        Dialog::WebNotice => {
-            let text = format!("{}\n\n{}", tr("web.notice_title"), tr("web.notice_text"));
-            match crate::ui::chrome::message_box(
-                ctx,
-                crate::ui::chrome::MessageIcon::Info,
-                &text,
-                &[&tr("dialog.ok"), &tr("web.notice_download")],
-            ) {
-                Some(1) => {
-                    app.open_url(crate::updates::RELEASES_PAGE);
-                    close = true;
-                }
-                Some(_) => close = true,
-                None => {}
-            }
-        }
+        Dialog::About => crate::ui::about::about_dialog(ctx, &mut close),
     }
     // A dialog's close button closes it like Esc.
     if crate::ui::chrome::take_close_request(ctx) {
@@ -4432,7 +4240,6 @@ mod tests {
             Dialog::OldCdrVersion { version: 9 },
             Dialog::ConfirmClose,
             Dialog::ConfirmResetSettings,
-            Dialog::Updates,
             Dialog::Recover(vec![crate::recovery::Found {
                 marker: "/nowhere/session-x.json".into(),
                 backups: vec!["/nowhere/AutoBackup_of_art.tdraw".into()],
@@ -4513,9 +4320,6 @@ mod tests {
                 "n".into(),
             )),
             Dialog::About,
-            Dialog::WebNotice,
-            Dialog::GithubOpen(Default::default()),
-            Dialog::GithubSave(Default::default()),
         ]
     }
 
@@ -4646,54 +4450,6 @@ mod tests {
             assert!(!app.doc().pages.is_empty(), "{name}: the document survived");
             app.dialog = Dialog::None;
             app.select_all();
-        }
-    }
-
-    /// The Updates dialog draws in every state of a check and of an
-    /// install in place.
-    #[test]
-    fn the_updates_dialog_draws_every_state() {
-        use crate::updates::{InstallState, Package, Release, UpdateState};
-        let mut app = App::headless();
-        let ctx = crate::theme::ui_context();
-        let release = Release {
-            version: "9.0.0".into(),
-            page: "https://example.org/r".into(),
-            download: None,
-            appimage: Some(Package {
-                url: "https://example.org/a.AppImage".into(),
-                sha256: "0".repeat(64),
-                size: 3 << 20,
-            }),
-        };
-        let checks = [
-            UpdateState::Idle,
-            UpdateState::Checking,
-            UpdateState::Latest,
-            UpdateState::Available(release),
-            UpdateState::Failed("offline".into()),
-        ];
-        let installs = [
-            InstallState::Idle,
-            InstallState::Downloading {
-                done: 1 << 20,
-                total: 3 << 20,
-            },
-            InstallState::Installed("9.0.0".into()),
-            InstallState::Failed("digest".into()),
-        ];
-        for check in &checks {
-            for install in &installs {
-                *app.updates.state.lock().expect("lock") = check.clone();
-                *app.installer.state.lock().expect("lock") = install.clone();
-                app.dialog = Dialog::Updates;
-                frame(&ctx, &mut app, false);
-                frame(&ctx, &mut app, false);
-                assert!(
-                    matches!(app.dialog, Dialog::Updates),
-                    "{check:?} {install:?}: still open"
-                );
-            }
         }
     }
 }

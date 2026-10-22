@@ -42,5 +42,4 @@ template.
 3. Give it a name and save it.
 
 Templates you save appear under [[tpl.my_templates]]. They are kept in the
-templates folder of your settings, so they are not available in the browser
-version.
+templates folder of your settings.

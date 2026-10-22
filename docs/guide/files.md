@@ -70,8 +70,7 @@ dialog on the first save:
 5. Press **Save**. If the file exists, CD Draw asks before replacing
    it.
 
-In the browser, Save downloads the file to your downloads folder; the
-dialog keeps the name, type, version and properties.
+
 
 To keep a copy of the old file each time you save, leave **Back up
 original file before saving** on in **Tools > Options > CD Draw >
@@ -127,8 +126,9 @@ Links you give objects in the **Links and Bookmarks** panel become
 clickable areas in PDF and links in SVG and HTML. See
 [the links notes](../behavior/links.md).
 
-**Send To** writes a PDF to the Desktop, Documents or a mail folder (in
-the browser, it downloads the PDF).
+
+
+**Send To** writes a PDF to the Desktop, Documents or a mail folder.
 
 ## Templates
 
@@ -149,8 +149,7 @@ If it did not (a crash, a power cut), the next start offers the backups:
   not ask again.
 
 To change how often it saves, or where (a `CD Draw` folder in your
-temporary folder to start with): **Tools > Options > CD Draw > Save**.
-Auto-backup is not available in the browser. See
+temporary folder to start with): **Tools > Options > CD Draw > Save**. See
 [the recovery notes](../behavior/recovery.md).
 
 ## Close drawings
@@ -165,23 +164,6 @@ Auto-backup is not available in the browser. See
 its own view, page and selection. **Window > Cascade**, **Tile
 Horizontally** and **Tile Vertically** show several drawings side by
 side. See [the drawing window notes](../behavior/drawing-window.md).
-
-## Updates
-
-On the desktop, **Help > Updates** checks for a newer release. If there
-is one, it offers:
-
-- **Download**: the file for your system; your system's installer does
-  the installing;
-- **Release notes**;
-- **Skip this version**;
-- **Close**.
-
-CD Draw also checks once a day when it starts and shows only a newer
-release you did not skip. To turn that off: **Tools > Options > Global >
-General**, clear **Check for updates at start**. The browser version is
-always the latest; there, Help > Updates opens the releases page. See
-[the update notes](../behavior/updates.md).
 
 ## Where next
 

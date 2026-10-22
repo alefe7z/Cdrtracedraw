@@ -817,15 +817,11 @@ pub struct App {
     /// `App::patch_selection_stroke_live`).
     pub live_stroke: Option<(u64, Option<Color>)>,
     pub file: Option<PathBuf>,
-    /// The drawing's file in a GitHub repository, when it came from one.
-    pub remote: Option<crate::github::Remote>,
     /// The last vector object's picture without its bitmap effects, by its
     /// id and state (see `App::vector_base_cached`).
     #[allow(clippy::type_complexity)]
     pub vector_fx_base:
         std::cell::RefCell<Option<((ShapeId, u64), (Vec<u8>, u32, u32, tracedraw_core::Rect))>>,
-    /// File > GitHub's session: the token, the request out, the history.
-    pub github: crate::github::GithubSession,
     /// The `.cdr` version the active drawing is saved in: the version of
     /// the `.cdr` file it came from, or the one last chosen when saving
     /// it. `None`: the version of Options > Global > File Formats.
@@ -978,8 +974,7 @@ pub struct App {
     /// revision (laying text out every frame would be slow).
     pub overflow_cache: std::cell::RefCell<(u64, std::collections::HashMap<ShapeId, bool>)>,
     pub wireframe: bool,
-    /// Families the font lists show: installed, carried by drawings, and
-    /// (browser build) offered by the page's font folder.
+    /// Families the font lists show: installed and carried by drawings.
     pub font_families: Vec<String>,
     /// What the Font Manager loaded and drew.
     pub font_catalog: crate::ui::font_manager::Catalog,
@@ -1094,23 +1089,16 @@ pub struct App {
     /// user's.
     pub pending_command: Option<String>,
     /// When the last auto-backup ran (set on the first frame).
-    pub last_auto_backup: Option<web_time::Instant>,
+    pub last_auto_backup: Option<std::time::Instant>,
     /// Linked bitmaps' files as last seen (`watch_linked_bitmaps`): the
     /// modification time of each, and when they were last looked at.
     pub linked_mtimes: std::collections::HashMap<ShapeId, std::time::SystemTime>,
-    pub linked_checked: Option<web_time::Instant>,
+    pub linked_checked: Option<std::time::Instant>,
     /// Session recovery: this session's marker in the auto-backup folder
     /// (made on the first frame, desktop only).
     pub session: Option<crate::recovery::Session>,
     /// Help > Highlight What's New: the menus mark what is new.
     pub highlight_whats_new: bool,
-    /// Help > Updates and the daily check at start.
-    pub updates: crate::updates::Checker,
-    /// Help > Updates, Install: an AppImage replaced in place.
-    pub installer: crate::updates::Installer,
-    /// The running check was started at start, not asked for: only a
-    /// newer release, not skipped, is shown.
-    pub update_quiet: bool,
     /// Page size changes apply to every page (the page bar's All pages).
     pub page_size_all: bool,
     /// The property bar's object origin: (column, row) of the 3 x 3
@@ -1145,7 +1133,7 @@ pub struct App {
     /// When `autosave_settings` last wrote the preferences, and the
     /// preferences as last saved or looked at (JSON), to save them only
     /// when they changed.
-    pub settings_written: Option<web_time::Instant>,
+    pub settings_written: Option<std::time::Instant>,
     pub settings_saved: Option<String>,
     /// A change waits to be written (see `autosave_settings`).
     pub settings_pending: bool,
@@ -1189,13 +1177,6 @@ pub struct App {
     pub debug_expr: String,
     /// VBA macro projects, the running macro and its dialogs.
     pub macros: crate::macros::MacroState,
-    /// AI Drawing: the request, the key in use, the conversation.
-    pub ai: crate::ai::AiSession,
-    /// AI Generate and Remove Background.
-    pub ai_image: crate::ai_image::ImageSession,
-    /// AI agents editing the open drawing (MCP), while allowed.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub mcp_link: Option<crate::mcp_link::Link>,
     pub find_state: crate::ui::dialogs::FindReplaceState,
     pub step_repeat: crate::ops2::StepRepeat,
     pub align_to: crate::ops2::AlignTo,
@@ -1524,13 +1505,12 @@ pub enum DockerTab {
     Shelf,
     Export,
     Comments,
-    AiGenerate,
     Effects,
     Macros,
 }
 
 impl DockerTab {
-    pub const ALL: [DockerTab; 42] = [
+    pub const ALL: [DockerTab; 41] = [
         DockerTab::Properties,
         DockerTab::Objects,
         DockerTab::Hints,
@@ -1545,7 +1525,6 @@ impl DockerTab {
         DockerTab::ColorStyles,
         DockerTab::ObjectStyles,
         DockerTab::FindReplace,
-        DockerTab::AiGenerate,
         DockerTab::Export,
         DockerTab::Comments,
         DockerTab::Scripts,
@@ -1589,7 +1568,6 @@ impl DockerTab {
             DockerTab::Symbols,
             DockerTab::FindReplace,
             DockerTab::Export,
-            DockerTab::AiGenerate,
         ],
         &[DockerTab::Transformations, DockerTab::Coordinates],
         &[DockerTab::Guidelines],
@@ -1676,7 +1654,6 @@ impl DockerTab {
             DockerTab::Shelf => "docker.shelf",
             DockerTab::Export => "docker.export",
             DockerTab::Comments => "docker.comments",
-            DockerTab::AiGenerate => "docker.ai_generate",
             DockerTab::Macros => "docker.macros",
             DockerTab::Effects => "docker.effects",
         }
@@ -1807,8 +1784,8 @@ impl App {
         });
     }
 
-    /// An app without a window, for tests, scripts and the MCP server.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    /// An app without a window, for tests.
+    #[cfg(test)]
     pub fn headless() -> Self {
         if std::env::var_os("TRACEDRAW_CONFIG_DIR").is_none() {
             std::env::set_var(
@@ -1850,9 +1827,7 @@ impl App {
             live_fill: None,
             live_stroke: None,
             file: None,
-            remote: None,
             vector_fx_base: Default::default(),
-            github: Default::default(),
             cdr_version: None,
             cdr_unsaved_version: None,
             tdraw_version: None,
@@ -2008,9 +1983,6 @@ impl App {
             linked_checked: None,
             session: None,
             highlight_whats_new: false,
-            updates: Default::default(),
-            installer: Default::default(),
-            update_quiet: false,
             recent_thumbs: Default::default(),
             shelf: Default::default(),
             export_assets: crate::export_assets::ExportAssets::new(),
@@ -2065,10 +2037,6 @@ impl App {
             debug_paused: None,
             breakpoints: Default::default(),
             debug_expr: String::new(),
-            ai: Default::default(),
-            ai_image: Default::default(),
-            #[cfg(not(target_arch = "wasm32"))]
-            mcp_link: None,
             find_state: Default::default(),
             step_repeat: Default::default(),
             align_to: Default::default(),
@@ -2171,9 +2139,6 @@ impl App {
         };
         app.load_settings();
         app.apply_runtime_settings();
-        if app.settings.github.remember_token {
-            app.github.token = app.settings.github.token.clone();
-        }
         // Start-up: the file given on the command line, else what Options >
         // General asks for: the Welcome Screen alone (no drawing open), a
         // new drawing, or the last drawing edited.
@@ -2195,17 +2160,7 @@ impl App {
                 }
             }
         }
-        if crate::files::WEB {
-            app.show_web_notice();
-        }
         app
-    }
-
-    /// Each time the browser version opens: a message that it is the same
-    /// Rust program compiled for the browser, what is slower or missing
-    /// there, and the way to the desktop app.
-    pub fn show_web_notice(&mut self) {
-        self.dialog = crate::ui::dialogs::Dialog::WebNotice;
     }
 
     /// A new document with localised default page and layer names.
@@ -2265,19 +2220,9 @@ impl App {
     }
 
     /// Where auto-backups go unless Options > Save names a folder: a
-    /// `CD Draw` folder in the temporary folder (none in a browser).
+    /// `CD Draw` folder in the temporary folder.
     pub fn auto_backup_dir_default() -> Option<PathBuf> {
-        if crate::files::WEB {
-            return None;
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            Some(std::env::temp_dir().join("TraceDraw"))
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            None
-        }
+        Some(std::env::temp_dir().join("TraceDraw"))
     }
 
     /// Double-click on a ruler: Document Options at the Rulers page.
@@ -2361,8 +2306,6 @@ impl App {
     /// Apply a set of preferences to the running editor.
     pub fn apply_settings(&mut self, mut s: crate::settings::Settings) {
         s.bars.migrate();
-        s.migrate_ai();
-        self.ai.key = crate::ai::remembered_key(&s.ai);
         let lang = if s.language.is_empty() {
             crate::i18n::system_language().to_string()
         } else {
@@ -2473,7 +2416,6 @@ impl App {
         crate::files::Dialog::new()
             .add_filter("ICC", &["icc", "icm"])
             .pick_file(self, move |app, path| {
-                let path = crate::files::keep(&path);
                 match crate::files::read(&path)
                     .ok()
                     .and_then(|b| tracedraw_core::icc::Profile::parse(&b).ok())
@@ -2499,7 +2441,6 @@ impl App {
         crate::files::Dialog::new()
             .add_filter("ICC", &["icc", "icm"])
             .pick_file(self, move |app, path| {
-                let path = crate::files::keep(&path);
                 app.use_icc_profile(cmyk, path);
             });
     }
@@ -2781,8 +2722,7 @@ impl App {
 
     /// Save the preferences when they changed: looked at every frame, so a
     /// change in Options, the menus, the bars or the dockers lasts even
-    /// when CD Draw does not close normally (and in the browser, where
-    /// closing the tab saves nothing); written at most once a second (a
+    /// when CD Draw does not close normally; written at most once a second (a
     /// window being resized changes them every frame), with a frame asked
     /// for when a write has to wait. Not while Options is open: its Cancel
     /// puts them back.
@@ -2796,7 +2736,7 @@ impl App {
         if !self.settings_pending {
             return;
         }
-        let now = web_time::Instant::now();
+        let now = std::time::Instant::now();
         let gap = std::time::Duration::from_secs(1);
         let wait = self
             .settings_written
@@ -2850,15 +2790,7 @@ impl App {
     /// Put the dockers back as `setup` says; names of no docker are
     /// skipped, and a docker named in two places keeps the first.
     pub fn set_docker_setup(&mut self, setup: &crate::settings::DockerSetup) {
-        // AI Drawing is a mode of AI Generate now.
-        let by_key = |k: &str| {
-            let k = if k == "docker.ai_drawing" {
-                "docker.ai_generate"
-            } else {
-                k
-            };
-            DockerTab::ALL.iter().copied().find(|t| t.key() == k)
-        };
+        let by_key = |k: &str| DockerTab::ALL.iter().copied().find(|t| t.key() == k);
         let mut seen: Vec<DockerTab> = Vec::new();
         let mut take = |keys: &[String]| -> Vec<DockerTab> {
             let mut out = Vec::new();
@@ -3253,18 +3185,6 @@ impl App {
             return;
         }
         self.close_active_document();
-    }
-
-    /// Tools > AI Generate: the AI Generate docker in front.
-    /// The AI Generate docker in its Draw with words mode.
-    pub fn open_ai_drawing(&mut self) {
-        self.ai_image.mode = crate::ai_image::Mode::Draw;
-        self.ai_image.info = false;
-        self.open_ai_generate();
-    }
-
-    pub fn open_ai_generate(&mut self) {
-        self.open_docker(DockerTab::AiGenerate);
     }
 
     /// File > New From Template.
@@ -4963,13 +4883,6 @@ impl App {
     }
 
     pub fn save(&mut self, save_as: bool) {
-        // A drawing from GitHub saves back as a commit (Save As saves a
-        // file as usual).
-        if !save_as && self.remote.is_some() {
-            self.github.status.clear();
-            self.dialog = crate::ui::dialogs::Dialog::GithubSave(self.github_form(true));
-            return;
-        }
         // A drawing opened from a `.cdr` version CD Draw does not save
         // in: say so and let the user choose the version first.
         if !save_as {
@@ -4978,9 +4891,7 @@ impl App {
                 return;
             }
         }
-        // In a browser every save is a download, so there is no path to
-        // write back to.
-        if !save_as && !crate::files::WEB {
+        if !save_as {
             if let Some(path) = self.file.clone() {
                 self.save_to(path);
                 return;
@@ -5108,9 +5019,9 @@ impl App {
     /// Options > Save > Auto-backup: every few minutes, save each open
     /// drawing with unsaved changes as `AutoBackup_of_<name>.tdraw` in the
     /// auto-backup folder. Called every frame; returns true when it saved.
-    pub fn auto_backup_tick(&mut self, now: web_time::Instant) -> bool {
+    pub fn auto_backup_tick(&mut self, now: std::time::Instant) -> bool {
         let b = self.settings.backup.clone();
-        if !b.auto || crate::files::WEB {
+        if !b.auto {
             return false;
         }
         let due = std::time::Duration::from_secs(u64::from(b.minutes.max(1)) * 60);
@@ -5154,9 +5065,9 @@ impl App {
     /// Session recovery, called every frame with the time in seconds: on
     /// the first call, start this session's marker and offer what a
     /// session that ended without closing left; then check in now and
-    /// then. Nothing happens in a browser or with auto-backup off.
+    /// then. Nothing happens with auto-backup off.
     pub fn session_tick(&mut self, now: u64) {
-        if crate::files::WEB || !self.settings.backup.auto {
+        if !self.settings.backup.auto {
             return;
         }
         // Tests leave the real auto-backup folder alone unless they name one.
@@ -5236,44 +5147,6 @@ impl App {
         self.show_text_toolbar = false;
         self.show_zoom_toolbar = false;
         self.show_transform_toolbar = false;
-    }
-
-    /// Help > Updates: check now and show the answer.
-    pub fn check_for_updates(&mut self, ctx: Option<egui::Context>) {
-        self.update_quiet = false;
-        self.updates.start(ctx);
-        self.dialog = crate::ui::dialogs::Dialog::Updates;
-    }
-
-    /// Called every frame with the time in seconds: once a day (Options >
-    /// Global > General), start a quiet check; when it finds a release
-    /// newer than this one that the user did not skip, show it.
-    pub fn update_tick(&mut self, now: u64, ctx: Option<egui::Context>) {
-        if crate::files::WEB || cfg!(test) {
-            return;
-        }
-        if self.settings.check_updates
-            && now.saturating_sub(self.settings.last_update_check) >= crate::updates::DAILY
-            && self.updates.get() == crate::updates::UpdateState::Idle
-        {
-            self.settings.last_update_check = now;
-            self.update_quiet = true;
-            self.updates.start(ctx);
-        }
-        if self.update_quiet {
-            match self.updates.get() {
-                crate::updates::UpdateState::Checking => {}
-                crate::updates::UpdateState::Available(r)
-                    if r.version != self.settings.skipped_update
-                        && matches!(self.dialog, crate::ui::dialogs::Dialog::None) =>
-                {
-                    self.update_quiet = false;
-                    self.dialog = crate::ui::dialogs::Dialog::Updates;
-                }
-                crate::updates::UpdateState::Available(_) => {}
-                _ => self.update_quiet = false,
-            }
-        }
     }
 
     /// A clean exit: this session's marker and auto-backups go.
@@ -5593,7 +5466,7 @@ impl App {
         }
     }
 
-    /// Read a `.cdr` file through the file layer (uploads in a browser).
+    /// Read a `.cdr` file through the file layer.
     fn open_cdr(
         path: &std::path::Path,
     ) -> std::result::Result<(tracedraw_core::Document, tracedraw_cdr::ParseReport), String> {
@@ -6484,7 +6357,7 @@ mod tests {
 
     /// Tool settings, what the window shows, snapping and the dockers'
     /// choices come back the next time, through the preferences file
-    /// (JSON, as in the browser's storage).
+    /// (JSON).
     #[test]
     fn tools_view_snapping_and_dockers_survive_a_restart() {
         let mut app = App::headless();
@@ -6786,7 +6659,7 @@ mod tests {
         first.settings.backup.auto_dir = Some(dir.clone());
         first.settings.backup.minutes = 1;
         first.session_tick(start);
-        let t0 = web_time::Instant::now();
+        let t0 = std::time::Instant::now();
         assert!(!first.auto_backup_tick(t0));
         rect_shape(&mut first, Rect::new(0.0, 0.0, 10.0, 10.0), true);
         assert!(first.auto_backup_tick(t0 + std::time::Duration::from_secs(61)));
@@ -6846,7 +6719,7 @@ mod tests {
         // Auto-backup: due after the interval, only for unsaved changes.
         app.settings.backup.auto_dir = Some(dir.join("auto"));
         app.settings.backup.minutes = 1;
-        let t0 = web_time::Instant::now();
+        let t0 = std::time::Instant::now();
         assert!(!app.auto_backup_tick(t0));
         rect_shape(&mut app, Rect::new(0.0, 0.0, 20.0, 10.0), true);
         assert!(!app.auto_backup_tick(t0 + std::time::Duration::from_secs(30)));
@@ -6910,16 +6783,5 @@ mod tests {
         // Not saved over: a print file is not a drawing.
         assert!(back.file.is_none());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_browser_notice_shows_at_every_visit() {
-        let mut app = App::headless();
-        app.show_web_notice();
-        assert!(matches!(app.dialog, crate::ui::dialogs::Dialog::WebNotice));
-        app.dialog = crate::ui::dialogs::Dialog::None;
-        let mut next = App::headless();
-        next.show_web_notice();
-        assert!(matches!(next.dialog, crate::ui::dialogs::Dialog::WebNotice));
     }
 }

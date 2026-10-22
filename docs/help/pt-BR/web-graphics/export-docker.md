@@ -29,4 +29,4 @@ objetos.
 
 Caracteres que não podem estar em nomes de arquivo viram `_`, e dois recursos
 com o mesmo nome recebem " (2)", " (3)" e assim por diante. A barra de status
-diz quantos arquivos foram gravados. No navegador, cada arquivo é baixado.
+diz quantos arquivos foram gravados.

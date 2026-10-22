@@ -42,19 +42,6 @@ Um script que define `TraceDrawFilter`, com um nome, extensões e uma função
 [[docker.install_filter]] para guardá-lo; [[docker.script_filters]] lista os
 filtros instalados com [[docker.edit]] e [[docker.remove]].
 
-## Assistentes de IA (MCP) {#mcp}
-
-O CD Draw fala o Model Context Protocol, então assistentes de IA no seu
-computador podem abrir, editar, inspecionar, exportar e salvar desenhos:
-
-- `tracedraw --mcp` executa o CD Draw sem janela para um assistente.
-- Para deixar um assistente editar o desenho aberto na sua janela, ligue
-  [[options.mcp_window]] na página [[options.general]] de
-  [[menu.tools > menu.tools.options > menu.tools.options_global]], e dê ao
-  assistente `tracedraw --mcp-window` como comando. Cada alteração é um passo
-  de desfazer que você pode voltar. Só programas no seu computador com o token
-  secreto que o CD Draw grava podem se conectar.
-
 ## A ferramenta de linha de comando {#cli}
 
 Todo download também traz `tracedraw-cli`, que converte desenhos entre formatos

@@ -11,8 +11,6 @@ CD Draw 的每個版本都會加入功能和修正。本頁說明如何得知變
   內容：每個新命令的結尾、通往新命令的子功能表箭頭旁，以及包含新命令的功能表
   標題上方都會出現一個小圓點。關閉該命令後標記消失，下次啟動 CD Draw 時該
   命令又會關閉。
-- 每個版本的完整變更清單在專案的
-  [變更記錄](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md) 中。
 
 ## 最近版本的重點 {#highlights}
 

@@ -1,7 +1,6 @@
 # Dropping files on the window
 
-Files dragged from the desktop or a file manager (in a browser: from the
-computer onto the page) and let go over the CD Draw window open or
+Files dragged from the desktop or a file manager and let go over the CD Draw window open or
 import, with no dialog.
 
 ## What a drop does
@@ -27,12 +26,6 @@ option (Options > Global > File Formats) is not used for drops.
 The window gets a 3 px accent frame over a light accent tint and, in the
 middle, a label with what a drop would do: "Drop to import into the
 drawing" with a drawing shown, "Drop to open" otherwise.
-
-## Browser build
-
-The browser hands over the bytes, not a path: they are read in the
-background, kept under `/upload/<file name>` like a file picked in a
-dialog, and opened or imported on a later frame.
 
 ## Checks
 

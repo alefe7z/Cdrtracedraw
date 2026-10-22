@@ -100,7 +100,7 @@ Buttons that need a drawing, and Snap To, are disabled on the Welcome
 Screen, also when drawings are open behind it; the property bar and the
 toolbox are pale there too, so the page fields cannot be changed
 (`pick_drag_tests::the_page_bar_does_nothing_on_the_welcome_screen`).
-New, Open, Options, Launch and AI Generate stay on. Hovered buttons are
+New, Open, Options and Launch stay on. Hovered buttons are
 light blue with a light blue frame.
 
 ## Property bar
@@ -212,7 +212,7 @@ and the status bar move (`ui/bars.rs`).
   take (a dot at the current one); every bar with a check at each one
   shown, as Window > Toolbars lists them (`menus::toolbars_list`: the
   menu bar, always on; the standard toolbar, the property bar, the
-  toolbox, the colour palette, the AI prompt bar, the status bar, the
+  toolbox, the colour palette, the status bar, the
   Text, Zoom and Transform toolbars, the time tracker); Customize; Lock
   Toolbars and Reset Bar Positions. Window > Toolbars has the same list,
   Lock Toolbars and Reset Bar Positions.
@@ -233,8 +233,7 @@ and the status bar move (`ui/bars.rs`).
 - Lock Toolbars hides the grips, stops every drag and greys the places in
   the menu. Reset Bar Positions puts every bar at its first place and
   shows it; the lock stays as it was.
-- The layout and the lock are kept in the preferences (`bars`; in the
-  browser, its local storage) as soon as they change; older preferences
+- The layout and the lock are kept in the preferences (`bars`) as soon as they change; older preferences
   without it start with the first places. Layouts of version 1
   (`bars.version`), whose palette stood at the right edge by default,
   put a palette found there back at the bottom once; a palette anywhere

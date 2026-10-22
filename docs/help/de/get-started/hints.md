@@ -11,7 +11,7 @@ verwenden, während Sie es verwenden. Es ist anfangs geöffnet, neben
 
 - Die **Startseite** stellt das Andockfenster vor und listet Themen auf, etwa
   Linien zeichnen, Formen, Objekte auswählen, verschieben und drehen, Effekte,
-  Umrisse, Füllungen, Text, KI und Hilfe erhalten. Jedes Thema ist ein Link.
+  Umrisse, Füllungen, Text und Hilfe erhalten. Jedes Thema ist ein Link.
 - Eine **Themenseite** erklärt das Thema und listet die passenden Werkzeuge
   auf, jedes mit Symbol, Namen und Funktion. Klicken Sie auf ein Werkzeug, um
   seine Seite zu sehen.

@@ -3,25 +3,48 @@
 //!
 //! A topic is a page of `docs/help/<lang>/` without the `.md`, with an
 //! optional `#anchor` (an explicit `{#id}` on one of its headings, the
-//! same in every language). The published Help lives at
-//! `<BASE><lang>/<page>.html#anchor`; every language has every page (a
-//! missing translation is published from the English page), so a link
-//! never breaks. See docs/behavior/help.md.
+//! same in every language). The Help is built with
+//! `scripts/help/help_site.py` and installed with the program, in a
+//! `help` folder (see [`installed_dir`]); a page is
+//! `<help>/<lang>/<page>.html#anchor` and opens from disk in the system
+//! browser, with no network. Every language has every page (a missing
+//! translation is built from the English page), so a link never breaks.
+//! See docs/behavior/help.md.
 
 use crate::app::{App, DockerTab};
 use crate::tools::Tool;
 use crate::ui::dialogs::{Dialog, OptionsPage};
-
-/// Where the Help is published (`web/help_site.py` builds it into
-/// `site/help/`, the project's page).
-pub const BASE: &str = "https://alefe7z.github.io/Cdrtracedraw/help/";
+use std::path::{Path, PathBuf};
 
 /// The first page of the Help.
 pub const HOME: &str = "index";
 
-/// The address of `topic` in `lang` (an interface language code, such as
-/// "pt-BR"); an unknown language opens the English Help.
-pub fn url_in(topic: &str, lang: &str) -> String {
+/// The installed Help folder, the first of these that holds an
+/// `index.html`: `TRACEDRAW_HELP_DIR`, then `help` next to the program
+/// (Windows, the portable zip, Linux archives), `../Resources/help` (the
+/// macOS bundle) and `../share/tracedraw/help` (Linux packages).
+pub fn installed_dir() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf));
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(d) = std::env::var_os("TRACEDRAW_HELP_DIR").filter(|d| !d.is_empty()) {
+        candidates.push(PathBuf::from(d));
+    }
+    if let Some(dir) = exe_dir {
+        candidates.push(dir.join("help"));
+        candidates.push(dir.join("../Resources/help"));
+        candidates.push(dir.join("../share/tracedraw/help"));
+    }
+    candidates
+        .into_iter()
+        .find(|d| d.join("index.html").is_file())
+}
+
+/// The page of `topic` in `lang` (an interface language code, such as
+/// "pt-BR") inside the Help folder `dir`, and its anchor; an unknown
+/// language opens the English Help.
+pub fn page_in<'a>(dir: &Path, topic: &'a str, lang: &str) -> (PathBuf, Option<&'a str>) {
     let lang = if crate::i18n::LANGUAGES.iter().any(|(c, _)| *c == lang) {
         lang
     } else {
@@ -32,15 +55,30 @@ pub fn url_in(topic: &str, lang: &str) -> String {
         None => (topic, None),
     };
     let page = if page.is_empty() { HOME } else { page };
-    match anchor {
-        Some(a) => format!("{BASE}{lang}/{page}.html#{a}"),
-        None => format!("{BASE}{lang}/{page}.html"),
-    }
+    (dir.join(lang).join(format!("{page}.html")), anchor)
 }
 
-/// The address of `topic` in the interface language.
-pub fn url(topic: &str) -> String {
-    url_in(topic, &crate::i18n::language())
+/// A `file://` address of `path` with `anchor`, for the system browser.
+pub fn file_url(path: &Path, anchor: Option<&str>) -> String {
+    let mut s = path.display().to_string().replace('\\', "/");
+    if !s.starts_with('/') {
+        // A Windows drive path: file:///C:/...
+        s.insert(0, '/');
+    }
+    let mut url = String::from("file://");
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' | b':' => {
+                url.push(b as char)
+            }
+            _ => url.push_str(&format!("%{b:02X}")),
+        }
+    }
+    if let Some(a) = anchor {
+        url.push('#');
+        url.push_str(a);
+    }
+    url
 }
 
 /// The page a dialog's "?" opens. Options goes by its page.
@@ -70,7 +108,6 @@ pub fn dialog_topic(d: &Dialog, options: OptionsPage) -> &'static str {
         Dialog::ConfirmClose => "get-started/open-and-save#closing",
         Dialog::ConfirmResetSettings => "customize/reset-settings",
         Dialog::Recover(_) => "get-started/open-and-save#recovery",
-        Dialog::Updates => "welcome/about-and-updates#updates",
         Dialog::OpenNotes(_) => "get-started/open-and-save#open-notes",
         Dialog::ConfirmShelfRemove { .. } => "objects/shelf#remove",
         Dialog::Export(_) => "file-formats/export",
@@ -102,10 +139,6 @@ pub fn dialog_topic(d: &Dialog, options: OptionsPage) -> &'static str {
         Dialog::PaletteEditor(_) => "color/palettes#palette-editor",
         Dialog::NewDocument(_) => "get-started/new-document",
         Dialog::About => "welcome/about-and-updates#about",
-        Dialog::GithubOpen(_) => "get-started/github#open",
-        Dialog::GithubSave(_) => "get-started/github#save",
-        Dialog::GithubHistory => "get-started/github#history",
-        Dialog::WebNotice => "get-started/browser-version",
         Dialog::TimeTracker(_) => "customize/time-tracker",
         Dialog::Preflight(_) => "printing/preflight",
         Dialog::PublishPdf(_) => "file-formats/publish-pdf",
@@ -149,8 +182,6 @@ pub fn options_topic(p: OptionsPage) -> &'static str {
         Warnings => "customize/global-options#warnings",
         FileLocations => "customize/global-options#file-locations",
         Workspace => "customize/workspaces",
-        AiGeneral => "customize/ai#general",
-        AiService => "customize/ai#service",
         DocumentGeneral => "pages-layout/document-options#general",
         PageSize => "pages-layout/document-options#page-size",
         Layout => "pages-layout/document-options#layout",
@@ -205,7 +236,6 @@ pub fn docker_topic(t: DockerTab) -> &'static str {
         DockerTab::Shelf => "objects/shelf",
         DockerTab::Export => "web-graphics/export-docker",
         DockerTab::Comments => "objects/comments",
-        DockerTab::AiGenerate => "customize/ai#generate",
         DockerTab::Effects => "effects/effects-docker",
     }
 }
@@ -293,10 +323,21 @@ pub fn context_topic(app: &App) -> &'static str {
 }
 
 impl App {
-    /// Open `topic` of the Help in the browser.
+    /// Open `topic` of the installed Help in the system browser, from
+    /// disk. Windows opens the page itself (its file handler drops an
+    /// anchor), the others its `file://` address with the anchor.
     pub fn open_help(&mut self, topic: &str) {
-        let u = url(topic);
-        self.open_url(&u);
+        let Some(dir) = installed_dir() else {
+            self.status = crate::i18n::tr("status.help_missing");
+            return;
+        };
+        let (page, anchor) = page_in(&dir, topic, &crate::i18n::language());
+        let target = if cfg!(target_os = "windows") {
+            page.display().to_string()
+        } else {
+            file_url(&page, anchor)
+        };
+        self.open_url(&target);
     }
 
     /// The "?" of the dialog being drawn.
@@ -389,7 +430,6 @@ mod tests {
             OptionsSet::Tools,
             OptionsSet::Global,
             OptionsSet::Workspaces,
-            OptionsSet::Ai,
             OptionsSet::Document,
         ] {
             t.extend(s.pages().iter().map(|p| options_topic(*p)));
@@ -413,15 +453,12 @@ mod tests {
             Dialog::PageNumberSettings,
             Dialog::ConfirmClose,
             Dialog::ConfirmResetSettings,
-            Dialog::Updates,
             Dialog::TextTabs,
             Dialog::TextColumns,
             Dialog::TextBullets,
             Dialog::TextDropCap,
             Dialog::TextStatistics,
             Dialog::About,
-            Dialog::GithubHistory,
-            Dialog::WebNotice,
         ]
     }
 
@@ -458,16 +495,47 @@ mod tests {
     }
 
     #[test]
-    fn urls_carry_the_language_and_fall_back_to_english() {
+    fn pages_carry_the_language_and_fall_back_to_english() {
+        let dir = Path::new("/opt/cd-draw/help");
         assert_eq!(
-            url_in("color/fills#mesh-fill", "pt-BR"),
-            "https://alefe7z.github.io/Cdrtracedraw/help/pt-BR/color/fills.html#mesh-fill"
+            page_in(dir, "color/fills#mesh-fill", "pt-BR"),
+            (dir.join("pt-BR/color/fills.html"), Some("mesh-fill"))
         );
         assert_eq!(
-            url_in("printing/print", "xx"),
-            "https://alefe7z.github.io/Cdrtracedraw/help/en/printing/print.html"
+            page_in(dir, "printing/print", "xx"),
+            (dir.join("en/printing/print.html"), None)
         );
-        assert_eq!(url_in("", "ja"), format!("{BASE}ja/index.html"));
+        assert_eq!(page_in(dir, "", "ja").0, dir.join("ja/index.html"));
+    }
+
+    #[test]
+    fn file_urls_are_escaped_and_keep_the_anchor() {
+        assert_eq!(
+            file_url(
+                Path::new("/opt/CD Draw/help/pt-BR/index.html"),
+                Some("begin")
+            ),
+            "file:///opt/CD%20Draw/help/pt-BR/index.html#begin"
+        );
+        assert_eq!(
+            file_url(
+                Path::new("C:\\Program Files\\CD Draw\\help\\en\\index.html"),
+                None
+            ),
+            "file:///C:/Program%20Files/CD%20Draw/help/en/index.html"
+        );
+    }
+
+    /// The Help folder is found next to the program, never online.
+    #[test]
+    fn the_help_folder_is_found_on_disk() {
+        let dir = std::env::temp_dir().join(format!("tracedraw-help-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<!doctype html>").unwrap();
+        std::env::set_var("TRACEDRAW_HELP_DIR", &dir);
+        assert_eq!(installed_dir(), Some(dir.clone()));
+        std::env::remove_var("TRACEDRAW_HELP_DIR");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

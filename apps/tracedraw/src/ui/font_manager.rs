@@ -250,14 +250,9 @@ pub struct Catalog {
 /// Run `job` off the interface thread where there are threads.
 fn spawn<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> mpsc::Receiver<T> {
     let (tx, rx) = mpsc::channel();
-    #[cfg(not(target_arch = "wasm32"))]
     std::thread::spawn(move || {
         let _ = tx.send(job());
     });
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = tx.send(job());
-    }
     rx
 }
 
@@ -652,17 +647,11 @@ fn run(app: &mut App, st: &mut FontManagerState, a: Action) {
             crate::files::Dialog::new()
                 .add_filter(tr("font_manager.font_files"), &["ttf", "otf", "ttc", "otc"])
                 .pick_file(app, |app, path| {
-                    let added = if crate::files::WEB {
-                        crate::files::read(&path)
-                            .map(|d| tracedraw_text::fonts().install_data(vec![d]))
-                            .unwrap_or_default()
-                    } else {
-                        let p = &mut app.settings.font_manager.installed;
-                        if !p.contains(&path) {
-                            p.push(path.clone());
-                        }
-                        tracedraw_text::fonts().install_paths(&[path])
-                    };
+                    let p = &mut app.settings.font_manager.installed;
+                    if !p.contains(&path) {
+                        p.push(path.clone());
+                    }
+                    let added = tracedraw_text::fonts().install_paths(&[path]);
                     app.font_families = tracedraw_text::fonts().available_families();
                     app.status = trf(
                         "font_manager.installed_n",
@@ -782,13 +771,7 @@ fn menu_row(
     let any = !selected.is_empty();
     egui::MenuBar::new().ui(ui, |ui| {
         ui.menu_button(tr("font_manager.menu_file"), |ui| {
-            if ui
-                .add_enabled(
-                    !crate::files::WEB,
-                    egui::Button::new(tr("font_manager.add_folder")),
-                )
-                .clicked()
-            {
+            if ui.button(tr("font_manager.add_folder")).clicked() {
                 actions.push(Action::AddFolder);
                 ui.close();
             }
@@ -1103,7 +1086,7 @@ fn toolbar(
             ui,
             Icon::AddFolder,
             &tr("font_manager.add_folder"),
-            !crate::files::WEB,
+            true,
             false,
         )
         .clicked()

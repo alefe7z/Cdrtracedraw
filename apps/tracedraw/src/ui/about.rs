@@ -4,7 +4,6 @@
 //! (author, license, source code, how it is built) as a two-column list,
 //! the copyright line and a Close button.
 
-use crate::app::App;
 use crate::i18n::{tr, trf};
 use crate::theme::Tokens;
 use crate::ui::brand;
@@ -82,7 +81,7 @@ fn fact(ui: &mut Ui, label: &str, value: impl FnOnce(&mut Ui)) {
 }
 
 /// Draw the About box; sets `close` when it should close.
-pub fn about_dialog(app: &mut App, ctx: &Context, close: &mut bool) {
+pub fn about_dialog(ctx: &Context, close: &mut bool) {
     let icon = brand::icon(ctx);
     crate::ui::chrome::window(tr("dialog.about")).show(ctx, |ui| {
         ui.set_width(480.0);
@@ -117,10 +116,7 @@ pub fn about_dialog(app: &mut App, ctx: &Context, close: &mut bool) {
                     ui.label(tr("dialog.about_license_value"));
                 });
                 fact(ui, &tr("dialog.about_source_label"), |ui| {
-                    let repo = env!("CARGO_PKG_REPOSITORY");
-                    if ui.link(repo).clicked() {
-                        app.open_url(repo);
-                    }
+                    ui.label(env!("CARGO_PKG_REPOSITORY"));
                 });
                 fact(ui, &tr("dialog.about_built"), |ui| {
                     ui.add(egui::Label::new(tr("dialog.about_ai")).wrap());
@@ -148,8 +144,6 @@ mod tests {
     #[test]
     fn the_about_box_draws_on_the_welcome_screen() {
         let ctx = crate::theme::ui_context();
-        let mut app = App::headless();
-        app.dialog = crate::ui::dialogs::Dialog::About;
         let mut close = false;
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -159,7 +153,7 @@ mod tests {
             ..Default::default()
         };
         let mut out = ctx.run_ui(input, |ui| {
-            about_dialog(&mut app, ui.ctx(), &mut close);
+            about_dialog(ui.ctx(), &mut close);
         });
         out.textures_delta.clear();
         assert!(!close);

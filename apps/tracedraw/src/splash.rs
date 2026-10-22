@@ -13,7 +13,7 @@ use crate::settings::Settings;
 use crate::ui::brand;
 use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Stroke, TextureHandle, Vec2};
 use std::path::Path;
-use web_time::{Duration, Instant};
+use std::time::{Duration, Instant};
 
 /// The splash window's size in points.
 pub const SIZE: Vec2 = Vec2::new(640.0, 380.0);

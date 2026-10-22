@@ -43,20 +43,6 @@ Skrip yang mendefinisikan `TraceDrawFilter`, dengan nama, ekstensi, dan fungsi
 [[docker.script_filters]] mencantumkan filter yang terpasang dengan
 [[docker.edit]] dan [[docker.remove]].
 
-## Asisten AI (MCP) {#mcp}
-
-CD Draw mendukung Model Context Protocol, sehingga asisten AI di komputer
-Anda dapat membuka, menyunting, memeriksa, mengekspor, dan menyimpan gambar:
-
-- `tracedraw --mcp` menjalankan CD Draw tanpa jendela untuk asisten.
-- Agar asisten dapat menyunting gambar yang terbuka di jendela Anda, aktifkan
-  [[options.mcp_window]] di halaman [[options.general]] pada
-  [[menu.tools > menu.tools.options > menu.tools.options_global]], dan berikan
-  `tracedraw --mcp-window` sebagai perintah asisten. Setiap perubahan adalah
-  satu langkah urungkan yang dapat Anda batalkan. Hanya program di komputer
-  Anda yang memiliki token rahasia yang ditulis CD Draw yang dapat
-  terhubung.
-
 ## Alat baris perintah {#cli}
 
 Setiap unduhan juga menyertakan `tracedraw-cli`, yang mengonversi gambar antar

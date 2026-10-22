@@ -20,8 +20,7 @@ and each gets the average colour of its centred square (flattened on
 white). Reading happens on worker threads while the panel shows a
 progress bar; files that cannot be read are skipped. The panel shows
 the folder's name (the full path as a tooltip) and how many pictures it
-holds. In the browser build there are no folders to read, so the panel
-says libraries need the desktop application.
+holds.
 
 ## Settings
 

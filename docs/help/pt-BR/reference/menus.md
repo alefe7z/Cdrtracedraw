@@ -15,10 +15,6 @@ próprios atalhos; veja
 | [[menu.file.open]] | [Abrir e salvar desenhos](../get-started/open-and-save.md) |
 | [[menu.file.open_recent]] | [Abrir e salvar desenhos](../get-started/open-and-save.md) |
 | [[menu.file.clear_recent]] | [Abrir e salvar desenhos](../get-started/open-and-save.md) |
-| [[menu.file.github]] | [Guardar desenhos no GitHub](../get-started/github.md) |
-| [[menu.file.github_open]] | [Guardar desenhos no GitHub](../get-started/github.md) |
-| [[menu.file.github_save]] | [Guardar desenhos no GitHub](../get-started/github.md) |
-| [[menu.file.github_history]] | [Guardar desenhos no GitHub](../get-started/github.md) |
 | [[menu.file.close]] | [Abrir e salvar desenhos](../get-started/open-and-save.md) |
 | [[menu.file.close_all]] | [Abrir e salvar desenhos](../get-started/open-and-save.md) |
 | [[menu.file.save]] | [Abrir e salvar desenhos](../get-started/open-and-save.md) |
@@ -135,12 +131,6 @@ próprios atalhos; veja
 
 | Comando | Veja |
 |---|---|
-| [[menu.object.ai_generate]] | [Desenhar e gerar com IA](../customize/ai.md) |
-| [[menu.object.ai_create_image]] | [Desenhar e gerar com IA](../customize/ai.md) |
-| [[menu.object.ai_remix_image]] | [Desenhar e gerar com IA](../customize/ai.md) |
-| [[menu.object.ai_create_vector]] | [Desenhar e gerar com IA](../customize/ai.md) |
-| [[menu.object.ai_draw_words]] | [Desenhar e gerar com IA](../customize/ai.md) |
-| [[menu.bitmaps.remove_background]] | [Desenhar e gerar com IA](../customize/ai.md) |
 | [[menu.object.create]] | [Objetos, símbolos e camadas](../objects/index.md) |
 | [[menu.object.create_arrowhead]] | [Definir contornos](../lines-shapes/outlines.md#outline-pen) |
 | [[menu.object.create_pattern]] | [Preenchimentos de padrão](../color/patterns.md) |
@@ -268,8 +258,6 @@ próprios atalhos; veja
 | [[menu.bitmaps.crop_bitmap]] | [Reamostrar, endireitar e expandir bitmaps](../bitmaps/resample-and-straighten.md) |
 | [[menu.bitmaps.resample]] | [Reamostrar, endireitar e expandir bitmaps](../bitmaps/resample-and-straighten.md) |
 | [[menu.bitmaps.remove_background_local]] | [Remover fundo](../bitmaps/remove-background.md) |
-| [[menu.bitmaps.remove_background]] | [Desenhar e gerar com IA](../customize/ai.md) |
-| [[menu.bitmaps.ai_art_styles]] | [Desenhar e gerar com IA](../customize/ai.md) |
 | [[menu.bitmaps.mode]] | [Mudar o modo de cor de bitmaps](../bitmaps/color-modes.md) |
 | [[menu.bitmaps.mode_bw]] | [Mudar o modo de cor de bitmaps](../bitmaps/color-modes.md) |
 | [[menu.bitmaps.mode_grayscale]] | [Mudar o modo de cor de bitmaps](../bitmaps/color-modes.md) |
@@ -381,7 +369,6 @@ próprios atalhos; veja
 | [[menu.tools.scripts_docker]] | [Scripts e automação](../customize/scripts.md) |
 | [[menu.tools.scripts_run]] | [Scripts e automação](../customize/scripts.md) |
 | [[menu.tools.scripts_record]] | [Scripts e automação](../customize/scripts.md) |
-| [[menu.tools.ai_generate]] | [Desenhar e gerar com IA](../customize/ai.md) |
 | [[menu.tools.font_manager]] | [Fontes e glifos](../text/fonts.md#font-manager) |
 | [[menu.tools.border_and_grommet]] | [Borda e ilhoses](../printing/border-and-grommet.md) |
 | [[menu.tools.time_tracker]] | [Controle de tempo](../customize/time-tracker.md) |
@@ -435,15 +422,12 @@ próprios atalhos; veja
 |---|---|
 | [[menu.help.help_topics]] | [Bem-vindo à Ajuda do CD Draw](../index.md#in-the-app) |
 | [[menu.help.product_help]] | [Bem-vindo à Ajuda do CD Draw](../index.md#in-the-app) |
-| [[menu.help.welcome_screen]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
-| [[menu.help.video_tutorials]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
+| [[menu.help.welcome_screen]] | [Sobre o CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.video_tutorials]] | [Sobre o CD Draw](../welcome/about-and-updates.md) |
 | [[menu.help.hints]] | [O painel Dicas](../get-started/hints.md) |
-| [[menu.help.quick_start_guide]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
-| [[menu.help.user_guide]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
+| [[menu.help.quick_start_guide]] | [Sobre o CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.user_guide]] | [Sobre o CD Draw](../welcome/about-and-updates.md) |
 | [[menu.help.whats_new]] | [Novidades](../welcome/whats-new.md) |
 | [[menu.help.highlight_whats_new]] | [Novidades](../welcome/whats-new.md) |
-| [[menu.help.updates]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
-| [[menu.help.message_settings]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
-| [[menu.help.community]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
-| [[menu.help.support]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
-| [[menu.help.about]] | [Sobre o CD Draw e atualizações](../welcome/about-and-updates.md) |
+| [[menu.help.message_settings]] | [Sobre o CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.about]] | [Sobre o CD Draw](../welcome/about-and-updates.md) |

@@ -14,8 +14,6 @@ listeler.
   içeren menünün başlığının üstünde küçük bir nokta görünür. Komutu
   kapattığınızda işaretler kaybolur ve CD Draw bir sonraki başlatılışında
   komut yine kapalıdır.
-- Her sürümün değişikliklerinin tam listesi projenin
-  [değişiklik günlüğündedir](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md).
 
 ## Son sürümlerin öne çıkanları {#highlights}
 

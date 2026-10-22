@@ -3,8 +3,7 @@
 CD Draw to wolny program do grafiki wektorowej o otwartym kodzie. Służy do
 rysowania ilustracji, logo, diagramów, układów stron i prac do druku złożonych
 z kształtów, linii i tekstu, które pozostają ostre w każdym rozmiarze, oraz do
-łączenia ich z bitmapami. Ten sam program działa w systemach Windows, macOS i
-Linux oraz w przeglądarce internetowej.
+łączenia ich z bitmapami. Program działa w systemach Windows, macOS i Linux całkowicie offline.
 
 Ta Pomoc wyjaśnia krok po kroku, jak wykonywać zadania w CD Draw, oraz co
 robi każde okno dialogowe, panel i narzędzie.
@@ -22,8 +21,7 @@ Spis treści po lewej odpowiada sposobowi pracy:
   oraz **Bitmapy** obejmują resztę pracy nad rysunkiem.
 - **Drukowanie**, **Grafika internetowa** i **Formaty plików** opisują, jak
   wydać pracę z CD Draw.
-- **Dostosowywanie i automatyzacja** dotyczy opcji, obszarów roboczych,
-  skryptów i funkcji AI, a **Informacje** wymieniają każde polecenie menu,
+- **Dostosowywanie i automatyzacja** dotyczy opcji, obszarów roboczych i skryptów, a **Informacje** wymieniają każde polecenie menu,
   narzędzie, panel i skrót klawiszowy.
 
 Użyj karty **Szukaj**, aby znaleźć stronę po dowolnym zawartym w niej słowie,

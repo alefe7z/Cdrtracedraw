@@ -14,9 +14,6 @@ versies.
   leidt, en boven de titel van een menu dat er een bevat. De markeringen
   verdwijnen als u de opdracht uitzet, en de opdracht staat weer uit als
   CD Draw de volgende keer start.
-- De volledige lijst met wijzigingen van elke versie staat in het
-  [wijzigingslogboek](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  van het project.
 
 ## Hoogtepunten van recente versies {#highlights}
 

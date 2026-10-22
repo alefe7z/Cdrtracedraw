@@ -2,7 +2,7 @@
 
 [[menu.bitmaps > menu.bitmaps.remove_background_local]] makes the background
 of a photo or scan transparent and keeps the subject. It works on this
-computer and needs no AI service. The property bar of a selected bitmap has
+computer. The property bar of a selected bitmap has
 the same command.
 
 ![The Remove Background dialog box](../../img/bitmaps-remove-background.png)
@@ -43,8 +43,6 @@ the same command.
 ## Tips {#tips}
 
 - It works best on a backdrop that differs from the subject: a studio
-  background, a sky, a product on a plain table. For busy scenes, the AI
-  command [[menu.bitmaps.remove_background]] (see
-  [AI](../customize/ai.md)) separates subject and scene by their meaning.
+  background, a sky, a product on a plain table.
 - The result replaces the pixels; effects on the bitmap are made permanent.
   To fine-tune afterwards, use [Masking colors](bitmap-mask.md).

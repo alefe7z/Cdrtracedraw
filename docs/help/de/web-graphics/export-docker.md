@@ -31,5 +31,4 @@ dem Namen springt zur Seite oder wählt die Objekte aus.
 
 Zeichen, die in Dateinamen nicht vorkommen dürfen, werden zu `_`, und zwei
 Elemente mit demselben Namen erhalten " (2)", " (3)" und so weiter. Die
-Statusleiste meldet, wie viele Dateien geschrieben wurden. Im Browser wird jede
-Datei heruntergeladen.
+Statusleiste meldet, wie viele Dateien geschrieben wurden.

@@ -69,8 +69,6 @@ dialogs it keeps the rest of the application waiting until it closes.
   never uninstalled.
 - Folders, installed files, Favorites, collections, the sample text and
   size and Show Details are kept in the settings.
-- In the browser, Add Folder is greyed (there are no folders to read) and
-  Add Font loads the uploaded file for the session.
 
 ## Checks
 

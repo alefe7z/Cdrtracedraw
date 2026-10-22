@@ -11,10 +11,6 @@ bewaard.
 
 - [[options.language]]: de taal van de interface. Deze Help opent in dezelfde
   taal.
-- [[options.check_updates]] (aan): zie
-  [Controleren op updates](../welcome/about-and-updates.md#updates).
-- [[options.agents]]: [[options.mcp_window]] laat AI-assistenten op deze
-  computer de geopende tekening bewerken; zie [Scripts](scripts.md#mcp).
 - [[options.reset_all]]: zie [Instellingen herstellen](reset-settings.md).
 
 ## Afdrukken {#printing}
@@ -68,7 +64,4 @@ aan om haar weer te zien.
 
 ![De pagina Bestandslocaties van de algemene opties](../../img/customize-global-options-file-locations.png)
 
-Toont waar de voorkeuren en de automatische back-ups worden bewaard. De
-voorkeuren staan in een map `tracedraw-settings` naast het programma als die
-bestaat (een draagbare kopie), anders op de plaats die uw systeem voor
-programma-instellingen gebruikt; de browserversie bewaart ze in de browser.
+Toont waar de voorkeuren en de automatische back-ups worden bewaard.

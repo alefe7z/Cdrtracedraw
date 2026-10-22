@@ -42,20 +42,6 @@ i [[menu.file.export]]. Kliknij [[docker.install_filter]], aby go zachować;
 [[docker.script_filters]] zawiera listę zainstalowanych filtrów z przyciskami
 [[docker.edit]] i [[docker.remove]].
 
-## Asystenci AI (MCP) {#mcp}
-
-CD Draw obsługuje protokół Model Context Protocol, dzięki czemu asystenci AI
-na Twoim komputerze mogą otwierać, edytować, badać, eksportować i zapisywać
-rysunki:
-
-- `tracedraw --mcp` uruchamia CD Draw bez okna dla asystenta.
-- Aby pozwolić asystentowi edytować rysunek otwarty w Twoim oknie, włącz
-  [[options.mcp_window]] na stronie [[options.general]] w
-  [[menu.tools > menu.tools.options > menu.tools.options_global]] i podaj
-  asystentowi polecenie `tracedraw --mcp-window`. Każda zmiana to jeden krok
-  cofania, który możesz wycofać. Połączyć się mogą tylko programy na Twoim
-  komputerze, które mają tajny token zapisywany przez CD Draw.
-
 ## Narzędzie wiersza poleceń {#cli}
 
 Każde pobranie zawiera też `tracedraw-cli`, które konwertuje rysunki między

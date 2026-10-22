@@ -43,16 +43,6 @@ pub fn encode(img: &RgbaImage) -> Option<Vec<u8>> {
     Some(buf.into_inner())
 }
 
-/// Resample to a new pixel size (Bitmaps > Resample).
-pub fn resample(img: &RgbaImage, w: u32, h: u32) -> RgbaImage {
-    image::imageops::resize(
-        img,
-        w.max(1),
-        h.max(1),
-        image::imageops::FilterType::Lanczos3,
-    )
-}
-
 /// Grow the canvas to `w` by `h` pixels (at least the image's size), the
 /// image in the middle and transparent around it.
 pub fn inflate_to(img: &RgbaImage, w: u32, h: u32) -> RgbaImage {

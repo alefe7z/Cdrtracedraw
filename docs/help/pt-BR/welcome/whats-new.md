@@ -12,9 +12,6 @@ saber o que mudou e lista os destaques das versões mais recentes.
   novo, ao lado da seta de um submenu que leva a um deles e sobre o título de
   um menu que contém um. As marcas somem quando você desativa o comando, e ele
   volta desativado na próxima vez que o CD Draw é iniciado.
-- A lista completa de mudanças de cada versão está no
-  [registro de alterações](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  do projeto.
 
 ## Destaques das versões recentes {#highlights}
 

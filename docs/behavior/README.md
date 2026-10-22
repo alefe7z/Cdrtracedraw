@@ -9,7 +9,7 @@ wrong. Each page records:
 - checks written as "given, when, then", which are the unit tests that
   gate the feature's row in `docs/features.md`.
 
-Pages: `ai-drawing.md`, `align-distribute.md`, `brush-strokes.md`, `bitmap-effects.md`, `bitmap-modes.md`, `remove-background.md`, `blend.md`,
+Pages: `align-distribute.md`, `brush-strokes.md`, `bitmap-effects.md`, `bitmap-modes.md`, `remove-background.md`, `blend.md`,
 `block-shadow.md`,
 `barcode.md`, `bitmap-import.md`, `border-and-grommet.md`, `brushes.md`, `color-docker.md`, `color-palettes.md`,
 `clones.md`, `colour-management.md`, `connectors-and-anchors.md`, `contour.md`,
@@ -19,7 +19,7 @@ Pages: `ai-drawing.md`, `align-distribute.md`, `brush-strokes.md`, `bitmap-effec
 `document-properties.md`, `documents.md`, `drawing-window.md`, `drop-files.md`, `drop-shadow.md`, `dxf.md`,
 `emf-wmf.md`, `envelope.md`, `eps-import.md`, `extrude.md`,
 `eyedroppers.md`, `files.md`, `font-manager.md`, `gradient-fill.md`, `free-transform.md`, `hints.md`,
-`lens.md`, `live-guides.md`, `mcp.md`, `mesh-fill.md`, `new-document.md`, `options.md`,
+`lens.md`, `live-guides.md`, `mesh-fill.md`, `new-document.md`, `options.md`,
 `outline-pen.md`, `pdf-import.md`, `picture-mosaic.md`, `pick-tool.md`,
 `plt.md`, `vba.md`, `vector-mosaic.md`,
 `clip-frame.md`, `clipboard.md`, `bitmap-tracing.md`, `psd-import.md`,
@@ -27,5 +27,5 @@ Pages: `ai-drawing.md`, `align-distribute.md`, `brush-strokes.md`, `bitmap-effec
 `shaping.md`, `shelf.md`, `shortcuts.md`, `area-fill.md`, `snapping.md`, `status-bar.md`,
 `straighten-image.md`,
 `symmetry.md`, `table.md`, `text-import.md`, `text.md`, `text-wrap.md`, `toolbars.md`,
-`toolbox.md`, `transformations.md`, `transparency.md`, `vector-pattern-fill.md`, `web.md`,
+`toolbox.md`, `transformations.md`, `transparency.md`, `vector-pattern-fill.md`,
 `writing-tools.md`, `zoom-and-pan.md`.

@@ -11,8 +11,6 @@ get-started/index
   get-started/open-and-save
   get-started/undo-and-views
   get-started/hints
-  get-started/browser-version
-  get-started/github
 lines-shapes/index
   lines-shapes/lines
   lines-shapes/artistic-media
@@ -113,7 +111,6 @@ customize/index
   customize/global-options
   customize/workspaces
   customize/reset-settings
-  customize/ai
   customize/scripts
   customize/time-tracker
 reference/index

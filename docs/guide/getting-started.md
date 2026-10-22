@@ -36,30 +36,6 @@ converting files (see [Customizing](customizing.md#scripts-and-automation)).
 If you want to try newer work before a release, the **Nightly build**
 pre-release on the releases page is refreshed with every change.
 
-### In your browser
-
-You can also [open CD Draw in the browser](https://alefe7z.github.io/Cdrtracedraw/)
-with nothing to install. While it loads, the page shows a progress bar;
-the editor starts when the bar is full.
-
-The browser version is the same editor, with a few differences:
-
-- Opening and importing use the browser's file picker; saving, exporting
-  and printing download a file.
-- Your settings are kept in that browser on that computer.
-- Recent drawings are not listed, because uploaded files cannot be
-  reopened.
-- Fonts come with the page, and more are fetched the first time your
-  text needs them.
-- It suits a desktop browser with a mouse and keyboard; on a tablet, use
-  the Touch workspace (see [Customizing](customizing.md#workspaces)).
-  A phone screen is too small for editing.
-- `Ctrl+N`, `Ctrl+T` and `Ctrl+W` stay with the browser, so use the
-  **File** menu for New and Close.
-
-The full list of differences is in
-[the browser notes](../behavior/web.md).
-
 ## Start CD Draw
 
 When CD Draw starts, a splash screen shows while fonts load. Then the

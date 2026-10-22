@@ -17,15 +17,6 @@ fn ci(ui: &mut Ui, close: &mut bool, key: &str, shortcut: &str, enabled: bool) -
     r
 }
 
-/// [`ci`] with a hover tip for the greyed row.
-fn ci_tip(ui: &mut Ui, close: &mut bool, key: &str, enabled: bool, tip: Option<&str>) -> bool {
-    let r = crate::ui::menus::item_tip(ui, key, "", enabled, tip);
-    if r {
-        *close = true;
-    }
-    r
-}
-
 /// The canvas context menu, drawn like the menus of the menu bar, at the
 /// position of the right click. Clicking an item or anywhere else closes
 /// it; submenus open on hover.
@@ -157,11 +148,7 @@ pub(crate) fn object_menu(app: &mut App, ui: &mut Ui, close: &mut bool) {
         sep(ui);
     }
     if is_bitmap {
-        // Edit Bitmap, then Remove Background (greyed until the AI
-        // service makes pictures; the tip says why), then tracing,
-        // cropping and remixing.
-        let ai = app.ai_image_ready() && app.ai_source_bitmap().is_some() && !app.ai_image.busy();
-        let tip = app.ai_image_tip();
+        // Edit Bitmap, then Remove Background, then tracing and cropping.
         if ci(
             ui,
             close,
@@ -171,7 +158,6 @@ pub(crate) fn object_menu(app: &mut App, ui: &mut Ui, close: &mut bool) {
         ) {
             app.edit_bitmap_externally();
         }
-        // On this computer, no AI service needed (#231).
         if ci(
             ui,
             close,
@@ -180,15 +166,6 @@ pub(crate) fn object_menu(app: &mut App, ui: &mut Ui, close: &mut bool) {
             app.selected_bitmap().is_some(),
         ) {
             app.dialog = crate::ui::dialogs::Dialog::RemoveBackground(Default::default());
-        }
-        if ci_tip(
-            ui,
-            close,
-            "menu.bitmaps.remove_background",
-            ai,
-            tip.as_deref(),
-        ) {
-            app.ai_remove_background();
         }
         if ci(
             ui,
@@ -204,12 +181,6 @@ pub(crate) fn object_menu(app: &mut App, ui: &mut Ui, close: &mut bool) {
         }
         if ci(ui, close, "menu.bitmaps.crop_bitmap", "", true) {
             app.set_tool(Tool::Crop);
-        }
-        if ci_tip(ui, close, "context.ai_remix", ai, tip.as_deref()) {
-            app.ai_image.mode = crate::ai_image::Mode::Remix;
-            app.ai_image.info = false;
-            app.ai_source_from_selection();
-            app.open_ai_generate();
         }
         sep(ui);
     }

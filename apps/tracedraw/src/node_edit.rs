@@ -537,7 +537,7 @@ impl App {
             styles: self.doc().object_styles.clone(),
             system: 0,
         });
-        self.mark_system_clipboard(None);
+        self.mark_system_clipboard();
         true
     }
 

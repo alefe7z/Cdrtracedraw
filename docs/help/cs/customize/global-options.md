@@ -10,10 +10,6 @@ vektorizaci, zprávy a umístění souborů.
 
 - [[options.language]]: jazyk rozhraní. Tato nápověda se otevírá ve stejném
   jazyce.
-- [[options.check_updates]] (zapnuto): viz
-  [Hledání aktualizací](../welcome/about-and-updates.md#updates).
-- [[options.agents]]: [[options.mcp_window]] umožní asistentům AI v tomto
-  počítači upravovat otevřenou kresbu; viz [Skripty](scripts.md#mcp).
 - [[options.reset_all]]: viz [Obnovení nastavení](reset-settings.md).
 
 ## Tisk {#printing}
@@ -63,7 +59,4 @@ uvidíte znovu.
 
 ![Stránka Umístění souborů v globálních možnostech](../../img/customize-global-options-file-locations.png)
 
-Ukazuje, kde jsou uloženy předvolby a automatické zálohy. Předvolby jsou ve
-složce `tracedraw-settings` vedle programu, pokud existuje (přenosná kopie),
-jinak v místě, které váš systém určuje pro nastavení programů; verze pro
-prohlížeč je uchovává v prohlížeči.
+Ukazuje, kde jsou uloženy předvolby a automatické zálohy.

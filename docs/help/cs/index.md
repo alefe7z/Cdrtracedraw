@@ -3,8 +3,7 @@
 CD Draw je svobodný vektorový kreslicí program s otevřeným zdrojovým kódem.
 Kreslíte v něm ilustrace, loga, diagramy, sazbu a tiskoviny z tvarů, čar a
 textu, které zůstávají ostré v jakékoli velikosti, a kombinujete je s
-bitmapami. Stejný program běží ve Windows, macOS a Linuxu i ve webovém
-prohlížeči.
+bitmapami. Program běží ve Windows, macOS a Linuxu zcela offline.
 
 Tato nápověda krok za krokem vysvětluje, jak v CD Draw pracovat, a co dělá
 každé dialogové okno, panel a nástroj.
@@ -20,8 +19,7 @@ Obsah vlevo sleduje způsob práce:
   a **Bitmapy** pokrývají zbytek práce na kresbě.
 - **Tisk**, **Webová grafika** a **Formáty souborů** vysvětlují, jak dostat
   práci z CD Draw ven.
-- **Přizpůsobení a automatizace** se týká voleb, pracovních prostorů, skriptů
-  a funkcí AI a **Reference** vypisuje každý příkaz nabídky, nástroj, panel a
+- **Přizpůsobení a automatizace** se týká voleb, pracovních prostorů a skriptů a **Reference** vypisuje každý příkaz nabídky, nástroj, panel a
   klávesovou zkratku.
 
 Kartou **Hledat** najdete stránku podle jakéhokoli slova, které obsahuje, a

@@ -45,7 +45,6 @@ pub struct DocSlot {
     pub view: View,
     pub selection: Vec<ShapeId>,
     pub file: Option<PathBuf>,
-    pub remote: Option<crate::github::Remote>,
     pub cdr_version: Option<u16>,
     pub cdr_unsaved_version: Option<u16>,
     pub tdraw_version: Option<u32>,
@@ -78,7 +77,6 @@ impl Default for DocSlot {
             view: View::default(),
             selection: Vec::new(),
             file: None,
-            remote: None,
             cdr_version: None,
             cdr_unsaved_version: None,
             tdraw_version: None,
@@ -125,7 +123,6 @@ impl App {
         };
         std::mem::swap(&mut self.engine, &mut slot.engine);
         std::mem::swap(&mut self.file, &mut slot.file);
-        std::mem::swap(&mut self.remote, &mut slot.remote);
         std::mem::swap(&mut self.cdr_version, &mut slot.cdr_version);
         std::mem::swap(&mut self.cdr_unsaved_version, &mut slot.cdr_unsaved_version);
         std::mem::swap(&mut self.tdraw_version, &mut slot.tdraw_version);
@@ -279,7 +276,6 @@ impl App {
             .set_max_history(self.settings.undo_levels.max(1));
         self.selection.clear();
         self.file = file;
-        self.remote = None;
         self.cdr_version = None;
         self.cdr_unsaved_version = None;
         self.tdraw_version = None;
@@ -305,8 +301,8 @@ impl App {
         }
     }
 
-    /// Catch up with fonts added since the last frame (fetched by the
-    /// browser build when text asked for them, or carried by a drawing):
+    /// Catch up with fonts added since the last frame (installed, or
+    /// carried by a drawing):
     /// refresh the font lists and the missing-font list, and draw the
     /// page and the text measurements again, since text drawn with a
     /// stand-in may now have its own font.
@@ -918,7 +914,7 @@ mod tests {
         // Nothing new: nothing changes.
         app.sync_fonts();
         assert_eq!(app.missing_fonts.len(), 2);
-        // A font arrives, as the browser build's font folder delivers them.
+        // A font arrives, as the Font Manager installs them.
         let quicksand = include_bytes!("../../../crates/text/testdata/Quicksand-VF.ttf");
         let _ = tracedraw_text::fonts().add_fonts(vec![quicksand.to_vec()]);
         app.sync_fonts();

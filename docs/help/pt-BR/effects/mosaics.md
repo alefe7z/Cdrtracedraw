@@ -56,6 +56,3 @@ Abra o painel [[docker.picture_mosaic]] com
      fileira ou removê-la; **Prioridade de saída** e a resolução: o tamanho do
      mosaico em pixels. O painel mostra o tamanho resultante.
 4. Clique em [[docker.apply]].
-
-> **Observação:** As bibliotecas de imagens precisam da versão para desktop; a
-> versão para navegador não lê pastas.

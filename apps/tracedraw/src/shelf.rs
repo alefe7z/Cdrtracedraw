@@ -9,8 +9,7 @@
 //! placing adds to another drawing's.
 //!
 //! The shelf is kept in the preferences folder as `shelf.json`
-//! (`{"kind": "tracedraw-shelf", "version": 1, "items": [...]}`), in local
-//! storage in a browser. A missing, damaged or foreign file gives an
+//! (`{"kind": "tracedraw-shelf", "version": 1, "items": [...]}`). A missing, damaged or foreign file gives an
 //! empty shelf; items beyond the limits are left out.
 
 use crate::app::App;
@@ -32,9 +31,6 @@ const MAX_FILE: u64 = 64 * 1024 * 1024;
 const MAX_NAME: usize = 120;
 /// Symbols inside symbols are followed this deep.
 const MAX_DEPTH: usize = 16;
-/// The browser build's local storage key.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-const WEB_KEY: &str = "tracedraw-shelf";
 
 /// One item on the shelf.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -182,14 +178,6 @@ impl Shelf {
         if cfg!(test) {
             return;
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let items = crate::web::storage_get(WEB_KEY)
-                .and_then(|s| items_from_bytes(s.as_bytes()))
-                .unwrap_or_default();
-            self.set_items(items);
-            return;
-        }
         #[allow(unreachable_code)]
         if let Some(p) = path() {
             self.load_from(&p);
@@ -241,13 +229,6 @@ impl Shelf {
     /// Keep the shelf (unit tests keep nothing, see `ensure_loaded`).
     pub fn save(&self) {
         if cfg!(test) {
-            return;
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Some(bytes) = items_to_bytes(&self.items) {
-                crate::web::storage_set(WEB_KEY, &String::from_utf8_lossy(&bytes));
-            }
             return;
         }
         #[allow(unreachable_code)]

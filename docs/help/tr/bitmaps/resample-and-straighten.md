@@ -61,8 +61,6 @@ Bulanıklaştırma gibi bazı efektler bir bitmapin kenarlarının dışına ta�
 - [[menu.bitmaps.crop_bitmap]] bir bitmapi [[tool.crop]] aracıyla kırpar;
   bir bitmapin köşesini [[tool.shape]] aracıyla sürüklemek de onu kırpar.
 - [[menu.bitmaps.edit_bitmap]] bitmapi başka bir programda açar.
-- [[menu.bitmaps.remove_background]] bir fotoğrafın arka planını saydam
-  yapar.
 - [[menu.bitmaps.remove_background_local]]: [Arka Planı Kaldır](remove-background.md).
 - [[menu.bitmaps.break_link]] ve [[menu.bitmaps.update_from_link]] bir dosyaya
   bağlı bitmaplerde çalışır.

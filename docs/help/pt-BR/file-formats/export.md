@@ -13,8 +13,7 @@ esquerda e as configurações à direita.
 3. Defina as opções do formato (abaixo).
 4. Marque **Somente selecionados** para exportar só a seleção, ou **Todas as
    páginas** para exportar cada página.
-5. Clique em [[dialog.ok]] e escolha onde salvar. No navegador, o arquivo é
-   baixado.
+5. Clique em [[dialog.ok]] e escolha onde salvar.
 
 A caixa de diálogo estima o tamanho do arquivo. Com **Não mostrar a caixa de
 filtro** marcado, a próxima exportação vai direto para o arquivo com as mesmas

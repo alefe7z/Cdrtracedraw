@@ -2,7 +2,7 @@
 //! drawn headlessly in English on a small demo drawing, rasterised in
 //! software from egui's meshes and cropped to the window.
 //!
-//! `web/help_shots.sh` runs `cargo test -p tracedraw help_shots -- --ignored`
+//! `scripts/help/help_shots.sh` runs `cargo test -p tracedraw help_shots -- --ignored`
 //! with `HELP_SHOTS` set to the output folder (`docs/help/img`). The
 //! images are named after the Help topic they illustrate (see
 //! docs/behavior/help.md).
@@ -369,8 +369,6 @@ fn shots() -> Vec<(String, Shot, bool)> {
         ("menu.file.print_merge_create", false),
         ("menu.file.preflight", false),
         ("menu.file.publish_to_pdf", false),
-        ("menu.file.github_open", false),
-        ("menu.file.github_save", false),
         ("menu.edit.paste_special", false),
         ("menu.layout.insert_page", false),
         ("menu.layout.rename_page", false),
@@ -424,11 +422,6 @@ fn shots() -> Vec<(String, Shot, bool)> {
             horizontal: true,
             vertical: true,
         }),
-        false,
-    ));
-    v.push((
-        name("get-started/github#history"),
-        Shot::Dialog(|_| Dialog::GithubHistory),
         false,
     ));
     v.push((
@@ -494,23 +487,12 @@ fn shots() -> Vec<(String, Shot, bool)> {
         Shot::Dialog(|_| Dialog::ConfirmClose),
         false,
     ));
-    v.push((
-        name("get-started/browser-version"),
-        Shot::Dialog(|_| Dialog::WebNotice),
-        false,
-    ));
-    v.push((
-        name("welcome/about-and-updates#updates"),
-        Shot::Dialog(|_| Dialog::Updates),
-        false,
-    ));
     for s in [
         crate::ui::options::OptionsSet::App,
         crate::ui::options::OptionsSet::Customization,
         crate::ui::options::OptionsSet::Tools,
         crate::ui::options::OptionsSet::Global,
         crate::ui::options::OptionsSet::Workspaces,
-        crate::ui::options::OptionsSet::Ai,
         crate::ui::options::OptionsSet::Document,
     ] {
         for p in s.pages() {
@@ -528,7 +510,7 @@ fn shots() -> Vec<(String, Shot, bool)> {
     v
 }
 
-/// Draw every screenshot into `$HELP_SHOTS` (run by `web/help_shots.sh`).
+/// Draw every screenshot into `$HELP_SHOTS` (run by `scripts/help/help_shots.sh`).
 #[test]
 #[ignore]
 fn help_shots() {

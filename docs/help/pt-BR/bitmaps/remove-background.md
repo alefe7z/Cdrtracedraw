@@ -1,8 +1,7 @@
 # Remover o fundo de um bitmap
 
 [[menu.bitmaps > menu.bitmaps.remove_background_local]] deixa transparente o
-fundo de uma foto ou digitalização e mantém o assunto. Funciona neste
-computador e não precisa de serviço de IA. A barra de propriedades de um
+fundo de uma foto ou digitalização e mantém o assunto. Funciona neste computador. A barra de propriedades de um
 bitmap selecionado tem o mesmo comando.
 
 ![A caixa de diálogo Remover fundo](../../img/bitmaps-remove-background.png)
@@ -44,8 +43,6 @@ bitmap selecionado tem o mesmo comando.
 ## Dicas {#tips}
 
 - Funciona melhor com um fundo diferente do assunto: um fundo de estúdio, um
-  céu, um produto sobre uma mesa lisa. Para cenas carregadas, o comando de IA
-  [[menu.bitmaps.remove_background]] (veja [IA](../customize/ai.md)) separa
-  assunto e cena pelo significado.
+  céu, um produto sobre uma mesa lisa.
 - O resultado substitui os pixels; os efeitos do bitmap ficam permanentes.
   Para ajustar depois, use [Mascarar cores](bitmap-mask.md).

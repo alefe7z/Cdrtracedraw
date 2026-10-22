@@ -3,9 +3,8 @@
 //! shortcuts and the folder's contents), the file name, the type
 //! (CD Draw or `.cdr`), the version of either (the newest first), whether
 //! the CMYK profile goes along, and the document's title,
-//! subject and rating, and asks before replacing a file. In a browser,
-//! where every save is a download, it keeps the name, type, version and
-//! properties. See docs/behavior/files.md.
+//! subject and rating, and asks before replacing a file. See
+//! docs/behavior/files.md.
 
 use crate::app::App;
 use crate::files::{self, DirEntry, Place};
@@ -160,14 +159,9 @@ impl SaveAsState {
         format!("{stem}.{}", self.extension())
     }
 
-    /// The file to write: in the folder (desktop) or a download named so
-    /// (browser).
+    /// The file to write, in the folder.
     pub fn target(&self) -> PathBuf {
-        if files::WEB {
-            PathBuf::from("/download").join(self.file_name())
-        } else {
-            self.dir.join(self.file_name())
-        }
+        self.dir.join(self.file_name())
     }
 
     /// Show `dir` (a folder that cannot be read shows empty).
@@ -292,7 +286,7 @@ impl App {
             st.note = Some(tr("dialog.need_file_name"));
             return false;
         }
-        if !files::WEB && !files::is_dir(&st.dir) {
+        if !files::is_dir(&st.dir) {
             st.note = Some(tr("dialog.no_such_folder"));
             return false;
         }
@@ -314,9 +308,7 @@ impl App {
             metadata.rating = st.rating.min(5);
             self.run(Command::SetMetadata { metadata });
         }
-        if !files::WEB {
-            self.settings.last_dir = Some(st.dir.clone());
-        }
+        self.settings.last_dir = Some(st.dir.clone());
         if st.cdr {
             self.cdr_embed_profile = st.embed_profile;
             self.cdr_embed_fonts = st.embed_fonts;
@@ -354,28 +346,23 @@ pub fn size_text(bytes: u64) -> String {
 pub fn dialog(app: &mut App, ctx: &Context, st: &mut SaveAsState, close: &mut bool) {
     window(ctx, tr("dialog.save_drawing")).show(ctx, |ui| {
         ui.set_width(WIDTH);
-        if !files::WEB {
-            folder_bar(ui, st);
-            ui.add_space(4.0);
-            // The shortcuts and the list keep a fixed height (a vertical
-            // separator would take all there is).
-            ui.allocate_ui(egui::vec2(WIDTH, LIST_H), |ui| {
-                ui.set_min_height(LIST_H);
-                ui.set_max_height(LIST_H);
-                ui.horizontal_top(|ui| {
-                    places(ui, st);
-                    ui.separator();
-                    listing(ui, st);
-                });
+        folder_bar(ui, st);
+        ui.add_space(4.0);
+        // The shortcuts and the list keep a fixed height (a vertical
+        // separator would take all there is).
+        ui.allocate_ui(egui::vec2(WIDTH, LIST_H), |ui| {
+            ui.set_min_height(LIST_H);
+            ui.set_max_height(LIST_H);
+            ui.horizontal_top(|ui| {
+                places(ui, st);
+                ui.separator();
+                listing(ui, st);
             });
-            ui.add_space(6.0);
-        }
+        });
+        ui.add_space(6.0);
         fields(ui, st);
         if let Some(note) = &st.note {
             ui.label(RichText::new(note.as_str()).color(ERROR));
-        }
-        if files::WEB {
-            ui.label(RichText::new(tr("dialog.download_hint")).color(Tokens::text_dim()));
         }
         ui.add_space(6.0);
         if let Some(path) = st.replace.clone() {

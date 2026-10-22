@@ -65,7 +65,6 @@ pub fn show(app: &mut App, ui: &mut Ui, tab: DockerTab) {
         DockerTab::Shelf => crate::ui::shelf_docker::shelf(app, ui),
         DockerTab::Export => crate::ui::export_docker::export_docker(app, ui),
         DockerTab::Comments => crate::ui::comments_docker::comments_docker(app, ui),
-        DockerTab::AiGenerate => crate::ui::ai_generate_docker::ai_generate(app, ui),
         DockerTab::Effects => crate::ui::effects_docker::effects_docker(app, ui),
         DockerTab::Macros => crate::ui::macros_ui::manager(app, ui),
         _ => {}
@@ -482,7 +481,7 @@ fn scripts(app: &mut App, ui: &mut Ui) {
         let vba = app.macros.scripts_vba;
         let js_r = ui.selectable_label(!vba, "JavaScript");
         let vba_r = ui
-            .add_enabled(!crate::files::WEB, egui::Button::selectable(vba, "VBA"))
+            .add_enabled(true, egui::Button::selectable(vba, "VBA"))
             .on_hover_text(tr("docker.vba_hint"));
         if (js_r.clicked() && vba) || (vba_r.clicked() && !vba) {
             std::mem::swap(&mut app.script_source, &mut app.macros.other_source);
@@ -508,8 +507,7 @@ fn scripts(app: &mut App, ui: &mut Ui) {
         if app.macros.run.is_some() && ui.button(tr("docker.stop")).clicked() {
             app.stop_macro();
         }
-        if !crate::files::WEB
-            && !vba
+        if !vba
             && ui
                 .add_enabled(!debugging, egui::Button::new(tr("docker.debug")))
                 .on_hover_text(tr("docker.debug_hint"))

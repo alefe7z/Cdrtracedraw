@@ -7,12 +7,12 @@
 <p align="center">
   <b>Vector illustration, page layout and print; an open-source, clean-room vector editor rebuilt from scratch in pure Rust.</b><br>
   Pages and layers, curves and nodes, artistic and paragraph text, fills and outlines, live effects, symbols, PDF/X and real <code>.cdr</code> files,<br>
-  in one native program for Windows, macOS and Linux, and in the browser.
+  in one native program for Windows, macOS and Linux that works entirely offline.
 </p>
 
 <p align="center">
   <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-b7410e?style=flat-square&logo=rust">
-  <img alt="Windows, macOS, Linux and the browser" src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux%20%C2%B7%20Web-native-1f6fc5?style=flat-square">
+  <img alt="Windows, macOS and Linux, offline" src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-offline-1f6fc5?style=flat-square">
   <img alt="License: MIT or Apache-2.0" src="https://img.shields.io/badge/license-MIT%20or%20Apache--2.0-444444?style=flat-square">
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-d97706?style=flat-square">
   <img alt="18 interface languages" src="https://img.shields.io/badge/interface-18%20languages-7b5cff?style=flat-square">
@@ -20,7 +20,6 @@
 
 <p align="center">
   <a href="https://github.com/alefe7z/Cdrtracedraw/releases"><b>Download</b></a> &middot;
-  <a href="https://alefe7z.github.io/Cdrtracedraw/">Open it in the browser</a> &middot;
   <a href="docs/features.md">Feature status</a> &middot;
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
@@ -54,19 +53,19 @@
   <tr>
     <td width="25%" valign="top">
       <h3>A full desktop workspace</h3>
-      Menu bar, context-sensitive property bar, toolbox with flyouts, 41 dockable panels, colour palette, rulers, guides and a page navigator, all set out for long working sessions.
+      Menu bar, context-sensitive property bar, toolbox with flyouts, 40 dockable panels, colour palette, rulers, guides and a page navigator, all set out for long working sessions.
     </td>
     <td width="25%" valign="top">
       <h3>Native and light</h3>
-      One program per platform built with egui, a CPU renderer for exact output and no runtime to install. No Electron, no web view; the same code runs in the browser as WebAssembly.
+      One program per platform built with egui, a CPU renderer for exact output and no runtime to install. No Electron, no web view, no network: nothing leaves your computer.
     </td>
     <td width="25%" valign="top">
       <h3>Opens your files</h3>
       A clean-room <code>.cdr</code> reader for format versions 1 to 27 and a writer for versions 7 to 27, plus SVG, PDF, AI, EPS, DXF, PSD, EMF, WMF, HPGL and text documents.
     </td>
     <td width="25%" valign="top">
-      <h3>Ready for scripts and agents</h3>
-      Every change is a command with undo, so the same engine answers the window, the command line, JavaScript and an MCP server.
+      <h3>Ready for scripts</h3>
+      Every change is a command with undo, so the same engine answers the window, the command line, JavaScript and VBA macros.
     </td>
   </tr>
 </table>
@@ -128,7 +127,7 @@ or the moon button at the right of the status bar).
       <h3>Bitmaps, too</h3>
       Place PNG, JPEG, BMP, GIF, TIFF and WebP images, or turn vectors into a bitmap, then use 98 bitmap effects in fifteen groups, each with its own dialog and a before and after preview. Effects stay in the object's list in the Properties panel, where they can be changed, hidden or removed.
       <br><br>
-      Colour modes, a colour mask, background removal on this computer (no AI needed), straighten, crop and resample complete the set.
+      Colour modes, a colour mask, background removal on this computer, straighten, crop and resample complete the set.
     </td>
     <td width="50%" valign="top">
       <img src="docs/images/tracedraw-trace.jpg" alt="The Trace Bitmap dialog with the Clipart preset: the bitmap before and its traced curves after, with the detail, smoothing and colour settings" width="100%">
@@ -165,11 +164,8 @@ or the moon button at the right of the status bar).
       Blank pages in the usual sizes and designed templates (business cards, flyers, a poster, a letterhead, a certificate, an invoice, a banner, a social post, a label), every part an ordinary editable object. Search them, filter by category, and keep your own: File &rsaquo; Save as Template puts a drawing in the list.
     </td>
     <td width="50%" valign="top">
-      <img src="docs/images/tracedraw-ai.jpg" alt="The AI Generate docker in the dark theme with a prompt, the Watercolor style and the Warm palette picked, next to the poster" width="100%">
-      <br>
-      <sub>The AI Generate docker, in the dark theme.</sub>
-      <h3>AI with your own keys</h3>
-      Create pictures from a prompt with aspect ratio, style and palette presets, remix a selected picture, create vectors (a generated illustration traced into curves), remove a picture's background, and draw shapes from a request in words. CD Draw has no AI of its own and no account: Tools &rsaquo; Options &rsaquo; AI connects the services you choose (Google Gemini, OpenAI or compatible APIs, local servers included), and nothing is sent until you ask.
+      <h3>Offline by design</h3>
+      CD Draw never connects to the internet: no accounts, no online services, no update checks, no telemetry, no downloads. The Help is installed with the program and opens from disk, and your drawings stay where you save them. The program contains no networking code at all.
     </td>
   </tr>
   <tr>
@@ -202,7 +198,7 @@ or the moon button at the right of the status bar).
     </td>
     <td width="33%" valign="top">
       <h4>41 panels</h4>
-      Properties &middot; Objects &middot; Hints &middot; Transformations &middot; Undo &middot; Align and Distribute &middot; Shaping &middot; Step and Repeat &middot; Text &middot; Glyphs &middot; Colour &middot; Colour Styles &middot; Object Styles &middot; Find and Replace &middot; Scripts &middot; Palettes &middot; Lens &middot; Blend &middot; Contour &middot; Envelope &middot; Extrude &middot; Bevel &middot; Brush Strokes &middot; Bitmap Mask &middot; Object Data &middot; Links &middot; Symbols &middot; Pages &middot; Guidelines &middot; Fonts &middot; Font Sampler &middot; Corners &middot; Join Curves &middot; Coordinates &middot; Vector Mosaic &middot; Picture Mosaic &middot; Shelf &middot; Effects &middot; Export &middot; Comments &middot; AI Generate (with Draw with words)
+      Properties &middot; Objects &middot; Hints &middot; Transformations &middot; Undo &middot; Align and Distribute &middot; Shaping &middot; Step and Repeat &middot; Text &middot; Glyphs &middot; Colour &middot; Colour Styles &middot; Object Styles &middot; Find and Replace &middot; Scripts &middot; Palettes &middot; Lens &middot; Blend &middot; Contour &middot; Envelope &middot; Extrude &middot; Bevel &middot; Brush Strokes &middot; Bitmap Mask &middot; Object Data &middot; Links &middot; Symbols &middot; Pages &middot; Guidelines &middot; Fonts &middot; Font Sampler &middot; Corners &middot; Join Curves &middot; Coordinates &middot; Vector Mosaic &middot; Picture Mosaic &middot; Shelf &middot; Effects &middot; Export &middot; Comments
     </td>
     <td width="33%" valign="top">
       <h4>Documents and pages</h4>
@@ -265,8 +261,8 @@ is confirmed and what is still assumed.
 ## Made to be automated
 
 Every menu item, tool and panel builds a command for one engine, with undo
-and redo. The window, the command line, the JavaScript object model and the
-MCP server all go through it, so anything a click can do, a script can do.
+and redo. The window, the command line, the JavaScript object model and
+VBA macros all go through it, so anything a click can do, a script can do.
 
 ```sh
 # Convert between any format CD Draw opens and any it writes
@@ -285,11 +281,6 @@ tracedraw-cli inspect drawing.cdr
 tracedraw-cli info drawing.cdr
 TRACEDRAW_OBJECTS=1 tracedraw-cli info drawing.cdr   # every object
 
-# Serve the editor to an AI agent over the Model Context Protocol
-tracedraw --mcp
-# ... or let the agent edit the drawing open in the window (Options >
-# Global > General > Let AI agents on this computer edit the open drawing)
-tracedraw --mcp-window
 ```
 
 The Scripts panel runs JavaScript against an object model of documents,
@@ -304,19 +295,9 @@ for (let i = 0; i < 12; i++) {
 }
 ```
 
-See [`docs/behavior/mcp.md`](docs/behavior/mcp.md) for the MCP tools.
-
 **VBA macros** run inside the editor: open a macro project (`.gms`, or
 `.bas`, `.cls` and `.frm` modules with their forms) in the Macro Manager,
-run, step and edit it in the macro editor, on every platform and in the
-browser. See [`docs/behavior/vba.md`](docs/behavior/vba.md).
-
-**Draw with words** (a mode of the AI Generate docker) writes those scripts for you: describe
-what to draw or change, and an AI service you set up with your own key
-(the Messages API, any chat completions service, or a model server on
-your own computer) writes the script, which runs as one undo step without
-access to your files. CD Draw has no AI service or account of its own;
-see [`docs/behavior/ai-drawing.md`](docs/behavior/ai-drawing.md).
+run, step and edit it in the macro editor, on every platform. See [`docs/behavior/vba.md`](docs/behavior/vba.md).
 
 ## Under the hood
 
@@ -327,7 +308,8 @@ see [`docs/behavior/ai-drawing.md`](docs/behavior/ai-drawing.md).
   exports and the previews, so what is on screen is what comes out.
 - **Real text:** fonts from the system through fontdb, shaping with
   rustybuzz, a paragraph engine of its own.
-- **Runs in the browser:** the whole editor compiles to WebAssembly.
+- **Offline only:** no HTTP, TLS or socket code in the workspace; the
+  Help ships with the program.
 - **Clean-room:** format support from public notes and owned files only;
   no proprietary code or assets.
 - **Tested:** about 1,600 tests, including format round trips,
@@ -402,11 +384,11 @@ names is the version number.
 | Windows (x64) | `tracedraw-<version>-windows-x86_64-setup.exe` (installer), `tracedraw-<version>-windows-x86_64-portable.zip` (keeps its settings in the `tracedraw-settings` folder beside the program; not signed yet: if SmartScreen warns, More info > Run anyway) |
 | macOS (Apple silicon, Intel) | `tracedraw-<version>-macos-arm64.dmg`, `tracedraw-<version>-macos-x86_64.dmg` (unsigned for now: right-click, Open) |
 | Linux (x86_64) | `.deb`, `tracedraw-<version>-linux-x86_64.AppImage`, `tracedraw-<version>-linux-x86_64.tar.gz` |
-| Web | no download: [open it in the browser](https://alefe7z.github.io/Cdrtracedraw/), nothing to install |
 
-Each download includes `tracedraw-cli` next to the editor. Packaging sources
-are in [`packaging/`](packaging/); the browser build is described in
-[`docs/behavior/web.md`](docs/behavior/web.md).
+Each download includes `tracedraw-cli` and the Help next to the editor.
+Packaging sources are in [`packaging/`](packaging/). A Windows build of any
+commit can be asked for with `scripts/request-exe.sh` (see
+[`windows-exe.yml`](.github/workflows/windows-exe.yml)).
 
 ## Code signing policy
 
@@ -423,17 +405,16 @@ is described in [`docs/code-signing.md`](docs/code-signing.md).
 | Committers and reviewers | [Ighor Toth](https://github.com/igtoth) |
 | Approvers | [Ighor Toth](https://github.com/igtoth) |
 
-Privacy policy: this program will not transfer any information to other
-networked systems unless specifically requested by the user or the person
-installing or operating it. CD Draw opens web pages (help, the project's
-pages) in your browser only when you choose to. The full policy is in
+Privacy policy: CD Draw never transfers any information to other networked
+systems; it makes no network connections at all. The Help opens from disk
+in your browser. The full policy is in
 [`PRIVACY.md`](PRIVACY.md).
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
-| [User Help](https://alefe7z.github.io/Cdrtracedraw/help/en/index.html) | the manual, with screenshots; every "?" button and F1 in the app open its page in the interface language |
+| [User Help](docs/help/en/index.md) | the manual, with screenshots; every "?" button and F1 in the app open its page in the interface language |
 | [`docs/features.md`](docs/features.md) | every capability and its status |
 | [`docs/behavior/`](docs/behavior/) | defaults, shortcuts and formulas, tool by tool |
 | [`docs/architecture.md`](docs/architecture.md) | crates, data flow, units, rendering, text |

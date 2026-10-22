@@ -50,16 +50,8 @@ impl ClipboardContent {
     }
 }
 
-/// The system clipboard as seen by the browser build: empty, because
-/// browsers only hand clipboard contents to paste events.
-#[cfg(target_arch = "wasm32")]
-pub fn read_system() -> ClipboardContent {
-    ClipboardContent::default()
-}
-
 /// Read text and image from the system clipboard; failures yield `None`
 /// fields (headless sessions have no clipboard).
-#[cfg(not(target_arch = "wasm32"))]
 pub fn read_system() -> ClipboardContent {
     let Ok(mut cb) = arboard::Clipboard::new() else {
         return ClipboardContent::default();
@@ -81,7 +73,6 @@ pub fn read_system() -> ClipboardContent {
 /// A path from a copied file list without the carriage return its line
 /// may keep: the list's lines end in CR LF and the clipboard library
 /// splits it at LF only.
-#[cfg(not(target_arch = "wasm32"))]
 fn without_line_end(path: std::path::PathBuf) -> std::path::PathBuf {
     match path.to_str() {
         Some(s) if s.ends_with(['\r', '\n']) => s.trim_end_matches(['\r', '\n']).into(),
@@ -90,17 +81,10 @@ fn without_line_end(path: std::path::PathBuf) -> std::path::PathBuf {
 }
 
 /// Put text on the system clipboard (best effort).
-#[cfg(not(target_arch = "wasm32"))]
 pub fn write_text(text: &str) {
     if let Ok(mut cb) = arboard::Clipboard::new() {
         let _ = cb.set_text(text.to_string());
     }
-}
-
-/// Put text on the system clipboard through egui (browser build).
-#[cfg(target_arch = "wasm32")]
-pub fn write_text(text: &str) {
-    crate::web::copy_text(text);
 }
 
 impl App {
@@ -128,22 +112,14 @@ impl App {
         };
         self.copy();
         write_text(&svg);
-        self.mark_system_clipboard(Some(&svg));
+        self.mark_system_clipboard();
     }
 
-    /// Remember what the system clipboard holds right after a copy here
-    /// (`written`: the text the copy put there), so that a paste can tell
-    /// whether something was copied elsewhere since.
-    pub fn mark_system_clipboard(&mut self, written: Option<&str>) {
-        // A browser hands the clipboard only to paste events: what was
-        // written is what a paste event brings back.
-        let now = match written {
-            Some(text) if crate::files::WEB => ClipboardContent {
-                text: Some(text.to_string()),
-                ..Default::default()
-            },
-            _ => read_system(),
-        };
+    /// Remember what the system clipboard holds right after a copy here,
+    /// so that a paste can tell whether something was copied elsewhere
+    /// since.
+    pub fn mark_system_clipboard(&mut self) {
+        let now = read_system();
         if let Some(cb) = self.clipboard.as_mut() {
             cb.system = now.fingerprint();
         }
@@ -212,17 +188,7 @@ impl App {
     /// Edit > Paste: what was copied last, here or in another
     /// application.
     pub fn paste_any(&mut self) {
-        self.paste_with_event_text(None);
-    }
-
-    /// Ctrl+V, with the text of the paste event when there was one (a
-    /// browser offers the clipboard's text only that way).
-    pub fn paste_with_event_text(&mut self, text: Option<String>) {
-        let mut content = read_system();
-        if crate::files::WEB {
-            content.text = text.filter(|t| !t.is_empty());
-        }
-        self.paste_from(content);
+        self.paste_from(read_system());
     }
 
     /// Paste the objects copied here while the system clipboard still
@@ -309,11 +275,6 @@ impl App {
     /// Bitmaps > Edit Bitmap: write the pixels to a PNG next to the system's
     /// temporary files, link the object to it and open the system editor.
     pub fn edit_bitmap_externally(&mut self) {
-        if crate::files::WEB {
-            // A browser cannot hand a file to another program.
-            self.status = tr("status.not_in_browser");
-            return;
-        }
         let Some(id) = self.selected_bitmap() else {
             return;
         };
@@ -402,10 +363,7 @@ impl App {
     /// a save in the outside editor shows here at once. Desktop only.
     /// `now` is the frame's time; `ctx` keeps a frame coming while the
     /// watch is on.
-    pub fn watch_linked_bitmaps(&mut self, ctx: Option<&egui::Context>, now: web_time::Instant) {
-        if crate::files::WEB {
-            return;
-        }
+    pub fn watch_linked_bitmaps(&mut self, ctx: Option<&egui::Context>, now: std::time::Instant) {
         let gap = std::time::Duration::from_secs(1);
         if let Some(last) = self.linked_checked {
             let since = now.duration_since(last);
@@ -564,7 +522,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn copied_file_paths_lose_the_line_end() {
         use std::path::PathBuf;
         assert_eq!(
@@ -608,9 +565,6 @@ mod linked_watch_tests {
     /// seen for the first time is only remembered (#284).
     #[test]
     fn a_linked_bitmap_is_read_again_when_its_file_changes() {
-        if crate::files::WEB {
-            return;
-        }
         let dir = std::env::temp_dir().join(format!("tracedraw-link-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("picture.png");
@@ -633,7 +587,7 @@ mod linked_watch_tests {
             ShapeKind::Bitmap { width_px, .. } => *width_px,
             _ => 0,
         };
-        let t0 = web_time::Instant::now();
+        let t0 = std::time::Instant::now();
         app.watch_linked_bitmaps(None, t0);
         assert_eq!(width(&app), 2, "first sight: remembered, not read");
         // The file changes (its time stamp moved on by two seconds).

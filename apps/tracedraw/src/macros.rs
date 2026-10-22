@@ -350,9 +350,6 @@ impl MacroState {
             return;
         }
         self.loaded = true;
-        if crate::files::WEB {
-            return;
-        }
         let Some(dir) = self.folder() else {
             return;
         };
@@ -507,10 +504,6 @@ pub fn command_name(key: &str) -> Option<(String, String)> {
 impl App {
     /// Tools > Macros > Load Macro Project: pick the files and install them.
     pub fn load_macro_project(&mut self) {
-        if crate::files::WEB {
-            self.status = tr("macros.desktop_only");
-            return;
-        }
         crate::files::Dialog::new()
             .add_filter(tr("macros.filter"), &["gms", "bas", "cls", "frm"])
             .pick_files(self, |app, paths| app.install_macro_files(&paths));
@@ -575,10 +568,6 @@ impl App {
 
     /// Start a macro now.
     pub fn run_macro(&mut self, project: usize, module: &str, name: &str) {
-        if crate::files::WEB {
-            self.status = tr("macros.desktop_only");
-            return;
-        }
         if self.macros.run.is_some() {
             self.status = tr("macros.already_running");
             return;

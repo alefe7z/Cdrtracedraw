@@ -9,7 +9,7 @@
   The rows are listed in `NEW_IN_THIS_VERSION` (`ui/menus.rs`); each
   version replaces the list with its own.
 - In this version: Window > New Window, Window > Dockers > Effects,
-  Object > Clip to Frame > Opacity Mask and Invert Mask, Help > Updates.
+  Object > Clip to Frame > Opacity Mask and Invert Mask.
 
 ## Checks
 

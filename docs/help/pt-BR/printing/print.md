@@ -2,7 +2,7 @@
 
 Escolha [[menu.file > menu.file.print]] (<kbd>Ctrl+P</kbd>). O CD Draw monta
 um PDF das folhas e o abre no visualizador do seu sistema, onde você escolhe a
-impressora e imprime. Na versão para navegador, o PDF é baixado.
+impressora e imprime.
 
 ![A caixa de diálogo Imprimir](../../img/printing-print.png)
 

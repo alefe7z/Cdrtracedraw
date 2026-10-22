@@ -13,9 +13,7 @@ pub enum Glyph {
     QuickStart,
     UserGuide,
     WhatsNew,
-    Updates,
     MessageSettings,
-    Community,
     Info,
     // File
     SaveAs,
@@ -118,7 +116,6 @@ pub enum Glyph {
     // Tools
     ColorManagement,
     FontManager,
-    Ai,
     Clock,
     Script,
     Record,
@@ -140,10 +137,8 @@ pub fn for_key(key: &str) -> Option<Glyph> {
         "menu.help.quick_start_guide" => QuickStart,
         "menu.help.user_guide" => UserGuide,
         "menu.help.whats_new" => WhatsNew,
-        "menu.help.updates" => Updates,
         "menu.help.message_settings" => MessageSettings,
-        "menu.help.community" => Community,
-        "menu.help.support" | "menu.help.about" => Info,
+        "menu.help.about" => Info,
         "menu.file.save_as" | "menu.file.save_as_template" => SaveAs,
         "menu.file.close" => CloseDoc,
         "menu.file.close_all" => CloseAllDocs,
@@ -245,15 +240,6 @@ pub fn for_key(key: &str) -> Option<Glyph> {
         "menu.table.distribute_columns" => DistCols,
         "menu.tools.color_management" => ColorManagement,
         "menu.tools.font_manager" => FontManager,
-        "menu.tools.ai_drawing" | "menu.object.ai_draw_words" => Ai,
-        "menu.tools.ai_generate"
-        | "menu.tools.options_ai"
-        | "menu.bitmaps.remove_background"
-        | "context.ai_remix"
-        | "menu.object.ai_generate"
-        | "menu.object.ai_create_image"
-        | "menu.object.ai_remix_image"
-        | "menu.object.ai_create_vector" => Ai,
         "menu.tools.time_tracker" => Clock,
         "menu.tools.scripts_run" | "menu.tools.scripts_docker" => Script,
         "menu.tools.scripts_record" => Record,
@@ -465,32 +451,10 @@ pub fn draw(painter: &Painter, r: Rect, g: Glyph, color: Color32) {
             ));
             circle(8.0, 8.0, 2.0, accent(GOLD), Stroke::NONE);
         }
-        Updates => {
-            arrow((8.0, 1.5), (8.0, 11.0), bold);
-            line((2.0, 14.0), (14.0, 14.0), bold);
-        }
         MessageSettings => {
             arrow((6.0, 1.5), (6.0, 8.5), s);
             line((1.5, 11.0), (10.0, 11.0), s);
             gear(12.0, 12.0, 3.6);
-        }
-        Community => {
-            closed(
-                &[
-                    (2.0, 3.0),
-                    (14.0, 3.0),
-                    (14.0, 11.0),
-                    (7.0, 11.0),
-                    (4.0, 14.0),
-                    (4.5, 11.0),
-                    (2.0, 11.0),
-                ],
-                paper,
-                s,
-            );
-            for x in [5.0, 8.0, 11.0] {
-                circle(x, 7.0, 0.9, color, Stroke::NONE);
-            }
         }
         Info => {
             circle(8.0, 8.0, 6.5, color, Stroke::NONE);
@@ -1056,23 +1020,6 @@ pub fn draw(painter: &Painter, r: Rect, g: Glyph, color: Color32) {
         FontManager => {
             text(6.0, 8.0, "A", 12.0, color);
             text(12.0, 10.0, "a", 9.0, blue);
-        }
-        Ai => {
-            closed(
-                &[
-                    (6.0, 1.0),
-                    (7.5, 6.5),
-                    (13.0, 8.0),
-                    (7.5, 9.5),
-                    (6.0, 15.0),
-                    (4.5, 9.5),
-                    (-1.0, 8.0),
-                    (4.5, 6.5),
-                ],
-                accent(GOLD),
-                Stroke::NONE,
-            );
-            text(12.5, 4.0, "+", 7.0, blue);
         }
         Clock => {
             circle(8.0, 8.0, 6.5, paper, s);

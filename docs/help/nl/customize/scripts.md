@@ -44,20 +44,6 @@ functie `Import` of `Export`, voegt een bestandsindeling toe aan
 [[docker.install_filter]] om het te bewaren; [[docker.script_filters]] toont de
 geïnstalleerde filters met [[docker.edit]] en [[docker.remove]].
 
-## AI-assistenten (MCP) {#mcp}
-
-CD Draw spreekt het Model Context Protocol, zodat AI-assistenten op uw
-computer tekeningen kunnen openen, bewerken, inspecteren, exporteren en
-opslaan:
-
-- `tracedraw --mcp` voert CD Draw zonder venster uit voor een assistent.
-- Om een assistent de tekening te laten bewerken die in uw venster geopend is,
-  schakelt u [[options.mcp_window]] in op de pagina [[options.general]] van
-  [[menu.tools > menu.tools.options > menu.tools.options_global]], en geeft u
-  de assistent `tracedraw --mcp-window` als opdracht. Elke wijziging is één
-  ongedaan-makenstap die u kunt terugdraaien. Alleen programma's op uw computer
-  met het geheime token dat CD Draw wegschrijft, kunnen verbinding maken.
-
 ## Het opdrachtregelprogramma {#cli}
 
 Elke download bevat ook `tracedraw-cli`, dat tekeningen tussen indelingen

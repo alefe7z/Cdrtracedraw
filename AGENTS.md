@@ -1,8 +1,8 @@
 # AGENTS.md: guide for AI agents and contributors
 
-CD Draw is an open-source vector editor in **Rust only**: native egui/eframe
-desktop app and the same app compiled to WebAssembly for the browser. No
-Electron, Tauri or webview.
+CD Draw is an open-source vector editor in **Rust only**: a native
+egui/eframe desktop app that works entirely offline. No Electron, Tauri,
+webview or browser build.
 The product name is **CD Draw** in prose; machine names are `tracedraw`
 (`tracedraw-core`, `tracedraw-cdr`, `.tdraw` files).
 
@@ -71,15 +71,14 @@ application running with no panic in the log after any interaction change.
 that the main window can be maximized and resized after the splash
 screen; CI runs it on the Linux build.
 
-## Browser build
+## Offline only
 
-The app must keep compiling for `wasm32-unknown-unknown`. File dialogs and
-file access go through `apps/tracedraw/src/files.rs` (never `rfd` or
-`std::fs` directly in UI code); anything that needs a desktop (processes,
-temporary folders, system clipboard images) checks `files::WEB` or is
-`#[cfg(not(target_arch = "wasm32"))]`. `std::time::Instant`,
-`SystemTime::now`, `std::env::temp_dir` and `std::process::id` panic in a
-browser: use `web_time` or avoid them. See `docs/behavior/web.md`.
+CD Draw makes no network connections of any kind: no update checks, no
+online services, no downloads, no telemetry, no local servers or ports.
+The workspace has no HTTP, TLS or socket dependency, and none may be
+added. Help is built from `docs/help` with `scripts/help/help_site.py`
+and shipped next to the program; it opens from disk. There is no
+browser (WebAssembly) build.
 
 ## Feature status
 

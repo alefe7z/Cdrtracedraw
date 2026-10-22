@@ -34,12 +34,11 @@ pub enum Topic {
     Outline,
     Fill,
     Text,
-    Ai,
     Help,
 }
 
 impl Topic {
-    pub const ALL: [Topic; 14] = [
+    pub const ALL: [Topic; 13] = [
         Topic::Lines,
         Topic::ConnectorLines,
         Topic::DimensionLines,
@@ -52,7 +51,6 @@ impl Topic {
         Topic::Outline,
         Topic::Fill,
         Topic::Text,
-        Topic::Ai,
         Topic::Help,
     ];
 
@@ -70,7 +68,6 @@ impl Topic {
             Topic::Outline => "outline",
             Topic::Fill => "fill",
             Topic::Text => "text",
-            Topic::Ai => "ai",
             Topic::Help => "help",
         }
     }
@@ -168,7 +165,7 @@ impl Topic {
                 Tool::ColorEyedropper,
             ],
             Topic::Text => &[Tool::Text, Tool::Table],
-            Topic::Ai | Topic::Help => &[],
+            Topic::Help => &[],
         }
     }
 }
@@ -358,55 +355,13 @@ fn topic(app: &mut App, ui: &mut Ui, t: Topic) -> Option<HintPage> {
         }
         ui.add_space(4.0);
     }
-    if t == Topic::Ai {
-        ai_topic(app, ui);
-    }
-    let page = match t {
-        Topic::Ai => "customize/ai",
-        _ => t
-            .tools()
-            .first()
-            .map(|t| crate::help::tool_topic(*t))
-            .unwrap_or(crate::help::HOME),
-    };
+    let page = t
+        .tools()
+        .first()
+        .map(|t| crate::help::tool_topic(*t))
+        .unwrap_or(crate::help::HOME);
     learn_more(app, ui, &t.title(), page);
     go
-}
-
-/// The AI topic: where each service stands, the ways to connect one and
-/// a button to the options.
-fn ai_topic(app: &mut App, ui: &mut Ui) {
-    let pictures = app.settings.ai.can_make_pictures();
-    for (key, ready, offered) in [
-        ("aiui.drawings", app.ai_drawing_ready(), true),
-        ("aiui.pictures", app.ai_image_ready(), pictures),
-    ] {
-        bullet_row(ui, |ui| {
-            let state = if !offered {
-                tr("aiui.drawings_only_state")
-            } else if ready {
-                tr("aiui.ready")
-            } else {
-                tr("aiui.not_ready")
-            };
-            rich(ui, &format!("**{}** {state}", tr(key)));
-        });
-    }
-    ui.add_space(6.0);
-    for key in [
-        "hintai.cloud",
-        "hintai.local",
-        "hintai.pictures",
-        "hintai.web",
-        "hintai.privacy",
-    ] {
-        bullet_row(ui, |ui| rich(ui, &tr(key)));
-        ui.add_space(4.0);
-    }
-    ui.add_space(4.0);
-    if ui.button(tr("aiui.set_up")).clicked() {
-        crate::ui::ai_ui::open_options(app, crate::ui::dialogs::OptionsPage::AiGeneral);
-    }
 }
 
 /// A tool's icon, its bold name and what it does; true when clicked.

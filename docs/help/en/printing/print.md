@@ -2,7 +2,7 @@
 
 Choose [[menu.file > menu.file.print]] (<kbd>Ctrl+P</kbd>). CD Draw builds a
 PDF of the sheets and opens it in your system's viewer, where you choose the
-printer and print. In the browser version, the PDF is downloaded.
+printer and print.
 
 ![The Print dialog box](../../img/printing-print.png)
 

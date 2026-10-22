@@ -3555,10 +3555,8 @@ fn decode_bitmap(
     )))
 }
 
-/// `f` over `items` in order, on up to four threads where the platform
-/// has them (a browser does not).
+/// `f` over `items` in order, on up to four threads.
 fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    #[cfg(not(target_arch = "wasm32"))]
     {
         let threads = std::thread::available_parallelism()
             .map(|n| n.get())

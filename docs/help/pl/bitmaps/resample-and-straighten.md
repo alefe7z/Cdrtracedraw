@@ -62,8 +62,6 @@ Niektóre efekty, takie jak rozmycia, wychodzą poza krawędzie bitmapy.
 - [[menu.bitmaps.crop_bitmap]] kadruje bitmapę narzędziem [[tool.crop]];
   przeciągnięcie narożnika bitmapy narzędziem [[tool.shape]] również ją kadruje.
 - [[menu.bitmaps.edit_bitmap]] otwiera bitmapę w innym programie.
-- [[menu.bitmaps.remove_background]] sprawia, że tło zdjęcia staje się
-  przezroczyste.
 - [[menu.bitmaps.remove_background_local]]: [Usuń tło](remove-background.md).
 - [[menu.bitmaps.break_link]] i [[menu.bitmaps.update_from_link]] działają na
   bitmapach połączonych z plikiem.

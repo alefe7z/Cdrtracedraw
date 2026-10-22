@@ -11,7 +11,7 @@ depuis [[menu.window > menu.window.dockers]].
 
 - La page d'**accueil** présente le panneau et liste des sujets comme tracer
   des lignes et des formes, sélectionner, déplacer et faire pivoter des
-  objets, les effets, les contours, les surfaces, le texte, l'IA et l'aide.
+  objets, les effets, les contours, les surfaces, le texte et l'aide.
   Chaque sujet est un lien.
 - Une page de **sujet** explique le sujet et liste les outils qui s'y
   rapportent, chacun avec son icône, son nom et ce qu'il fait. Cliquez sur un

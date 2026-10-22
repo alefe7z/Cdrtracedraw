@@ -12,9 +12,6 @@ cara mengetahui apa yang berubah dan mencantumkan sorotan versi-versi terbaru.
   baru, di samping panah submenu yang menuju ke sana, dan di atas judul menu
   yang memuatnya. Tanda hilang saat Anda menonaktifkan perintah itu, dan
   perintah kembali nonaktif saat CD Draw dimulai lagi.
-- Daftar lengkap perubahan setiap versi ada di
-  [log perubahan](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  proyek.
 
 ## Sorotan versi terbaru {#highlights}
 

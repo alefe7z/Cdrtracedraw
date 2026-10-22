@@ -451,9 +451,7 @@ impl FontSystem {
                 continue;
             }
             let path = match &face.source {
-                #[cfg(not(target_arch = "wasm32"))]
                 fontdb::Source::File(p) => Some(p.clone()),
-                #[cfg(not(target_arch = "wasm32"))]
                 fontdb::Source::SharedFile(p, _) => Some(p.clone()),
                 _ => None,
             };
@@ -482,9 +480,7 @@ impl FontSystem {
         let mut out: Vec<PathBuf> = db
             .faces()
             .filter_map(|face| match &face.source {
-                #[cfg(not(target_arch = "wasm32"))]
                 fontdb::Source::File(p) => Some(p.clone()),
-                #[cfg(not(target_arch = "wasm32"))]
                 fontdb::Source::SharedFile(p, _) => Some(p.clone()),
                 _ => None,
             })
@@ -510,13 +506,10 @@ impl FontSystem {
                 let Ok(data) = std::fs::read(path) else {
                     continue;
                 };
-                #[cfg(not(target_arch = "wasm32"))]
                 let source = {
                     let _ = data;
                     fontdb::Source::File(path.clone())
                 };
-                #[cfg(target_arch = "wasm32")]
-                let source = fontdb::Source::Binary(Arc::new(data));
                 ids.extend(db.load_font_source(source));
             }
         }
@@ -572,9 +565,7 @@ impl FontSystem {
             let ids: Vec<fontdb::ID> = db
                 .faces()
                 .filter(|face| match &face.source {
-                    #[cfg(not(target_arch = "wasm32"))]
                     fontdb::Source::File(p) => p == path,
-                    #[cfg(not(target_arch = "wasm32"))]
                     fontdb::Source::SharedFile(p, _) => p == path,
                     _ => false,
                 })

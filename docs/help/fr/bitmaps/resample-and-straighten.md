@@ -66,7 +66,6 @@ Certains effets, comme les flous, débordent des bords d'une image bitmap.
   [[tool.crop]] ; faire glisser un coin d'une image bitmap avec l'outil
   [[tool.shape]] la recadre aussi.
 - [[menu.bitmaps.edit_bitmap]] ouvre l'image bitmap dans un autre programme.
-- [[menu.bitmaps.remove_background]] rend transparent le fond d'une photo.
 - [[menu.bitmaps.remove_background_local]]: [Supprimer l'arrière-plan](remove-background.md).
 - [[menu.bitmaps.break_link]] et [[menu.bitmaps.update_from_link]] agissent
   sur les images bitmap liées à un fichier.

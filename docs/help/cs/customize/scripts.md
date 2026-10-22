@@ -42,19 +42,6 @@ Skript, který definuje `TraceDrawFilter` s názvem, příponami a funkcí
 [[docker.script_filters]] uvádí nainstalované filtry s tlačítky
 [[docker.edit]] a [[docker.remove]].
 
-## Asistenti AI (MCP) {#mcp}
-
-CD Draw umí protokol Model Context Protocol, takže asistenti AI ve vašem
-počítači mohou kresby otevírat, upravovat, zkoumat, exportovat a ukládat:
-
-- `tracedraw --mcp` spustí CD Draw bez okna pro asistenta.
-- Aby asistent mohl upravovat kresbu otevřenou ve vašem okně, zapněte
-  [[options.mcp_window]] na stránce [[options.general]] v
-  [[menu.tools > menu.tools.options > menu.tools.options_global]] a dejte
-  asistentovi jako příkaz `tracedraw --mcp-window`. Každá změna je jeden krok
-  zpět, který můžete vrátit. Připojit se mohou jen programy ve vašem
-  počítači s tajným tokenem, který CD Draw zapíše.
-
 ## Nástroj příkazového řádku {#cli}
 
 Každé stažení obsahuje také `tracedraw-cli`, který převádí kresby mezi

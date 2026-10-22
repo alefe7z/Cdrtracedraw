@@ -11,7 +11,7 @@ open it again with [[menu.help > menu.help.hints]] or from
 
 - The **home** page introduces the panel and lists topics such as drawing
   lines, shapes, selecting, moving and rotating objects, effects, outlines,
-  fills, text, AI and getting help. Each topic is a link.
+  fills, text and getting help. Each topic is a link.
 - A **topic** page explains the topic and lists the tools that serve it, each
   with its icon, its name and what it does. Click a tool to see its page.
 - A **tool** page tells you how to use the tool, one instruction per line

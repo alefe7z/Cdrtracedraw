@@ -2,9 +2,8 @@
 
 Bitmaps > Remove Background... (`menu.bitmaps.remove_background_local`,
 also on the bitmap property bar and in a bitmap's context menu) opens a dialog that makes the background of
-the selected bitmaps transparent without an AI service
-(`bg_remove::remove_background`). The AI command stays as Remove
-Background with AI (`menu.bitmaps.remove_background`).
+the selected bitmaps transparent, on this computer
+(`bg_remove::remove_background`).
 
 ## Dialog
 

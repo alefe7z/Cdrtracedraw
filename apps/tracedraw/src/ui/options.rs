@@ -20,7 +20,6 @@ pub enum OptionsSet {
     Tools,
     Global,
     Workspaces,
-    Ai,
     Document,
 }
 
@@ -63,9 +62,6 @@ pub enum OptionsPage {
     FileLocations,
     // Tools > Options > Workspaces.
     Workspace,
-    // Tools > Options > AI.
-    AiGeneral,
-    AiService,
     // Layout > Document Options.
     DocumentGeneral,
     PageSize,
@@ -107,7 +103,6 @@ impl OptionsSet {
                 FileLocations,
             ],
             OptionsSet::Workspaces => &[Workspace],
-            OptionsSet::Ai => &[AiGeneral, AiService],
             OptionsSet::Document => &[
                 DocumentGeneral,
                 PageSize,
@@ -128,7 +123,6 @@ impl OptionsSet {
             OptionsSet::Tools => tr("options.title_tools"),
             OptionsSet::Global => tr("options.title_global"),
             OptionsSet::Workspaces => tr("options.title_workspaces"),
-            OptionsSet::Ai => tr("options.title_ai"),
             OptionsSet::Document => tr("dialog.document_options"),
         }
     }
@@ -142,7 +136,6 @@ impl OptionsPage {
             OptionsSet::Tools,
             OptionsSet::Global,
             OptionsSet::Workspaces,
-            OptionsSet::Ai,
             OptionsSet::Document,
         ]
         .into_iter()
@@ -183,8 +176,6 @@ impl OptionsPage {
             BitmapTracing => "options.bitmap_tracing",
             Warnings => "options.warnings",
             Workspace => "options.workspace",
-            AiGeneral => "options.general",
-            AiService => "options.ai_service",
             PageSize => "options.page_size",
             Layout => "options.layout",
             Background => "options.background",
@@ -535,8 +526,6 @@ fn draw_page(app: &mut App, ui: &mut Ui) {
         Warnings => crate::ui::options_global::warnings_page(app, ui),
         FileLocations => file_locations_page(app, ui),
         Workspace => workspace_page(app, ui),
-        AiGeneral => crate::ui::ai_ui::general_page(app, ui),
-        AiService => crate::ui::ai_ui::service_page(app, ui),
         DocumentGeneral => document_general_page(app, ui),
         PageSize => crate::ui::dialogs::page_size_page(app, ui),
         Layout => layout_page(app, ui),
@@ -612,9 +601,7 @@ fn general_page(app: &mut App, ui: &mut Ui) {
             &mut app.settings.show_new_document_dialog,
             tr("options.show_new_document_dialog"),
         );
-        if !crate::files::WEB {
-            ui.checkbox(&mut app.settings.show_splash, tr("options.show_splash"));
-        }
+        ui.checkbox(&mut app.settings.show_splash, tr("options.show_splash"));
     });
     chrome::section(ui, &tr("options.undo_levels"));
     ui.indent("undo", |ui| {
@@ -1178,7 +1165,7 @@ fn path_field(ui: &mut Ui, dir: &mut Option<std::path::PathBuf>, fallback: Strin
             egui::TextEdit::singleline(&mut text.clone()).desired_width(320.0),
         );
         if ui
-            .add_enabled(!crate::files::WEB, egui::Button::new(tr("options.browse")))
+            .add_enabled(true, egui::Button::new(tr("options.browse")))
             .clicked()
         {
             if let Some(p) = crate::files::pick_folder() {
@@ -2267,25 +2254,6 @@ fn global_general_page(app: &mut App, ui: &mut Ui) {
             });
         ui.end_row();
     });
-    #[cfg(not(target_arch = "wasm32"))]
-    ui.checkbox(&mut app.settings.check_updates, tr("options.check_updates"))
-        .on_hover_text(tr("options.check_updates_tip"));
-    // AI agents on this computer and the open drawing (desktop only).
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        chrome::section(ui, &tr("options.agents"));
-        ui.checkbox(&mut app.settings.mcp_window, tr("options.mcp_window"));
-        ui.label(egui::RichText::new(tr("options.mcp_window_hint")).color(Tokens::text_dim()));
-        if let Some(link) = &app.mcp_link {
-            ui.label(
-                egui::RichText::new(crate::i18n::trf(
-                    "options.mcp_window_port",
-                    &[("port", &link.info.port.to_string())],
-                ))
-                .color(Tokens::text_dim()),
-            );
-        }
-    }
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tr("options.reset_all_hint")).color(Tokens::text_dim()));
     if ui.button(tr("options.reset_all")).clicked() {
@@ -2676,7 +2644,6 @@ mod tests {
             OptionsSet::Tools,
             OptionsSet::Global,
             OptionsSet::Workspaces,
-            OptionsSet::Ai,
             OptionsSet::Document,
         ];
         let mut seen = Vec::new();
@@ -2715,7 +2682,6 @@ mod tests {
             OptionsSet::Tools,
             OptionsSet::Global,
             OptionsSet::Workspaces,
-            OptionsSet::Ai,
             OptionsSet::Document,
         ] {
             for p in set.pages() {

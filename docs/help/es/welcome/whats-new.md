@@ -13,9 +13,6 @@ cómo saber qué ha cambiado y enumera lo más destacado de las últimas version
   un menú que contiene uno. Las marcas desaparecen al desactivar el comando, y
   el comando vuelve a estar desactivado la próxima vez que CD Draw se
   inicia.
-- La lista completa de cambios de cada versión está en el
-  [registro de cambios](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  del proyecto.
 
 ## Lo más destacado de las últimas versiones {#highlights}
 

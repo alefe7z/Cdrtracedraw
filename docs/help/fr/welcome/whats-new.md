@@ -14,9 +14,6 @@ dernières versions.
   mène, et au-dessus du titre d'un menu qui en contient une. Les marques
   disparaissent quand vous désactivez la commande, et la commande est de
   nouveau désactivée au prochain démarrage de CD Draw.
-- La liste complète des changements de chaque version se trouve dans le
-  [journal des modifications](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  du projet.
 
 ## Points forts des dernières versions {#highlights}
 

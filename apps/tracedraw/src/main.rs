@@ -10,8 +10,6 @@
 
 //! CD Draw desktop app: a thin egui shell over the engine.
 
-mod ai;
-mod ai_image;
 mod anchors;
 mod app;
 mod autocorrect;
@@ -38,7 +36,6 @@ mod corners;
 mod crop_tool;
 mod curve_join;
 mod defaults;
-mod describe;
 mod dimensions;
 mod distort_tool;
 mod doc_stats;
@@ -57,11 +54,8 @@ mod eyedropper;
 mod files;
 mod fill_tool;
 mod focus;
-#[cfg(any(target_arch = "wasm32", test))]
-mod font_folder;
 mod frame_type;
 mod fx;
-mod github;
 mod gradient_presets;
 mod grammar;
 mod guides;
@@ -79,14 +73,10 @@ mod lens;
 mod live_guides;
 mod macro_forms;
 mod macros;
-mod mcp;
-#[cfg(not(target_arch = "wasm32"))]
-mod mcp_link;
 mod media;
 mod mesh_tool;
 mod mixed;
 mod multipage;
-mod net;
 mod new_document;
 mod node_edit;
 mod object_clone;
@@ -122,7 +112,6 @@ mod shortcuts;
 mod snap;
 mod snap_points;
 mod spell;
-#[cfg(not(target_arch = "wasm32"))]
 mod splash;
 mod straighten;
 mod styles;
@@ -147,33 +136,15 @@ mod tools;
 mod tools2;
 mod trace;
 mod ui;
-mod updates;
 mod variable_outline;
 mod vector_mosaic;
 mod view;
-#[cfg(target_arch = "wasm32")]
-mod web;
-#[cfg(any(target_arch = "wasm32", test))]
-mod web_page;
 mod workspace_file;
 
-#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     tracedraw_text::install();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // `tracedraw --mcp`: no window, a Model Context Protocol server on
-    // stdin/stdout (see mcp.rs and docs/behavior/mcp.md).
-    if args.iter().any(|a| a == "--mcp") {
-        mcp::serve();
-        return Ok(());
-    }
-    // `tracedraw --mcp-window`: the same tools on the drawings of the open
-    // window, which must let AI agents in (see mcp_link.rs).
-    if args.iter().any(|a| a == "--mcp-window") {
-        mcp_link::bridge();
-        return Ok(());
-    }
     // `--no-splash` or TRACEDRAW_NO_SPLASH (automation, the visual
     // checks): straight into a plain window at the default size.
     let plain = args.iter().any(|a| a == "--no-splash")
@@ -230,38 +201,26 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// The browser build starts from `web::start` (the page loads the module,
-/// which runs `main`).
-#[cfg(target_arch = "wasm32")]
-fn main() {
-    web::start();
-}
-
 struct Shell {
     app: Option<app::App>,
     /// The splash screen while CD Draw starts (see splash.rs).
-    #[cfg(not(target_arch = "wasm32"))]
     splash: Option<splash::Splash>,
     /// The file to open once the splash is done.
-    #[cfg(not(target_arch = "wasm32"))]
     open: Option<std::path::PathBuf>,
 }
 
 impl Shell {
-    /// The editor at once (the browser build, or no splash screen).
+    /// The editor at once (no splash screen).
     fn new(cc: &eframe::CreationContext<'_>, open: Option<std::path::PathBuf>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
         Shell {
             app: Some(app::App::new(&cc.egui_ctx, open)),
-            #[cfg(not(target_arch = "wasm32"))]
             splash: None,
-            #[cfg(not(target_arch = "wasm32"))]
             open: None,
         }
     }
 
     /// The splash screen first; the editor is built when it is done.
-    #[cfg(not(target_arch = "wasm32"))]
     fn with_splash(cc: &eframe::CreationContext<'_>, open: Option<std::path::PathBuf>) -> Self {
         Shell {
             app: None,
@@ -273,7 +232,6 @@ impl Shell {
 
 impl eframe::App for Shell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(splash) = self.splash.as_mut() {
             if splash.update(ui) == splash::Step::Wait {
                 return;
@@ -293,33 +251,9 @@ impl eframe::App for Shell {
         let Some(app) = self.app.as_mut() else {
             return;
         };
-        // Fonts text asked for (browser build), and fonts that arrived.
-        #[cfg(target_arch = "wasm32")]
-        web::fetch_requested_fonts();
+        // Fonts that arrived.
         app.sync_fonts();
         app.sync_document_colors();
-        // File dialogs that finished in the background (browser build).
-        files::run_finished(app);
-        // Requests of AI agents for the open drawing (MCP).
-        #[cfg(not(target_arch = "wasm32"))]
-        if app.sync_mcp_link(ui.ctx()) {
-            ui.ctx().request_repaint();
-        }
-        // An answer from GitHub (File > GitHub).
-        if app.poll_github() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
-        }
-        // A reply of the AI service (AI Drawing).
-        if app.poll_ai() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
-        }
-        // Pictures from the image service (AI Generate).
-        if app.poll_ai_image() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
-        }
         // A Picture Mosaic library indexed on worker threads.
         if app.poll_picture_mosaic_index() {
             ui.ctx()
@@ -336,13 +270,12 @@ impl eframe::App for Shell {
         app.refresh_callouts();
         // Blends follow their end objects.
         app.refresh_blends();
-        #[cfg(not(target_arch = "wasm32"))]
         splash::remember_window(ui.ctx(), &mut app.settings);
         // Preferences changed this frame last without waiting for the
-        // exit (the browser has none).
+        // exit.
         app.autosave_settings(Some(ui.ctx()));
         // Bitmaps edited outside follow their files.
-        app.watch_linked_bitmaps(Some(ui.ctx()), web_time::Instant::now());
+        app.watch_linked_bitmaps(Some(ui.ctx()), std::time::Instant::now());
     }
 
     /// Keep the toolbox, dockers and other preferences for the next session.

@@ -238,9 +238,8 @@ fn rgb_to_cmyk_bytes(rgb: &[u8]) -> Vec<u8> {
 
 /// PDF date string for now (UTC).
 fn pdf_date() -> String {
-    // web_time is std's clock natively and the JavaScript clock in a browser.
-    let secs = web_time::SystemTime::now()
-        .duration_since(web_time::UNIX_EPOCH)
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let days = secs / 86_400;
@@ -1819,8 +1818,8 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
             let random: crate::pdf_crypt::Random = Box::new(|buf: &mut [u8]| {
                 if getrandom::fill(buf).is_err() {
                     // No system randomness: a time-seeded generator.
-                    let mut x = web_time::SystemTime::now()
-                        .duration_since(web_time::UNIX_EPOCH)
+                    let mut x = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_nanos() as u64)
                         .unwrap_or(0x9E37_79B9_7F4A_7C15)
                         | 1;

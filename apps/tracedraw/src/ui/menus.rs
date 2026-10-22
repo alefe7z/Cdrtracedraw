@@ -241,18 +241,6 @@ pub(crate) fn item(ui: &mut Ui, key: &str, shortcut: &str, enabled: bool) -> boo
     item_text(ui, &tr(key), shortcut, enabled, menu_icon(key), key)
 }
 
-/// A menu item with a hover tip shown while it is greyed (why it cannot
-/// run, such as an AI service that makes drawings only).
-pub(crate) fn item_tip(
-    ui: &mut Ui,
-    key: &str,
-    shortcut: &str,
-    enabled: bool,
-    tip: Option<&str>,
-) -> bool {
-    item_text_tip(ui, &tr(key), shortcut, enabled, menu_icon(key), key, tip)
-}
-
 /// A menu item with a ready label (a style name, a file).
 pub(crate) fn item_label(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool) -> bool {
     item_text(ui, label, shortcut, enabled, None, label)
@@ -275,9 +263,6 @@ pub const NEW_IN_THIS_VERSION: &[&str] = &[
     "menu.object.clip_frame",
     "menu.object.clip_frame_opacity_mask",
     "menu.object.clip_frame_invert_mask",
-    // Help > Updates checks for a newer release.
-    "menu.help",
-    "menu.help.updates",
 ];
 
 thread_local! {
@@ -1006,12 +991,9 @@ pub(crate) mod replay {
 
     /// Items that would block on a native file chooser, start another
     /// program (an editor or the web browser) or close the window.
-    const SKIP: [&str; 16] = [
+    const SKIP: [&str; 13] = [
         "menu.file.send_to_mail",
         "menu.tools.macros_load",
-        "menu.help.updates",
-        "menu.help.community",
-        "menu.help.support",
         "menu.file.open",
         "menu.file.save",
         "menu.file.save_as",
@@ -1192,9 +1174,9 @@ mod tests {
                 "{key} is not in the menus"
             );
         }
-        assert!(!marked_new("menu.help.updates"));
+        assert!(!marked_new("menu.object.clip_frame"));
         set_highlight_new(true);
-        assert!(marked_new("menu.help.updates"));
+        assert!(marked_new("menu.object.clip_frame"));
         assert!(!marked_new("menu.file.export"));
         set_highlight_new(false);
         assert!(
@@ -1614,21 +1596,6 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
                 app.recent_thumbs.clear();
                 app.settings.save();
             }
-        }
-    });
-    sub(ui, "menu.file.github", |ui| {
-        if item(ui, "menu.file.github_open", "", true) {
-            app.github.status.clear();
-            app.dialog = Dialog::GithubOpen(app.github_form(false));
-        }
-        if item(ui, "menu.file.github_save", "", doc) {
-            app.github.status.clear();
-            app.dialog = Dialog::GithubSave(app.github_form(true));
-        }
-        if item(ui, "menu.file.github_history", "", app.remote.is_some()) {
-            app.github.status.clear();
-            app.github.history = None;
-            app.dialog = Dialog::GithubHistory;
         }
     });
     sep(ui);
@@ -2085,37 +2052,6 @@ pub(crate) fn layout_menu(app: &mut App, ui: &mut Ui) {
 fn object_menu(app: &mut App, ui: &mut Ui) {
     let has = !app.selection.is_empty();
     let many = app.selection.len() > 1;
-    // AI Generate: the docker in each mode, and Remove Background.
-    sub(ui, "menu.object.ai_generate", |ui| {
-        let doc = app.has_document();
-        for (key, mode) in [
-            ("menu.object.ai_create_image", crate::ai_image::Mode::Create),
-            ("menu.object.ai_remix_image", crate::ai_image::Mode::Remix),
-            (
-                "menu.object.ai_create_vector",
-                crate::ai_image::Mode::Vector,
-            ),
-            ("menu.object.ai_draw_words", crate::ai_image::Mode::Draw),
-        ] {
-            if item(ui, key, "", doc) {
-                app.ai_image.mode = mode;
-                app.ai_image.info = false;
-                app.open_ai_generate();
-            }
-        }
-        let cutout =
-            app.ai_image_ready() && app.ai_source_bitmap().is_some() && !app.ai_image.busy();
-        let tip = app.ai_image_tip();
-        if item_tip(
-            ui,
-            "menu.bitmaps.remove_background",
-            "",
-            cutout,
-            tip.as_deref(),
-        ) {
-            app.ai_remove_background();
-        }
-    });
     sub(ui, "menu.object.create", |ui| {
         if item(
             ui,
@@ -2634,31 +2570,9 @@ fn bitmaps_menu(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.bitmaps.resample", "", has_bitmap) {
         app.open_resample();
     }
-    // On this computer, no AI service needed.
     if item(ui, "menu.bitmaps.remove_background_local", "", has_bitmap) {
         app.dialog = Dialog::RemoveBackground(Default::default());
     }
-    // AI: greyed until the AI service makes pictures (Tools > Options >
-    // AI > Service); the tip says why.
-    let cutout = app.ai_image_ready() && app.ai_source_bitmap().is_some() && !app.ai_image.busy();
-    let tip = app.ai_image_tip();
-    if item_tip(
-        ui,
-        "menu.bitmaps.remove_background",
-        "",
-        cutout,
-        tip.as_deref(),
-    ) {
-        app.ai_remove_background();
-    }
-    let styled = app.ai_image_ready() && !app.selection.is_empty() && !app.ai_image.busy();
-    sub(ui, "menu.bitmaps.ai_art_styles", |ui| {
-        for (i, (key, _)) in crate::ai_image::ART_STYLES.iter().enumerate() {
-            if item_tip(ui, key, "", styled, tip.as_deref()) {
-                app.ai_art_style(i);
-            }
-        }
-    });
     // Black and white, duotone and paletted open their dialogs; the
     // others convert at once.
     sub(ui, "menu.bitmaps.mode", |ui| {
@@ -3047,7 +2961,7 @@ fn macros_items(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.tools.macro_editor", "Alt+F11", true) {
         app.open_macro_editor();
     }
-    if item(ui, "menu.tools.macros_load", "", !crate::files::WEB) {
+    if item(ui, "menu.tools.macros_load", "", true) {
         app.load_macro_project();
     }
     if item(ui, "menu.tools.macros_stop", "", running) {
@@ -3102,9 +3016,6 @@ fn tools_menu(app: &mut App, ui: &mut Ui) {
         }
     });
     sub(ui, "menu.tools.macros", |ui| macros_items(app, ui));
-    if item(ui, "menu.tools.ai_generate", "", true) {
-        app.open_ai_generate();
-    }
     if item(ui, "menu.tools.font_manager", "", true) {
         app.dialog = Dialog::FontManager(Default::default());
     }
@@ -3146,11 +3057,6 @@ pub(crate) fn toolbars_list(app: &mut App, ui: &mut Ui) {
     let palette = app.settings.palette.show_palette;
     if check(ui, "bars.palette", "", palette) {
         app.settings.palette.show_palette = !palette;
-    }
-    // Shown while an AI service is set up (AI Drawing).
-    let ai_bar = app.settings.ai.show_bar;
-    if check(ui, "bars.ai_prompt", "", ai_bar) {
-        app.settings.ai.show_bar = !ai_bar;
     }
     if check(
         ui,
@@ -3404,18 +3310,9 @@ fn help_menu(app: &mut App, ui: &mut Ui) {
         app.highlight_whats_new = !app.highlight_whats_new;
     }
     sep(ui);
-    if item(ui, "menu.help.updates", "", true) {
-        app.check_for_updates(Some(ui.ctx().clone()));
-    }
     if item(ui, "menu.help.message_settings", "", true) {
         app.dialog = Dialog::Options;
         app.options_page = crate::ui::dialogs::OptionsPage::General;
-    }
-    if item(ui, "menu.help.community", "", true) {
-        app.open_url("https://github.com/alefe7z/Cdrtracedraw/discussions");
-    }
-    if item(ui, "menu.help.support", "", true) {
-        app.open_url("https://github.com/alefe7z/Cdrtracedraw/issues");
     }
     sep(ui);
     if item(ui, "menu.help.about", "", true) {
@@ -3445,9 +3342,5 @@ pub(crate) fn options_items(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.tools.options_workspaces", "", true) {
         app.dialog = Dialog::Options;
         app.options_page = crate::ui::dialogs::OptionsPage::Workspace;
-    }
-    if item(ui, "menu.tools.options_ai", "", true) {
-        app.dialog = Dialog::Options;
-        app.options_page = crate::ui::dialogs::OptionsPage::AiGeneral;
     }
 }

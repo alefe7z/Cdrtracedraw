@@ -192,7 +192,7 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut TemplateState, close: &mut 
         ui.horizontal(|ui| {
             if ui
                 .button("\u{1f4c2}")
-                .on_hover_text(match user_dir().filter(|_| !crate::files::WEB) {
+                .on_hover_text(match user_dir() {
                     Some(dir) => format!(
                         "{}\n{}",
                         tr("welcome.open_template"),

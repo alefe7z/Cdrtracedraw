@@ -548,7 +548,7 @@ follows the public MS-OVBA and MS-OFORMS specifications.
 ### Exported module files
 
 - `read_files` takes files and folders, `read_named` (file name, bytes)
-  pairs (for the browser, which has no folders). A folder stands for the
+  pairs. A folder stands for the
   `.bas`, `.cls`, `.frm` and `.frx` files in it; a compound file among
   the files adds its modules.
 - `.bas`: a standard module. `.cls`: a class, its `VERSION 1.0 CLASS`
@@ -652,8 +652,7 @@ follows the public MS-OVBA and MS-OFORMS specifications.
 
 Macro projects written for other drawing suites load and run in the
 desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
-`ui/macros_ui.rs`). The browser build lists nothing and says that
-macros run in the desktop version.
+`ui/macros_ui.rs`).
 
 ### Running macros
 

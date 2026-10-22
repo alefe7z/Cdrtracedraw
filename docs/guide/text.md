@@ -58,8 +58,8 @@ next text you add.
 - Click in the field and type to find a family: names that hold the
   letters you typed are listed, the best match first. **Down**, **Up**
   and **Enter** pick one; **Esc** puts the old name back.
-- The top of the list filters it: all fonts, installed fonts, fonts in
-  this drawing, or (in the browser) fonts to download.
+- The top of the list filters it: all fonts, installed fonts, or fonts
+  in this drawing.
 - **Used last** lists the five families you picked most recently.
 - Each name is drawn in its own font. A family with several styles has
   an arrow to show them (Regular, Italic, Bold and so on).

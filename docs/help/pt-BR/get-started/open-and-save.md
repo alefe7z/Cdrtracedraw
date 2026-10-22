@@ -79,18 +79,13 @@ Para salvar um desenho com um nome novo:
 A caixa de diálogo começa na pasta do desenho, senão na última pasta em que
 você salvou, senão na sua pasta de documentos.
 
-> **Observação:** Na versão para navegador, todo salvamento é um download: a
-> caixa de diálogo guarda o nome, o tipo, a versão e as propriedades, e o
-> navegador coloca o arquivo na pasta de downloads.
-
 Outras formas de salvar: [[menu.file > menu.file.save_as_template]] salva um
 modelo (veja [Modelos](../templates-styles/templates.md)),
 [[menu.file.export]] grava outros formatos (veja
 [Exportar](../file-formats/export.md)), [[menu.file.publish_to_pdf]] grava um
-PDF (veja [Publicar em PDF](../file-formats/publish-pdf.md)),
+PDF (veja [Publicar em PDF](../file-formats/publish-pdf.md)) e
 [[menu.file.send_to]] salva um PDF na área de trabalho ou na pasta de
-documentos ou o anexa a um e-mail, e [[menu.file.github]] guarda desenhos em um
-repositório do GitHub (veja [GitHub](github.md)). [[menu.file.revert]] volta à
+documentos ou o anexa a um e-mail. [[menu.file.revert]] volta à
 versão salva por último.
 
 ## Fechar desenhos {#closing}

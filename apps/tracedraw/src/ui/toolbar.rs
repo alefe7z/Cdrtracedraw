@@ -282,32 +282,6 @@ pub fn standard_toolbar(app: &mut App, ui: &mut Ui) {
         if std_button(ui, icons::Action::Save, &tip("toolbar.save"), doc, false).clicked() {
             app.save(false);
         }
-        // The drawing's Git repository: open a file from it, or save the
-        // drawing to it as a commit.
-        if std_button(
-            ui,
-            icons::Action::GitPull,
-            &tip("toolbar.git_pull"),
-            true,
-            false,
-        )
-        .clicked()
-        {
-            app.github.status.clear();
-            app.dialog = crate::ui::dialogs::Dialog::GithubOpen(app.github_form(false));
-        }
-        if std_button(
-            ui,
-            icons::Action::GitPush,
-            &tip("toolbar.git_push"),
-            doc,
-            false,
-        )
-        .clicked()
-        {
-            app.github.status.clear();
-            app.dialog = crate::ui::dialogs::Dialog::GithubSave(app.github_form(true));
-        }
         if std_button(ui, icons::Action::Print, &tip("toolbar.print"), doc, false).clicked() {
             app.print();
         }
@@ -610,97 +584,7 @@ pub fn standard_toolbar(app: &mut App, ui: &mut Ui) {
                     ui.close();
                 }
             });
-        std_sep(ui);
-        ai_button(app, ui);
     });
-}
-
-/// AI Generate on the standard toolbar: the AI docker, with the other AI
-/// commands in its list.
-fn ai_button(app: &mut App, ui: &mut Ui) {
-    let label = tr("toolbar.ai_generate");
-    let galley = ui.painter().layout_no_wrap(
-        label.clone(),
-        egui::FontId::proportional(13.0),
-        Tokens::text(),
-    );
-    let w = galley.size().x + 52.0;
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, std_btn()), egui::Sense::click());
-    std_frame(ui, rect, resp.hovered(), false);
-    let p = ui.painter();
-    p.text(
-        egui::pos2(rect.left() + 14.0, rect.center().y),
-        egui::Align2::CENTER_CENTER,
-        "\u{2726}",
-        egui::FontId::proportional(15.0),
-        Tokens::ACCENT,
-    );
-    p.galley(
-        egui::pos2(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0),
-        galley,
-        Tokens::text(),
-    );
-    let c = egui::pos2(rect.right() - 9.0, rect.center().y);
-    p.add(egui::epaint::PathShape::convex_polygon(
-        vec![
-            c + Vec2::new(-4.0, -2.0),
-            c + Vec2::new(4.0, -2.0),
-            c + Vec2::new(0.0, 2.5),
-        ],
-        Tokens::text_dim(),
-        egui::Stroke::NONE,
-    ));
-    let resp = resp.on_hover_ui(|ui| {
-        rich_tip(
-            ui,
-            &format!(
-                "{}\n{}",
-                tr("toolbar.ai_generate"),
-                tr("toolbar.ai_generate_tip")
-            ),
-        )
-    });
-    // The arrow is a button of its own: it opens the list.
-    let arrow_rect =
-        egui::Rect::from_min_max(egui::pos2(rect.right() - 18.0, rect.top()), rect.max);
-    let arrow = ui.interact(
-        arrow_rect,
-        egui::Id::new("ai_menu_arrow"),
-        egui::Sense::click(),
-    );
-    if resp.clicked() && !arrow.clicked() && !arrow.hovered() {
-        app.open_ai_generate();
-    }
-    egui::Popup::menu(&arrow)
-        .id(egui::Id::new("ai_menu"))
-        .show(|ui| {
-            if ui.button(tr("menu.tools.ai_generate")).clicked() {
-                app.open_ai_generate();
-                ui.close();
-            }
-            if ui.button(tr("menu.object.ai_draw_words")).clicked() {
-                app.open_ai_drawing();
-                ui.close();
-            }
-            let cutout = app.ai_image_ready() && app.ai_source_bitmap().is_some();
-            let tip = app.ai_image_tip().unwrap_or_default();
-            if ui
-                .add_enabled(
-                    cutout,
-                    egui::Button::new(tr("menu.bitmaps.remove_background")),
-                )
-                .rich_disabled_tip(tip)
-                .clicked()
-            {
-                app.ai_remove_background();
-                ui.close();
-            }
-            ui.separator();
-            if ui.button(tr("menu.tools.options_ai")).clicked() {
-                crate::ui::ai_ui::open_options(app, crate::ui::dialogs::OptionsPage::AiGeneral);
-                ui.close();
-            }
-        });
 }
 
 /// Window > Toolbars > Text: font controls as a standalone bar.
@@ -1547,26 +1431,6 @@ fn bitmap_properties(app: &mut App, ui: &mut Ui) {
         .clicked()
     {
         app.dialog = crate::ui::dialogs::Dialog::RemoveBackground(Default::default());
-    }
-    // AI: greyed until the AI service makes pictures.
-    let ready = app.ai_image_ready() && app.ai_source_bitmap().is_some();
-    let busy = app.ai_image.busy();
-    let tip = app
-        .ai_image_tip()
-        .unwrap_or_else(|| tr("toolbar.remove_background_tip"));
-    if ui
-        .add_enabled(
-            ready && !busy,
-            egui::Button::new(format!("\u{2726} {}", tr("toolbar.remove_background"))),
-        )
-        .rich_tip(tip.clone())
-        .rich_disabled_tip(tip)
-        .clicked()
-    {
-        app.ai_remove_background();
-    }
-    if busy {
-        ui.spinner();
     }
 }
 

@@ -46,6 +46,4 @@ page of the global options.
 
 ## Where the Shelf is kept {#storage}
 
-On the desktop, the Shelf is a file in your preferences folder. In the
-browser, it is kept in that browser's storage, which holds only a few
-megabytes, so large bitmaps may not be kept.
+The Shelf is a file in your preferences folder.

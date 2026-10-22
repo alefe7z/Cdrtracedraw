@@ -10,10 +10,6 @@ defaults, tracing, messages and where files are kept.
 
 - [[options.language]]: the language of the interface. This Help opens in the
   same language.
-- [[options.check_updates]] (on): see
-  [Checking for updates](../welcome/about-and-updates.md#updates).
-- [[options.agents]]: [[options.mcp_window]] lets AI assistants on this
-  computer edit the open drawing; see [Scripts](scripts.md#mcp).
 - [[options.reset_all]]: see [Resetting settings](reset-settings.md).
 
 ## Printing {#printing}
@@ -65,5 +61,4 @@ message also has a box that stops it; tick the option here to see it again.
 
 Shows where the preferences and the auto-backups are kept. The preferences
 are in a `tracedraw-settings` folder next to the program when there is one
-(a portable copy), otherwise in your system's place for program settings; the
-browser version keeps them in the browser.
+(a portable copy), otherwise in your system's place for program settings.

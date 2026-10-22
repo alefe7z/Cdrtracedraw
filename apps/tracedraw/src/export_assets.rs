@@ -1,6 +1,6 @@
 //! The Export docker: a list of assets (whole pages or groups of chosen
 //! objects), each with its own name, file format and resolution, exported
-//! together to one folder (in a browser, each one downloaded).
+//! together to one folder.
 
 use crate::app::App;
 use crate::ui::dialogs::{ExportState, EXPORT_FORMATS};
@@ -219,22 +219,17 @@ impl App {
     }
 
     /// The docker's Export button: into the chosen folder (asked for when
-    /// none is set yet); in a browser every file is downloaded.
+    /// none is set yet).
     pub fn export_assets(&mut self) {
-        let folder = if crate::files::WEB {
-            Some(PathBuf::new())
-        } else {
-            self.export_assets
-                .folder
-                .clone()
-                .or_else(crate::files::pick_folder)
-        };
+        let folder = self
+            .export_assets
+            .folder
+            .clone()
+            .or_else(crate::files::pick_folder);
         let Some(folder) = folder else {
             return;
         };
-        if !crate::files::WEB {
-            self.export_assets.folder = Some(folder.clone());
-        }
+        self.export_assets.folder = Some(folder.clone());
         let (written, errors) = self.export_assets_to(&folder);
         self.status = match errors.first() {
             None => crate::i18n::trf("export_docker.done", &[("n", &written.to_string())]),

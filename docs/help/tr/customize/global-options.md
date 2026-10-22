@@ -9,11 +9,6 @@ varsayılanları, izleme, iletiler ve dosyaların nerede tutulduğu.
 ![Genel seçeneklerin Genel sayfası](../../img/customize-global-options-general.png)
 
 - [[options.language]]: arayüzün dili. Bu Yardım da aynı dilde açılır.
-- [[options.check_updates]] (açık): bkz.
-  [Güncellemeleri denetleme](../welcome/about-and-updates.md#updates).
-- [[options.agents]]: [[options.mcp_window]], bu bilgisayardaki YZ
-  asistanlarının açık çizimi düzenlemesine izin verir; bkz.
-  [Betikler](scripts.md#mcp).
 - [[options.reset_all]]: bkz. [Ayarları sıfırlama](reset-settings.md).
 
 ## Yazdırma {#printing}
@@ -66,7 +61,4 @@ seçeneği burada işaretleyin.
 
 ![Genel seçeneklerin Dosya Konumları sayfası](../../img/customize-global-options-file-locations.png)
 
-Tercihlerin ve otomatik yedeklerin nerede tutulduğunu gösterir. Tercihler,
-varsa programın yanındaki bir `tracedraw-settings` klasöründe (taşınabilir
-bir kopya), yoksa sisteminizin program ayarları için ayırdığı yerdedir;
-tarayıcı sürümü onları tarayıcıda tutar.
+Tercihlerin ve otomatik yedeklerin nerede tutulduğunu gösterir.

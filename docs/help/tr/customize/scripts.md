@@ -43,21 +43,6 @@ komutlarına bir dosya biçimi ekler. Saklamak için [[docker.install_filter]]
 düğmesine tıklayın; [[docker.script_filters]] yüklü filtreleri
 [[docker.edit]] ve [[docker.remove]] ile birlikte listeler.
 
-## YZ asistanları (MCP) {#mcp}
-
-CD Draw Model Context Protocol'ü konuşur; böylece bilgisayarınızdaki YZ
-asistanları çizimleri açabilir, düzenleyebilir, inceleyebilir, dışa
-aktarabilir ve kaydedebilir:
-
-- `tracedraw --mcp`, CD Draw'u bir asistan için penceresiz çalıştırır.
-- Bir asistanın pencerenizde açık olan çizimi düzenlemesine izin vermek
-  için [[menu.tools > menu.tools.options > menu.tools.options_global]]
-  altındaki [[options.general]] sayfasında [[options.mcp_window]]
-  seçeneğini açın ve asistana komut olarak `tracedraw --mcp-window` verin.
-  Her değişiklik geri alabileceğiniz bir geri alma adımıdır. Yalnızca
-  bilgisayarınızda bulunan ve CD Draw'un yazdığı gizli belirteci taşıyan
-  programlar bağlanabilir.
-
 ## Komut satırı aracı {#cli}
 
 Her indirmede, toplu işler için çizimleri programı açmadan biçimler arasında

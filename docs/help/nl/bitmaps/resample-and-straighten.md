@@ -65,8 +65,6 @@ bitmap.
   [[tool.crop]]; een hoek van een bitmap slepen met het gereedschap
   [[tool.shape]] snijdt hem ook bij.
 - [[menu.bitmaps.edit_bitmap]] opent de bitmap in een ander programma.
-- [[menu.bitmaps.remove_background]] maakt de achtergrond van een foto
-  transparant.
 - [[menu.bitmaps.remove_background_local]]: [Achtergrond verwijderen](remove-background.md).
 - [[menu.bitmaps.break_link]] en [[menu.bitmaps.update_from_link]] werken op
   bitmaps die aan een bestand gekoppeld zijn.

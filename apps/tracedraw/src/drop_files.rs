@@ -1,5 +1,5 @@
-//! Files dropped on the window from the desktop or a file manager (or
-//! from the computer onto the page, in a browser). With a drawing open,
+//! Files dropped on the window from the desktop or a file manager. With
+//! a drawing open,
 //! what File > Import reads goes into it, in the middle of the view
 //! (the windowing layer does not say where the pointer let go);
 //! otherwise each file opens like File > Open, and a picture without a

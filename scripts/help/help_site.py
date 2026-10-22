@@ -2,7 +2,7 @@
 """Build the user Help (docs/help) into a static site, one tree per
 interface language.
 
-    python3 web/help_site.py [docs/help] [apps/tracedraw/lang] [site/help]
+    python3 scripts/help/help_site.py [docs/help] [apps/tracedraw/lang] [site/help]
 
 Pages are Markdown in docs/help/<lang>/<page>.md, ordered by
 docs/help/contents.txt. A page missing in a language is published from the
@@ -26,7 +26,7 @@ import re
 import shutil
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RTL = {"ar"}
 ERRORS = []
 PARTIAL = False
@@ -445,7 +445,10 @@ tabs.forEach(function(b){b.addEventListener("click",function(){show(b.dataset.ta
 var index=null,loading=false;
 function load(){
  if(index||loading)return;loading=true;
- fetch(HELP.up+"search.json").then(function(r){return r.json();}).then(function(j){index=j;run();}).catch(function(){loading=false;});
+ // A script, not fetch(): pages opened from disk (file://) may not fetch.
+ var sc=document.createElement("script");sc.src=HELP.up+"search.js";
+ sc.onload=function(){index=window.HELP_INDEX||[];run();};sc.onerror=function(){loading=false;};
+ document.head.appendChild(sc);
 }
 function norm(s){return s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g,"");}
 function run(){
@@ -574,8 +577,10 @@ def build(help_dir, lang_dir, out_dir):
             with open(dest, "w", encoding="utf-8") as f:
                 f.write(html_out)
         os.makedirs(os.path.join(out_dir, code), exist_ok=True)
-        with open(os.path.join(out_dir, code, "search.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(out_dir, code, "search.js"), "w", encoding="utf-8") as f:
+            f.write("window.HELP_INDEX=")
             json.dump(index, f, ensure_ascii=False, separators=(",", ":"))
+            f.write(";\n")
     codes = [c for c, _ in langs]
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(redirect_html(codes))

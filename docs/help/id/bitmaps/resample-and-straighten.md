@@ -64,8 +64,6 @@ Beberapa efek, seperti buram, menyebar melewati tepi bitmap.
 - [[menu.bitmaps.crop_bitmap]] memangkas bitmap dengan alat [[tool.crop]];
   menyeret sudut bitmap dengan alat [[tool.shape]] juga memangkasnya.
 - [[menu.bitmaps.edit_bitmap]] membuka bitmap di program lain.
-- [[menu.bitmaps.remove_background]] membuat latar belakang foto menjadi
-  transparan.
 - [[menu.bitmaps.remove_background_local]]: [Hapus Latar](remove-background.md).
 - [[menu.bitmaps.break_link]] dan [[menu.bitmaps.update_from_link]] berlaku
   untuk bitmap yang tertaut ke sebuah berkas.

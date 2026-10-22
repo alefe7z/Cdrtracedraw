@@ -3,7 +3,7 @@
 CD Draw ist ein freies, quelloffenes Vektorzeichenprogramm. Damit zeichnen Sie
 Illustrationen, Logos, Diagramme, Layouts und Druckarbeiten aus Formen, Linien
 und Text, die in jeder Größe scharf bleiben, und kombinieren sie mit Bitmaps.
-Dasselbe Programm läuft unter Windows, macOS und Linux und im Webbrowser.
+Das Programm läuft unter Windows, macOS und Linux, vollständig offline.
 
 Diese Hilfe erklärt Schritt für Schritt, wie Sie in CD Draw arbeiten, und was
 jedes Dialogfeld, jedes Andockfenster und jedes Werkzeug tut.
@@ -21,8 +21,7 @@ Das Inhaltsverzeichnis links folgt Ihrer Arbeitsweise:
   und **Bitmaps** decken die übrige Zeichenarbeit ab.
 - **Drucken**, **Webgrafiken** und **Dateiformate** erklären, wie Ihre Arbeit
   aus CD Draw herauskommt.
-- **Anpassen und automatisieren** behandelt die Optionen, Arbeitsbereiche,
-  Skripte und KI-Funktionen, und **Referenz** listet jeden Menübefehl, jedes
+- **Anpassen und automatisieren** behandelt die Optionen, Arbeitsbereiche und Skripte, und **Referenz** listet jeden Menübefehl, jedes
   Werkzeug, jedes Andockfenster und jedes Tastenkürzel auf.
 
 Mit der Registerkarte **Suchen** finden Sie eine Seite über jedes Wort, das sie

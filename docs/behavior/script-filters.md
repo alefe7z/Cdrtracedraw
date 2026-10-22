@@ -22,7 +22,7 @@ const TraceDrawFilter = {
 ```
 
 - Scripts panel, **Install as Filter**: checks the script in the panel
-  (it runs against an empty drawing with the limits of AI Drawing
+  (it runs against an empty drawing with the limits of untrusted
   scripts, and nothing it does is kept) and keeps it in the preferences.
   It needs a name, at least one extension (letters and digits) and
   `Import` or `Export`. A filter of the same name is replaced. The panel

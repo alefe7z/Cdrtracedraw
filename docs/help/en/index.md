@@ -3,7 +3,7 @@
 CD Draw is a free, open-source vector drawing program. You use it to draw
 illustrations, logos, diagrams, layouts and print work made of shapes, lines
 and text that stay sharp at any size, and to combine them with bitmaps. The
-same program runs on Windows, macOS and Linux and in a web browser.
+program runs on Windows, macOS and Linux, entirely offline.
 
 This Help explains how to do things in CD Draw, step by step, and what
 every dialog box, panel and tool does.
@@ -19,8 +19,8 @@ The contents on the left follow the way you work:
   layout** and **Bitmaps** cover the rest of the drawing work.
 - **Printing**, **Web graphics** and **File formats** cover getting your
   work out of CD Draw.
-- **Customize and automate** covers the options, workspaces, scripts and AI
-  features, and **Reference** lists every menu command, tool, panel and
+- **Customize and automate** covers the options, workspaces and scripts,
+  and **Reference** lists every menu command, tool, panel and
   keyboard shortcut.
 
 Use the **Search** tab to find a page by any word it contains, and the
@@ -38,7 +38,9 @@ language list at the top to read the same page in another language.
   [[hint.learn_more]] link opens the tool's page here. See
   [Hints](get-started/hints.md).
 
-Pages open in your web browser, in the language CD Draw is set to.
+Pages open in your web browser from the copy of the Help installed with
+CD Draw, in the language CD Draw is set to; no internet connection is
+needed.
 
 ## Where to begin {#begin}
 

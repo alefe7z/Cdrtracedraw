@@ -3,8 +3,7 @@
 CD Draw ücretsiz ve açık kaynaklı bir vektör çizim programıdır. Onunla her
 boyutta keskin kalan şekiller, çizgiler ve metinden oluşan çizimler, logolar,
 diyagramlar, sayfa düzenleri ve baskı işleri hazırlar, bunları bitmaplerle
-birleştirirsiniz. Aynı program Windows, macOS ve Linux'ta ve bir web
-tarayıcısında çalışır.
+birleştirirsiniz. Program Windows, macOS ve Linux'ta tamamen çevrimdışı çalışır.
 
 Bu Yardım, CD Draw'da işlerin adım adım nasıl yapıldığını ve her iletişim
 kutusunun, panelin ve aracın ne yaptığını açıklar.
@@ -20,8 +19,7 @@ Soldaki içindekiler, çalışma şeklinizi izler:
   ve **Bitmapler** çizim işinin geri kalanını kapsar.
 - **Yazdırma**, **Web grafikleri** ve **Dosya biçimleri** işinizi CD Draw'dan
   dışarı çıkarmayı anlatır.
-- **Özelleştirme ve otomasyon** seçenekleri, çalışma alanlarını, betikleri ve
-  yapay zekâ özelliklerini anlatır; **Başvuru** ise her menü komutunu, aracı,
+- **Özelleştirme ve otomasyon** seçenekleri, çalışma alanlarını ve betikleri anlatır; **Başvuru** ise her menü komutunu, aracı,
   paneli ve klavye kısayolunu listeler.
 
 Bir sayfayı içerdiği herhangi bir sözcükle bulmak için **Ara** sekmesini,

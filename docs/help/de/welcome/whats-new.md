@@ -14,9 +14,6 @@ der letzten Versionen.
   zu einem führt, und über dem Titel eines Menüs, das einen enthält. Die
   Markierungen verschwinden, wenn Sie den Befehl ausschalten, und beim
   nächsten Start von CD Draw ist der Befehl wieder aus.
-- Die vollständige Liste der Änderungen jeder Version steht im
-  [Änderungsprotokoll](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  des Projekts.
 
 ## Highlights der letzten Versionen {#highlights}
 

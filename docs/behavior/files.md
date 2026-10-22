@@ -58,9 +58,6 @@ One window, 760 px wide, the same on every system:
   already exists. Replace it?" with Replace and Cancel. Cancel closes
   without writing. The dialog starts in the drawing's folder, else the
   last folder saved to, else Documents, else home.
-- In the browser, where every save is a download, the dialog keeps the
-  file name, type, version and properties, and says the browser saves
-  the file in its downloads folder.
 
 ## `.cdr` versions
 
@@ -86,8 +83,7 @@ version decides who can open a file:
   version in `TRACEDRAW_CDR_VERSION` (14 to 27; another version is
   refused with exit code 2). Versions 7 to 13 are experimental and are
   written only with `TRACEDRAW_CDR_EXPERIMENTAL=1`, for testing them in
-  other programs. The MCP `save` tool takes an optional `version`, 14 to
-  27 (`mcp.md`).
+  other programs.
 
 What each version's file holds is in `docs/cdr-format.md`, Writing.
 
@@ -127,8 +123,6 @@ What each version's file holds is in `docs/cdr-format.md`, Writing.
 - The dialog draws, folders open (`ui::save_as::tests::the_dialog_draws_and_opens_folders`),
   and the Linux folder names are read from the user's settings
   (`ui::save_as::tests::linux_folder_names_come_from_the_users_settings`).
-- The MCP `save` tool writes version 21 when asked and refuses versions 3
-  and 23 (`mcp::tests::export_and_save_write_files`).
 - Every version from 7 to 22 reads back with its pages, layers, objects,
   text runs and alignment (`write::tests` in `crates/cdr`).
 - Checked on screen: the dialog with its shortcuts, list, type list,

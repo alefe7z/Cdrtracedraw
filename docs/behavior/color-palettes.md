@@ -5,8 +5,7 @@ document palette above the status bar (Window > Color Palettes >
 Document Palette shows or hides it). The dotted grip at the start of the
 default palette moves it to another edge (on a side it is a column) or
 into a floating window with one row (see "Moving the bars" in
-`toolbars.md`); where it is put is kept across restarts, in the browser
-too. The document palette stays a row under the drawing window wherever
+`toolbars.md`); where it is put is kept across restarts. The document palette stays a row under the drawing window wherever
 the default palette is (over the drawing window when the default palette
 is along the top). Window > Toolbars > Color Palette hides or shows
 them. The rows described below are the same along a column, turned

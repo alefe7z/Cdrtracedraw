@@ -10,10 +10,6 @@ ekspor, penjiplakan, pesan, dan lokasi penyimpanan berkas.
 
 - [[options.language]]: bahasa antarmuka. Bantuan ini terbuka dalam bahasa
   yang sama.
-- [[options.check_updates]] (aktif): lihat
-  [Memeriksa pembaruan](../welcome/about-and-updates.md#updates).
-- [[options.agents]]: [[options.mcp_window]] memungkinkan asisten AI di
-  komputer ini menyunting gambar yang terbuka; lihat [Skrip](scripts.md#mcp).
 - [[options.reset_all]]: lihat [Mengatur ulang pengaturan](reset-settings.md).
 
 ## Pencetakan {#printing}
@@ -65,7 +61,4 @@ centang opsinya di sini untuk melihatnya lagi.
 
 ![Halaman Lokasi Berkas pada opsi global](../../img/customize-global-options-file-locations.png)
 
-Menampilkan tempat preferensi dan cadangan otomatis disimpan. Preferensi
-berada di folder `tracedraw-settings` di samping program bila folder itu ada
-(salinan portabel), selain itu di tempat yang disediakan sistem Anda untuk
-pengaturan program; versi peramban menyimpannya di peramban.
+Menampilkan tempat preferensi dan cadangan otomatis disimpan.

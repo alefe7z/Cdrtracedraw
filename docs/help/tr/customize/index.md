@@ -2,8 +2,7 @@
 
 CD Draw çalışma şeklinize göre ayarlanabilir: programın ve her aracın
 seçenekleri, arayüzün görünüşü, klavye kısayolları, çubuklar ve çalışma
-alanları. İşleri betiklerle otomatikleştirebilir, bir açıklamadan çizim yapan
-bir yapay zekâ hizmeti bağlayabilir ve bir çizime harcanan süreyi
+alanları. İşleri betiklerle otomatikleştirebilir ve bir çizime harcanan süreyi
 izleyebilirsiniz.
 
 Seçenekler [[menu.tools > menu.tools.options]] altındadır: her öğe kendi

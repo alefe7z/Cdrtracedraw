@@ -61,6 +61,7 @@ New-Item -ItemType Directory -Force (Join-Path $stage 'Assets') | Out-Null
 
 Copy-Item (Join-Path $SrcDir 'tracedraw.exe') $stage
 Copy-Item (Join-Path $SrcDir 'tracedraw-cli.exe') $stage
+Copy-Item -Recurse (Join-Path $SrcDir 'help') (Join-Path $stage 'help')
 foreach ($f in 'README.md', 'LICENSE-MIT', 'LICENSE-APACHE') {
     Copy-Item (Join-Path $root $f) $stage
 }

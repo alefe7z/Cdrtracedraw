@@ -439,7 +439,7 @@ its default settings to a 64-pixel landscape, and its name below.
 ## Save Bitmap As
 
 The bitmap's context menu writes its pixels, the effects in its stack
-included, to a PNG file (a download in the browser).
+included, to a PNG file.
 
 ## Bitmap Mask docker
 

@@ -40,8 +40,8 @@ pub struct FontSystem {
     /// each added.
     carried: RwLock<Vec<(Vec<String>, DocumentFont)>>,
     cache: Mutex<HashMap<String, Arc<BezPath>>>,
-    /// Families the application can fetch when text asks for them (the
-    /// browser build's font folder), sorted; see
+    /// Families the application can load when text asks for them, sorted;
+    /// see
     /// [`FontSystem::offer_families`].
     offered: RwLock<Vec<String>>,
     /// Offered families text asked for and the application has not taken
@@ -87,8 +87,8 @@ pub fn install() {
 
 static SYSTEM: OnceLock<FontSystem> = OnceLock::new();
 
-/// Font files registered before the font system starts (the browser build
-/// has no system fonts and registers bundled ones here).
+/// Font files registered before the font system starts, beside the
+/// system's fonts.
 static EXTRA_FONTS: Mutex<Vec<Arc<Vec<u8>>>> = Mutex::new(Vec::new());
 
 /// Register a font file (TTF, OTF or a collection). Takes effect when the
@@ -821,7 +821,6 @@ impl TextLayout {
 impl FontSystem {
     fn load() -> Self {
         let mut db = fontdb::Database::new();
-        #[cfg(not(target_arch = "wasm32"))]
         db.load_system_fonts();
         if let Ok(extra) = EXTRA_FONTS.lock() {
             for data in extra.iter() {
@@ -933,8 +932,8 @@ impl FontSystem {
         self.generation.load(Ordering::Relaxed)
     }
 
-    /// Families the application can fetch on request (the browser build's
-    /// font folder); installed ones are left out. Text set in one of them,
+    /// Families the application can load on request (from files it keeps);
+    /// installed ones are left out. Text set in one of them,
     /// in a family one of them stands in for, or holding letters only one
     /// of them has, asks for it while it draws with what is installed:
     /// [`FontSystem::take_font_requests`] hands the requests over and

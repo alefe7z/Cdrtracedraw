@@ -132,10 +132,6 @@ fn get_started(app: &mut App, ui: &mut Ui) {
                     .size(11.0),
             );
         });
-        // A browser keeps no recent documents.
-        if crate::files::WEB {
-            return;
-        }
         ui.add_space(40.0);
         ui.vertical(|ui| {
             ui.strong(tr("welcome.recent_documents"));

@@ -165,23 +165,21 @@ pub fn export_docker(app: &mut App, ui: &mut Ui) {
     }
 
     ui.separator();
-    if !crate::files::WEB {
-        ui.horizontal(|ui| {
-            let folder = app
-                .export_assets
-                .folder
-                .as_ref()
-                .map(|f| f.display().to_string())
-                .unwrap_or_else(|| tr("export_docker.no_folder"));
-            ui.label(egui::RichText::new(folder).size(11.0))
-                .on_hover_text(tr("export_docker.folder"));
-            if ui.button(tr("export_docker.browse")).clicked() {
-                if let Some(f) = crate::files::pick_folder() {
-                    app.export_assets.folder = Some(f);
-                }
+    ui.horizontal(|ui| {
+        let folder = app
+            .export_assets
+            .folder
+            .as_ref()
+            .map(|f| f.display().to_string())
+            .unwrap_or_else(|| tr("export_docker.no_folder"));
+        ui.label(egui::RichText::new(folder).size(11.0))
+            .on_hover_text(tr("export_docker.folder"));
+        if ui.button(tr("export_docker.browse")).clicked() {
+            if let Some(f) = crate::files::pick_folder() {
+                app.export_assets.folder = Some(f);
             }
-        });
-    }
+        }
+    });
     let count = app
         .export_assets
         .assets

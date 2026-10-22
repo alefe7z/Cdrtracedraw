@@ -15,10 +15,6 @@ mostrare le vostre scorciatoie; vedere
 | [[menu.file.open]] | [Opening and saving drawings](../get-started/open-and-save.md) |
 | [[menu.file.open_recent]] | [Opening and saving drawings](../get-started/open-and-save.md) |
 | [[menu.file.clear_recent]] | [Opening and saving drawings](../get-started/open-and-save.md) |
-| [[menu.file.github]] | [Keeping drawings on GitHub](../get-started/github.md) |
-| [[menu.file.github_open]] | [Keeping drawings on GitHub](../get-started/github.md) |
-| [[menu.file.github_save]] | [Keeping drawings on GitHub](../get-started/github.md) |
-| [[menu.file.github_history]] | [Keeping drawings on GitHub](../get-started/github.md) |
 | [[menu.file.close]] | [Opening and saving drawings](../get-started/open-and-save.md) |
 | [[menu.file.close_all]] | [Opening and saving drawings](../get-started/open-and-save.md) |
 | [[menu.file.save]] | [Opening and saving drawings](../get-started/open-and-save.md) |
@@ -135,12 +131,6 @@ mostrare le vostre scorciatoie; vedere
 
 | Comando | Vedere |
 |---|---|
-| [[menu.object.ai_generate]] | [AI drawing and generating](../customize/ai.md) |
-| [[menu.object.ai_create_image]] | [AI drawing and generating](../customize/ai.md) |
-| [[menu.object.ai_remix_image]] | [AI drawing and generating](../customize/ai.md) |
-| [[menu.object.ai_create_vector]] | [AI drawing and generating](../customize/ai.md) |
-| [[menu.object.ai_draw_words]] | [AI drawing and generating](../customize/ai.md) |
-| [[menu.bitmaps.remove_background]] | [AI drawing and generating](../customize/ai.md) |
 | [[menu.object.create]] | [Oggetti, simboli e livelli](../objects/index.md) |
 | [[menu.object.create_arrowhead]] | [Setting outlines](../lines-shapes/outlines.md#outline-pen) |
 | [[menu.object.create_pattern]] | [Pattern fills](../color/patterns.md) |
@@ -268,8 +258,6 @@ mostrare le vostre scorciatoie; vedere
 | [[menu.bitmaps.crop_bitmap]] | [Resampling, straightening and inflating bitmaps](../bitmaps/resample-and-straighten.md) |
 | [[menu.bitmaps.resample]] | [Resampling, straightening and inflating bitmaps](../bitmaps/resample-and-straighten.md) |
 | [[menu.bitmaps.remove_background_local]] | [Rimuovi sfondo](../bitmaps/remove-background.md) |
-| [[menu.bitmaps.remove_background]] | [AI drawing and generating](../customize/ai.md) |
-| [[menu.bitmaps.ai_art_styles]] | [AI drawing and generating](../customize/ai.md) |
 | [[menu.bitmaps.mode]] | [Changing the color mode of bitmaps](../bitmaps/color-modes.md) |
 | [[menu.bitmaps.mode_bw]] | [Changing the color mode of bitmaps](../bitmaps/color-modes.md) |
 | [[menu.bitmaps.mode_grayscale]] | [Changing the color mode of bitmaps](../bitmaps/color-modes.md) |
@@ -381,7 +369,6 @@ mostrare le vostre scorciatoie; vedere
 | [[menu.tools.scripts_docker]] | [Scripts and automation](../customize/scripts.md) |
 | [[menu.tools.scripts_run]] | [Scripts and automation](../customize/scripts.md) |
 | [[menu.tools.scripts_record]] | [Scripts and automation](../customize/scripts.md) |
-| [[menu.tools.ai_generate]] | [AI drawing and generating](../customize/ai.md) |
 | [[menu.tools.font_manager]] | [Fonts and glyphs](../text/fonts.md#font-manager) |
 | [[menu.tools.border_and_grommet]] | [Border and grommets](../printing/border-and-grommet.md) |
 | [[menu.tools.time_tracker]] | [Time tracker](../customize/time-tracker.md) |
@@ -435,15 +422,12 @@ mostrare le vostre scorciatoie; vedere
 |---|---|
 | [[menu.help.help_topics]] | [Benvenuti nella Guida di CD Draw](../index.md#in-the-app) |
 | [[menu.help.product_help]] | [Benvenuti nella Guida di CD Draw](../index.md#in-the-app) |
-| [[menu.help.welcome_screen]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
-| [[menu.help.video_tutorials]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
+| [[menu.help.welcome_screen]] | [Informazioni su CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.video_tutorials]] | [Informazioni su CD Draw](../welcome/about-and-updates.md) |
 | [[menu.help.hints]] | [The Hints panel](../get-started/hints.md) |
-| [[menu.help.quick_start_guide]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
-| [[menu.help.user_guide]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
+| [[menu.help.quick_start_guide]] | [Informazioni su CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.user_guide]] | [Informazioni su CD Draw](../welcome/about-and-updates.md) |
 | [[menu.help.whats_new]] | [Novità](../welcome/whats-new.md) |
 | [[menu.help.highlight_whats_new]] | [Novità](../welcome/whats-new.md) |
-| [[menu.help.updates]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
-| [[menu.help.message_settings]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
-| [[menu.help.community]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
-| [[menu.help.support]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
-| [[menu.help.about]] | [Informazioni su CD Draw e aggiornamenti](../welcome/about-and-updates.md) |
+| [[menu.help.message_settings]] | [Informazioni su CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.about]] | [Informazioni su CD Draw](../welcome/about-and-updates.md) |

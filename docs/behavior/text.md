@@ -93,8 +93,7 @@ Text and Glyphs dockers and Options (default font):
   move through the list, Enter takes the highlighted family, Escape
   closes the list and puts the name back.
 - At the top of the list, the number of families shown and what to show:
-  all fonts, installed fonts, the fonts in this drawing, or (in the
-  browser) the fonts to download.
+  all fonts, installed fonts or the fonts in this drawing.
 - "Used last": the last five families picked in any font list, newest
   first (kept in the preferences, `recent_fonts`), while nothing is typed.
 - Every family, its name drawn in its own font (in the interface font for
@@ -111,8 +110,6 @@ Text and Glyphs dockers and Options (default font):
 - The preview: "AaBbYyZz" in the family (and style) under the pointer,
   else the one the keys reached, else the family in use, between its top,
   baseline and bottom lines, with "Family (Style)" under it.
-- In the browser, resting the pointer on a family to download for 0.4 s
-  fetches it, and its row and preview then draw in it.
 
 Names are drawn by the text engine into pictures of the screen's
 resolution, only for the rows in view, and kept until fonts are added.
@@ -489,12 +486,6 @@ axis (within its range), and slant on their italic or slant axis for
 italic when the face is upright; only what no axis gives is made
 synthetically (bold by drawing the letters twice, italic by slanting
 them).
-
-The browser build offers the families of its font folder (see
-`web/FONTS.md`): the font lists show them, and text asks for one the
-first time it needs it (text set in it, in a family it stands in for,
-or holding letters of a script only it has); the page fetches the files
-and draws again when they arrive.
 
 Names are compared in lower case without spaces, punctuation, style
 words and foundry endings ("Arial-BoldMT" and "Arial MT" are Arial,

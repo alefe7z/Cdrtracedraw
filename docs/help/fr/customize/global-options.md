@@ -11,11 +11,6 @@ l'emplacement des fichiers.
 
 - [[options.language]] : la langue de l'interface. Cette Aide s'ouvre dans
   la même langue.
-- [[options.check_updates]] (actif) : voir
-  [Rechercher des mises à jour](../welcome/about-and-updates.md#updates).
-- [[options.agents]] : [[options.mcp_window]] permet aux assistants d'IA de
-  cet ordinateur de modifier le dessin ouvert ; voir
-  [Scripts](scripts.md#mcp).
 - [[options.reset_all]] : voir
   [Réinitialiser les paramètres](reset-settings.md).
 
@@ -71,7 +66,3 @@ ici pour le revoir.
 ![La page Emplacements des fichiers des options globales](../../img/customize-global-options-file-locations.png)
 
 Indique où sont conservées les préférences et les sauvegardes automatiques.
-Les préférences se trouvent dans un dossier `tracedraw-settings` à côté du
-programme quand il existe (une copie portable), sinon à l'emplacement prévu
-par votre système pour les paramètres des programmes ; la version pour
-navigateur les conserve dans le navigateur.

@@ -5,9 +5,7 @@ layout of the window, keyboard shortcuts, the interface language, and
 scripts that do repetitive work for you.
 
 Your preferences are saved as soon as they change, so they survive even
-if CD Draw does not close normally. On the desktop they live in a
-settings file; in the browser, in that browser's storage on that
-computer.
+if CD Draw does not close normally.
 
 ## Options
 
@@ -51,9 +49,7 @@ rectangle corners, polygon points and table rows and columns.
 
 ### Global
 
-- **General**: the interface language, the daily update check, letting
-  AI agents on this computer edit the open drawing, and **Reset all
-  settings...**.
+- **General**: the interface language and **Reset all settings...**.
 - **File Locations**: where preferences and auto-backups are kept.
 - **Printing**: what the Print dialog starts with.
 - **File Formats**: what Export starts with, where imported objects go,
@@ -186,16 +182,6 @@ set a breakpoint and press **Debug**: the script stops there, and you can
 step through it, look at its variables with **Evaluate**, continue or
 stop. See [the debugger notes](../behavior/script-debugger.md).
 
-### AI Drawing
-
-**AI Generate > Draw with words** (the docker's fourth mode) turns a request in words ("a red bicycle with
-blue wheels") into a drawing. It uses an AI service you set up yourself,
-with your own key: a Messages API service, any chat completions service,
-or a model server on your own computer. The service writes a script,
-which runs as one undo step without access to your files. CD Draw has
-no AI service or account of its own, and nothing is sent until you press
-**Draw**. See [the AI Drawing notes](../behavior/ai-drawing.md).
-
 ### The command line
 
 Every download includes `tracedraw-cli`. For example, to convert between
@@ -205,14 +191,6 @@ any format CD Draw opens and any it writes:
 tracedraw-cli convert poster.cdr poster.pdf
 TRACEDRAW_DPI=300 tracedraw-cli convert poster.tdraw poster.png
 ```
-
-### AI agents
-
-`tracedraw --mcp` serves the editor to AI agents over the Model Context
-Protocol. To let an agent on your computer edit the drawing open in your
-window, turn on **Tools > Options > Global > General > Let AI agents on
-this computer edit the open drawing** (off to start with). See
-[the MCP notes](../behavior/mcp.md).
 
 ## Where next
 

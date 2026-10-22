@@ -12,9 +12,6 @@ sprawdzić, co się zmieniło, i wymienia najważniejsze nowości ostatnich wers
   polecenia, obok strzałki podmenu, które do niego prowadzi, i nad tytułem
   menu, które je zawiera. Oznaczenia znikają po wyłączeniu polecenia, a przy
   następnym uruchomieniu CD Draw polecenie znowu jest wyłączone.
-- Pełna lista zmian każdej wersji znajduje się w
-  [dzienniku zmian](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  projektu.
 
 ## Najważniejsze nowości ostatnich wersji {#highlights}
 

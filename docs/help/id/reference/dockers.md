@@ -22,7 +22,6 @@ panel dan halaman yang menjelaskannya.
 | [[docker.color_styles]] |  | [→](../color/color-styles.md) |
 | [[docker.object_styles]] |  | [→](../templates-styles/object-styles.md) |
 | [[docker.find_replace]] | <kbd>Ctrl+F</kbd> | [→](../objects/find-replace.md) |
-| [[docker.ai_generate]] |  | [→](../customize/ai.md#generate) |
 | [[docker.export]] |  | [→](../web-graphics/export-docker.md) |
 | [[docker.comments]] |  | [→](../objects/comments.md) |
 | [[docker.scripts]] |  | [→](../customize/scripts.md) |

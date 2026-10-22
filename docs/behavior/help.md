@@ -1,8 +1,8 @@
 # Help
 
-The user Help: task pages for people drawing with CD Draw, published
-in every interface language, and the context help that opens them from
-the app.
+The user Help: task pages for people drawing with CD Draw, in every
+interface language, installed with the program, and the context help that
+opens them from the app. Nothing is fetched online.
 
 ## Where it opens
 
@@ -19,23 +19,33 @@ the app.
   Help (F1) opens the page of the docker on show, else of the tool.
 - The Hints docker's "Learn more" link opens the page of the tool or
   topic it shows; its first page links to the first page of the Help.
-- Pages open in the browser (a new tab in the browser version), at
-  `https://alefe7z.github.io/Cdrtracedraw/help/<language>/<page>.html#<anchor>`
-  in the interface language (Options > Global > General > Language). Every
-  page exists in every language: a page not translated yet is published
-  from the English page with a notice at the top, so a link never breaks.
+- Pages open from disk in the system browser, at
+  `<help>/<language>/<page>.html#<anchor>` in the interface language
+  (Options > Global > General > Language). Windows opens the page file
+  itself (its file handler drops an anchor); macOS and Linux open its
+  `file://` address with the anchor. Every page exists in every language:
+  a page not translated yet is built from the English page with a notice
+  at the top, so a link never breaks.
+- `<help>` is the first of these folders that holds an `index.html`
+  (`help::installed_dir`): `TRACEDRAW_HELP_DIR`, `help` next to the
+  program (the Windows installer, the portable zip, the Linux archive),
+  `../Resources/help` (the macOS bundle) and `../share/tracedraw/help`
+  (the AppImage and the `.deb`). Without one the status bar says the
+  Help is not installed and nothing opens.
 
 ## The site
 
-- `web/help_site.py` builds `docs/help/` into `site/help/`, one tree per
-  interface language (`site/help/<code>/`), with the stylesheet and
-  script shared. CI runs it in the `web` job, so the `pages` job
-  publishes it with the browser version. `site/help/index.html` sends
-  the reader to the browser's language, English otherwise.
+- `scripts/help/help_site.py` builds `docs/help/` into a folder, one
+  tree per interface language (`<code>/`), with the stylesheet and script
+  shared; standard library only. The build workflows run it into
+  `target/<triple>/release/help`, and every package ships that folder.
+  `index.html` sends the reader to the browser's language, English
+  otherwise. The pages load nothing from the network.
 - Each page has: a top bar (name, language list, light or dark switch);
   a side panel with two tabs, Contents (the tree: one collapsible
   section per part, the current page marked and its section open) and
-  Search (the language's `search.json`, matched as the reader types:
+  Search (the language's `search.js`, loaded with a script element so
+  that it works from `file://`, matched as the reader types:
   titles first, then headings, then text; works for scripts without
   spaces); breadcrumbs (Help, section, page); the page; Previous and
   Next in the order of the contents.
@@ -82,8 +92,8 @@ the app.
   and every language's pages use the same pictures (the alt text and the
   page text are translated): `docs/help/img/<topic>.png`, named after the
   Help topic with `/` and `#` as `-` (`pages-layout-pages-insert-page.png`),
-  published as `site/help/img/`.
-- `web/help_shots.sh` makes them again: it runs the ignored test
+  shipped as `help/img/`.
+- `scripts/help/help_shots.sh` makes them again: it runs the ignored test
   `help_shots` (`src/help_shots.rs`), which opens each dialog through its
   menu command (or sets it, for dialogs without one), each options page
   and each panel, on a demo drawing of a filled rectangle, an ellipse, a
@@ -103,7 +113,7 @@ the app.
   of the contents exists in English, every translated page has the
   English anchors and labels, and every `[[key]]` it uses is in that
   language's `lang/<code>.toml`.
-- `web/help_site.py` stops with an error on a link to a missing page or
+- `scripts/help/help_site.py` stops with an error on a link to a missing page or
   anchor, an unknown `[[key]]` or a listed page missing in English
   (`--partial` skips pages not written yet, `--lang=en,de` builds only
   some languages).

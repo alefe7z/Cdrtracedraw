@@ -28,9 +28,6 @@ pub const RECENT: usize = 5;
 pub const SAMPLE_SIZES: std::ops::RangeInclusive<f32> = 12.0..=40.0;
 /// The size samples start at.
 pub const DEFAULT_SAMPLE: f32 = 18.0;
-/// How long the pointer rests on a family to download (browser) before it
-/// is fetched for its picture.
-const REST_SECONDS: f64 = 0.4;
 /// Pictures kept before the oldest go.
 const MAX_PICTURES: usize = 1200;
 
@@ -49,18 +46,16 @@ pub enum Show {
     All,
     Installed,
     Drawing,
-    Download,
 }
 
 impl Show {
-    const ALL: [Show; 4] = [Show::All, Show::Installed, Show::Drawing, Show::Download];
+    const ALL: [Show; 3] = [Show::All, Show::Installed, Show::Drawing];
 
     fn key(self) -> &'static str {
         match self {
             Show::All => "font_list.show_all",
             Show::Installed => "font_list.show_installed",
             Show::Drawing => "font_list.show_drawing",
-            Show::Download => "font_list.show_download",
         }
     }
 }
@@ -80,8 +75,6 @@ pub struct FontPreviews {
     generation: u64,
     pictures: HashMap<PictureKey, Option<Picture>>,
     infos: HashMap<String, Option<FamilyInfo>>,
-    /// Families to download that were asked for, each once.
-    requested: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -144,14 +137,6 @@ impl FontPreviews {
             });
         self.pictures.insert(key, picture.clone());
         picture
-    }
-
-    /// Ask for a family to download once.
-    fn request(&mut self, family: &str) {
-        if !self.requested.iter().any(|f| f == family) {
-            self.requested.push(family.to_string());
-            tracedraw_text::fonts().request_family(family);
-        }
     }
 }
 
@@ -270,7 +255,6 @@ struct ListState {
     /// The keys or typing moved the highlight since the pointer last
     /// rested on a row: the preview follows the highlight.
     keyed: bool,
-    rest: Option<(String, f64)>,
 }
 
 /// A font list showing `current`, `width` points wide. Returns what was
@@ -377,14 +361,6 @@ pub fn font_list(
                 .cloned()
                 .collect()
         }
-        Show::Download => {
-            let fonts = tracedraw_text::fonts();
-            app.font_families
-                .iter()
-                .filter(|f| !fonts.has_family(f))
-                .cloned()
-                .collect()
-        }
     };
     let families = matching(&all, st.typed.as_deref(), current);
     let mut rows: Vec<Row> = Vec::with_capacity(families.len());
@@ -466,7 +442,6 @@ pub fn font_list(
         });
     if shown.is_none() && !field.has_focus() {
         st.typed = None;
-        st.rest = None;
     }
     if hovered_now.is_some() {
         st.hovered = hovered_now;
@@ -687,26 +662,6 @@ fn list_body(
         .or(keyed)
         .unwrap_or_else(|| (current.to_string(), (false, false)));
     preview(app, ui, &family, style, ppp);
-
-    // A family to download under the pointer for a moment is fetched.
-    let now = ctx.input(|i| i.time);
-    match hovered_now.as_ref().map(|(f, _)| f.clone()) {
-        Some(f) if !tracedraw_text::fonts().has_family(&f) => {
-            let since = match &st.rest {
-                Some((g, t)) if *g == f => *t,
-                _ => {
-                    st.rest = Some((f.clone(), now));
-                    now
-                }
-            };
-            if now - since >= REST_SECONDS {
-                app.font_previews.request(&f);
-            } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(120));
-            }
-        }
-        _ => st.rest = None,
-    }
 }
 
 /// What happened to a row this frame.

@@ -13,9 +13,6 @@ before it goes out, and publishing PDF and PDF/X files.
 3. Press **Print**. The PDF opens in your system's viewer; print from
    there.
 
-In the browser, the PDF is downloaded instead; open it and print it from
-the browser's viewer.
-
 ### Pages and copies
 
 - **Copies**: handed on to the viewer.
@@ -140,8 +137,7 @@ the standards forbid it; the Security page says so when a PDF/X level is
 chosen. CD Draw never keeps your passwords; your other choices are
 remembered for next time.
 
-Press **OK** and choose where to save (in the browser the PDF is
-downloaded). See [the Publish to PDF notes](../behavior/publish-to-pdf.md).
+Press **OK** and choose where to save. See [the Publish to PDF notes](../behavior/publish-to-pdf.md).
 
 You can also choose PDF in **File > Export**, with the same PDF/X levels
 and bleed; Publish to PDF adds the bookmarks and protection.

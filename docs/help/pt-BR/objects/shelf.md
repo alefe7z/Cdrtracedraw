@@ -47,6 +47,4 @@ globais.
 
 ## Onde a Prateleira fica guardada {#storage}
 
-No computador, a Prateleira é um arquivo na sua pasta de preferências. No
-navegador, ela fica no armazenamento daquele navegador, que guarda só alguns
-megabytes, então bitmaps grandes podem não ser guardados.
+No computador, a Prateleira é um arquivo na sua pasta de preferências.

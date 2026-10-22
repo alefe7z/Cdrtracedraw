@@ -8,7 +8,6 @@
 use crate::app::App;
 use crate::i18n::{tr, trf};
 use crate::picture_mosaic::{grid, tile_pixels, Composition, Edges, Priority};
-use crate::theme::Tokens;
 use crate::ui::docker_form::{indented, row, section, wide_button};
 use egui::{RichText, Ui};
 
@@ -16,14 +15,6 @@ use egui::{RichText, Ui};
 /// progress while the folder is read.
 fn library(app: &mut App, ui: &mut Ui) {
     section(ui, Some(&tr("docker.picture_mosaic_library")));
-    if crate::files::WEB {
-        ui.label(
-            RichText::new(tr("docker.picture_mosaic_web"))
-                .color(Tokens::text_dim())
-                .small(),
-        );
-        return;
-    }
     let none = tr("docker.form_none");
     let n = app.picture_mosaic.images.len();
     row(ui, &tr("docker.picture_mosaic_images_label"), |ui| {

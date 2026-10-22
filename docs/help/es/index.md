@@ -3,8 +3,7 @@
 CD Draw es un programa de dibujo vectorial libre y de código abierto. Sirve
 para dibujar ilustraciones, logotipos, diagramas, maquetaciones y trabajos de
 impresión hechos de formas, líneas y texto que se mantienen nítidos a cualquier
-tamaño, y para combinarlos con mapas de bits. El mismo programa funciona en
-Windows, macOS y Linux y en un navegador web.
+tamaño, y para combinarlos con mapas de bits. El programa funciona en Windows, macOS y Linux, totalmente sin conexión.
 
 Esta Ayuda explica cómo hacer las cosas en CD Draw, paso a paso, y qué hace
 cada cuadro de diálogo, panel y herramienta.
@@ -21,8 +20,7 @@ El contenido de la izquierda sigue la forma en que se trabaja:
   diseño** y **Mapas de bits** cubren el resto del trabajo de dibujo.
 - **Impresión**, **Gráficos web** y **Formatos de archivo** explican cómo sacar
   el trabajo de CD Draw.
-- **Personalizar y automatizar** trata de las opciones, los espacios de
-  trabajo, los scripts y las funciones de IA, y **Referencia** enumera cada
+- **Personalizar y automatizar** trata de las opciones, los espacios de trabajo y los scripts, y **Referencia** enumera cada
   comando de menú, herramienta, panel y atajo de teclado.
 
 Use la pestaña **Buscar** para encontrar una página por cualquier palabra que

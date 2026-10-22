@@ -687,7 +687,6 @@ pub fn bundled_font_definitions() -> egui::FontDefinitions {
 
 /// True when the interface language `code` needs a system font for its
 /// script (the bundled one covers Latin, Greek and Cyrillic).
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn needs_system_font(code: &str) -> bool {
     matches!(code, "zh-CN" | "zh-TW" | "ja" | "ar" | "hi" | "bn")
 }

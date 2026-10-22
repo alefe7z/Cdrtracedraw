@@ -357,41 +357,10 @@ pub struct Settings {
     /// Options > Global > File Formats.
     #[serde(default)]
     pub formats: crate::prefs::FormatPrefs,
-    /// AI Drawing: the service, address, model and (when asked) the key.
-    #[serde(default)]
-    pub ai: crate::ai::AiPrefs,
-    /// Tools > Options > AI: AI features on (they still need a service
-    /// set up with the user's key).
-    #[serde(default = "ai_enabled_default")]
-    pub ai_enabled: bool,
-    /// The separate image service older versions saved. Read once and
-    /// folded into `ai` (see `migrate_ai`); it stays in the file only
-    /// when it holds a remembered key the one service could not take, so
-    /// that key is never lost.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ai_image: Option<crate::ai_image::ImagePrefs>,
-    /// Options > Global > General: AI agents on this computer may edit the
-    /// open drawing (MCP, `tracedraw --mcp-window`).
-    #[serde(default)]
-    pub mcp_window: bool,
-    /// Options > Global > General: look for a newer release once a day at
-    /// start (desktop).
-    #[serde(default = "default_true")]
-    pub check_updates: bool,
-    /// When that check last ran, seconds since 1970.
-    #[serde(default)]
-    pub last_update_check: u64,
-    /// A release the user chose to skip: not offered again at start.
-    #[serde(default)]
-    pub skipped_update: String,
     /// Scripts panel > Install as Filter: file formats that scripts read
     /// or write (see `behavior/script-filters.md`).
     #[serde(default)]
     pub script_filters: Vec<crate::scripting::ScriptFilter>,
-    /// File > GitHub's last repository, branch, path (and the token, when
-    /// the user asked to remember it).
-    #[serde(default)]
-    pub github: crate::github::GithubPrefs,
     /// Options > Global > Bitmap Tracing.
     #[serde(default)]
     pub tracing: crate::prefs::TracePrefs,
@@ -1293,15 +1262,7 @@ impl Default for Settings {
             workspace_parts: crate::workspace_file::WorkspaceParts::default(),
             printing: Default::default(),
             formats: Default::default(),
-            ai: Default::default(),
-            ai_enabled: true,
-            ai_image: None,
-            mcp_window: false,
-            check_updates: true,
-            last_update_check: 0,
-            skipped_update: String::new(),
             script_filters: Vec::new(),
-            github: Default::default(),
             tracing: Default::default(),
             warnings: Default::default(),
             curves: Default::default(),
@@ -1328,7 +1289,6 @@ pub fn config_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("TRACEDRAW_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(dir) = std::env::current_exe().ok().and_then(|e| portable_dir(&e)) {
         return Some(dir);
     }
@@ -1349,10 +1309,6 @@ pub fn config_dir() -> Option<PathBuf> {
             .map(|p| p.join("tracedraw"))
     }
 }
-
-/// Local storage key of the settings in the browser build.
-#[cfg(target_arch = "wasm32")]
-const WEB_KEY: &str = "tracedraw.settings";
 
 impl Settings {
     /// The preferences as CD Draw comes, keeping what is history rather
@@ -1394,18 +1350,7 @@ impl Settings {
             self.snap.dynamic_guides = false;
         }
         self.upgrades = self.upgrades.max(UPGRADES);
-        self.migrate_ai();
         self
-    }
-
-    /// Fold the separate image service of older versions into the one AI
-    /// service. Safe to run again.
-    pub fn migrate_ai(&mut self) {
-        if let Some(image) = self.ai_image.take() {
-            let (ai, kept) = migrate_ai(self.ai.clone(), image);
-            self.ai = ai;
-            self.ai_image = kept;
-        }
     }
 
     pub fn load() -> Settings {
@@ -1413,14 +1358,6 @@ impl Settings {
         // the program left in the folder they share (see `save`).
         if cfg!(test) {
             return Settings::default();
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            // The browser build keeps settings in local storage.
-            return crate::web::storage_get(WEB_KEY)
-                .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
-                .map(Settings::upgrade)
-                .unwrap_or_default();
         }
         #[allow(unreachable_code)]
         let Some(p) = Self::path() else {
@@ -1443,13 +1380,6 @@ impl Settings {
     }
 
     pub fn save(&self) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            if let Ok(s) = serde_json::to_string(self) {
-                crate::web::storage_set(WEB_KEY, &s);
-            }
-            return;
-        }
         #[allow(unreachable_code)]
         let Some(p) = Self::path() else {
             return;
@@ -1476,125 +1406,10 @@ impl Settings {
 
     /// Move or insert `path` at the front of the recent list (max 10).
     pub fn touch_recent(&mut self, path: &std::path::Path) {
-        // Browser uploads and downloads have no path to reopen.
-        if crate::files::WEB {
-            return;
-        }
         self.recent_files.retain(|p| p != path);
         self.recent_files.insert(0, path.to_path_buf());
         self.recent_files.truncate(10);
     }
-}
-
-/// The one AI service from the drawing service (`ai`) and the separate
-/// image service (`image`) older versions saved, and the image service
-/// to keep in the file when its remembered key could not be taken (see
-/// `Settings::ai_image`).
-///
-/// The drawing service stays when it was set up; it takes the image
-/// model (and the remembered key, when it had none) of an image service
-/// of the same kind. When only the image service was set up, it becomes
-/// the one service: Gemini as the Gemini preset, OpenAI as the OpenAI
-/// preset or, at another address, an OpenAI-compatible address with the
-/// image model kept.
-pub fn migrate_ai(
-    ai: crate::ai::AiPrefs,
-    image: crate::ai_image::ImagePrefs,
-) -> (crate::ai::AiPrefs, Option<crate::ai_image::ImagePrefs>) {
-    use crate::ai::{AiPrefs, ImageSupport, Provider};
-    use crate::ai_image::{ImagePrefs, ImageProvider};
-    if image == ImagePrefs::default() {
-        return (ai, None);
-    }
-    let image_key = if image.remember_key {
-        image.key.trim().to_string()
-    } else {
-        String::new()
-    };
-    let defaults = AiPrefs {
-        show_bar: ai.show_bar,
-        ..AiPrefs::default()
-    };
-    if ai != defaults {
-        // The drawing service was set up: it stays.
-        let mut ai = ai;
-        let same_kind = match (ai.image_support(), image.provider) {
-            (ImageSupport::Gemini, ImageProvider::Gemini) => image.endpoint.trim().is_empty(),
-            (ImageSupport::OpenAi, ImageProvider::OpenAi) => {
-                crate::ai::api_base(&image.endpoint()) == crate::ai::OPENAI_API_BASE
-            }
-            (ImageSupport::Custom { base }, ImageProvider::OpenAi) => {
-                crate::ai::api_base(&image.endpoint()) == base
-            }
-            _ => false,
-        };
-        if !same_kind {
-            // Its remembered key stays in the file for the user to find.
-            return (ai, (!image_key.is_empty()).then_some(image));
-        }
-        if ai.image_model.trim().is_empty() {
-            ai.image_model = match ai.image_support() {
-                // An address of the user's makes pictures only with a
-                // model named.
-                ImageSupport::Custom { .. } => image.model(),
-                _ => image.model.trim().to_string(),
-            };
-        }
-        let drawing_key = crate::ai::remembered_key(&ai);
-        if drawing_key.trim().is_empty() && !image_key.is_empty() {
-            ai.key = image_key;
-            ai.remember_key = true;
-            return (ai, None);
-        }
-        let lost = !image_key.is_empty() && image_key != drawing_key;
-        return (ai, lost.then_some(image));
-    }
-    // Only the image service was set up: it becomes the one service.
-    let mut out = AiPrefs {
-        provider: Provider::OpenAiCompatible,
-        key: image_key.clone(),
-        remember_key: image.remember_key && !image_key.is_empty(),
-        show_bar: ai.show_bar,
-        ..AiPrefs::default()
-    };
-    let preset_address = |key: &str| {
-        crate::ai::PRESETS
-            .iter()
-            .find(|(k, _, _)| *k == key)
-            .map(|(_, _, e)| e.to_string())
-            .unwrap_or_default()
-    };
-    match image.provider {
-        ImageProvider::Gemini => {
-            out.endpoint = preset_address("aipreset.gemini");
-            out.image_model = image.model.trim().to_string();
-        }
-        ImageProvider::OpenAi => {
-            let base = crate::ai::api_base(&image.endpoint());
-            if base == crate::ai::OPENAI_API_BASE {
-                out.endpoint = preset_address("aipreset.openai");
-                out.image_model = image.model.trim().to_string();
-            } else {
-                out.endpoint = format!("{base}/chat/completions");
-                // The same server under another name when the address is
-                // that of a chat-only preset, so that it stays one that
-                // can make pictures.
-                if !out.can_make_pictures() {
-                    out.endpoint = if out.endpoint.contains("//localhost") {
-                        out.endpoint.replacen("//localhost", "//127.0.0.1", 1)
-                    } else {
-                        out.endpoint.replacen("//127.0.0.1", "//localhost", 1)
-                    };
-                }
-                out.image_model = image.model();
-            }
-        }
-    }
-    (out, None)
-}
-
-fn ai_enabled_default() -> bool {
-    true
 }
 
 fn default_focus_visibility() -> u8 {
@@ -1809,122 +1624,27 @@ mod tests {
         s.upgrade()
     }
 
+    /// Preferences saved by a version with online features (AI services,
+    /// GitHub, the update check) still open, and their keys and tokens
+    /// are not written back.
     #[test]
-    fn an_older_image_service_alone_becomes_the_one_service() {
-        use crate::ai::{ImageSupport, Provider};
-        use crate::ai_image::ImageProvider;
-        // Gemini: the Gemini preset with that key.
+    fn online_preferences_of_older_versions_are_dropped() {
         let s = migrated(
-            r#"{"ai_image": {"provider": "gemini", "model": "gemini-3-pro-image-preview",
-                "key": "g-key", "remember_key": true}}"#,
+            r#"{"ai": {"provider": "openai", "key": "sk-secret", "remember_key": true},
+                "ai_image": {"provider": "gemini", "key": "g-secret"},
+                "github": {"token": "ghp_secret", "remember_token": true},
+                "check_updates": true, "mcp_window": true}"#,
         );
-        assert!(s.ai_image.is_none(), "folded in");
-        assert_eq!(s.ai.provider, Provider::OpenAiCompatible);
-        assert_eq!(crate::ai::preset_of(&s.ai), Some(2));
-        assert_eq!(s.ai.image_support(), ImageSupport::Gemini);
-        assert_eq!(crate::ai::remembered_key(&s.ai), "g-key");
-        let p = s.ai.image_prefs().expect("pictures");
-        assert_eq!(
-            (p.provider, p.model()),
-            (ImageProvider::Gemini, "gemini-3-pro-image-preview".into())
-        );
-        // OpenAI at its usual address: the OpenAI preset.
-        let s = migrated(
-            r#"{"ai_image": {"provider": "open_ai", "key": "o-key", "remember_key": true}}"#,
-        );
-        assert_eq!(crate::ai::preset_of(&s.ai), Some(1));
-        assert_eq!(crate::ai::remembered_key(&s.ai), "o-key");
-        assert_eq!(
-            s.ai.image_prefs().map(|p| p.model()),
-            Some("gpt-image-1".into())
-        );
-        // OpenAI-compatible at the user's address: a custom address with
-        // the image model kept.
-        let s = migrated(
-            r#"{"ai_image": {"provider": "open_ai", "endpoint": "http://box:7000/v1/",
-                "model": "sd-xl"}}"#,
-        );
-        assert_eq!(s.ai.endpoint, "http://box:7000/v1/chat/completions");
-        assert_eq!(crate::ai::preset_of(&s.ai), None);
-        let p = s.ai.image_prefs().expect("pictures");
-        assert_eq!(
-            (p.endpoint(), p.model()),
-            ("http://box:7000/v1".into(), "sd-xl".into())
-        );
-        assert!(!s.ai.remember_key && s.ai.key.is_empty());
-        // The usual local image server shares its address with a chat-only
-        // preset: it stays a custom address that makes pictures.
-        let s = migrated(
-            r#"{"ai_image": {"provider": "open_ai", "endpoint": "http://localhost:8080/v1"}}"#,
-        );
-        assert_eq!(s.ai.endpoint, "http://127.0.0.1:8080/v1/chat/completions");
-        assert!(s.ai.can_make_pictures());
-        assert_eq!(
-            s.ai.image_prefs().map(|p| p.model()),
-            Some("gpt-image-1".into())
-        );
-        // The prompt bar switch is kept.
-        let s = migrated(r#"{"ai": {"show_bar": false}, "ai_image": {"provider": "open_ai"}}"#);
-        assert!(!s.ai.show_bar);
-        // Saved again, only the one service is written; read back it stays.
-        let json = serde_json::to_string(&s).expect("saved");
-        assert!(!json.contains("\"ai_image\""));
-        let again = migrated(&json);
-        assert_eq!(again.ai, s.ai);
-    }
-
-    #[test]
-    fn an_older_drawing_service_stays_and_no_remembered_key_is_lost() {
-        use crate::ai::Provider;
-        // Both set up, of the same kind: the drawing service stays and
-        // takes the image model; its own key wins.
-        let s = migrated(
-            r#"{"ai": {"provider": "open_ai_compatible", "model": "gpt-5", "key": "d-key",
-                "remember_key": true},
-                "ai_image": {"provider": "open_ai", "model": "dall-e-3", "key": "d-key",
-                "remember_key": true}}"#,
-        );
-        assert_eq!(
-            (s.ai.model.as_str(), s.ai.image_model.as_str()),
-            ("gpt-5", "dall-e-3")
-        );
-        assert_eq!(crate::ai::remembered_key(&s.ai), "d-key");
-        assert!(s.ai_image.is_none());
-        // The drawing service without a remembered key takes the image
-        // service's key of the same kind.
-        let s = migrated(
-            r#"{"ai": {"provider": "open_ai_compatible",
-                "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                "model": "gemini-2.5-flash"},
-                "ai_image": {"provider": "gemini", "key": "g-key", "remember_key": true}}"#,
-        );
-        assert_eq!(crate::ai::remembered_key(&s.ai), "g-key");
-        assert_eq!(s.ai.model, "gemini-2.5-flash");
-        assert!(s.ai_image.is_none());
-        // Different kinds (the Messages API and Gemini pictures): the
-        // drawing service stays, and the image key stays in the file.
-        let s = migrated(
-            r#"{"ai": {"key": "a-key", "remember_key": true},
-                "ai_image": {"provider": "gemini", "key": "g-key", "remember_key": true}}"#,
-        );
-        assert_eq!(s.ai.provider, Provider::Anthropic);
-        assert_eq!(crate::ai::remembered_key(&s.ai), "a-key");
-        assert!(!s.ai.can_make_pictures());
-        let json = serde_json::to_string(&s).expect("saved");
-        assert!(json.contains("a-key") && json.contains("g-key"));
-        let again = migrated(&json);
-        assert_eq!(again.ai, s.ai);
-        assert!(again.ai_image.is_some(), "still kept");
-        // Two different remembered keys of the same kind: both kept.
-        let s = migrated(
-            r#"{"ai": {"provider": "open_ai_compatible", "key": "one", "remember_key": true},
-                "ai_image": {"provider": "open_ai", "key": "two", "remember_key": true}}"#,
-        );
-        assert_eq!(crate::ai::remembered_key(&s.ai), "one");
-        assert_eq!(s.ai_image.as_ref().map(|i| i.key.as_str()), Some("two"));
-        // An image service left as it came: nothing to fold in.
-        let s = migrated(r#"{"ai_image": {}}"#);
-        assert_eq!(s.ai, crate::ai::AiPrefs::default());
-        assert!(s.ai_image.is_none());
+        let saved = serde_json::to_string(&s).expect("saves");
+        for gone in [
+            "sk-secret",
+            "g-secret",
+            "ghp_secret",
+            "check_updates",
+            "mcp_window",
+            "\"ai\"",
+        ] {
+            assert!(!saved.contains(gone), "{gone} written back");
+        }
     }
 }

@@ -1,53 +1,26 @@
-//! File access for both builds.
+//! File access and file dialogs.
 //!
-//! Natively these are the file system and the system file dialogs, used
-//! synchronously as before. In a browser there is no file system: a file
-//! the user picks is kept in memory under a synthetic path
-//! (`/upload/<name>`), so the path-based open and import code reads it with
-//! [`read`] like any file, and [`write`] offers the bytes as a download
-//! named after the path's file name.
+//! Thin wrappers over the file system and the system file dialogs, so
+//! that the open, save and import code goes through one place.
 //!
 //! Dialogs come in three shapes:
-//! - [`Dialog::pick_file`] runs a closure with the picked path: at once
-//!   natively, on a later frame in a browser (see [`run_finished`]).
+//! - [`Dialog::pick_file`] runs a closure with the picked path at once.
 //! - [`Dialog::pick_into`] stores the picked path under a key that a
-//!   dialog's own code collects with [`take_picked`] on the same frame
-//!   (natively) or a later one (browser).
-//! - [`Dialog::save_file`] runs a closure with the chosen path at once: a
-//!   save dialog natively, `/download/<file name>` in a browser.
+//!   dialog's own code collects with [`take_picked`] on the same frame.
+//! - [`Dialog::save_file`] runs a closure with the chosen path at once.
 
 use crate::app::App;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-type Job = Box<dyn FnOnce(&mut App, PathBuf)>;
-
 thread_local! {
-    /// Dialogs finished in the background (browser), waiting for a frame.
-    static FINISHED: RefCell<Vec<(Job, PathBuf)>> = const { RefCell::new(Vec::new()) };
     /// Picked paths waiting for the dialog that asked for them.
     static PICKED: RefCell<HashMap<String, PathBuf>> = RefCell::new(HashMap::new());
-    /// Uploaded files by synthetic path (browser only).
-    static STORE: RefCell<HashMap<PathBuf, Vec<u8>>> = RefCell::new(HashMap::new());
 }
 
-/// True in the browser build: no file system, downloads instead of saves.
-pub const WEB: bool = cfg!(target_arch = "wasm32");
-
-/// Read a whole file (or an uploaded one in a browser).
+/// Read a whole file.
 pub fn read(path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
-    let path = path.as_ref();
-    if WEB {
-        return STORE
-            .with(|s| s.borrow().get(path).cloned())
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("{} is not available in the browser", path.display()),
-                )
-            });
-    }
     std::fs::read(path)
 }
 
@@ -58,73 +31,45 @@ pub fn read_to_string(path: impl AsRef<Path>) -> std::io::Result<String> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
 }
 
-/// Write a whole file; in a browser, download it under the path's name.
+/// Write a whole file.
 pub fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
-    let path = path.as_ref();
-    if WEB {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "download".into());
-        return download(&name, bytes.as_ref());
-    }
     std::fs::write(path, bytes)
 }
 
-/// Copy a file, creating the target folder (backups). Nothing happens in
-/// a browser, which has no files to copy.
+/// Copy a file, creating the target folder (backups).
 pub fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<()> {
-    if WEB {
-        return Ok(());
-    }
     if let Some(dir) = to.as_ref().parent() {
         std::fs::create_dir_all(dir)?;
     }
     std::fs::copy(from, to).map(|_| ())
 }
 
-/// True when a file exists on disk (never in a browser).
+/// True when a file exists on disk.
 pub fn exists(path: impl AsRef<Path>) -> bool {
-    !WEB && path.as_ref().is_file()
+    path.as_ref().is_file()
 }
 
 /// Write a file, creating its folder first (auto-backups).
 pub fn write_creating(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
-    if WEB {
-        return Ok(());
-    }
     if let Some(dir) = path.as_ref().parent() {
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(path, bytes)
 }
 
-/// Delete a file (nothing in a browser).
+/// Delete a file.
 pub fn remove(path: impl AsRef<Path>) -> std::io::Result<()> {
-    if WEB {
-        return Ok(());
-    }
     std::fs::remove_file(path)
 }
 
-/// Choose a folder (desktop only; `None` when cancelled or in a browser).
+/// Choose a folder (`None` when cancelled).
 pub fn pick_folder() -> Option<PathBuf> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        rfd::FileDialog::new().pick_folder()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
+    rfd::FileDialog::new().pick_folder()
 }
 
 /// The files directly inside a folder (not its subfolders), in no
-/// particular order; empty when it cannot be read or in a browser.
+/// particular order; empty when it cannot be read.
 pub fn list_dir(path: impl AsRef<Path>) -> Vec<PathBuf> {
-    if WEB {
-        return Vec::new();
-    }
     match std::fs::read_dir(path) {
         Ok(entries) => entries
             .filter_map(|e| e.ok())
@@ -148,12 +93,9 @@ pub struct DirEntry {
 }
 
 /// The folders and files directly inside `dir`: folders first, then by
-/// name ignoring case; hidden ones (a leading dot) left out. Empty in a
-/// browser or when the folder cannot be read.
+/// name ignoring case; hidden ones (a leading dot) left out. Empty when
+/// the folder cannot be read.
 pub fn list_entries(dir: impl AsRef<Path>) -> Vec<DirEntry> {
-    if WEB {
-        return Vec::new();
-    }
     let Ok(read) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -190,16 +132,13 @@ pub fn list_entries(dir: impl AsRef<Path>) -> Vec<DirEntry> {
     out
 }
 
-/// True for a folder on disk (never in a browser).
+/// True for a folder on disk.
 pub fn is_dir(path: impl AsRef<Path>) -> bool {
-    !WEB && path.as_ref().is_dir()
+    path.as_ref().is_dir()
 }
 
-/// Make a folder (nothing in a browser).
+/// Make a folder.
 pub fn create_dir(path: impl AsRef<Path>) -> std::io::Result<()> {
-    if WEB {
-        return Ok(());
-    }
     std::fs::create_dir(path)
 }
 
@@ -217,9 +156,6 @@ pub enum Place {
 
 /// The user's home folder.
 pub fn home_dir() -> Option<PathBuf> {
-    if WEB {
-        return None;
-    }
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .filter(|h| !h.is_empty())
         .map(PathBuf::from)
@@ -228,7 +164,7 @@ pub fn home_dir() -> Option<PathBuf> {
 /// The shortcuts that exist on this computer: home, desktop, documents,
 /// downloads and pictures (the names the system gives them, read from
 /// the user's folder settings on Linux), then the drives (Windows) or
-/// the root. Empty in a browser.
+/// the root.
 pub fn places() -> Vec<(Place, PathBuf)> {
     let mut out = Vec::new();
     let Some(home) = home_dir() else {
@@ -298,47 +234,8 @@ pub fn open_image(path: impl AsRef<Path>) -> Result<image::DynamicImage, String>
     image::load_from_memory(&bytes).map_err(|e| e.to_string())
 }
 
-/// Keep bytes under a synthetic path so [`read`] finds them (browser).
-pub fn store(path: &Path, bytes: Vec<u8>) {
-    STORE.with(|s| {
-        s.borrow_mut().insert(path.to_path_buf(), bytes);
-    });
-}
-
-/// Keep an uploaded file past the dialog that picked it (a profile that
-/// is read again later): returns the path to read it from. Natively the
-/// file stays where it is.
-pub fn keep(path: &Path) -> PathBuf {
-    if !WEB {
-        return path.to_path_buf();
-    }
-    let kept = PathBuf::from("/kept").join(path.file_name().unwrap_or_default());
-    if let Ok(bytes) = read(path) {
-        store(&kept, bytes);
-    }
-    kept
-}
-
-/// Forget an uploaded file once nothing needs it any more.
-pub fn forget(path: &Path) {
-    STORE.with(|s| {
-        s.borrow_mut().remove(path);
-    });
-}
-
-/// Run the dialogs that finished since the last frame (browser). Called
-/// once per frame before the interface is drawn.
-pub fn run_finished(app: &mut App) {
-    let jobs: Vec<(Job, PathBuf)> = FINISHED.with(|f| std::mem::take(&mut *f.borrow_mut()));
-    for (job, path) in jobs {
-        job(app, path.clone());
-        forget(&path);
-    }
-}
-
 /// Files dropped on the window this frame: `then` runs with each one's
-/// path, at once natively, on a later frame in a browser (where the bytes
-/// are read first and kept under `/upload/<name>` like a picked file).
+/// path.
 pub fn take_dropped(
     ctx: &egui::Context,
     app: &mut App,
@@ -346,26 +243,7 @@ pub fn take_dropped(
 ) {
     let dropped = ctx.input(|i| i.raw.dropped_files.clone());
     for file in dropped {
-        #[cfg(not(target_arch = "wasm32"))]
         then.clone()(app, file.path().to_path_buf());
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = &app;
-            let then = then.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                match file.bytes_async().await {
-                    Ok(bytes) => {
-                        let name = file.path().file_name().unwrap_or_default();
-                        let path = PathBuf::from("/upload").join(name);
-                        store(&path, bytes);
-                        let job: Job = Box::new(then);
-                        FINISHED.with(|f| f.borrow_mut().push((job, path)));
-                        crate::web::request_repaint();
-                    }
-                    Err(e) => log::warn!("{}: {e}", file.path().display()),
-                }
-            });
-        }
     }
 }
 
@@ -374,7 +252,7 @@ pub fn take_picked(key: &str) -> Option<PathBuf> {
     PICKED.with(|p| p.borrow_mut().remove(key))
 }
 
-/// A file dialog description, the same in both builds.
+/// A file dialog description.
 #[derive(Debug, Clone, Default)]
 pub struct Dialog {
     filters: Vec<(String, Vec<String>)>,
@@ -399,130 +277,55 @@ impl Dialog {
         self
     }
 
-    /// Pick a file and run `then` with its path: at once natively, on a
-    /// later frame in a browser.
+    /// Pick a file and run `then` with its path.
     pub fn pick_file(self, app: &mut App, then: impl FnOnce(&mut App, PathBuf) + 'static) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = self.native_pick() {
+        if let Some(path) = self.native_dialog().pick_file() {
             then(app, path);
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = app;
-            self.web_pick(Box::new(then));
         }
     }
 
-    /// Pick one or more files and run `then` with their paths (one file in
-    /// a browser).
+    /// Pick one or more files and run `then` with their paths.
     pub fn pick_files(self, app: &mut App, then: impl FnOnce(&mut App, Vec<PathBuf>) + 'static) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut d = rfd::FileDialog::new();
-            for (name, exts) in &self.filters {
-                let exts: Vec<&str> = exts.iter().map(|e| e.as_str()).collect();
-                d = d.add_filter(name, &exts);
-            }
-            if let Some(paths) = d.pick_files() {
-                then(app, paths);
-            }
+        if let Some(paths) = self.native_dialog().pick_files() {
+            then(app, paths);
         }
-        #[cfg(target_arch = "wasm32")]
-        self.pick_file(app, move |app, p| then(app, vec![p]));
     }
 
     /// Pick a file and keep its path for [`take_picked`]`(key)`.
     pub fn pick_into(self, key: &str) {
-        let key = key.to_string();
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(path) = self.native_pick() {
+        if let Some(path) = self.native_dialog().pick_file() {
             PICKED.with(|p| {
-                p.borrow_mut().insert(key, path);
+                p.borrow_mut().insert(key.to_string(), path);
             });
         }
-        // The upload outlives this job: the dialog reads it on a later frame.
-        #[cfg(target_arch = "wasm32")]
-        self.web_pick(Box::new(move |_app, path| {
-            let kept = keep(&path);
-            PICKED.with(|p| {
-                p.borrow_mut().insert(key, kept);
-            });
-        }));
     }
 
     /// Choose where to save and run `then` with that path; `then` writes
-    /// with [`write`]. In a browser there is no dialog: the path is
-    /// `/download/<file name>` and the write becomes a download.
+    /// with [`write`].
     pub fn save_file(self, app: &mut App, then: impl FnOnce(&mut App, PathBuf)) {
         if let Some(path) = self.save_path() {
             then(app, path);
         }
     }
 
-    /// The path to save to, or `None` when the user cancels: a save
-    /// dialog natively, `/download/<file name>` in a browser (write it with
-    /// [`write`] to download it).
+    /// The path to save to, or `None` when the user cancels.
     pub fn save_path(self) -> Option<PathBuf> {
-        if WEB {
-            let name = self.file_name.unwrap_or_else(|| "download".into());
-            return Some(PathBuf::from("/download").join(name));
+        let mut d = self.native_dialog();
+        if let Some(n) = &self.file_name {
+            d = d.set_file_name(n);
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut d = rfd::FileDialog::new();
-            for (name, exts) in &self.filters {
-                let exts: Vec<&str> = exts.iter().map(|e| e.as_str()).collect();
-                d = d.add_filter(name, &exts);
-            }
-            if let Some(n) = &self.file_name {
-                d = d.set_file_name(n);
-            }
-            return d.save_file();
-        }
-        #[allow(unreachable_code)]
-        None
+        d.save_file()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn native_pick(&self) -> Option<PathBuf> {
+    /// The system dialog with this description's filters.
+    fn native_dialog(&self) -> rfd::FileDialog {
         let mut d = rfd::FileDialog::new();
         for (name, exts) in &self.filters {
             let exts: Vec<&str> = exts.iter().map(|e| e.as_str()).collect();
             d = d.add_filter(name, &exts);
         }
-        d.pick_file()
+        d
     }
-
-    #[cfg(target_arch = "wasm32")]
-    fn web_pick(self, then: Job) {
-        let mut d = rfd::AsyncFileDialog::new();
-        for (name, exts) in &self.filters {
-            let exts: Vec<&str> = exts.iter().map(|e| e.as_str()).collect();
-            d = d.add_filter(name, &exts);
-        }
-        wasm_bindgen_futures::spawn_local(async move {
-            let Some(handle) = d.pick_file().await else {
-                return;
-            };
-            let name = handle.file_name();
-            let bytes = handle.read().await;
-            let path = PathBuf::from("/upload").join(name);
-            store(&path, bytes);
-            FINISHED.with(|f| f.borrow_mut().push((then, path)));
-            crate::web::request_repaint();
-        });
-    }
-}
-
-/// Offer bytes as a browser download (no-op natively).
-#[cfg(target_arch = "wasm32")]
-fn download(name: &str, bytes: &[u8]) -> std::io::Result<()> {
-    crate::web::download(name, bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn download(_name: &str, _bytes: &[u8]) -> std::io::Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]
@@ -539,27 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn finished_jobs_run_once_and_free_their_upload() {
-        let mut app = App::headless();
-        let path = PathBuf::from("/upload/t.txt");
-        store(&path, b"hello".to_vec());
-        FINISHED.with(|f| {
-            f.borrow_mut().push((
-                Box::new(|app: &mut App, p: PathBuf| {
-                    app.status = format!("got {}", p.display());
-                }),
-                path.clone(),
-            ))
-        });
-        run_finished(&mut app);
-        assert_eq!(app.status, "got /upload/t.txt");
-        run_finished(&mut app);
-        assert_eq!(app.status, "got /upload/t.txt");
-        assert!(STORE.with(|s| s.borrow().get(&path).is_none()));
-    }
-
-    #[test]
-    fn native_read_and_write_use_the_file_system() {
+    fn read_and_write_use_the_file_system() {
         let dir = std::env::temp_dir().join(format!("tracedraw-files-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("a.bin");

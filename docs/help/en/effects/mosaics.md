@@ -53,6 +53,3 @@ Open the [[docker.picture_mosaic]] panel with
      or remove it; **Output priority** and the resolution: how large the
      mosaic is in pixels. The panel shows the resulting size.
 4. Click [[docker.apply]].
-
-> **Note:** Picture libraries need the desktop version; the browser version
-> cannot read folders.

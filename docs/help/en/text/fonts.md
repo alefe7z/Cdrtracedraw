@@ -94,5 +94,4 @@ To use the Font Manager:
   font you clicked.
 
 Fonts the drawing uses that are not installed are listed in orange above the
-cards. In the browser version, **Add font** loads a font file for the session
-only.
+cards.

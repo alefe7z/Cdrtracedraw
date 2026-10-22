@@ -47,16 +47,16 @@ pub struct Found {
 
 /// Seconds since 1970 (0 if the clock is before it).
 pub fn now_secs() -> u64 {
-    web_time::SystemTime::now()
-        .duration_since(web_time::UNIX_EPOCH)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
 /// A session id unlikely to repeat: the start time in nanoseconds.
 pub fn new_id() -> String {
-    let nanos = web_time::SystemTime::now()
-        .duration_since(web_time::UNIX_EPOCH)
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{nanos:x}")

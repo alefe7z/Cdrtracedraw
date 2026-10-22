@@ -2,8 +2,7 @@
 
 CD Draw se puede ajustar a su forma de trabajar: opciones del programa y de
 cada herramienta, el aspecto de la interfaz, atajos de teclado, barras y
-espacios de trabajo. También puede automatizar el trabajo con scripts,
-conectar un servicio de IA para dibujar a partir de una descripción y llevar la
+espacios de trabajo. También puede automatizar el trabajo con scripts y llevar la
 cuenta del tiempo dedicado a un dibujo.
 
 Las opciones están en [[menu.tools > menu.tools.options]]: cada elemento abre

@@ -1,8 +1,5 @@
 # Script debugger
 
-Desktop only (the browser build has no worker threads; there the Scripts
-panel has no Debug button).
-
 - The Scripts panel's editor has a margin with the line numbers. A click
   in the margin sets a breakpoint on that line (a red dot) or clears it.
   A wrapped line keeps one number. Breakpoints stay while the app runs

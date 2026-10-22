@@ -40,9 +40,7 @@ CD Draw は、すべてを保持する独自の形式 `.tdraw` で図面を保�
 
 ダイアログボックスは、図面のフォルダー、なければ最後に保存したフォルダー、それもなければドキュメントフォルダーで開きます。
 
-> **メモ:** ブラウザー版では、保存はすべてダウンロードになります。ダイアログボックスは名前、種類、バージョン、プロパティを保持し、ブラウザーがファイルをダウンロードフォルダーに置きます。
-
-そのほかの保存方法: [[menu.file > menu.file.save_as_template]] はテンプレートを保存します ([テンプレート](../templates-styles/templates.md) を参照)。[[menu.file.export]] はほかの形式で書き出します ([エクスポート](../file-formats/export.md) を参照)。[[menu.file.publish_to_pdf]] は PDF を書き出します ([PDF に発行する](../file-formats/publish-pdf.md) を参照)。[[menu.file.send_to]] は PDF をデスクトップかドキュメントフォルダーに保存するか、メールに添付します。[[menu.file.github]] は図面を GitHub のリポジトリに保管します ([GitHub](github.md) を参照)。[[menu.file.revert]] は最後に保存したバージョンに戻します。
+そのほかの保存方法: [[menu.file > menu.file.save_as_template]] はテンプレートを保存します ([テンプレート](../templates-styles/templates.md) を参照)。[[menu.file.export]] はほかの形式で書き出します ([エクスポート](../file-formats/export.md) を参照)。[[menu.file.publish_to_pdf]] は PDF を書き出します ([PDF に発行する](../file-formats/publish-pdf.md) を参照)。[[menu.file.send_to]] は PDF をデスクトップかドキュメントフォルダーに保存するか、メールに添付します。[[menu.file.revert]] は最後に保存したバージョンに戻します。
 
 ## 図面を閉じる {#closing}
 

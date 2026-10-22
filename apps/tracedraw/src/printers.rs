@@ -1,7 +1,7 @@
 //! The system's printers for the Print dialog's Printer list: the
 //! printers CUPS knows (Linux and macOS), listed by `lpstat` and printed
 //! to with `lp`, which takes the print PDF as it is. Where there is no
-//! CUPS (Windows, the browser) the list is empty and the print goes
+//! CUPS (Windows) the list is empty and the print goes
 //! through the system PDF viewer, as before. See
 //! docs/behavior/printing.md.
 
@@ -50,7 +50,7 @@ pub fn parse_lpstat(output: &str) -> Vec<Printer> {
 
 /// The printers the system has, the default one first; empty where
 /// none is set up or there is no CUPS.
-#[cfg(not(any(target_arch = "wasm32", target_os = "windows")))]
+#[cfg(not(target_os = "windows"))]
 pub fn system_printers() -> Vec<Printer> {
     let out = std::process::Command::new("lpstat")
         .args(["-p", "-d"])
@@ -66,7 +66,7 @@ pub fn system_printers() -> Vec<Printer> {
     }
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub fn system_printers() -> Vec<Printer> {
     Vec::new()
 }
@@ -108,7 +108,7 @@ pub fn lp_args(printer: &str, pdf: &Path, copies: u32, collate: bool, title: &st
 
 /// Send `pdf` to `printer` through `lp`. Ok with what `lp` said (the
 /// request id), Err with its complaint.
-#[cfg(not(any(target_arch = "wasm32", target_os = "windows")))]
+#[cfg(not(target_os = "windows"))]
 pub fn print_pdf(
     printer: &str,
     pdf: &Path,
@@ -133,7 +133,7 @@ pub fn print_pdf(
     }
 }
 
-#[cfg(any(target_arch = "wasm32", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub fn print_pdf(
     printer: &str,
     _pdf: &Path,

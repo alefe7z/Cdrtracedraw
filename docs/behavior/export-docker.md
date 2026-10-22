@@ -22,8 +22,7 @@ once, each in its own format, to one folder.
 ## Export
 
 - Export (n) writes the ticked assets to the chosen folder (Browse...
-  chooses it; the first Export asks for one). In the browser every file
-  is downloaded.
+  chooses it; the first Export asks for one).
 - File names are the asset names with `/ \ : * ? " < > |` and control
   characters replaced by `_`; an empty name is "asset". Two assets that
   would write the same file (ignoring case) get " (2)", " (3)" and so on.

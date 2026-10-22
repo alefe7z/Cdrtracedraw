@@ -26,8 +26,8 @@ at any time. You can:
 - print with separations and printers' marks, and publish PDF and PDF/X
   files.
 
-CD Draw runs as a native program on Windows, macOS and Linux, and the
-same program runs in a web browser with nothing to install.
+CD Draw runs as a native program on Windows, macOS and Linux, entirely
+offline.
 
 > CD Draw is in **alpha**. Most of what a vector editor needs is in
 > place, but expect bugs and rough edges. The

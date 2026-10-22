@@ -618,11 +618,7 @@ pub fn start(
     let program = with_stop_checks(program);
     let entry = format!("{entry};\n__pump(0,true);\n");
     let (stop2, forms2) = (stop.clone(), forms.clone());
-    let folder = if crate::files::WEB {
-        None
-    } else {
-        app.macros.dir.clone().or_else(crate::macros::default_dir)
-    };
+    let folder = app.macros.dir.clone().or_else(crate::macros::default_dir);
     let handle = std::thread::Builder::new()
         .name("vba-macro".into())
         .stack_size(64 * 1024 * 1024)

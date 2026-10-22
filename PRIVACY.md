@@ -1,69 +1,45 @@
 # Privacy policy
 
-CD Draw is a vector editor that runs on your own computer. This policy
-covers the desktop program (installer, portable zip, Microsoft Store,
-macOS and Linux packages), `tracedraw-cli` and the browser version.
+CD Draw is a vector editor that runs entirely on your own computer. This
+policy covers the desktop program (installer, portable zip, Microsoft
+Store, macOS and Linux packages) and `tracedraw-cli`.
 
 ## What CD Draw collects
 
 Nothing. CD Draw has no accounts, no telemetry, no analytics, no crash
-reporting and no advertising. It does not send your drawings, your files
-or anything about you or your computer anywhere, except what you ask AI
-Drawing to send to the AI service you set up yourself (see below).
+reporting, no advertising and no online services. It never connects to
+the internet or to any other computer: it checks for no updates, downloads
+nothing, uploads nothing and opens no network port. The program contains
+no networking code at all.
 
 ## What stays on your computer
 
 - Your drawings, where you save them.
 - Preferences, the Shelf and thumbnails of recent drawings, in
-  CD Draw's preferences folder (in the browser version: the page's local
-  storage in your browser). Deleting that folder removes them; Options >
-  Global > Reset all settings puts the preferences back as they came.
+  CD Draw's preferences folder. Deleting that folder removes them;
+  Options > Global > Reset all settings puts the preferences back as they
+  came.
 - Automatic backups of open drawings, in the folder set in Options > Save
   (by default a `CD Draw` folder in your system's temporary folder).
-- AI Drawing's settings (service, address, model) with the preferences;
-  your API key only if you tick "Remember the key on this computer", and
-  then in plain text in the preferences file (in the browser version: the
-  page's local storage). Otherwise the key is forgotten when CD Draw
-  closes.
 
-## When CD Draw uses the network
+Preferences saved by an older version that had online features (AI service
+keys, a GitHub token, the update check) are read without those parts, and
+they are left out the next time the preferences are saved.
 
-Only when you ask it to:
+## When CD Draw hands something to another program
 
-- Help, the project's pages and links you click open in your web
-  browser, which then follows its own privacy policy.
+Only when you ask it to, and only to programs on your computer:
+
+- Help opens the copy of the Help installed with CD Draw in your web
+  browser, from disk.
 - Send To > Mail hands a file to your mail program; you choose whether to
   send it.
-- `tracedraw --mcp` talks over standard input and output with the
-  program that started it, on your computer; it opens no network port.
-- Options > Global > General > "Let AI agents on this computer edit the
-  open drawing" (off unless you turn it on) opens a port on your
-  computer only (`127.0.0.1`), guarded by a key kept in the preferences
-  folder, for `tracedraw --mcp-window`; nothing outside your computer can
-  connect.
-- AI Drawing (Tools > AI Drawing), only when you press Draw: it sends
-  your request, the earlier requests of the same conversation and a
-  description of the active page (its size, layers and objects: types,
-  positions, colours and text; no file names or pictures) to the AI
-  service whose address you entered, with your API key. That service
-  handles them under its own terms and privacy policy. CD Draw has no
-  AI service of its own and sends nothing to its authors.
-
-## The browser version
-
-The browser version at <https://alefe7z.github.io/Cdrtracedraw/> is a set of static
-files served by GitHub Pages. CD Draw itself sends nothing (AI Drawing
-aside, as above, from your browser to the service you set up). When a
-drawing's text needs a font of the page's font catalog, or the pointer
-rests on one in a font list, the page fetches that font's files from
-GitHub's file server (`raw.githubusercontent.com`). GitHub, as the host
-of both, may log visits as described in the
-[GitHub Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
-Files you open in it stay in your browser.
+- Edit Bitmap opens a picture in the editor you choose; printing opens
+  the print PDF in your system's viewer.
 
 ## Contact
 
 Questions about this policy: open an issue at
 <https://github.com/alefe7z/Cdrtracedraw/issues>.
 
-Last updated: 2026-10-12.
+Last updated: 2026-10-22.

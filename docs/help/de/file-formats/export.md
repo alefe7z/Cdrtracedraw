@@ -13,8 +13,7 @@ zeigt links eine Vorschau und rechts die Einstellungen.
 3. Stellen Sie die Optionen des Formats ein (siehe unten).
 4. Aktivieren Sie **Nur Auswahl**, um nur die Auswahl zu exportieren, oder
    **Alle Seiten**, um jede Seite zu exportieren.
-5. Klicken Sie auf [[dialog.ok]] und wählen Sie den Speicherort. Im Browser
-   wird die Datei heruntergeladen.
+5. Klicken Sie auf [[dialog.ok]] und wählen Sie den Speicherort.
 
 Das Dialogfeld schätzt die Größe der Datei. Ist **Filterdialog nicht anzeigen**
 aktiviert, geht der nächste Export mit denselben Einstellungen direkt in die

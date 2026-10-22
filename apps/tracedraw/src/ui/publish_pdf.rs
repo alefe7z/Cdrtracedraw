@@ -306,11 +306,7 @@ impl PublishState {
             .map(Path::to_path_buf)
             .or_else(|| app.settings.last_dir.clone())
             .unwrap_or_default();
-        let file = if crate::files::WEB {
-            PathBuf::from("/download").join(format!("{stem}.pdf"))
-        } else {
-            dir.join(format!("{stem}.pdf"))
-        };
+        let file = dir.join(format!("{stem}.pdf"));
         PublishState {
             tab: Tab::General,
             prefs: app.settings.publish_pdf.clone(),
@@ -674,10 +670,8 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut PublishState, close: &mut b
             return;
         }
         app.settings.publish_pdf = st.prefs.clone();
-        if !crate::files::WEB {
-            if let Some(dir) = st.file.parent() {
-                app.settings.last_dir = Some(dir.to_path_buf());
-            }
+        if let Some(dir) = st.file.parent() {
+            app.settings.last_dir = Some(dir.to_path_buf());
         }
         app.status = match publish(app, st, &st.file) {
             Ok(msg) => msg,
@@ -726,7 +720,7 @@ fn general(app: &App, ui: &mut Ui, st: &mut PublishState) {
     }
     row(ui, &tr("publish.file_name"), |ui| {
         ui.label(st.file.display().to_string());
-        if !crate::files::WEB && ui.button(tr("publish.browse")).clicked() {
+        if ui.button(tr("publish.browse")).clicked() {
             let name = st
                 .file
                 .file_name()

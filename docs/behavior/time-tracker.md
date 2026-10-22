@@ -82,7 +82,7 @@ Tools > Time Tracker... or the toolbar's Tasks... button:
 - "Stop counting after N minutes without input" sets the idle time
   (preferences, `time_tracker.idle_minutes`).
 - Export CSV... and Export Text... save the records where the user
-  chooses (a download in the browser), named "<drawing> time.csv" or
+  chooses, named "<drawing> time.csv" or
   ".txt"; the status bar tells where they went.
 - Close.
 

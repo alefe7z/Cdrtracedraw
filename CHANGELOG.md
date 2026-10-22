@@ -6,6 +6,9 @@ full, row-by-row status.
 
 ## Unreleased
 
+- Offline only: CD Draw no longer connects to the internet or to anything else. Removed: the browser version, AI Drawing, AI Generate, AI Art Styles and Remove Background with AI (Remove Background on this computer stays), File > GitHub, Help > Updates and the daily update check, Help > Community and Support, the MCP server (`tracedraw --mcp`, `--mcp-window`) and its local port, and the font downloads of the browser version. The program has no HTTP, TLS or socket code any more. Preferences of older versions open without those parts, and their stored API keys and tokens are not written back.
+- Help: installed with the program (installer, portable zip, macOS bundle, AppImage, `.deb` and archive) and opened from disk, in the interface language; F1 says so when the Help folder is missing. The Help's search works from disk too.
+
 - Windows builds on request: a pushed commit with `[exe]` in its message (`scripts/request-exe.sh` makes one) or a pushed `exe-*` tag builds the Windows installer, portable zip and program on GitHub and publishes them as a pre-release under an `exe-*` tag.
 
 - Name: the product is now called CD Draw in the interface, the window title, the logo, the documentation, the installers and the web page. Crate, binary and file names (`tracedraw`, `.tdraw`) are unchanged, so existing drawings and settings keep working. Links, the update check and the issue templates point to alefe7z/Cdrtracedraw.

@@ -3,8 +3,7 @@
 CD Draw is een vrij, opensource vectortekenprogramma. U tekent er
 illustraties, logo's, diagrammen, lay-outs en drukwerk mee, opgebouwd uit
 vormen, lijnen en tekst die op elk formaat scherp blijven, en combineert die
-met bitmaps. Hetzelfde programma werkt op Windows, macOS en Linux en in een
-webbrowser.
+met bitmaps. Het programma werkt op Windows, macOS en Linux, volledig offline.
 
 Deze Help legt stap voor stap uit hoe u dingen doet in CD Draw, en wat elk
 dialoogvenster, elk paneel en elk gereedschap doet.
@@ -22,8 +21,7 @@ De inhoud links volgt de manier waarop u werkt:
   lay-out** en **Bitmaps** behandelen de rest van het tekenwerk.
 - **Afdrukken**, **Webafbeeldingen** en **Bestandsindelingen** gaan over het
   naar buiten brengen van uw werk.
-- **Aanpassen en automatiseren** behandelt de opties, werkruimten, scripts en
-  AI-functies, en **Naslag** somt elke menuopdracht, elk gereedschap, elk
+- **Aanpassen en automatiseren** behandelt de opties, werkruimten en scripts, en **Naslag** somt elke menuopdracht, elk gereedschap, elk
   paneel en elke sneltoets op.
 
 Gebruik het tabblad **Zoeken** om een pagina te vinden op elk woord dat erin

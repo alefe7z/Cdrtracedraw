@@ -10,10 +10,6 @@ i eksportu, wektoryzację, komunikaty oraz miejsca przechowywania plików.
 
 - [[options.language]]: język interfejsu. Ta Pomoc otwiera się w tym samym
   języku.
-- [[options.check_updates]] (włączone): zobacz
-  [Sprawdzanie aktualizacji](../welcome/about-and-updates.md#updates).
-- [[options.agents]]: [[options.mcp_window]] pozwala asystentom AI na tym
-  komputerze edytować otwarty rysunek; zobacz [Skrypty](scripts.md#mcp).
 - [[options.reset_all]]: zobacz [Resetowanie ustawień](reset-settings.md).
 
 ## Drukowanie {#printing}
@@ -66,7 +62,3 @@ aby znów go widzieć.
 ![Strona Lokalizacje plików opcji globalnych](../../img/customize-global-options-file-locations.png)
 
 Pokazuje, gdzie są przechowywane preferencje i automatyczne kopie zapasowe.
-Preferencje znajdują się w folderze `tracedraw-settings` obok programu, jeśli
-taki istnieje (kopia przenośna), a w przeciwnym razie w miejscu, którego system
-używa na ustawienia programów; wersja przeglądarkowa przechowuje je
-w przeglądarce.

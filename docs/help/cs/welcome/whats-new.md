@@ -12,9 +12,6 @@ zjistit, co se změnilo, a uvádí hlavní novinky posledních verzí.
   malá tečka, také vedle šipky podnabídky, která k němu vede, a nad názvem
   nabídky, která ho obsahuje. Značky zmizí, když příkaz vypnete, a při příštím
   spuštění CD Draw je příkaz opět vypnutý.
-- Úplný seznam změn každé verze je v
-  [seznamu změn](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  projektu.
 
 ## Hlavní novinky posledních verzí {#highlights}
 

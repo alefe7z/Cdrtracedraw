@@ -2,8 +2,7 @@
 
 File > Print (Ctrl+P) builds a print-ready PDF of the sheets and sends
 it to the printer chosen in the dialog, or opens it in the system
-viewer, where the printer is chosen (in the browser the PDF is
-downloaded). `export::print` builds it; the sheets come from
+viewer, where the printer is chosen. `export::print` builds it; the sheets come from
 `imposition.rs`.
 
 ## Printers
@@ -19,7 +18,7 @@ name", or what `lp` complained about. The dialog starts on the printer
 printed to last when the system still has it, else on the default
 printer, else on the PDF viewer (`starting_printer`); the printer is
 remembered with the other print choices (Options > Global > Printing).
-On Windows and in the browser the list has no printers and the print
+On Windows the list has no printers and the print
 goes through the PDF viewer.
 
 ## Print dialog
@@ -34,8 +33,7 @@ has one.
 
 - General:
   - Destination: Printer is one of the system's printers (above), the
-    system PDF viewer (which owns the printer and the copy count; in the
-    browser the PDF is downloaded), a PDF file or a PostScript file (saved
+    system PDF viewer (which owns the printer and the copy count), a PDF file or a PostScript file (saved
     where chosen). Orientation: Match orientation (the Layout tab's
     Landscape box), Portrait or Landscape, for fixed sheets.
   - Print range: Current document, Current page, Pages (a list such as

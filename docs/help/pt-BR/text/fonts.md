@@ -101,5 +101,4 @@ Para usar o Gerenciador de fontes:
   glifos, as escritas e os recursos da fonte que você clicou.
 
 As fontes que o desenho usa e que não estão instaladas aparecem em laranja
-acima dos cartões. Na versão para navegador, **Acrescentar fonte** carrega um
-arquivo de fonte só para a sessão.
+acima dos cartões.

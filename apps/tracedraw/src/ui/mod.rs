@@ -4,10 +4,6 @@
 //! palette under the canvas, status bar at the bottom.
 
 pub mod about;
-pub mod ai_bar;
-pub mod ai_docker;
-pub mod ai_generate_docker;
-pub mod ai_ui;
 pub mod align_docker;
 pub mod barcode_wizard;
 pub mod bars;
@@ -52,7 +48,6 @@ pub mod font_list;
 pub mod font_manager;
 pub mod font_sampler;
 pub mod fx_icons;
-pub mod github_dialogs;
 pub mod glyphs_docker;
 pub mod hints;
 pub mod icons;
@@ -151,7 +146,7 @@ pub(crate) const UI_SIZES: [f32; 8] = [0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
 #[cfg(target_os = "windows")]
 pub(crate) const BASE_ZOOM: f32 = 12.0 / 13.0;
 
-/// The zoom of the interface at 100 % elsewhere (macOS, the browser):
+/// The zoom of the interface at 100 % elsewhere (macOS):
 /// its measures (13 px text, 20 px icons, 24 px rows) at 0.8 of the
 /// system's scaling.
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -195,17 +190,14 @@ impl egui::Widget for Rail<'_> {
     }
 }
 
-/// Set the window title (the page title in a browser) when it changes.
+/// Set the window title when it changes.
 fn set_window_title(ctx: &egui::Context, title: String) {
     let id = egui::Id::new("tracedraw_window_title");
     if ctx.data(|d| d.get_temp::<String>(id)).as_deref() == Some(title.as_str()) {
         return;
     }
     ctx.data_mut(|d| d.insert_temp(id, title.clone()));
-    #[cfg(not(target_arch = "wasm32"))]
     ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
-    #[cfg(target_arch = "wasm32")]
-    crate::web::set_title(&title);
 }
 
 pub fn root(app: &mut App, ui: &mut Ui) {
@@ -257,7 +249,6 @@ fn root_frame(app: &mut App, ui: &mut Ui) {
     set_window_title(&ctx, format!("CD Draw - {doc_name}"));
 
     // Closing the window with unsaved drawings asks about each first.
-    #[cfg(not(target_arch = "wasm32"))]
     {
         if ctx.input(|i| i.viewport().close_requested())
             && !app.quit_now
@@ -294,10 +285,8 @@ fn root_frame(app: &mut App, ui: &mut Ui) {
     }
     // VBA macros: their requests, dialogs, forms and editor.
     macros_ui::frame(app, &ctx);
-    // Help > Updates, once a day.
-    app.update_tick(crate::recovery::now_secs(), Some(ctx.clone()));
     // Options > Save > Auto-backup.
-    if app.auto_backup_tick(web_time::Instant::now()) {
+    if app.auto_backup_tick(std::time::Instant::now()) {
         app.status = tr("status.auto_backup_saved");
     }
     // The Time Tracker's clock: while it counts, a frame a second keeps it
@@ -559,17 +548,6 @@ fn root_frame(app: &mut App, ui: &mut Ui) {
                 .frame(palette_frame)
                 .show(ui, |ui| palette::palette_row(app, ui));
         }
-    }
-    // The AI prompt bar, over the palette rows, while a service is set up.
-    if ai_bar::visible(app) {
-        side(Panel::bottom("ai_prompt_bar"), ai_bar::BAR_H)
-            .frame(
-                Frame::new()
-                    .fill(Tokens::panel())
-                    .inner_margin(egui::Margin::symmetric(0, 2)),
-            )
-            .show_separator_line(true)
-            .show(ui, |ui| ai_bar::ai_bar(app, ui));
     }
     palette::popups(app, &ctx);
 

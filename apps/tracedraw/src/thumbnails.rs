@@ -1,8 +1,7 @@
 //! Small pictures of recent drawings for the Welcome Screen: the first
 //! page, at most 160 pixels on its long side, kept as PNG in the
 //! preferences folder (`thumbnails/<hash of the path>.png`) when a drawing
-//! is opened or saved. The browser keeps no recent drawings, so none are
-//! made there.
+//! is opened or saved.
 
 use crate::app::App;
 use std::path::{Path, PathBuf};
@@ -32,9 +31,6 @@ pub fn thumbnail_path(path: &Path) -> Option<PathBuf> {
 
 /// Forget every thumbnail (the recent list was cleared).
 pub fn clear() {
-    if crate::files::WEB {
-        return;
-    }
     if let Some(dir) = folder() {
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -59,9 +55,6 @@ impl App {
     /// Keep a thumbnail of the active drawing for the recent list entry
     /// `path`; the picture shown for it is drawn again.
     pub fn store_thumbnail(&mut self, path: &Path) {
-        if crate::files::WEB {
-            return;
-        }
         self.recent_thumbs.remove(path);
         let (Some(out), Some(png)) = (thumbnail_path(path), first_page_png(self)) else {
             return;

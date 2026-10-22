@@ -32,13 +32,6 @@ with Ctrl (Cmd), Shift+Insert or the Paste key that came without a paste
 event or press before it pastes too, once. V let go after Ctrl is typing
 and does not paste.
 
-## Browser build
-
-The browser hands the clipboard only to paste events, and only as text:
-a copy notes the SVG it wrote, and Ctrl+V compares the paste event's
-text with it. Images and files copied in other programs are not
-available.
-
 ## Checks
 
 - `clipboard::tests`: the copy here wins while the system clipboard

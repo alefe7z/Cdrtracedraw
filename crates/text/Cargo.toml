@@ -8,12 +8,8 @@ description = "Font discovery, shaping and glyph outlines for CD Draw"
 [dependencies]
 tracedraw-core.workspace = true
 kurbo.workspace = true
-fontdb = { version = "0.24", default-features = false, features = ["std"] }
+# System font discovery (font files on disk, fontconfig).
+fontdb = { version = "0.24", default-features = false, features = ["std", "fs", "memmap", "fontconfig"] }
 ttf-parser.workspace = true
 rustybuzz.workspace = true
 log.workspace = true
-
-# System font discovery exists only natively; the browser build registers
-# its fonts with `add_font_data`.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-fontdb = { version = "0.24", features = ["fs", "memmap", "fontconfig"] }

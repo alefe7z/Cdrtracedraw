@@ -3,8 +3,7 @@
 File > Publish to PDF... (also on the standard toolbar) opens the PDF
 Settings dialog for the active drawing, with the tabs General, Color,
 Document, Objects, Prepress, Security and the issues tab, then "?", OK
-and Cancel. OK writes the file named on General (in the browser the file
-is downloaded). The dialog is `ui/publish_pdf.rs`; the file comes from
+and Cancel. OK writes the file named on General. The dialog is `ui/publish_pdf.rs`; the file comes from
 `tracedraw_io::pdf` and its protection from `tracedraw_io::pdf_crypt`.
 
 ## General

@@ -76,7 +76,6 @@ pub fn show(ui: &mut Ui, tip: &str) {
 /// Rich tips on a response, in place of `on_hover_text`.
 pub trait RichTip {
     fn rich_tip(self, tip: impl AsRef<str>) -> Response;
-    fn rich_disabled_tip(self, tip: impl AsRef<str>) -> Response;
 }
 
 impl RichTip for Response {
@@ -85,13 +84,6 @@ impl RichTip for Response {
         #[cfg(test)]
         record(&tip);
         self.on_hover_ui(|ui| show(ui, &tip))
-    }
-
-    fn rich_disabled_tip(self, tip: impl AsRef<str>) -> Response {
-        let tip = tip.as_ref().to_string();
-        #[cfg(test)]
-        record(&tip);
-        self.on_disabled_hover_ui(|ui| show(ui, &tip))
     }
 }
 

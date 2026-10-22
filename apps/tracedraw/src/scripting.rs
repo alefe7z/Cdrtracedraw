@@ -13,8 +13,8 @@
 //! Implementation: one native dispatcher `__td(method, argsJson)` works on
 //! a snapshot of the document and records commands; the JS prelude builds
 //! the object model on top. After the script the commands run as one
-//! undo step. Scripts an AI service wrote run untrusted
-//! ([`run_untrusted`]): without file access, with limits, all or nothing.
+//! undo step. Script filters run untrusted: without file access, with
+//! limits, all or nothing.
 
 pub mod vba_run;
 mod vg;
@@ -58,8 +58,8 @@ enum Trust {
     /// The user's own scripts: every method; the changes made before an
     /// error are kept.
     User,
-    /// Scripts an AI service wrote (AI Drawing): no file access, loops,
-    /// recursion and changes limited, nothing kept unless all of it runs.
+    /// Script filters: no file access, loops, recursion and changes
+    /// limited, nothing kept unless all of it runs.
     Untrusted,
 }
 
@@ -316,18 +316,6 @@ pub fn run(app: &mut App, src: &str) -> Result<Vec<String>, String> {
 #[allow(dead_code)]
 pub fn run_vgcore(app: &mut App, src: &str, label: &'static str) -> Result<Vec<String>, String> {
     run_host(app, src, Trust::User, label, true).map(|(output, _)| output)
-}
-
-/// Run a script an AI service wrote: no file access, loops, call depth
-/// and changes limited, and nothing applied unless the whole script runs.
-/// Its changes are one undo step named `label`. Returns the printed lines
-/// and the number of changes.
-pub fn run_untrusted(
-    app: &mut App,
-    src: &str,
-    label: &'static str,
-) -> Result<(Vec<String>, usize), String> {
-    run_with(app, src, Trust::Untrusted, label)
 }
 
 fn host_for(app: &App, trust: Trust) -> HostInner {

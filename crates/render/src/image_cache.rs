@@ -10,9 +10,6 @@ use std::sync::Arc;
 use tiny_skia::Pixmap;
 
 /// Bytes of decoded pixels kept per drawing thread.
-#[cfg(target_arch = "wasm32")]
-const BUDGET: usize = 256 << 20;
-#[cfg(not(target_arch = "wasm32"))]
 const BUDGET: usize = 1024 << 20;
 
 #[derive(Default)]

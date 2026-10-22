@@ -40,9 +40,7 @@ CD Draw 以自己的格式 `.tdraw` 儲存繪圖，這種格式會保留所有�
 
 對話方塊會從繪圖所在的資料夾開始；若沒有，則從您上次儲存的資料夾開始；再沒有則從您的文件資料夾開始。
 
-> **注意：** 在瀏覽器版本中，每次儲存都是一次下載：對話方塊會保留名稱、類型、版本和屬性，而瀏覽器會將檔案放在其下載資料夾中。
-
-其他儲存方式：[[menu.file > menu.file.save_as_template]] 會儲存範本（請參閱[範本](../templates-styles/templates.md)），[[menu.file.export]] 會寫入其他格式（請參閱[匯出](../file-formats/export.md)），[[menu.file.publish_to_pdf]] 會寫入 PDF（請參閱[發佈為 PDF](../file-formats/publish-pdf.md)），[[menu.file.send_to]] 會將 PDF 儲存到您的桌面或文件資料夾，或將其附加到電子郵件中，而 [[menu.file.github]] 會將繪圖保存在 GitHub 儲存庫中（請參閱 [GitHub](github.md)）。[[menu.file.revert]] 會回到上次儲存的版本。
+其他儲存方式：[[menu.file > menu.file.save_as_template]] 會儲存範本（請參閱[範本](../templates-styles/templates.md)），[[menu.file.export]] 會寫入其他格式（請參閱[匯出](../file-formats/export.md)），[[menu.file.publish_to_pdf]] 會寫入 PDF（請參閱[發佈為 PDF](../file-formats/publish-pdf.md)），[[menu.file.send_to]] 會將 PDF 儲存到您的桌面或文件資料夾，或將其附加到電子郵件中。[[menu.file.revert]] 會回到上次儲存的版本。
 
 ## 關閉繪圖 {#closing}
 

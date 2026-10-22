@@ -64,7 +64,7 @@ Spiral (revolutions, symmetrical or logarithmic), Graph Paper and Table
 
 ## Global and Workspaces
 
-Global > General: user interface language; check for updates at start (on, desktop, see `updates.md`); Reset all settings... (asks
+Global > General: user interface language; Reset all settings... (asks
 first, then puts every preference back to how CD Draw comes, keeping
 the recent drawings, the last folder and the window's size; drawings are
 not touched). Global > File Locations: where the preferences and
@@ -154,8 +154,8 @@ it), applied when the slider is let go.
   12 px at 100 % scaling, 15 px at 125 %); at 0.8 it was 10.4 px at
   100 %, too small (#229).
 - On Linux 100 % is a zoom of 1 over the system's scaling: one interface
-  point per pixel at the system's scaling (#1). Elsewhere (macOS, the
-  browser) it is 0.8. The sizes offered and their order are the same.
+  point per pixel at the system's scaling (#1). Elsewhere (macOS) it is
+  0.8. The sizes offered and their order are the same.
 - The size is a zoom factor over the monitor's own scaling, so text stays
   sharp. Values out of 50 % to 400 % count as 100 %.
 - The interface size never changes how large drawings are: zoom 100 %
@@ -253,8 +253,7 @@ Windows; elsewhere nothing is read and the defaults apply):
   (`settings::tests::the_portable_zip_ships_the_settings_folder`).
 - Otherwise the system's place: `%APPDATA%\TraceDraw` on Windows,
   `~/Library/Application Support/TraceDraw` on macOS,
-  `$XDG_CONFIG_HOME/tracedraw` (or `~/.config/tracedraw`) elsewhere; the
-  browser keeps them in its local storage.
+  `$XDG_CONFIG_HOME/tracedraw` (or `~/.config/tracedraw`) elsewhere.
 
 Menus, lists and dialogs appear at once, without fading in.
 

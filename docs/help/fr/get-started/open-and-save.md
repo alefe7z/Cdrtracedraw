@@ -86,19 +86,13 @@ La boîte de dialogue s'ouvre dans le dossier du dessin, sinon dans le
 dernier dossier où vous avez enregistré, sinon dans votre dossier de
 documents.
 
-> **Remarque :** Dans la version pour navigateur, chaque enregistrement est
-> un téléchargement : la boîte de dialogue conserve le nom, le type, la
-> version et les propriétés, et le navigateur place le fichier dans son
-> dossier de téléchargements.
-
 Autres façons d'enregistrer : [[menu.file > menu.file.save_as_template]]
 enregistre un modèle (voir [Modèles](../templates-styles/templates.md)),
 [[menu.file.export]] écrit d'autres formats (voir
 [Exporter](../file-formats/export.md)), [[menu.file.publish_to_pdf]] écrit
-un PDF (voir [Publier au format PDF](../file-formats/publish-pdf.md)),
+un PDF (voir [Publier au format PDF](../file-formats/publish-pdf.md)) et
 [[menu.file.send_to]] enregistre un PDF sur votre bureau ou dans votre
-dossier de documents, ou le joint à un e-mail, et [[menu.file.github]]
-conserve les dessins dans un dépôt GitHub (voir [GitHub](github.md)).
+dossier de documents, ou le joint à un e-mail.
 [[menu.file.revert]] revient à la dernière version enregistrée.
 
 ## Fermer des dessins {#closing}

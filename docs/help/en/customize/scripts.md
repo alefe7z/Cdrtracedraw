@@ -29,7 +29,7 @@ for (let i = 0; i < 5; i++) {
 
 ## Debugging {#debug}
 
-On the desktop, click in the margin of the editor to set a breakpoint, then
+Click in the margin of the editor to set a breakpoint, then
 click [[docker.debug]]. The script stops at the breakpoint: **Continue**,
 **Step** or **Stop** it, and type an expression to evaluate it where the
 script is paused.
@@ -42,24 +42,11 @@ A script that defines `TraceDrawFilter`, with a name, extensions and an
 [[docker.install_filter]] to keep it; [[docker.script_filters]] lists the
 installed filters with [[docker.edit]] and [[docker.remove]].
 
-## AI assistants (MCP) {#mcp}
-
-CD Draw speaks the Model Context Protocol, so AI assistants on your
-computer can open, edit, inspect, export and save drawings:
-
-- `tracedraw --mcp` runs CD Draw without a window for an assistant.
-- To let an assistant edit the drawing open in your window, turn on
-  [[options.mcp_window]] on the [[options.general]] page of
-  [[menu.tools > menu.tools.options > menu.tools.options_global]], and give
-  the assistant `tracedraw --mcp-window` as its command. Each change is one
-  undo step you can take back. Only programs on your computer with the
-  secret token CD Draw writes can connect.
-
 ## The command-line tool {#cli}
 
-Every download also has `tracedraw-cli`, which converts drawings between
+Every installation also has `tracedraw-cli`, which converts drawings between
 formats without opening the program, for batch work.
 
 ## Macros {#macros}
 
-CD Draw runs VBA macro projects written for drawing programs (desktop version). [[menu.tools > menu.tools.macros > menu.tools.macros_load]] adds a project (`.gms`) or module files (`.bas`, `.cls`, `.frm`); projects are kept and load at start-up. The [[docker.macros]] lists their macros: double-click one or use [[menu.tools > menu.tools.macros > menu.tools.macros_run]] (<kbd>Alt+Shift+F8</kbd>) to run it. A macro's forms, message boxes and input boxes appear on screen, <kbd>Esc</kbd> or [[menu.tools > menu.tools.macros > menu.tools.macros_stop]] stops it, and everything one run changes is one undo step. [[menu.tools > menu.tools.macros > menu.tools.macro_editor]] (<kbd>Alt+F11</kbd>) shows and edits the code. Macros that call Windows functions or the editor's own object model do not run.
+CD Draw runs VBA macro projects written for drawing programs. [[menu.tools > menu.tools.macros > menu.tools.macros_load]] adds a project (`.gms`) or module files (`.bas`, `.cls`, `.frm`); projects are kept and load at start-up. The [[docker.macros]] lists their macros: double-click one or use [[menu.tools > menu.tools.macros > menu.tools.macros_run]] (<kbd>Alt+Shift+F8</kbd>) to run it. A macro's forms, message boxes and input boxes appear on screen, <kbd>Esc</kbd> or [[menu.tools > menu.tools.macros > menu.tools.macros_stop]] stops it, and everything one run changes is one undo step. [[menu.tools > menu.tools.macros > menu.tools.macro_editor]] (<kbd>Alt+F11</kbd>) shows and edits the code. Macros that call Windows functions or the editor's own object model do not run.

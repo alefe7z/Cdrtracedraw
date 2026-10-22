@@ -52,7 +52,6 @@ the version on the right).
 - Options > General > Show the splash screen at start-up turns it off.
   `--no-splash` or `TRACEDRAW_NO_SPLASH=1` skip it for one run and open a
   plain 1600 x 950 window (automation and the visual checks use this).
-- The browser build has no splash: the page shows its own loader.
 
 ## Back to the defaults
 
@@ -96,7 +95,6 @@ forgets them.
   kept as PNG in the preferences folder under `thumbnails/`, named by a
   hash of the drawing's path (FNV-1a, the same from one run to the next).
   Saving again makes it again.
-- Clear list removes the thumbnails too. The browser version records no
-  recent drawings, so it makes no thumbnails.
+- Clear list removes the thumbnails too.
 - `thumbnails::tests::opened_and_saved_drawings_get_a_thumbnail`
 

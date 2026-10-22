@@ -82,8 +82,6 @@ restarts. Code: `shelf.rs` (items, file, placing, pictures) and
 - Desktop: `shelf.json` in the preferences folder, rewritten after every
   change through a temporary file (`shelf.json.tmp`, then renamed), so a
   failed write leaves the previous shelf.
-- Browser: the page's local storage (`tracedraw-shelf`); browsers limit
-  it to a few megabytes, so large bitmaps may not be kept there.
 - The file: `{"kind": "tracedraw-shelf", "version": 1, "items": [{"name",
   "shapes", "styles"}]}`; shapes are written as in `.tdraw` files.
 - Reading: a missing file, a damaged one, one of another kind or one over

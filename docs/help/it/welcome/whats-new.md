@@ -13,9 +13,6 @@ come scoprire cosa è cambiato ed elenca i punti salienti delle ultime versioni.
   sopra il titolo di un menu che ne contiene uno. I segni spariscono quando
   disattivate il comando, e il comando torna disattivato al prossimo avvio di
   CD Draw.
-- L'elenco completo delle modifiche di ogni versione si trova nel
-  [registro delle modifiche](https://github.com/alefe7z/Cdrtracedraw/blob/main/CHANGELOG.md)
-  del progetto.
 
 ## Punti salienti delle ultime versioni {#highlights}
 

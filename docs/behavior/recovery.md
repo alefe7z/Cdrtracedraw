@@ -19,7 +19,6 @@ Save names another). It holds the time the session last checked in
   the marker. A marker without backups is forgotten silently.
 - Two CD Draw windows running at once each keep their own marker; one
   never offers the other's drawings while it still checks in.
-- Nothing is written in the browser build.
 
 ## Checks
 

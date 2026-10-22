@@ -14,10 +14,6 @@ only the Welcome Screen is open. The menus can show your own shortcuts; see
 | [[menu.file.open]] | [Opening and saving](../get-started/open-and-save.md) |
 | [[menu.file.open_recent]] | [Opening and saving](../get-started/open-and-save.md) |
 | [[menu.file.clear_recent]] | [Opening and saving](../get-started/open-and-save.md) |
-| [[menu.file.github]] | [GitHub](../get-started/github.md) |
-| [[menu.file.github_open]] | [GitHub](../get-started/github.md) |
-| [[menu.file.github_save]] | [GitHub](../get-started/github.md) |
-| [[menu.file.github_history]] | [GitHub](../get-started/github.md) |
 | [[menu.file.close]] | [Opening and saving](../get-started/open-and-save.md) |
 | [[menu.file.close_all]] | [Opening and saving](../get-started/open-and-save.md) |
 | [[menu.file.save]] | [Opening and saving](../get-started/open-and-save.md) |
@@ -134,12 +130,6 @@ only the Welcome Screen is open. The menus can show your own shortcuts; see
 
 | Command | See |
 |---|---|
-| [[menu.object.ai_generate]] | [AI](../customize/ai.md) |
-| [[menu.object.ai_create_image]] | [AI](../customize/ai.md) |
-| [[menu.object.ai_remix_image]] | [AI](../customize/ai.md) |
-| [[menu.object.ai_create_vector]] | [AI](../customize/ai.md) |
-| [[menu.object.ai_draw_words]] | [AI](../customize/ai.md) |
-| [[menu.bitmaps.remove_background]] | [AI](../customize/ai.md) |
 | [[menu.object.create]] | [Objects](../objects/index.md) |
 | [[menu.object.create_arrowhead]] | [Outlines](../lines-shapes/outlines.md#outline-pen) |
 | [[menu.object.create_pattern]] | [Pattern fills](../color/patterns.md) |
@@ -267,8 +257,6 @@ only the Welcome Screen is open. The menus can show your own shortcuts; see
 | [[menu.bitmaps.crop_bitmap]] | [Resampling](../bitmaps/resample-and-straighten.md) |
 | [[menu.bitmaps.resample]] | [Resampling](../bitmaps/resample-and-straighten.md) |
 | [[menu.bitmaps.remove_background_local]] | [Remove Background](../bitmaps/remove-background.md) |
-| [[menu.bitmaps.remove_background]] | [AI](../customize/ai.md) |
-| [[menu.bitmaps.ai_art_styles]] | [AI](../customize/ai.md) |
 | [[menu.bitmaps.mode]] | [Color modes](../bitmaps/color-modes.md) |
 | [[menu.bitmaps.mode_bw]] | [Color modes](../bitmaps/color-modes.md) |
 | [[menu.bitmaps.mode_grayscale]] | [Color modes](../bitmaps/color-modes.md) |
@@ -380,7 +368,6 @@ only the Welcome Screen is open. The menus can show your own shortcuts; see
 | [[menu.tools.scripts_docker]] | [Scripts](../customize/scripts.md) |
 | [[menu.tools.scripts_run]] | [Scripts](../customize/scripts.md) |
 | [[menu.tools.scripts_record]] | [Scripts](../customize/scripts.md) |
-| [[menu.tools.ai_generate]] | [AI](../customize/ai.md) |
 | [[menu.tools.font_manager]] | [Font Manager](../text/fonts.md#font-manager) |
 | [[menu.tools.border_and_grommet]] | [Border and grommets](../printing/border-and-grommet.md) |
 | [[menu.tools.time_tracker]] | [Time tracker](../customize/time-tracker.md) |
@@ -434,15 +421,12 @@ only the Welcome Screen is open. The menus can show your own shortcuts; see
 |---|---|
 | [[menu.help.help_topics]] | [Help](../index.md#in-the-app) |
 | [[menu.help.product_help]] | [Help](../index.md#in-the-app) |
-| [[menu.help.welcome_screen]] | [About and updates](../welcome/about-and-updates.md) |
-| [[menu.help.video_tutorials]] | [About and updates](../welcome/about-and-updates.md) |
+| [[menu.help.welcome_screen]] | [About CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.video_tutorials]] | [About CD Draw](../welcome/about-and-updates.md) |
 | [[menu.help.hints]] | [Hints](../get-started/hints.md) |
-| [[menu.help.quick_start_guide]] | [About and updates](../welcome/about-and-updates.md) |
-| [[menu.help.user_guide]] | [About and updates](../welcome/about-and-updates.md) |
+| [[menu.help.quick_start_guide]] | [About CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.user_guide]] | [About CD Draw](../welcome/about-and-updates.md) |
 | [[menu.help.whats_new]] | [What is new](../welcome/whats-new.md) |
 | [[menu.help.highlight_whats_new]] | [What is new](../welcome/whats-new.md) |
-| [[menu.help.updates]] | [About and updates](../welcome/about-and-updates.md) |
-| [[menu.help.message_settings]] | [About and updates](../welcome/about-and-updates.md) |
-| [[menu.help.community]] | [About and updates](../welcome/about-and-updates.md) |
-| [[menu.help.support]] | [About and updates](../welcome/about-and-updates.md) |
-| [[menu.help.about]] | [About and updates](../welcome/about-and-updates.md) |
+| [[menu.help.message_settings]] | [About CD Draw](../welcome/about-and-updates.md) |
+| [[menu.help.about]] | [About CD Draw](../welcome/about-and-updates.md) |

@@ -247,8 +247,7 @@ impl IndexJob {
     }
 }
 
-/// Start indexing a folder: on worker threads on the desktop, at once in
-/// a browser (which has no folders to read).
+/// Start indexing a folder on worker threads.
 pub fn start_index(dir: PathBuf) -> IndexJob {
     let paths = library_paths(&dir);
     let done = Arc::new(AtomicUsize::new(0));
@@ -259,8 +258,8 @@ pub fn start_index(dir: PathBuf) -> IndexJob {
         done: done.clone(),
         rx,
     };
-    if paths.is_empty() || crate::files::WEB {
-        // Nothing to read (always so in a browser, which lists no folders).
+    if paths.is_empty() {
+        // Nothing to read.
         let _ = tx.send(Vec::new());
         return job;
     }

@@ -80,18 +80,13 @@ To save a drawing under a new name:
 The dialog box starts in the drawing's folder, else in the folder you saved
 to last, else in your documents folder.
 
-> **Note:** In the browser version every save is a download: the dialog box
-> keeps the name, type, version and properties, and the browser puts the file
-> in its downloads folder.
-
 Other ways to save: [[menu.file > menu.file.save_as_template]] saves a
 template (see [Templates](../templates-styles/templates.md)),
 [[menu.file.export]] writes other formats (see
 [Exporting](../file-formats/export.md)), [[menu.file.publish_to_pdf]] writes
 a PDF (see [Publishing to PDF](../file-formats/publish-pdf.md)),
-[[menu.file.send_to]] saves a PDF to your desktop or documents folder or
-attaches it to an email, and [[menu.file.github]] keeps drawings in a GitHub
-repository (see [GitHub](github.md)). [[menu.file.revert]] goes back to the
+and [[menu.file.send_to]] saves a PDF to your desktop or documents folder or
+attaches it to an email. [[menu.file.revert]] goes back to the
 version last saved.
 
 ## Closing drawings {#closing}
@@ -110,7 +105,7 @@ When several drawings have changes, it asks about each one; Cancel stops.
 
 ## Auto-backup and recovery {#recovery}
 
-On the desktop, CD Draw keeps backups of your open drawings while
+CD Draw keeps backups of your open drawings while
 auto-backup is on (the [[options.save]] page of
 [[menu.tools > menu.tools.options > menu.tools.options_app]] sets how often
 and where; every 20 minutes at first). Closing CD Draw normally removes

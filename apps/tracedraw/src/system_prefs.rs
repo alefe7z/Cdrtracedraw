@@ -2,7 +2,7 @@
 //! Windows' text size ("Make text bigger", 100 to 225 %) and its high
 //! contrast themes (on or off, and their colours). They are read once at
 //! start-up with the system's `reg` tool, so nothing here needs a
-//! platform library; elsewhere (and in a browser) the defaults apply.
+//! platform library; elsewhere the defaults apply.
 
 // The registry readers run on Windows only; elsewhere only the tests use them.
 #![cfg_attr(not(windows), allow(dead_code))]

@@ -23,9 +23,7 @@ Checks: `ui::tests::the_touch_workspace_is_larger_and_keeps_real_sizes`,
 ## Kept across restarts
 
 Everything below is part of the preferences (`settings.json` in the
-configuration folder, or the browser's local storage under
-`tracedraw.settings`, which belongs to that browser on that computer)
-and comes back when CD Draw starts again: every page of Options, where
+configuration folder) and comes back when CD Draw starts again: every page of Options, where
 each bar sits (`bars`), which bars show (`shown_bars`: standard toolbar,
 property bar, toolbox, status bar, panels, rulers, Text, Zoom and
 Transform toolbars), the tool each toolbox group shows, hidden flyouts,
@@ -43,8 +41,8 @@ overprints, the view mode) and the dockers' own choices (`panels`: the
 Color docker's model and views, Align To, Use Outline, Distribute To).
 
 The preferences are saved whenever they change, looked at once a second
-(so a change lasts even when CD Draw does not close normally, and in
-the browser, where closing the tab saves nothing), on Options' OK, and
+(so a change lasts even when CD Draw does not close normally), on
+Options' OK, and
 when CD Draw closes; not while Options is open, whose Cancel puts them
 back. Values out of range in a file edited by hand are brought into
 range, and names CD Draw does not know fall back to the defaults.

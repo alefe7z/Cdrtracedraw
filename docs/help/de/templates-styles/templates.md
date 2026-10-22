@@ -44,6 +44,4 @@ als Vorlage.
 2. Wählen Sie [[menu.file > menu.file.save_as_template]].
 3. Geben Sie ihr einen Namen und speichern Sie sie.
 
-Gespeicherte Vorlagen erscheinen unter [[tpl.my_templates]]. Sie liegen im
-Vorlagenordner Ihrer Einstellungen und sind daher in der Browserversion nicht
-verfügbar.
+Gespeicherte Vorlagen erscheinen unter [[tpl.my_templates]].

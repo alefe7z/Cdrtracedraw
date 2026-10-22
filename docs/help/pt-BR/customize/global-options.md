@@ -9,10 +9,6 @@ exportação, vetorização, mensagens e onde os arquivos ficam.
 ![A página Geral das opções globais](../../img/customize-global-options-general.png)
 
 - [[options.language]]: o idioma da interface. Esta Ajuda abre no mesmo idioma.
-- [[options.check_updates]] (ligado): veja
-  [Procurar atualizações](../welcome/about-and-updates.md#updates).
-- [[options.agents]]: [[options.mcp_window]] deixa assistentes de IA neste
-  computador editarem o desenho aberto; veja [Scripts](scripts.md#mcp).
 - [[options.reset_all]]: veja [Redefinir configurações](reset-settings.md).
 
 ## Impressão {#printing}
@@ -65,7 +61,4 @@ voltar a vê-la.
 
 ![A página Locais de arquivos das opções globais](../../img/customize-global-options-file-locations.png)
 
-Mostra onde ficam as preferências e as cópias de segurança automáticas. As
-preferências ficam em uma pasta `tracedraw-settings` ao lado do programa quando
-ela existe (uma cópia portátil), senão no lugar do sistema para configurações de
-programas; a versão para navegador as guarda no navegador.
+Mostra onde ficam as preferências e as cópias de segurança automáticas.

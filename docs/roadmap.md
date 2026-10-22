@@ -41,8 +41,6 @@ Status tracked in `docs/features.md`.
 - Signed Windows downloads and a Microsoft Store package: the build signs through SignPath or Azure Artifact Signing and packs an MSIX once the accounts are set up (build ready; signing waits for the accounts, see `code-signing.md`)
 - JavaScript automation with macro recording (done)
 - User interface in 18 languages (done)
-- JSON control channel and MCP server (`tracedraw --mcp`, see `behavior/mcp.md`) (done)
-- WebAssembly build: the same editor in the browser (WebGL 2), published to GitHub Pages and attached to releases (done; see `behavior/web.md`)
 
 ## M5 Interchange
 - Import PDF, AI, EPS, DXF, PSD, EMF and WMF (done); export HTML, DXF, EMF and WMF (done); CMX (import partial: no lenses or bitmap fills yet)
@@ -60,7 +58,7 @@ Status tracked in `docs/features.md`.
 - Node types stored with the curve (done)
 - Asset library: objects, symbols, colours and styles shared between drawings (done: the Shelf keeps objects, with their object styles and symbols turned into objects, and colours with colour styles; see `behavior/shelf.md`)
 - Session recovery after a crash (on top of auto-backup) (done)
-- Scripting stays JavaScript only (decided 2026-10-14: one object model, recorded macros in JavaScript, runs in the browser too)
+- Scripting stays JavaScript only (decided 2026-10-14: one object model, recorded macros in JavaScript)
 - Drawing window: focus mode, Multipage View, Draw in Perspective (one-, two- and three-point), variable-width outlines, painterly brushes, review comments and an Export panel for many assets at once (done; see the `behavior/` pages of each)
 - Accessibility: the desktop's text size and high contrast themes followed, coloured tool icons (done; see `behavior/options.md`)
 
@@ -70,7 +68,6 @@ Status tracked in `docs/features.md`.
 - `.cdr` target versions written down, each layout confirmed on files (public notes and other readers' documentation only to confirm a layout, never their code)
 
 ## M8 Saving and collaboration (planned)
-- Git hosting: open a `.tdraw` straight from a repository, save as a commit with a message, history from the log (done with a personal access token, see `behavior/github.md`); OAuth sign-in, a branch per session, a pull request from the app, LFS for large files, a visual diff between commits, conflicts resolved in the interface, the token kept in the system keyring (open)
 - Storage: Google Drive, Dropbox, OneDrive, S3-compatible storage (AWS, MinIO, Cloudflare R2), a synced local folder, WebDAV
 - Real-time editing: a self-hosted WebSocket server, automatic merging with a CRDT (Yjs or Automerge), presence with each user's pointer and selection, optional locks per object, comments anchored to objects, permissions per project, share links that expire, version history with restore
 - Order (decided 2026-10-14): Git hosting first, without a server of our own; storage services and real-time editing later. Stable IDs per object are done
@@ -79,6 +76,5 @@ Status tracked in `docs/features.md`.
 - A raster editing tool inside CD Draw (layers, selections, retouching) so a bitmap need not leave for an outside editor; until then Edit Bitmap hands the file to the system editor and the drawing follows its saves
 
 ## M9 Release (planned)
-- Automatic updates from inside the app (checking and downloading done, see `behavior/updates.md`; installing in place done for the Linux AppImage; Windows and macOS wait for code signing and a test on real machines)
 - User documentation (done; see `guide/README.md`)
 - Public launch and announcement once Pick and Shape tool parity is reached

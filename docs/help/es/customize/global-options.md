@@ -10,10 +10,6 @@ impresión y exportación, calco, mensajes y dónde se guardan los archivos.
 
 - [[options.language]]: el idioma de la interfaz. Esta Ayuda se abre en el
   mismo idioma.
-- [[options.check_updates]] (activado): vea
-  [Buscar actualizaciones](../welcome/about-and-updates.md#updates).
-- [[options.agents]]: [[options.mcp_window]] permite que los asistentes de IA
-  de este equipo editen el dibujo abierto; vea [Scripts](scripts.md#mcp).
 - [[options.reset_all]]: vea [Restablecer los ajustes](reset-settings.md).
 
 ## Impresión {#printing}
@@ -70,5 +66,4 @@ aquí la opción para volver a verlo.
 Muestra dónde se guardan las preferencias y las copias de seguridad
 automáticas. Las preferencias están en una carpeta `tracedraw-settings` junto
 al programa cuando existe (una copia portátil); si no, en el lugar que su
-sistema destina a los ajustes de los programas. La versión para navegador las
-guarda en el navegador.
+sistema destina a los ajustes de los programas.

@@ -41,6 +41,4 @@ O controle [[tpl.thumbnail_size]], embaixo, aumenta ou diminui as miniaturas, e
 2. Escolha [[menu.file > menu.file.save_as_template]].
 3. Dê um nome e salve.
 
-Os modelos que você salva aparecem em [[tpl.my_templates]]. Eles ficam na pasta
-de modelos das suas configurações, então não estão disponíveis na versão para
-navegador.
+Os modelos que você salva aparecem em [[tpl.my_templates]].

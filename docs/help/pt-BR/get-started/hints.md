@@ -11,7 +11,7 @@ abra-o de novo com [[menu.help > menu.help.hints]] ou em
 
 - A página **inicial** apresenta o painel e lista temas como desenhar linhas e
   formas, selecionar, mover e girar objetos, efeitos, contornos,
-  preenchimentos, texto, IA e como obter ajuda. Cada tema é um link.
+  preenchimentos, texto e como obter ajuda. Cada tema é um link.
 - A página de um **tema** o explica e lista as ferramentas que servem a ele,
   cada uma com ícone, nome e o que faz. Clique em uma ferramenta para ver sua
   página.

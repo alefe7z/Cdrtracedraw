@@ -122,9 +122,7 @@ The package declares `runFullTrust`. Partner Center asks why; answer:
 > needs full trust to open and save the user's drawings anywhere they
 > choose, to read the installed fonts, to print, and to export files to
 > the folders the user picks. It collects no data and makes no network
-> connections of its own; the only exception is the optional AI Drawing
-> panel, which, when the user presses Draw, sends the user's request to
-> the AI service the user set up with their own key.
+> connections at all; it contains no networking code.
 
 ## Notes for certification
 
