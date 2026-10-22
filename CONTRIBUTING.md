@@ -19,10 +19,6 @@ This file covers what every contribution must also respect.
 - Bundle only original or openly licensed assets (icons, fonts, images,
   palettes, templates, test files) and list each one in
   `ATTRIBUTION.md` with its author, source and license.
-- CD Draw stands on its own: do not name other vendors or their
-  products in code, comments, docs, commit messages or file names, and do
-  not describe a feature as modelled on another program. Give features
-  descriptive names of their own.
 
 ## Sign-off (DCO)
 

@@ -15,16 +15,10 @@ The product name is **CD Draw** in prose; machine names are `tracedraw`
    `panic!`, `todo!` or raw indexing on data that came from a file or the
    user. Return `Result`, log a warning, skip the object. Opening any file
    must always yield a document.
-3. **Clean-room and independence.** CD Draw stands on its own: never
-   name other graphics editors or their makers anywhere in the repo (code,
-   comments, docs, commit messages, packaging, file names), and never
-   describe CD Draw or a feature as modelled on another program.
-   Features carry our own names: generic terms (Fill, Blend, Contour,
-   Envelope, Weld) are fine, distinctive product or feature names of other
-   software are never used. File formats go by their usual names (`.cdr`,
-   `.ai`, `.psd`, a format owner's name in a file dialog filter, a header
-   string a format requires) only to describe compatibility; copyright
-   notices that a license requires stay in `ATTRIBUTION.md`. Never decompile any program and never use
+3. **Clean-room code and assets.** The look, layout, names and
+   behaviour of other programs may be followed, and other programs may be
+   named. Copyright notices that a license requires stay in
+   `ATTRIBUTION.md`. Never decompile any program and never use
    decompiled code or dumps, not even in conversations with AI tools.
    Format readers come from public format notes and from inspecting files
    we own; never port code from libcdr or any other implementation.
