@@ -1,0 +1,90 @@
+name: windows-exe
+
+# A Windows build on request, without the full release pipeline of
+# build.yml. Pushing a tag named exe-<anything> (scripts/request-exe.sh
+# makes one) builds the programs and publishes a pre-release under that
+# tag with the installer, the portable zip and the bare program. The
+# pre-release is never marked latest, so the update check ignores it.
+# Started by hand from the Actions tab, it only uploads the files as a
+# workflow artifact.
+
+on:
+  push:
+    tags: ["exe-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-exe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-pc-windows-msvc
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          base=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          echo "version=${base}-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc -p tracedraw -p tracedraw-cli
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $src = "target\x86_64-pc-windows-msvc\release"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DVersion=$v /DSrcDir="$PWD\$src" packaging\windows\tracedraw.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Move-Item "dist\tracedraw-$v-windows-x86_64-setup.exe" "dist\CD-Draw-$v-windows-x86_64-setup.exe"
+          Copy-Item -Recurse -Force packaging\windows\portable\tracedraw-settings "$src\tracedraw-settings"
+          Compress-Archive -Path "$src\tracedraw.exe","$src\tracedraw-cli.exe","$src\tracedraw-settings",README.md,LICENSE-MIT,LICENSE-APACHE -DestinationPath "dist\CD-Draw-$v-windows-x86_64-portable.zip"
+          Copy-Item "$src\tracedraw.exe" "dist\CD-Draw-$v-windows-x86_64.exe"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cd-draw-windows-${{ steps.ver.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/exe-')
+        shell: bash
+        run: |
+          {
+            echo "Windows build of CD Draw ${{ steps.ver.outputs.version }}, from commit ${GITHUB_SHA} (${{ github.ref_name }})."
+            echo
+            echo "- \`*-setup.exe\`: installer (Start menu, desktop shortcut, opens .tdraw and .cdr files)."
+            echo "- \`*-portable.zip\`: unzip anywhere and run tracedraw.exe; settings stay in the folder."
+            echo "- \`*-windows-x86_64.exe\`: the program alone."
+            echo
+            echo "The programs are not code-signed: Windows SmartScreen may ask for confirmation (More info > Run anyway)."
+          } > release-notes.md
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/exe-')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: CD Draw ${{ steps.ver.outputs.version }} (Windows)
+          body_path: release-notes.md
+          prerelease: true
+          make_latest: false
+          files: dist/*
+          fail_on_unmatched_files: true

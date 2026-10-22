@@ -6,6 +6,8 @@ full, row-by-row status.
 
 ## Unreleased
 
+- Windows builds on request: pushing an `exe-*` tag (`scripts/request-exe.sh`) builds the Windows installer, portable zip and program on GitHub and publishes them as a pre-release under that tag.
+
 - Name: the product is now called CD Draw in the interface, the window title, the logo, the documentation, the installers and the web page. Crate, binary and file names (`tracedraw`, `.tdraw`) are unchanged, so existing drawings and settings keep working. Links, the update check and the issue templates point to alefe7z/Cdrtracedraw.
 
 - Toolbox: the Variable Outline tool has a button of its own at the bottom of the toolbox, after the Fill flyout; it was inside the Shape tool's flyout, where it was hard to find (#339).
