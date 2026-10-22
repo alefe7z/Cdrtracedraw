@@ -6,7 +6,7 @@ full, row-by-row status.
 
 ## Unreleased
 
-- Windows builds on request: pushing an `exe-*` tag (`scripts/request-exe.sh`) builds the Windows installer, portable zip and program on GitHub and publishes them as a pre-release under that tag.
+- Windows builds on request: a pushed commit with `[exe]` in its message (`scripts/request-exe.sh` makes one) or a pushed `exe-*` tag builds the Windows installer, portable zip and program on GitHub and publishes them as a pre-release under an `exe-*` tag.
 
 - Name: the product is now called CD Draw in the interface, the window title, the logo, the documentation, the installers and the web page. Crate, binary and file names (`tracedraw`, `.tdraw`) are unchanged, so existing drawings and settings keep working. Links, the update check and the issue templates point to alefe7z/Cdrtracedraw.
 

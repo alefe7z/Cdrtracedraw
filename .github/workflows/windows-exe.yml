@@ -1,15 +1,15 @@
 name: windows-exe
 
 # A Windows build on request, without the full release pipeline of
-# build.yml. Pushing a tag named exe-<anything> (scripts/request-exe.sh
-# makes one) builds the programs and publishes a pre-release under that
-# tag with the installer, the portable zip and the bare program. The
+# build.yml. It runs for a push whose last commit message contains [exe]
+# (scripts/request-exe.sh makes one), for a pushed tag named exe-*, or by
+# hand from the Actions tab. It publishes a pre-release under an exe-*
+# tag with the installer, the portable zip and the bare program; the
 # pre-release is never marked latest, so the update check ignores it.
-# Started by hand from the Actions tab, it only uploads the files as a
-# workflow artifact.
 
 on:
   push:
+    branches: ["**"]
     tags: ["exe-*"]
   workflow_dispatch:
 
@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   exe:
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/exe-') || contains(github.event.head_commit.message, '[exe]')
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -39,6 +40,12 @@ jobs:
         run: |
           base=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           echo "version=${base}-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          # The release tag: the pushed exe-* tag, or a new one.
+          if [[ "$GITHUB_REF" == refs/tags/exe-* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=exe-$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build
         run: cargo build --release --target x86_64-pc-windows-msvc -p tracedraw -p tracedraw-cli
@@ -64,11 +71,10 @@ jobs:
           if-no-files-found: error
 
       - name: Release notes
-        if: startsWith(github.ref, 'refs/tags/exe-')
         shell: bash
         run: |
           {
-            echo "Windows build of CD Draw ${{ steps.ver.outputs.version }}, from commit ${GITHUB_SHA} (${{ github.ref_name }})."
+            echo "Windows build of CD Draw ${{ steps.ver.outputs.version }}, from commit ${GITHUB_SHA} (${{ github.ref_name }}, run ${{ github.run_id }})."
             echo
             echo "- \`*-setup.exe\`: installer (Start menu, desktop shortcut, opens .tdraw and .cdr files)."
             echo "- \`*-portable.zip\`: unzip anywhere and run tracedraw.exe; settings stay in the folder."
@@ -78,10 +84,10 @@ jobs:
           } > release-notes.md
 
       - name: Publish
-        if: startsWith(github.ref, 'refs/tags/exe-')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: CD Draw ${{ steps.ver.outputs.version }} (Windows)
           body_path: release-notes.md
           prerelease: true
