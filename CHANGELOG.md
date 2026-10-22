@@ -6,6 +6,8 @@ full, row-by-row status.
 
 ## Unreleased
 
+- Name: the product is now called CD Draw in the interface, the window title, the logo, the documentation, the installers and the web page. Crate, binary and file names (`tracedraw`, `.tdraw`) are unchanged, so existing drawings and settings keep working. Links, the update check and the issue templates point to alefe7z/Cdrtracedraw.
+
 - Toolbox: the Variable Outline tool has a button of its own at the bottom of the toolbox, after the Fill flyout; it was inside the Shape tool's flyout, where it was hard to find (#339).
 
 - Page bar: the Autofit Page button opens a popup with a Margin field (kept between sessions) and the Autofit Page button, so the page can be fitted to the drawing with room left around it; it fitted the page with no margin at once (#340).

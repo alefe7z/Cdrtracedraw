@@ -1,9 +1,9 @@
 # AGENTS.md: guide for AI agents and contributors
 
-TraceDraw is an open-source vector editor in **Rust only**: native egui/eframe
+CD Draw is an open-source vector editor in **Rust only**: native egui/eframe
 desktop app and the same app compiled to WebAssembly for the browser. No
 Electron, Tauri or webview.
-The product name is **TraceDraw** in prose; machine names are `tracedraw`
+The product name is **CD Draw** in prose; machine names are `tracedraw`
 (`tracedraw-core`, `tracedraw-cdr`, `.tdraw` files).
 
 ## Golden rules
@@ -15,10 +15,10 @@ The product name is **TraceDraw** in prose; machine names are `tracedraw`
    `panic!`, `todo!` or raw indexing on data that came from a file or the
    user. Return `Result`, log a warning, skip the object. Opening any file
    must always yield a document.
-3. **Clean-room and independence.** TraceDraw stands on its own: never
+3. **Clean-room and independence.** CD Draw stands on its own: never
    name other graphics editors or their makers anywhere in the repo (code,
    comments, docs, commit messages, packaging, file names), and never
-   describe TraceDraw or a feature as modelled on another program.
+   describe CD Draw or a feature as modelled on another program.
    Features carry our own names: generic terms (Fill, Blend, Contour,
    Envelope, Weld) are fine, distinctive product or feature names of other
    software are never used. File formats go by their usual names (`.cdr`,

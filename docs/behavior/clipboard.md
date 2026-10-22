@@ -2,9 +2,9 @@
 
 ## Copy (Ctrl+C) and Cut (Ctrl+X)
 
-The selection goes to TraceDraw's own clipboard, which keeps everything
+The selection goes to CD Draw's own clipboard, which keeps everything
 (styles, effects, links to object styles), and as SVG text to the system
-clipboard, so other programs can paste it. Right after the copy TraceDraw
+clipboard, so other programs can paste it. Right after the copy CD Draw
 notes what the system clipboard holds (a fingerprint of its text, image
 and file list). Ctrl+C with nothing selected changes nothing.
 

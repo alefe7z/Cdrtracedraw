@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/icon/tracedraw-256.png" alt="TraceDraw" width="120">
+  <img src="assets/icon/tracedraw-256.png" alt="CD Draw" width="120">
 </p>
 
-<h1 align="center">TraceDraw</h1>
+<h1 align="center">CD Draw</h1>
 
 <p align="center">
   <b>Vector illustration, page layout and print; an open-source, clean-room vector editor rebuilt from scratch in pure Rust.</b><br>
@@ -19,20 +19,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/igtoth/tracedraw/releases"><b>Download</b></a> &middot;
-  <a href="https://igtoth.github.io/tracedraw/">Open it in the browser</a> &middot;
+  <a href="https://github.com/alefe7z/Cdrtracedraw/releases"><b>Download</b></a> &middot;
+  <a href="https://alefe7z.github.io/Cdrtracedraw/">Open it in the browser</a> &middot;
   <a href="docs/features.md">Feature status</a> &middot;
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 <p align="center">
-  <sub>Alpha: expect bugs. A <code>.cdr</code> file that does not open right? <a href="https://github.com/igtoth/tracedraw/issues/new?template=cdr_file.yml">Send it in an issue</a>: sample files are what improves the reader most.</sub>
+  <sub>Alpha: expect bugs. A <code>.cdr</code> file that does not open right? <a href="https://github.com/alefe7z/Cdrtracedraw/issues/new?template=cdr_file.yml">Send it in an issue</a>: sample files are what improves the reader most.</sub>
 </p>
 
 <br>
 
 <p align="center">
-  <img src="docs/images/tracedraw-hero.jpg" alt="TraceDraw with an illustrated poster of a lake at dusk: the title is selected, the property bar shows its font, size and alignment, and the Objects panel lists the five layers and their named objects" width="100%">
+  <img src="docs/images/tracedraw-hero.jpg" alt="CD Draw with an illustrated poster of a lake at dusk: the title is selected, the property bar shows its font, size and alignment, and the Objects panel lists the five layers and their named objects" width="100%">
   <br>
   <sub>A poster drawn on five layers, its title selected, every object named in the Objects panel.</sub>
 </p>
@@ -75,7 +75,7 @@
 
 ## Features
 
-Every screenshot is TraceDraw itself, captured headless by
+Every screenshot is CD Draw itself, captured headless by
 `scripts/visual/readme_shots.sh` from drawings made from scratch by
 `apps/tracedraw-cli/examples/showcase.rs`. Some are in the Dark and
 Medium Dark themes (Options &rsaquo; Customization &rsaquo; Appearance,
@@ -149,7 +149,7 @@ or the moon button at the right of the status bar).
       Print goes through a PDF; Print Merge fills a design from a CSV file.
     </td>
     <td width="50%" valign="top">
-      <img src="docs/images/tracedraw-languages.jpg" alt="The page of type in TraceDraw with the interface in Japanese: menus, property bar, Text panel and status bar" width="100%">
+      <img src="docs/images/tracedraw-languages.jpg" alt="The page of type in CD Draw with the interface in Japanese: menus, property bar, Text panel and status bar" width="100%">
       <br>
       <sub>The same page with the interface in Japanese.</sub>
       <h3>In your language</h3>
@@ -169,7 +169,7 @@ or the moon button at the right of the status bar).
       <br>
       <sub>The AI Generate docker, in the dark theme.</sub>
       <h3>AI with your own keys</h3>
-      Create pictures from a prompt with aspect ratio, style and palette presets, remix a selected picture, create vectors (a generated illustration traced into curves), remove a picture's background, and draw shapes from a request in words. TraceDraw has no AI of its own and no account: Tools &rsaquo; Options &rsaquo; AI connects the services you choose (Google Gemini, OpenAI or compatible APIs, local servers included), and nothing is sent until you ask.
+      Create pictures from a prompt with aspect ratio, style and palette presets, remix a selected picture, create vectors (a generated illustration traced into curves), remove a picture's background, and draw shapes from a request in words. CD Draw has no AI of its own and no account: Tools &rsaquo; Options &rsaquo; AI connects the services you choose (Google Gemini, OpenAI or compatible APIs, local servers included), and nothing is sent until you ask.
     </td>
   </tr>
   <tr>
@@ -231,7 +231,7 @@ or the moon button at the right of the status bar).
 
 ## .cdr files, read and written independently
 
-TraceDraw's `.cdr` support lives in its own crate (`crates/cdr`), written
+CD Draw's `.cdr` support lives in its own crate (`crates/cdr`), written
 from public format notes and from files we own, never from decompiled
 programs or other implementations. `CLEANROOM.md` records where each piece
 of format knowledge comes from and when; `docs/cdr-format.md` records what
@@ -250,7 +250,7 @@ is confirmed and what is still assumed.
   document palette; what the reader cannot map yet is counted and
   reported, never silently dropped.
 - **Writing back, in the version you need:** drawings save as `.cdr` in
-  any version from 7 to 27, as well as in TraceDraw's own JSON format. A
+  any version from 7 to 27, as well as in CD Draw's own JSON format. A
   drawing opened from a `.cdr` saves in its own version unless you pick
   another. Save As offers versions 14 to 27, the ones checked to open in
   the program that wrote the samples; versions 7 to 13 are experimental
@@ -269,7 +269,7 @@ and redo. The window, the command line, the JavaScript object model and the
 MCP server all go through it, so anything a click can do, a script can do.
 
 ```sh
-# Convert between any format TraceDraw opens and any it writes
+# Convert between any format CD Draw opens and any it writes
 tracedraw-cli convert poster.cdr poster.pdf
 TRACEDRAW_DPI=300 tracedraw-cli convert poster.tdraw poster.png
 TRACEDRAW_PAGE=2 tracedraw-cli convert brochure.cdr page2.png
@@ -315,7 +315,7 @@ browser. See [`docs/behavior/vba.md`](docs/behavior/vba.md).
 what to draw or change, and an AI service you set up with your own key
 (the Messages API, any chat completions service, or a model server on
 your own computer) writes the script, which runs as one undo step without
-access to your files. TraceDraw has no AI service or account of its own;
+access to your files. CD Draw has no AI service or account of its own;
 see [`docs/behavior/ai-drawing.md`](docs/behavior/ai-drawing.md).
 
 ## Under the hood
@@ -337,7 +337,7 @@ see [`docs/behavior/ai-drawing.md`](docs/behavior/ai-drawing.md).
 ## Get started
 
 ```sh
-git clone https://github.com/igtoth/tracedraw
+git clone https://github.com/alefe7z/Cdrtracedraw
 cd tracedraw
 cargo run --release -p tracedraw                  # the editor
 cargo run --release -p tracedraw -- drawing.cdr   # open a file
@@ -352,13 +352,13 @@ New contributors and AI agents: start with [`AGENTS.md`](AGENTS.md), then
 
 > [!IMPORTANT]
 > **Status: alpha.** Most of what a vector editor is expected to do is in
-> place and covered by tests, but TraceDraw is young and has barely met
+> place and covered by tests, but CD Draw is young and has barely met
 > real users: expect bugs and rough edges,
 > some formats and effects that are close in look rather than identical,
 > and gaps listed in [`docs/blueprint-gaps.md`](docs/blueprint-gaps.md).
 > [`docs/features.md`](docs/features.md) is the honest, row-by-row picture.
 > Issues with a sample file and a screenshot are the most helpful; there
-> are [templates](https://github.com/igtoth/tracedraw/issues/new/choose)
+> are [templates](https://github.com/alefe7z/Cdrtracedraw/issues/new/choose)
 > for bugs, `.cdr` files and feature requests.
 
 ## Help wanted
@@ -366,19 +366,19 @@ New contributors and AI agents: start with [`AGENTS.md`](AGENTS.md), then
 Anyone who wants to help is welcome, with or without writing code:
 
 - **Try it on your own files.** A `.cdr` that does not open right, sent
-  in [an issue](https://github.com/igtoth/tracedraw/issues/new?template=cdr_file.yml),
+  in [an issue](https://github.com/alefe7z/Cdrtracedraw/issues/new?template=cdr_file.yml),
   improves the reader more than anything else (only files you may share).
   Files of versions 4 and 6, and old files that use perspective,
   pattern or PostScript fills, with a picture of how they look, are the
   most wanted: those are the parts still read from few samples.
 - **Open our test files in your copy of the reference program.** The
-  [`interop` branch](https://github.com/igtoth/tracedraw/tree/interop/bundles)
-  holds small `.cdr` files saved by TraceDraw in versions 7 to 15; telling
-  us which ones open (and which do not) is what lets TraceDraw save
+  [`interop` branch](https://github.com/alefe7z/Cdrtracedraw/tree/interop/bundles)
+  holds small `.cdr` files saved by CD Draw in versions 7 to 15; telling
+  us which ones open (and which do not) is what lets CD Draw save
   versions 7 to 13 again. Releases from 2021 on open version 15 and newer only,
   so versions 7 to 14 need CorelDRAW 2020 or older.
 - **Report bugs** with the steps and a screenshot
-  ([bug report](https://github.com/igtoth/tracedraw/issues/new?template=bug_report.yml)).
+  ([bug report](https://github.com/alefe7z/Cdrtracedraw/issues/new?template=bug_report.yml)).
 - **Review a translation** in your language (`apps/tracedraw/lang/`):
   native speakers catch what no test does.
 - **Pick a row** of [`docs/features.md`](docs/features.md) that is not
@@ -392,7 +392,7 @@ sign-off line and how pull requests are checked.
 ## Downloads
 
 Each version gets a release with installers for every platform: take the
-[latest release](https://github.com/igtoth/tracedraw/releases/latest)
+[latest release](https://github.com/alefe7z/Cdrtracedraw/releases/latest)
 (what changed is in [`CHANGELOG.md`](CHANGELOG.md)). Every push to `main`
 also refreshes the **Nightly build** pre-release. `<version>` in the file
 names is the version number.
@@ -402,7 +402,7 @@ names is the version number.
 | Windows (x64) | `tracedraw-<version>-windows-x86_64-setup.exe` (installer), `tracedraw-<version>-windows-x86_64-portable.zip` (keeps its settings in the `tracedraw-settings` folder beside the program; not signed yet: if SmartScreen warns, More info > Run anyway) |
 | macOS (Apple silicon, Intel) | `tracedraw-<version>-macos-arm64.dmg`, `tracedraw-<version>-macos-x86_64.dmg` (unsigned for now: right-click, Open) |
 | Linux (x86_64) | `.deb`, `tracedraw-<version>-linux-x86_64.AppImage`, `tracedraw-<version>-linux-x86_64.tar.gz` |
-| Web | no download: [open it in the browser](https://igtoth.github.io/tracedraw/), nothing to install |
+| Web | no download: [open it in the browser](https://alefe7z.github.io/Cdrtracedraw/), nothing to install |
 
 Each download includes `tracedraw-cli` next to the editor. Packaging sources
 are in [`packaging/`](packaging/); the browser build is described in
@@ -425,7 +425,7 @@ is described in [`docs/code-signing.md`](docs/code-signing.md).
 
 Privacy policy: this program will not transfer any information to other
 networked systems unless specifically requested by the user or the person
-installing or operating it. TraceDraw opens web pages (help, the project's
+installing or operating it. CD Draw opens web pages (help, the project's
 pages) in your browser only when you choose to. The full policy is in
 [`PRIVACY.md`](PRIVACY.md).
 
@@ -433,7 +433,7 @@ pages) in your browser only when you choose to. The full policy is in
 
 | Document | What it covers |
 |---|---|
-| [User Help](https://igtoth.github.io/tracedraw/help/en/index.html) | the manual, with screenshots; every "?" button and F1 in the app open its page in the interface language |
+| [User Help](https://alefe7z.github.io/Cdrtracedraw/help/en/index.html) | the manual, with screenshots; every "?" button and F1 in the app open its page in the interface language |
 | [`docs/features.md`](docs/features.md) | every capability and its status |
 | [`docs/behavior/`](docs/behavior/) | defaults, shortcuts and formulas, tool by tool |
 | [`docs/architecture.md`](docs/architecture.md) | crates, data flow, units, rendering, text |
@@ -450,7 +450,7 @@ pages) in your browser only when you choose to. The full policy is in
 
 ## License and credits
 
-TraceDraw is dual-licensed under [MIT](LICENSE-MIT) or
+CD Draw is dual-licensed under [MIT](LICENSE-MIT) or
 [Apache-2.0](LICENSE-APACHE), at your option.
 Copyright &copy; 2026 Ighor Toth and the TraceDraw contributors.
 
@@ -461,12 +461,12 @@ the About box says so too.
 Bundled fonts, icons and other assets keep their own open licenses; each
 is listed with its author, source and license in
 [ATTRIBUTION.md](ATTRIBUTION.md). Every drawing in the screenshots was made
-for TraceDraw.
+for CD Draw.
 
-<sub>TraceDraw is an independent open-source project, not affiliated with,
+<sub>CD Draw is an independent open-source project, not affiliated with,
 sponsored by or endorsed by any other software vendor. Trademarks and
 product names belong to their owners; file format names such as
 <code>.cdr</code>, <code>.ai</code>, <code>.psd</code> and <code>.pdf</code>
-are used only to describe the files TraceDraw reads and writes. The
+are used only to describe the files CD Draw reads and writes. The
 software is provided "as is", without warranty of any kind, as the
 licenses state.</sub>

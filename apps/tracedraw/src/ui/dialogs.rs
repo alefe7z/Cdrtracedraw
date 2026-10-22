@@ -82,7 +82,7 @@ impl Default for ExportState {
 }
 
 /// Where a `.cdr` file that does not open right is sent in.
-pub const CDR_ISSUE: &str = "https://github.com/igtoth/tracedraw/issues/new?template=cdr_file.yml";
+pub const CDR_ISSUE: &str = "https://github.com/alefe7z/Cdrtracedraw/issues/new?template=cdr_file.yml";
 
 pub const PDF_STANDARDS: [&str; 4] = ["PDF 1.4", "PDF/X-1a:2003", "PDF/X-3:2003", "PDF/X-4"];
 
@@ -613,13 +613,13 @@ pub enum Dialog {
         name: String,
     },
     DocumentProperties(Box<crate::ui::doc_properties::DocPropsState>),
-    /// Save on a drawing opened from a `.cdr` version TraceDraw does not
+    /// Save on a drawing opened from a `.cdr` version CD Draw does not
     /// save in: choose another version first.
     OldCdrVersion {
         version: u16,
     },
     ConfirmClose,
-    /// Reset every preference to the defaults? (F8 while TraceDraw
+    /// Reset every preference to the defaults? (F8 while CD Draw
     /// starts, Options > Global.)
     ConfirmResetSettings,
     /// At start-up: drawings a session that ended without closing left in

@@ -3,7 +3,7 @@
 //! Favorites and collections) and filters on the left, and on the right a
 //! sample text, a search field and every face of the chosen library drawn
 //! in itself, grouped by family, with how it is built and whether it is
-//! installed. Fonts of added folders can be installed for TraceDraw and
+//! installed. Fonts of added folders can be installed for CD Draw and
 //! uninstalled; folders, installed files, Favorites and collections are
 //! kept in the settings. See docs/behavior/font-manager.md.
 
@@ -41,7 +41,7 @@ const SECTION_BLUE: Color32 = Color32::from_rgb(0x1E, 0x9B, 0xE0);
 pub struct FontManagerPrefs {
     /// Folders added to the libraries.
     pub folders: Vec<PathBuf>,
-    /// Font files installed for TraceDraw (loaded at every start).
+    /// Font files installed for CD Draw (loaded at every start).
     pub installed: Vec<PathBuf>,
     /// Keys ([`FaceRecord::key`]) of the favourite faces.
     pub favorites: Vec<String>,
@@ -72,7 +72,7 @@ impl FontManagerPrefs {
     }
 }
 
-/// Load the font files installed for TraceDraw (at start).
+/// Load the font files installed for CD Draw (at start).
 pub fn install_saved(prefs: &FontManagerPrefs) -> Vec<String> {
     if prefs.installed.is_empty() {
         return Vec::new();
@@ -687,7 +687,7 @@ fn run(app: &mut App, st: &mut FontManagerState, a: Action) {
                 "font_manager.installed_n",
                 &[("n", &paths.len().to_string())],
             ));
-            log::info!("installed for TraceDraw: {}", added.join(", "));
+            log::info!("installed for CD Draw: {}", added.join(", "));
             app.font_families = fonts.available_families();
             app.save_settings();
         }
@@ -886,7 +886,7 @@ fn menu_row(
     });
 }
 
-/// A face installed for TraceDraw (not one of the system's).
+/// A face installed for CD Draw (not one of the system's).
 fn uninstallable(r: &FaceRecord, prefs: &FontManagerPrefs) -> bool {
     r.installed && !r.system && r.path.as_ref().is_some_and(|p| prefs.installed.contains(p))
 }

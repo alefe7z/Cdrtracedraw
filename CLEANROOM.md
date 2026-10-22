@@ -1,6 +1,6 @@
 # Clean-room record
 
-This file records where TraceDraw's knowledge of each file format comes
+This file records where CD Draw's knowledge of each file format comes
 from, so that anyone can check that the format support was written
 independently. The details of each layout, and whether a file confirmed
 it, live in `docs/cdr-format.md` and in the pages of `docs/behavior/`.
@@ -24,7 +24,7 @@ it, live in `docs/cdr-format.md` and in the pages of `docs/behavior/`.
 
 | Format | Sources |
 |---|---|
-| `.cdr` | Publicly available, unofficial format notes describing the RIFF chunks, the ZIP containers and the coordinate units; inspection of files owned by the author with `tracedraw-cli inspect` and a hex viewer; round trips of files TraceDraw writes, read back by TraceDraw and by another open-source reader. The libcdr documentation was consulted only to confirm layouts; none of its code (MPL 2.0) was ported. Embedded fonts: the W3C Member Submission "Embedded OpenType (EOT) File Format" (2008). |
+| `.cdr` | Publicly available, unofficial format notes describing the RIFF chunks, the ZIP containers and the coordinate units; inspection of files owned by the author with `tracedraw-cli inspect` and a hex viewer; round trips of files CD Draw writes, read back by CD Draw and by another open-source reader. The libcdr documentation was consulted only to confirm layouts; none of its code (MPL 2.0) was ported. Embedded fonts: the W3C Member Submission "Embedded OpenType (EOT) File Format" (2008). |
 | SVG | The W3C SVG 1.1 and SVG 2 specifications. |
 | PDF, AI (PDF-compatible) | ISO 32000 (PDF 1.7 and 2.0) and the PDF/X standards. Password protection follows ISO 32000-2 section 7.6 (standard security handler, revisions 2 to 6); RC4 follows its published description and test vectors. Other PDF libraries and tools were used only to check files: as test oracles that open, protect or check them, never as code to port. |
 | EPS, PostScript | The public PostScript language reference and the EPSF specification. |

@@ -1,8 +1,8 @@
 # About box and start-up
 
-## About TraceDraw
+## About CD Draw
 
-Help > About TraceDraw opens the About box from the Welcome Screen as well
+Help > About CD Draw opens the About box from the Welcome Screen as well
 as from a drawing. It is a chrome dialog (white title bar with the close
 button) 480 points wide:
 
@@ -19,7 +19,7 @@ button) 480 points wide:
 
 ## Splash screen
 
-While TraceDraw starts, a borderless 640 x 380 point window centred on
+While CD Draw starts, a borderless 640 x 380 point window centred on
 the screen shows the same artwork as the About banner at a larger size
 (two selected nodes on the main curve), the 96 px icon, the name at
 46 px with the tagline, and a darker strip along the bottom with the
@@ -57,7 +57,7 @@ the version on the right).
 ## Back to the defaults
 
 Pressing F8 while the splash screen shows asks, once the editor is up,
-whether to reset every preference to how TraceDraw comes (Options >
+whether to reset every preference to how CD Draw comes (Options >
 Global > Reset all settings... asks the same). Reset keeps the recent
 drawings, the last folder and the window's size; Cancel changes
 nothing. `tracedraw --reset-settings` resets without asking (scripts,

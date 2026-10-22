@@ -1,6 +1,6 @@
 # Options dialogs
 
-Tools > Options is a submenu: TraceDraw
+Tools > Options is a submenu: CD Draw
 (Ctrl+J), Customization, Tools, Global and Workspaces each open their own
 dialog. Layout > Document Options opens the document's dialog (also a
 double-click on a ruler, the page border or its shadow).
@@ -21,7 +21,7 @@ double-click on a ruler, the page border or its shadow).
   the close button and Esc put back everything the dialog changed,
   including document settings (their commands are undone).
 
-## TraceDraw Options
+## CD Draw Options
 
 | Page | Settings (defaults) |
 |---|---|
@@ -33,7 +33,7 @@ double-click on a ruler, the page border or its shadow).
 | Snapping | Snap to objects, page, guidelines, grid, baseline grid, pixels; snapping radius (10 px); show snap location marks and the screen tip (on); the modes, each with its mark (all on), Select All, Deselect All |
 | Alignment Guides | On or off; guides for the selection as one or each object; edges, centres, the page, equal spacing, equal sizes; margins with offset and inset; colour and line style; Reset (see `live-guides.md`) |
 | Dynamic Guides | On or off; angles (check boxes every 15 degrees, others added by value); distance and angle tip; tick marks, their spacing, snap to ticks; colour and line style; Reset (see `live-guides.md`) |
-| Save | Back up original file before saving (on): `backup_of_<name>` next to the file or in a chosen folder; Auto-backup every 20 minutes (on): each open drawing with unsaved changes as `AutoBackup_of_<name>.tdraw` in `TraceDraw` under the temporary folder or a chosen folder; a session that ended without closing offers them at the next start (see `recovery.md`) |
+| Save | Back up original file before saving (on): `backup_of_<name>` next to the file or in a chosen folder; Auto-backup every 20 minutes (on): each open drawing with unsaved changes as `AutoBackup_of_<name>.tdraw` in `CD Draw` under the temporary folder or a chosen folder; a session that ended without closing offers them at the next start (see `recovery.md`) |
 | Text | Keyboard text increment (1 pt: Ctrl+8 and Ctrl+2 grow and shrink the selected text); default font and size; hyphenation; non-printing characters |
 
 ## Customization
@@ -65,7 +65,7 @@ Spiral (revolutions, symmetrical or logarithmic), Graph Paper and Table
 ## Global and Workspaces
 
 Global > General: user interface language; check for updates at start (on, desktop, see `updates.md`); Reset all settings... (asks
-first, then puts every preference back to how TraceDraw comes, keeping
+first, then puts every preference back to how CD Draw comes, keeping
 the recent drawings, the last folder and the window's size; drawings are
 not touched). Global > File Locations: where the preferences and
 auto-backups are kept. Workspaces: the workspace in use, and exporting
@@ -104,7 +104,7 @@ the import's undo step.
 Saving .cdr files: the Version new drawings are saved in (`cdr_version`,
 27 by default, 14 to 27; a value out of range from a file is brought
 into it). Saving a `.cdr` file sets it to the version chosen there; a
-drawing opened from a `.cdr` file keeps its own when TraceDraw saves
+drawing opened from a `.cdr` file keeps its own when CD Draw saves
 that version (`files.md`).
 
 ### Bitmap Tracing
@@ -133,7 +133,7 @@ message never replaces another dialog that is open.
 ### Pages with no equivalent
 
 Pen settings (pressure curves for tablets), Tablet Mode, VBA and
-plug-ins have no page: TraceDraw reads no pen pressure, has its own
+plug-ins have no page: CD Draw reads no pen pressure, has its own
 workspaces instead of a tablet mode, scripts in JavaScript (Scripts
 panel) and hosts no plug-ins.
 

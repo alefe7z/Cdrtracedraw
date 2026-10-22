@@ -1,4 +1,4 @@
-# Build the MSIX package of TraceDraw for the Microsoft Store.
+# Build the MSIX package of CD Draw for the Microsoft Store.
 #
 # The Store signs the package itself, so this package is not signed. The
 # identity comes from the app's Product identity page in Partner Center,

@@ -831,7 +831,7 @@ pub struct App {
     /// it. `None`: the version of Options > Global > File Formats.
     pub cdr_version: Option<u16>,
     /// The `.cdr` version the active drawing was opened from, when it is
-    /// one TraceDraw does not save in (older than the checked versions):
+    /// one CD Draw does not save in (older than the checked versions):
     /// Save asks for a version first.
     pub cdr_unsaved_version: Option<u16>,
     /// The `.tdraw` format version the active drawing is saved in: the
@@ -2265,7 +2265,7 @@ impl App {
     }
 
     /// Where auto-backups go unless Options > Save names a folder: a
-    /// `TraceDraw` folder in the temporary folder (none in a browser).
+    /// `CD Draw` folder in the temporary folder (none in a browser).
     pub fn auto_backup_dir_default() -> Option<PathBuf> {
         if crate::files::WEB {
             return None;
@@ -2352,7 +2352,7 @@ impl App {
     /// Apply persisted settings (language, workspace, snapping, units).
     pub fn load_settings(&mut self) {
         self.apply_settings(crate::settings::Settings::load());
-        // Fonts installed for TraceDraw in the Font Manager.
+        // Fonts installed for CD Draw in the Font Manager.
         if !crate::ui::font_manager::install_saved(&self.settings.font_manager).is_empty() {
             self.font_families = tracedraw_text::fonts().available_families();
         }
@@ -2535,7 +2535,7 @@ impl App {
         }
     }
 
-    /// Every preference back to how TraceDraw comes (history kept: see
+    /// Every preference back to how CD Draw comes (history kept: see
     /// `Settings::reset_keeping_history`), applied and saved: shortcuts,
     /// bars, toolbox, palette options, interface size and the rest.
     /// Drawings are not touched.
@@ -2781,7 +2781,7 @@ impl App {
 
     /// Save the preferences when they changed: looked at every frame, so a
     /// change in Options, the menus, the bars or the dockers lasts even
-    /// when TraceDraw does not close normally (and in the browser, where
+    /// when CD Draw does not close normally (and in the browser, where
     /// closing the tab saves nothing); written at most once a second (a
     /// window being resized changes them every frame), with a frame asked
     /// for when a write has to wait. Not while Options is open: its Cancel
@@ -4516,7 +4516,7 @@ impl App {
             .add_filter("Photoshop (*.psd, *.psb)", &["psd", "psb"])
             .add_filter(crate::i18n::tr("file.cdr_files"), &["cdr", "cdt", "cdrt"])
             .add_filter("CMX (*.cmx)", &["cmx"])
-            .add_filter("TraceDraw (*.tdraw)", &["tdraw"])
+            .add_filter("CD Draw (*.tdraw)", &["tdraw"])
             .pick_file(self, |app, p| app.open_path(p));
     }
 
@@ -4875,7 +4875,7 @@ impl App {
                             ("skipped", &report.skipped_objects.to_string()),
                         ],
                     );
-                    // An older version than TraceDraw saves: say which
+                    // An older version than CD Draw saves: say which
                     // version Save will write.
                     if let (Some(v), Some(w)) = (report.version, cdr_version) {
                         if v.0 != w {
@@ -4970,7 +4970,7 @@ impl App {
             self.dialog = crate::ui::dialogs::Dialog::GithubSave(self.github_form(true));
             return;
         }
-        // A drawing opened from a `.cdr` version TraceDraw does not save
+        // A drawing opened from a `.cdr` version CD Draw does not save
         // in: say so and let the user choose the version first.
         if !save_as {
             if let Some(version) = self.cdr_unsaved_version {
@@ -4989,7 +4989,7 @@ impl App {
         self.save_as_dialog();
     }
 
-    /// Save As for a drawing opened from a `.cdr` version TraceDraw does
+    /// Save As for a drawing opened from a `.cdr` version CD Draw does
     /// not save in, offering the oldest version it saves.
     pub(crate) fn save_as_from_old_cdr(&mut self) {
         self.save_as_dialog();

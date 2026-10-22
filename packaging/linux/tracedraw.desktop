@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=TraceDraw
+Name=CD Draw
 Comment=Vector illustration editor
 Exec=tracedraw %f
 Icon=tracedraw

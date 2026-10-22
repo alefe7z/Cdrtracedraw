@@ -165,7 +165,7 @@ pub struct Settings {
     /// as `ui_scale`, which is ignored.
     #[serde(default)]
     pub ui_size: f32,
-    /// Options > General: show the splash screen while TraceDraw starts.
+    /// Options > General: show the splash screen while CD Draw starts.
     #[serde(default = "default_true")]
     pub show_splash: bool,
     /// Customization > Appearance: dialogs open in the middle of the
@@ -240,11 +240,11 @@ pub struct Settings {
     /// by default).
     #[serde(default = "default_true")]
     pub treat_all_filled: bool,
-    /// Options > TraceDraw > Edit: how visible the objects outside the
+    /// Options > CD Draw > Edit: how visible the objects outside the
     /// one in focus stay, in percent.
     #[serde(default = "default_focus_visibility")]
     pub focus_visibility: u8,
-    /// Options > TraceDraw > Edit: a double click on a group brings it
+    /// Options > CD Draw > Edit: a double click on a group brings it
     /// into focus.
     #[serde(default = "default_true")]
     pub focus_double_click: bool,
@@ -302,7 +302,7 @@ pub struct Settings {
     /// What a fill or outline chosen with nothing selected changes.
     #[serde(default)]
     pub defaults: crate::defaults::DefaultsPrefs,
-    /// The bars shown when TraceDraw was left; none in preferences written
+    /// The bars shown when CD Draw was left; none in preferences written
     /// before they were kept (the workspace's own bars then show).
     #[serde(default)]
     pub shown_bars: Option<ShownBars>,
@@ -1355,7 +1355,7 @@ pub fn config_dir() -> Option<PathBuf> {
 const WEB_KEY: &str = "tracedraw.settings";
 
 impl Settings {
-    /// The preferences as TraceDraw comes, keeping what is history rather
+    /// The preferences as CD Draw comes, keeping what is history rather
     /// than choice: the recent drawings, the last folder and the window's
     /// size.
     pub fn reset_keeping_history(&self) -> Settings {

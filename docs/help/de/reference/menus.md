@@ -433,17 +433,17 @@ Ihre eigenen Tastenkürzel zeigen; siehe
 
 | Befehl | Siehe |
 |---|---|
-| [[menu.help.help_topics]] | [Willkommen in der TraceDraw-Hilfe](../index.md#in-the-app) |
-| [[menu.help.product_help]] | [Willkommen in der TraceDraw-Hilfe](../index.md#in-the-app) |
-| [[menu.help.welcome_screen]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
-| [[menu.help.video_tutorials]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.help_topics]] | [Willkommen in der CD Draw-Hilfe](../index.md#in-the-app) |
+| [[menu.help.product_help]] | [Willkommen in der CD Draw-Hilfe](../index.md#in-the-app) |
+| [[menu.help.welcome_screen]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.video_tutorials]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |
 | [[menu.help.hints]] | [The Hints panel](../get-started/hints.md) |
-| [[menu.help.quick_start_guide]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
-| [[menu.help.user_guide]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.quick_start_guide]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.user_guide]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |
 | [[menu.help.whats_new]] | [Neuigkeiten](../welcome/whats-new.md) |
 | [[menu.help.highlight_whats_new]] | [Neuigkeiten](../welcome/whats-new.md) |
-| [[menu.help.updates]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
-| [[menu.help.message_settings]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
-| [[menu.help.community]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
-| [[menu.help.support]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
-| [[menu.help.about]] | [Über TraceDraw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.updates]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.message_settings]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.community]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.support]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |
+| [[menu.help.about]] | [Über CD Draw und Updates](../welcome/about-and-updates.md) |

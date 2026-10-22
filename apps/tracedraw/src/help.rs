@@ -14,7 +14,7 @@ use crate::ui::dialogs::{Dialog, OptionsPage};
 
 /// Where the Help is published (`web/help_site.py` builds it into
 /// `site/help/`, the project's page).
-pub const BASE: &str = "https://igtoth.github.io/tracedraw/help/";
+pub const BASE: &str = "https://alefe7z.github.io/Cdrtracedraw/help/";
 
 /// The first page of the Help.
 pub const HOME: &str = "index";
@@ -461,11 +461,11 @@ mod tests {
     fn urls_carry_the_language_and_fall_back_to_english() {
         assert_eq!(
             url_in("color/fills#mesh-fill", "pt-BR"),
-            "https://igtoth.github.io/tracedraw/help/pt-BR/color/fills.html#mesh-fill"
+            "https://alefe7z.github.io/Cdrtracedraw/help/pt-BR/color/fills.html#mesh-fill"
         );
         assert_eq!(
             url_in("printing/print", "xx"),
-            "https://igtoth.github.io/tracedraw/help/en/printing/print.html"
+            "https://alefe7z.github.io/Cdrtracedraw/help/en/printing/print.html"
         );
         assert_eq!(url_in("", "ja"), format!("{BASE}ja/index.html"));
     }

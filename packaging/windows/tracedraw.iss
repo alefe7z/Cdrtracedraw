@@ -1,4 +1,4 @@
-; Inno Setup script for TraceDraw. Built by CI on windows-latest.
+; Inno Setup script for CD Draw. Built by CI on windows-latest.
 ; Variables: /DVersion=x.y.z /DSrcDir=<dir with tracedraw.exe and tracedraw-cli.exe>
 
 #ifndef Version
@@ -10,13 +10,13 @@
 
 [Setup]
 AppId={{7E6E3B5C-4C1E-4F7B-9D7A-2B9D5C1A0E11}
-AppName=TraceDraw
+AppName=CD Draw
 AppVersion={#Version}
 AppPublisher=Ighor Toth
 AppCopyright=Copyright (c) 2026 Ighor Toth and the TraceDraw contributors
-AppPublisherURL=https://github.com/igtoth/tracedraw
+AppPublisherURL=https://github.com/alefe7z/Cdrtracedraw
 DefaultDirName={autopf}\TraceDraw
-DefaultGroupName=TraceDraw
+DefaultGroupName=CD Draw
 UninstallDisplayIcon={app}\tracedraw.exe
 OutputDir=..\..\dist
 OutputBaseFilename=tracedraw-{#Version}-windows-x86_64-setup
@@ -46,23 +46,23 @@ Source: "..\..\LICENSE-MIT"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE-APACHE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\TraceDraw"; Filename: "{app}\tracedraw.exe"
-Name: "{group}\Uninstall TraceDraw"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\TraceDraw"; Filename: "{app}\tracedraw.exe"; Tasks: desktopicon
+Name: "{group}\CD Draw"; Filename: "{app}\tracedraw.exe"
+Name: "{group}\Uninstall CD Draw"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\CD Draw"; Filename: "{app}\tracedraw.exe"; Tasks: desktopicon
 
 [Registry]
 ; .tdraw file association
 Root: HKA; Subkey: "Software\Classes\.tdraw"; ValueType: string; ValueName: ""; ValueData: "TraceDraw.Document"; Flags: uninsdeletevalue
-Root: HKA; Subkey: "Software\Classes\TraceDraw.Document"; ValueType: string; ValueName: ""; ValueData: "TraceDraw Document"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\TraceDraw.Document"; ValueType: string; ValueName: ""; ValueData: "CD Draw Document"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\TraceDraw.Document\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\tracedraw.exe,0"
 Root: HKA; Subkey: "Software\Classes\TraceDraw.Document\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\tracedraw.exe"" ""%1"""
-; "Open with TraceDraw" for .cdr, without stealing the default
+; "Open with CD Draw" for .cdr, without stealing the default
 Root: HKA; Subkey: "Software\Classes\.cdr\OpenWithProgids"; ValueType: string; ValueName: "TraceDraw.Document"; ValueData: ""; Flags: uninsdeletevalue
 ; PATH
 Root: HKA; Subkey: "{code:PathRegKey}"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath('{app}')
 
 [Run]
-Filename: "{app}\tracedraw.exe"; Description: "{cm:LaunchProgram,TraceDraw}"; Flags: nowait postinstall skipifsilent shellexec runasoriginaluser
+Filename: "{app}\tracedraw.exe"; Description: "{cm:LaunchProgram,CD Draw}"; Flags: nowait postinstall skipifsilent shellexec runasoriginaluser
 
 [Code]
 function PathRegKey(Param: string): string;

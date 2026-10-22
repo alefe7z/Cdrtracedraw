@@ -89,7 +89,7 @@ impl Default for PdfPreset {
     }
 }
 
-/// The presets that come with TraceDraw: (i18n key of the name, preset).
+/// The presets that come with CD Draw: (i18n key of the name, preset).
 pub fn builtin_presets() -> Vec<(&'static str, PdfPreset)> {
     let base = PdfPreset::default();
     vec![

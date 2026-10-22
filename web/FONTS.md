@@ -1,6 +1,6 @@
 # Fonts in the browser build
 
-The browser has no system fonts. The web build of TraceDraw brings free
+The browser has no system fonts. The web build of CD Draw brings free
 fonts whose licences allow redistribution with software, in two ways.
 
 ## Bundled into the module

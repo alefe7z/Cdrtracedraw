@@ -44,7 +44,7 @@ struct HostInner {
     /// The drawing's file, when it has one (`Document.FullFileName`).
     file: Option<String>,
     /// The object model of VBA macros (see `scripting/vg.rs`) instead of
-    /// TraceDraw's own JavaScript one.
+    /// CD Draw's own JavaScript one.
     vg: bool,
     /// What the app shows that macros read: see [`vg::AppView`].
     view: vg::AppView,
@@ -88,7 +88,7 @@ const console = { log: print, error: print, warn: print, info: print };
 function MsgBox(t) { print(t); }
 "#;
 
-/// TraceDraw's own JavaScript object model (lengths in millimetres).
+/// CD Draw's own JavaScript object model (lengths in millimetres).
 const PRELUDE: &str = r#"
 class Color {
   constructor(v) { this.v = v || {model:'rgb', r:0, g:0, b:0}; }
@@ -292,7 +292,7 @@ const Application = {
   get ActiveShape() { const s = new Document().Selection; return s.Count ? s.Item(1) : null; },
   get ActiveSelection() { return new Document().Selection; },
   get Version() { return __call('version', {}).version; },
-  get Name() { return 'TraceDraw'; },
+  get Name() { return 'CD Draw'; },
   CreateColor: Color,
 };
 const ActiveDocument = Application.ActiveDocument;

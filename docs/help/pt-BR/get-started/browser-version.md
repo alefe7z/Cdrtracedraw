@@ -1,6 +1,6 @@
 # A versão para navegador
 
-Você pode [usar o TraceDraw no navegador](https://igtoth.github.io/tracedraw/)
+Você pode [usar o CD Draw no navegador](https://alefe7z.github.io/Cdrtracedraw/)
 sem instalar nada. É o mesmo programa da versão para computador, compilado para
 o navegador, então os menus, as ferramentas e os arquivos são os mesmos.
 
@@ -25,7 +25,7 @@ computador.
   o texto precisa delas.
 - **Configurações** ficam guardadas naquele navegador, naquele computador.
 - **Teclas.** Enquanto o desenho tem o foco, os atalhos do programa vão para o
-  TraceDraw e não para o navegador, exceto as teclas da área de transferência,
+  CD Draw e não para o navegador, exceto as teclas da área de transferência,
   recarregar e as ferramentas de desenvolvedor do navegador.
   <kbd>Ctrl+N</kbd>, <kbd>Ctrl+T</kbd> e <kbd>Ctrl+W</kbd> sempre ficam com o
   navegador, então use o menu [[menu.file]] para criar e fechar desenhos.

@@ -6,8 +6,8 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("../../assets/icon/tracedraw.ico");
-        res.set("ProductName", "TraceDraw");
-        res.set("FileDescription", "TraceDraw vector editor");
+        res.set("ProductName", "CD Draw");
+        res.set("FileDescription", "CD Draw vector editor");
         res.set("CompanyName", "Ighor Toth");
         res.set(
             "LegalCopyright",

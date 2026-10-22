@@ -26,7 +26,7 @@ pub enum OptionsSet {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OptionsPage {
-    // Tools > Options > TraceDraw.
+    // Tools > Options > CD Draw.
     #[default]
     General,
     Display,
@@ -123,7 +123,7 @@ impl OptionsSet {
 
     fn title(self) -> String {
         match self {
-            OptionsSet::App => trf("options.title_app", &[("app", "TraceDraw")]),
+            OptionsSet::App => trf("options.title_app", &[("app", "CD Draw")]),
             OptionsSet::Customization => tr("options.title_customization"),
             OptionsSet::Tools => tr("options.title_tools"),
             OptionsSet::Global => tr("options.title_global"),
@@ -594,13 +594,13 @@ fn rgb_button(ui: &mut Ui, rgb: &mut [u8; 3]) -> bool {
     resp.changed()
 }
 
-// ----- TraceDraw options -------------------------------------------------
+// ----- CD Draw options -------------------------------------------------
 
 fn general_page(app: &mut App, ui: &mut Ui) {
     chrome::section(ui, &tr("options.getting_started"));
     ui.indent("gs", |ui| {
         grid("startup").show(ui, |ui| {
-            row_label(ui, &trf("options.on_startup", &[("app", "TraceDraw")]));
+            row_label(ui, &trf("options.on_startup", &[("app", "CD Draw")]));
             let mut s = app.settings.startup;
             if combo(ui, "startup", &mut s, &Startup::ALL, |v| tr(v.key()), 240.0) {
                 app.settings.startup = s;

@@ -14,9 +14,9 @@ use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
 /// The project's latest release, as GitHub describes it.
-pub const LATEST_URL: &str = "https://api.github.com/repos/igtoth/tracedraw/releases/latest";
+pub const LATEST_URL: &str = "https://api.github.com/repos/alefe7z/Cdrtracedraw/releases/latest";
 /// The release list, for when no download fits this system.
-pub const RELEASES_PAGE: &str = "https://github.com/igtoth/tracedraw/releases";
+pub const RELEASES_PAGE: &str = "https://github.com/alefe7z/Cdrtracedraw/releases";
 /// How often the check at start runs, seconds.
 pub const DAILY: u64 = 24 * 60 * 60;
 
@@ -461,7 +461,7 @@ mod tests {
 
     const SAMPLE: &str = r#"{
         "tag_name": "v0.5.0",
-        "html_url": "https://github.com/igtoth/tracedraw/releases/tag/v0.5.0",
+        "html_url": "https://github.com/alefe7z/Cdrtracedraw/releases/tag/v0.5.0",
         "prerelease": false,
         "draft": false,
         "assets": [

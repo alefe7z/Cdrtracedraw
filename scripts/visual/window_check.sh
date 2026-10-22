@@ -1,6 +1,6 @@
 #!/bin/bash
 # usage: window_check.sh <tracedraw binary>
-# Starts TraceDraw under Xvfb with a window manager (openbox), once with
+# Starts CD Draw under Xvfb with a window manager (openbox), once with
 # the splash screen and once without, and checks with xprop that the main
 # window can be maximized and resized and has no maximum size. A window
 # that kept the splash screen's size hints fails here (#1).
@@ -38,7 +38,7 @@ check() {
     for _ in $(seq 1 60); do
         sleep 0.5
         out=$(props) || continue
-        if echo "$out" | grep -q 'WM_NAME.*TraceDraw - '; then
+        if echo "$out" | grep -q 'WM_NAME.*CD Draw - '; then
             sleep 1
             out=$(props)
             break

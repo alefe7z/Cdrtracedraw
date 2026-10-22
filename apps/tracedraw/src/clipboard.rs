@@ -29,7 +29,7 @@ impl ClipboardContent {
     }
 
     /// A summary of the content, to tell whether the clipboard changed
-    /// since TraceDraw copied.
+    /// since CD Draw copied.
     pub fn fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();

@@ -8,7 +8,7 @@
 // No console window in release builds on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! TraceDraw desktop app: a thin egui shell over the engine.
+//! CD Draw desktop app: a thin egui shell over the engine.
 
 mod ai;
 mod ai_image;
@@ -183,7 +183,7 @@ fn main() -> eframe::Result<()> {
         .find(|a| !a.starts_with("--"))
         .map(std::path::PathBuf::from);
     let mut settings = settings::Settings::load();
-    // `--reset-settings`: every preference back to how TraceDraw comes
+    // `--reset-settings`: every preference back to how CD Draw comes
     // (the recent drawings and the window's size are kept).
     if args.iter().any(|a| a == "--reset-settings") {
         settings = settings.reset_keeping_history();
@@ -204,13 +204,13 @@ fn main() -> eframe::Result<()> {
             .with_inner_size(splash::SIZE)
             .with_decorations(false)
             .with_resizable(true)
-            .with_title("TraceDraw")
+            .with_title("CD Draw")
     } else {
         egui::ViewportBuilder::default()
             .with_inner_size(splash::main_window_size(settings.window_size, None))
             .with_min_inner_size(splash::MIN_SIZE)
             .with_maximized(settings.window_maximized && !plain)
-            .with_title("TraceDraw")
+            .with_title("CD Draw")
     };
     let options = eframe::NativeOptions {
         viewport,
@@ -218,7 +218,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "TraceDraw",
+        "CD Draw",
         options,
         Box::new(move |cc| {
             Ok(Box::new(if splash {
@@ -239,7 +239,7 @@ fn main() {
 
 struct Shell {
     app: Option<app::App>,
-    /// The splash screen while TraceDraw starts (see splash.rs).
+    /// The splash screen while CD Draw starts (see splash.rs).
     #[cfg(not(target_arch = "wasm32"))]
     splash: Option<splash::Splash>,
     /// The file to open once the splash is done.
@@ -282,7 +282,7 @@ impl eframe::App for Shell {
             self.splash = None;
             let mut app = app::App::new(ui.ctx(), self.open.take());
             splash::open_main_window(ui.ctx(), &app.settings);
-            // F8 held while TraceDraw started: ask before resetting.
+            // F8 held while CD Draw started: ask before resetting.
             if reset {
                 app.dialog = ui::dialogs::Dialog::ConfirmResetSettings;
             }

@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>TraceDraw</string>
-  <key>CFBundleDisplayName</key><string>TraceDraw</string>
+  <key>CFBundleName</key><string>CD Draw</string>
+  <key>CFBundleDisplayName</key><string>CD Draw</string>
   <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Ighor Toth and the TraceDraw contributors</string>
   <key>CFBundleIdentifier</key><string>dev.tracedraw.app</string>
   <key>CFBundleVersion</key><string>__VERSION__</string>
@@ -16,7 +16,7 @@
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
-      <key>CFBundleTypeName</key><string>TraceDraw Document</string>
+      <key>CFBundleTypeName</key><string>CD Draw Document</string>
       <key>CFBundleTypeExtensions</key><array><string>tdraw</string></array>
       <key>CFBundleTypeRole</key><string>Editor</string>
     </dict>

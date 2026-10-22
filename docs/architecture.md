@@ -1,6 +1,6 @@
 # Architecture
 
-TraceDraw is a Cargo workspace. The dependency direction is strict and
+CD Draw is a Cargo workspace. The dependency direction is strict and
 reviewed: nothing below `apps/` knows about egui, and `core` knows about
 nothing else in the workspace.
 

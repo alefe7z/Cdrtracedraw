@@ -1694,7 +1694,7 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
     };
     let date = pdf_date();
     let mut info = format!(
-        "<< /Title {} /Creator (TraceDraw) /Producer (TraceDraw) /CreationDate {} /ModDate {}",
+        "<< /Title {} /Creator (CD Draw) /Producer (CD Draw) /CreationDate {} /ModDate {}",
         pdf_text_any(&title),
         pdf_text(&date),
         pdf_text(&date)
@@ -1888,7 +1888,7 @@ fn xmp_packet(text: &XmpText, std_: PdfStandard, date: &str) -> String {
     x.push_str("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
     let _ = write!(
         x,
-        "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\" xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\">\n<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n<xmp:CreatorTool>TraceDraw</xmp:CreatorTool>\n<xmp:CreateDate>{iso}</xmp:CreateDate>\n<xmp:ModifyDate>{iso}</xmp:ModifyDate>\n<pdf:Producer>TraceDraw</pdf:Producer>\n<pdf:Trapped>False</pdf:Trapped>\n",
+        "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\" xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\" xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\">\n<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></dc:title>\n<xmp:CreatorTool>CD Draw</xmp:CreatorTool>\n<xmp:CreateDate>{iso}</xmp:CreateDate>\n<xmp:ModifyDate>{iso}</xmp:ModifyDate>\n<pdf:Producer>CD Draw</pdf:Producer>\n<pdf:Trapped>False</pdf:Trapped>\n",
         esc(text.title)
     );
     // The same author, subject and keywords as the document information.

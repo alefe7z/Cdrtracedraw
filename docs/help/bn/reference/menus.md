@@ -431,17 +431,17 @@
 
 | কমান্ড | দেখুন |
 |---|---|
-| [[menu.help.help_topics]] | [TraceDraw সহায়তায় স্বাগতম](../index.md#in-the-app) |
-| [[menu.help.product_help]] | [TraceDraw সহায়তায় স্বাগতম](../index.md#in-the-app) |
-| [[menu.help.welcome_screen]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
-| [[menu.help.video_tutorials]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.help_topics]] | [CD Draw সহায়তায় স্বাগতম](../index.md#in-the-app) |
+| [[menu.help.product_help]] | [CD Draw সহায়তায় স্বাগতম](../index.md#in-the-app) |
+| [[menu.help.welcome_screen]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.video_tutorials]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
 | [[menu.help.hints]] | [The Hints panel](../get-started/hints.md) |
-| [[menu.help.quick_start_guide]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
-| [[menu.help.user_guide]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.quick_start_guide]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.user_guide]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
 | [[menu.help.whats_new]] | [নতুন কী](../welcome/whats-new.md) |
 | [[menu.help.highlight_whats_new]] | [নতুন কী](../welcome/whats-new.md) |
-| [[menu.help.updates]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
-| [[menu.help.message_settings]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
-| [[menu.help.community]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
-| [[menu.help.support]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
-| [[menu.help.about]] | [TraceDraw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.updates]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.message_settings]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.community]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.support]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |
+| [[menu.help.about]] | [CD Draw সম্পর্কে ও আপডেট](../welcome/about-and-updates.md) |

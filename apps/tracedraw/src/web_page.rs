@@ -58,7 +58,7 @@ mod tests {
 
     /// The loading page shows the splash screen of the desktop app (name,
     /// tagline, status, progress bar, copyright and version), says what
-    /// TraceDraw is, links to the downloads and the code, and has the
+    /// CD Draw is, links to the downloads and the code, and has the
     /// elements the module and its loader use.
     #[test]
     fn the_loading_page_shows_the_splash_and_says_what_it_is() {
@@ -80,9 +80,9 @@ mod tests {
             "Written in Rust",
             "MIT or Apache-2.0",
             // Where to go when loading stalls.
-            "https://github.com/igtoth/tracedraw/releases/latest",
-            "https://github.com/igtoth/tracedraw\"",
-            "https://github.com/igtoth/tracedraw/issues",
+            "https://github.com/alefe7z/Cdrtracedraw/releases/latest",
+            "https://github.com/alefe7z/Cdrtracedraw\"",
+            "https://github.com/alefe7z/Cdrtracedraw/issues",
             // Which screens it is for.
             "desktop browser",
             "Window &gt; Workspace &gt; Touch",

@@ -1,7 +1,7 @@
 # Saving files
 
 File > Save (Ctrl+S) writes the drawing back to its file. A drawing that
-has none (new, or opened from a format TraceDraw only reads or converts,
+has none (new, or opened from a format CD Draw only reads or converts,
 `.cdr` included), and File > Save As (Ctrl+Shift+S), open the Save
 Drawing dialog.
 
@@ -23,10 +23,10 @@ One window, 760 px wide, the same on every system:
 - **File name**: the drawing's file name, else its title, else
   "Graphic1", with the type's extension; a name typed with either
   extension, or none, gets the chosen type's.
-- **Save as type**: TraceDraw (`*.tdraw`, the native JSON format, which
+- **Save as type**: CD Draw (`*.tdraw`, the native JSON format, which
   keeps everything) or CDR files (`*.cdr`). It starts at `.cdr` for a
   drawing that came from or was saved to a `.cdr` file.
-- **Version**: for TraceDraw files the `.tdraw` format version, shown
+- **Version**: for CD Draw files the `.tdraw` format version, shown
   as "v0" with nothing to choose while it is the only one
   (`docs/tdraw-format.md`); for `.cdr` 27 down to 14, each with its
   release name ("v14 (X4)", "v27 (2026)").
@@ -40,7 +40,7 @@ One window, 760 px wide, the same on every system:
   greyed below version 16 and when no face may be embedded. Both
   choices stay for the next Save As and for Save. Embed fonts starts
   on.
-- **Embed fonts (size)** for TraceDraw files: on (as it starts), the
+- **Embed fonts (size)** for CD Draw files: on (as it starts), the
   installed fonts the text uses go into the `.tdraw` file, one file per
   face (the regular face for a bold or italic the family lacks), where
   the font's licence allows use in documents, so the drawing keeps its
@@ -71,11 +71,11 @@ version decides who can open a file:
   from.
 - The version chosen stays with the drawing: Save writes the same
   version again without asking. Each open drawing keeps its own.
-- TraceDraw saves only the versions checked in other programs, 14 to 27.
+- CD Draw saves only the versions checked in other programs, 14 to 27.
   A drawing opened from an older `.cdr` (versions 1 to 13) keeps its
   file, but Save does not write that version: the status line says
   which version Save writes ("Save writes version 14."), and Save opens
-  "Older file version": the drawing came from version N, TraceDraw does
+  "Older file version": the drawing came from version N, CD Draw does
   not save in it, choose a version from 14 to 27; Choose Version...
   (or Enter) opens Save As on version 14, Cancel saves nothing. Once
   saved in a checked version, Save writes it without asking. A file
@@ -94,12 +94,12 @@ What each version's file holds is in `docs/cdr-format.md`, Writing.
 ## Checks
 
 - Given a folder with a subfolder, a `.cdr` and a `.txt` file, the
-  TraceDraw type lists the subfolder only and CDR the subfolder and the
+  CD Draw type lists the subfolder only and CDR the subfolder and the
   `.cdr` file; saving "poster" as CDR version 15 with a title, subject
   and rating writes `poster.cdr` there (version 15), sets the properties
   and remembers the folder; the next Save As starts there as `.cdr`
   version 27; an existing name asks first and Replace overwrites it; a
-  TraceDraw file is written with its own extension, in the format version
+  CD Draw file is written with its own extension, in the format version
   chosen (0), which Ctrl+S keeps and opening the file brings back
   (`ui::save_as::tests::save_as_chooses_folder_name_type_version_and_properties`).
 - An empty name, a bare extension and a missing folder save nothing and

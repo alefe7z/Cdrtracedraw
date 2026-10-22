@@ -142,8 +142,8 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-          description: TraceDraw
-          description-url: https://github.com/igtoth/tracedraw
+          description: CD Draw
+          description-url: https://github.com/alefe7z/Cdrtracedraw
 
       - name: Programs to sign (SignPath)
         id: unsigned-programs
@@ -219,8 +219,8 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
-          description: TraceDraw Setup
-          description-url: https://github.com/igtoth/tracedraw
+          description: CD Draw Setup
+          description-url: https://github.com/alefe7z/Cdrtracedraw
 
       - name: Installer to sign (SignPath)
         id: unsigned-installer
