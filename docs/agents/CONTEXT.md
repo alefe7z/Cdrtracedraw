@@ -92,6 +92,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Codex | Reference validation workflow and failure diagnosis | 2026-10-23 | Serialize shared-state tests; retain failure logs and render artifacts. |
 
 ## Notes for other agents
 
