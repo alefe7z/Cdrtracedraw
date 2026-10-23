@@ -241,6 +241,8 @@ pub struct PrintState {
     pub page_numbers: bool,
     /// PostScript language level of a PostScript file (2 or 3).
     pub ps_level: u8,
+    /// The options of the Print dialog's tabs that came later.
+    pub ex: crate::ui::print_dialog::PrintExtra,
 }
 
 /// The sheets the Print dialog offers: fitted to the pages, then paper
@@ -350,6 +352,18 @@ impl PrintState {
     /// The indexes of the pages to print among `count` pages, the current
     /// one being `current`.
     pub fn page_indexes(&self, count: usize, current: usize) -> Vec<usize> {
+        let all = self.range_indexes(count, current);
+        // Even or odd pages only (by page number), for page ranges.
+        if self.ex.parity == 0 || matches!(self.range, 1 | 3) {
+            return all;
+        }
+        let even = self.ex.parity == 1;
+        all.into_iter()
+            .filter(|i| ((i + 1) % 2 == 0) == even)
+            .collect()
+    }
+
+    fn range_indexes(&self, count: usize, current: usize) -> Vec<usize> {
         match self.range {
             1 | 3 => vec![current.min(count.saturating_sub(1))],
             2 => {
@@ -432,6 +446,7 @@ impl Default for PrintState {
             info_text: String::new(),
             page_numbers: false,
             ps_level: 2,
+            ex: crate::ui::print_dialog::PrintExtra::default(),
         }
     }
 }
@@ -1333,7 +1348,7 @@ pub fn show(app: &mut App, ctx: &Context) {
             }
         }
         Dialog::Export(st) => export_dialog(app, ctx, st, &mut close),
-        Dialog::Print(st) => print_dialog(app, ctx, st, &mut close),
+        Dialog::Print(st) => crate::ui::print_dialog::print_dialog(app, ctx, st, &mut close),
         Dialog::PrintMerge(st) => print_merge_dialog(app, ctx, st, &mut close),
         Dialog::CreatePattern { vector } => {
             window(ctx, tr("dialog.create_pattern")).show(ctx, |ui| {
@@ -2657,365 +2672,6 @@ pub(crate) fn print_layout_fields(app: &App, ui: &mut Ui, st: &mut PrintState) {
             );
         });
     });
-}
-
-/// A titled frame around a group of the Print dialog's options.
-fn print_group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.strong(title);
-        add(ui);
-    });
-}
-
-fn print_dialog(app: &mut App, ctx: &Context, st: &mut PrintState, close: &mut bool) {
-    window(ctx, tr("dialog.print")).show(ctx, |ui| {
-        let issues = if app.settings.printing.preflight {
-            st.preflight
-                .get_or_insert_with(|| crate::ui::preflight_dialog::issues_of(app))
-                .clone()
-        } else {
-            Vec::new()
-        };
-        let issues_tab = if issues.is_empty() {
-            tr("print.tab_no_issues")
-        } else {
-            trf("print.tab_issues", &[("n", &issues.len().to_string())])
-        };
-        let tabs = [
-            tr("print.tab_general"),
-            tr("print.tab_color"),
-            tr("print.tab_composite"),
-            tr("print.tab_layout"),
-            tr("print.tab_prepress"),
-            tr("print.tab_postscript"),
-            issues_tab,
-        ];
-        ui.horizontal(|ui| {
-            for (i, t) in tabs.iter().enumerate() {
-                if i == 6 && !app.settings.printing.preflight {
-                    continue;
-                }
-                ui.selectable_value(&mut st.tab, i, t.as_str());
-            }
-        });
-        ui.separator();
-        egui::Frame::new().show(ui, |ui| {
-            ui.set_min_size(egui::vec2(560.0, 380.0));
-            ui.set_max_width(560.0);
-            match st.tab {
-                1 => print_tab_color(ui, st),
-                2 => print_tab_composite(ui, st),
-                3 => print_tab_layout(app, ui, st),
-                4 => print_tab_prepress(app, ui, st),
-                5 => print_tab_postscript(ui, st),
-                6 => print_tab_issues(app, ui, &issues, close),
-                _ => print_tab_general(app, ui, st),
-            }
-        });
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button(tr("menu.file.print_preview")).clicked() {
-                app.print_preview(Some(st.clone()));
-                *close = true;
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(tr("print.apply")).clicked() {
-                    app.settings.printing.remember(st);
-                    app.settings.save();
-                }
-                if ui.button(tr("dialog.cancel")).clicked() {
-                    *close = true;
-                }
-                if ui.button(tr("dialog.print")).clicked() {
-                    match crate::export::print(app, st) {
-                        Ok(msg) if !msg.is_empty() => app.status = msg,
-                        Ok(_) => {}
-                        Err(e) => app.status = format!("{}: {e}", tr("dialog.print_failed")),
-                    }
-                    if app.settings.printing.remember_last {
-                        app.settings.printing.remember(st);
-                        app.settings.save();
-                    }
-                    *close = true;
-                }
-            });
-        });
-    });
-}
-
-fn print_tab_general(app: &App, ui: &mut Ui, st: &mut PrintState) {
-    print_group(ui, &tr("print.destination"), |ui| {
-        egui::Grid::new("print_dest")
-            .num_columns(2)
-            .spacing([8.0, 6.0])
-            .show(ui, |ui| {
-                ui.label(tr("print.printer"));
-                // The system's printers (the default first), then the
-                // PDF viewer and the file destinations.
-                let dests = ["print.dest_viewer", "print.dest_pdf", "print.dest_ps"];
-                let on_printer = st.destination == 0 && st.printer.is_some();
-                let selected = match (&st.printer, st.destination) {
-                    (Some(p), 0) => p.clone(),
-                    _ => tr(dests[st.destination.min(2)]),
-                };
-                egui::ComboBox::from_id_salt("print_destination")
-                    .selected_text(selected)
-                    .width(300.0)
-                    .show_ui(ui, |ui| {
-                        for p in st.printers.clone() {
-                            let is = on_printer && st.printer.as_deref() == Some(p.name.as_str());
-                            if ui.selectable_label(is, &p.name).clicked() {
-                                st.destination = 0;
-                                st.printer = Some(p.name.clone());
-                            }
-                        }
-                        for (i, d) in dests.iter().enumerate() {
-                            let is = st.destination == i && (i != 0 || !on_printer);
-                            if ui.selectable_label(is, tr(d)).clicked() {
-                                st.destination = i;
-                                if i == 0 {
-                                    st.printer = None;
-                                }
-                            }
-                        }
-                    });
-                ui.end_row();
-                ui.label(tr("print.orientation"));
-                let ors = [
-                    "print.orient_match",
-                    "print.orient_portrait",
-                    "print.orient_landscape",
-                ];
-                egui::ComboBox::from_id_salt("print_orientation")
-                    .selected_text(tr(ors[st.orientation.min(2)]))
-                    .width(300.0)
-                    .show_ui(ui, |ui| {
-                        for (i, o) in ors.iter().enumerate() {
-                            if ui.selectable_value(&mut st.orientation, i, tr(o)).clicked() && i > 0
-                            {
-                                st.landscape = i == 2;
-                            }
-                        }
-                    });
-                ui.end_row();
-            });
-    });
-    ui.add_space(6.0);
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            ui.set_width(270.0);
-            print_group(ui, &tr("print.range"), |ui| {
-                ui.radio_value(&mut st.range, 0, tr("print.range_document"));
-                ui.radio_value(&mut st.range, 1, tr("print.range_page"));
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut st.range, 2, tr("print.range_pages"));
-                    ui.add_enabled(
-                        st.range == 2,
-                        egui::TextEdit::singleline(&mut st.pages)
-                            .hint_text(format!("1-{}", app.doc().pages.len()))
-                            .desired_width(110.0),
-                    );
-                });
-                ui.add_enabled_ui(!app.selection.is_empty(), |ui| {
-                    ui.radio_value(&mut st.range, 3, tr("print.range_selection"));
-                });
-            });
-        });
-        ui.vertical(|ui| {
-            print_group(ui, &tr("print.copies"), |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(tr("print.number_of_copies"));
-                    ui.add(egui::DragValue::new(&mut st.copies).range(1..=999));
-                });
-                ui.add_enabled(
-                    st.copies > 1,
-                    egui::Checkbox::new(&mut st.collate, tr("print.collate")),
-                );
-            });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut st.as_bitmap, tr("print.as_bitmap"));
-                ui.add_enabled(
-                    st.as_bitmap,
-                    egui::DragValue::new(&mut st.bitmap_dpi)
-                        .range(36.0..=1200.0)
-                        .suffix(" dpi"),
-                );
-            });
-        });
-    });
-    // Keep the older "all pages" choice in step with the range.
-    st.all_pages = st.range != 1;
-}
-
-fn print_tab_color(ui: &mut Ui, st: &mut PrintState) {
-    egui::Grid::new("print_color")
-        .num_columns(2)
-        .spacing([24.0, 8.0])
-        .show(ui, |ui| {
-            ui.label(tr("print.color"));
-            ui.vertical(|ui| {
-                ui.radio_value(&mut st.separations, false, tr("print.composite_output"));
-                ui.radio_value(&mut st.separations, true, tr("print.separations_output"));
-            });
-            ui.end_row();
-            ui.label("");
-            ui.checkbox(&mut st.spot_to_cmyk, tr("print.spot_to_cmyk"));
-            ui.end_row();
-        });
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tr("print.color_hint")).color(Tokens::text_dim()));
-}
-
-fn print_tab_composite(ui: &mut Ui, st: &mut PrintState) {
-    print_group(ui, &tr("print.options"), |ui| {
-        ui.checkbox(&mut st.text_black, tr("print.text_black"));
-        ui.checkbox(&mut st.overprint_black, tr("print.overprint_black"));
-    });
-}
-
-fn print_tab_layout(app: &App, ui: &mut Ui, st: &mut PrintState) {
-    print_group(ui, &tr("print.position_size"), |ui| {
-        let mut mode = if st.fit_to_page {
-            1
-        } else if (st.scale - 100.0).abs() > 1e-9 {
-            2
-        } else {
-            0
-        };
-        ui.radio_value(&mut mode, 0, tr("print.as_in_document"));
-        ui.radio_value(&mut mode, 1, tr("dialog.fit_to_page"));
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut mode, 2, tr("print.scale"));
-            ui.add_enabled(
-                mode == 2,
-                egui::DragValue::new(&mut st.scale)
-                    .range(1.0..=1000.0)
-                    .suffix(" %"),
-            );
-        });
-        match mode {
-            0 => {
-                st.fit_to_page = false;
-                st.scale = 100.0;
-            }
-            1 => st.fit_to_page = true,
-            _ => {
-                st.fit_to_page = false;
-                if (st.scale - 100.0).abs() < 1e-9 {
-                    st.scale = 99.0;
-                }
-            }
-        }
-    });
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut st.bleed, tr("print.bleed_limit"));
-        ui.add_enabled(
-            st.bleed,
-            egui::DragValue::new(&mut st.bleed_limit)
-                .range(0.0..=50.0)
-                .speed(0.5)
-                .suffix(" mm"),
-        );
-    });
-    ui.add_space(6.0);
-    print_layout_fields(app, ui, st);
-}
-
-fn print_tab_prepress(app: &App, ui: &mut Ui, st: &mut PrintState) {
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
-            ui.set_width(270.0);
-            print_group(ui, &tr("print.paper_film"), |ui| {
-                ui.checkbox(&mut st.invert, tr("dialog.invert"));
-                ui.checkbox(&mut st.mirror, tr("dialog.mirror"));
-            });
-            ui.add_space(6.0);
-            print_group(ui, &tr("print.file_info"), |ui| {
-                ui.checkbox(&mut st.page_info, tr("print.print_file_info"));
-                ui.add_enabled(
-                    st.page_info,
-                    egui::TextEdit::singleline(&mut st.info_text)
-                        .hint_text(app.document_name())
-                        .desired_width(240.0),
-                );
-                ui.checkbox(&mut st.page_numbers, tr("print.page_numbers"));
-            });
-            ui.add_space(6.0);
-            print_group(ui, &tr("print.finishing"), |ui| {
-                ui.checkbox(&mut st.crop_marks, tr("print.crop_fold_marks"));
-            });
-        });
-        ui.vertical(|ui| {
-            print_group(ui, &tr("print.registration"), |ui| {
-                ui.checkbox(&mut st.registration_marks, tr("dialog.registration_marks"));
-            });
-            ui.add_space(6.0);
-            print_group(ui, &tr("print.calibration"), |ui| {
-                ui.checkbox(&mut st.color_bars, tr("print.color_bars"));
-                ui.checkbox(&mut st.densitometer, tr("print.densitometer"));
-            });
-        });
-    });
-}
-
-fn print_tab_postscript(ui: &mut Ui, st: &mut PrintState) {
-    if st.destination != 2 {
-        ui.label(egui::RichText::new(tr("print.postscript_hint")).color(Tokens::text_dim()));
-        ui.add_space(6.0);
-    }
-    ui.add_enabled_ui(st.destination == 2, |ui| {
-        print_group(ui, &tr("print.compatibility"), |ui| {
-            egui::ComboBox::from_id_salt("print_ps_level")
-                .selected_text(trf("print.ps_level", &[("n", &st.ps_level.to_string())]))
-                .show_ui(ui, |ui| {
-                    for l in [2u8, 3] {
-                        ui.selectable_value(
-                            &mut st.ps_level,
-                            l,
-                            trf("print.ps_level", &[("n", &l.to_string())]),
-                        );
-                    }
-                });
-        });
-    });
-}
-
-fn print_tab_issues(
-    app: &mut App,
-    ui: &mut Ui,
-    issues: &[crate::preflight::Issue],
-    close: &mut bool,
-) {
-    ui.label(crate::ui::preflight_dialog::summary(issues));
-    ui.add_space(4.0);
-    egui::ScrollArea::vertical()
-        .max_height(300.0)
-        .show(ui, |ui| {
-            for issue in issues {
-                ui.horizontal(|ui| {
-                    let (r, _) =
-                        ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                    crate::ui::preflight_dialog::paint_icon(
-                        ui.painter(),
-                        r.center(),
-                        issue.check.severity(),
-                    );
-                    let mut text = tr(&issue.check.key());
-                    if !issue.detail.is_empty() {
-                        text = format!("{text}: {}", issue.detail);
-                    }
-                    ui.label(text);
-                });
-            }
-        });
-    ui.add_space(6.0);
-    if ui.button(tr("preflight.open")).clicked() {
-        app.dialog = Dialog::Preflight(Default::default());
-        *close = true;
-    }
 }
 
 fn merge_kind_names() -> [String; 4] {

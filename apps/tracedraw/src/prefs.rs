@@ -46,6 +46,17 @@ pub struct PrintPrefs {
     pub bleed_limit: f64,
     pub page_numbers: bool,
     pub ps_level: u8,
+    /// The options of the Print dialog's tabs kept beside these.
+    pub extra: crate::ui::print_dialog::PrintExtra,
+    /// The print styles saved with Save As.
+    pub styles: Vec<PrintStyle>,
+}
+
+/// A print style: the Print dialog's settings under a name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrintStyle {
+    pub name: String,
+    pub prefs: PrintPrefs,
 }
 
 impl Default for PrintPrefs {
@@ -75,6 +86,8 @@ impl Default for PrintPrefs {
             bleed_limit: st.bleed_limit,
             page_numbers: st.page_numbers,
             ps_level: st.ps_level,
+            extra: st.ex,
+            styles: Vec::new(),
         }
     }
 }
@@ -117,8 +130,33 @@ impl PrintPrefs {
             } else {
                 PrintState::default().gutter
             },
+            ex: self.extra.clone(),
             ..PrintState::default()
         }
+    }
+
+    /// The settings of `st` as preferences (for a print style).
+    pub fn of(st: &PrintState) -> PrintPrefs {
+        let mut p = PrintPrefs::default();
+        p.remember(st);
+        p
+    }
+
+    /// True when `other` prints the same: everything but the style list,
+    /// the style's name and whether choices are remembered.
+    pub fn same_settings(&self, other: &PrintPrefs) -> bool {
+        let strip = |p: &PrintPrefs| {
+            let mut p = p.clone();
+            p.styles.clear();
+            p.extra.style.clear();
+            p.extra.side_preview = false;
+            p.remember_last = false;
+            p.preflight = true;
+            p.printer = None;
+            p.destination = 0;
+            p
+        };
+        strip(self) == strip(other)
     }
 
     /// Keep the choices of a print for the next one.
@@ -144,6 +182,7 @@ impl PrintPrefs {
         self.bleed_limit = st.bleed_limit;
         self.page_numbers = st.page_numbers;
         self.ps_level = st.ps_level;
+        self.extra = st.ex.clone();
     }
 }
 

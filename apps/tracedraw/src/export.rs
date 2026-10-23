@@ -308,17 +308,19 @@ fn encode_raster(pm: &tiny_skia::Pixmap, ext: &str, quality: u8) -> Result<Vec<u
 pub fn print(app: &mut App, st: &PrintState) -> Result<String, String> {
     let mut doc = print_sheets(app, st);
     if st.separations {
-        doc = separations_doc(&doc);
+        doc = separations_doc(&doc, &st.ex.excluded_plates);
     }
+    // Print to File writes a PostScript file.
+    let destination = if st.ex.to_file { 2 } else { st.destination };
     let stem = app.document_title().trim_end_matches('*').to_string();
     // Files get their copies inside; the printer (lp) or the system
     // viewer handles the count.
-    if st.destination != 0 && st.copies > 1 {
+    if destination != 0 && st.copies > 1 {
         repeat_copies(&mut doc, st.copies.min(999) as usize, st.collate);
     }
-    match st.destination {
+    match destination {
         1 | 2 => {
-            let ps = st.destination == 2;
+            let ps = destination == 2;
             let (ext, filter) = if ps {
                 ("ps", "PostScript")
             } else {
@@ -639,6 +641,53 @@ pub fn plates(doc: &Document) -> Vec<(Plate, String)> {
     plates
 }
 
+/// How much of `plate`'s ink `c` puts down, 0 to 1; registration colour
+/// prints fully on every plate.
+pub fn ink_coverage(plate: Plate, c: tracedraw_core::Color) -> f32 {
+    use tracedraw_core::Color;
+    if matches!(c, Color::Registration) {
+        return 1.0;
+    }
+    let v = match (plate, c) {
+        (Plate::Spot(id), Color::Spot { ink, tint, .. }) if ink == id => tint,
+        (Plate::Spot(_), _) | (Plate::Process(_), Color::Spot { .. }) => 0.0,
+        (Plate::Process(i), _) => match c.convert_to("CMYK") {
+            Color::Cmyk { c, m, y, k } => [c, m, y, k].get(i).copied().unwrap_or(0.0),
+            _ => 0.0,
+        },
+    };
+    v.clamp(0.0, 1.0)
+}
+
+/// For each plate of [`plates`], whether some colour of `doc` puts its
+/// ink down (registration colour left aside).
+pub fn plates_used(doc: &Document) -> Vec<bool> {
+    use std::cell::Cell;
+    plates(doc)
+        .iter()
+        .map(|(plate, _)| {
+            let used = Cell::new(false);
+            let probe = |c: tracedraw_core::Color| {
+                if !matches!(c, tracedraw_core::Color::Registration)
+                    && ink_coverage(*plate, c) > 0.0
+                {
+                    used.set(true);
+                }
+                c
+            };
+            for page in &doc.pages {
+                for layer in &page.layers {
+                    for s in &layer.shapes {
+                        let mut s = s.clone();
+                        map_colors(&mut s, &probe);
+                    }
+                }
+            }
+            used.get()
+        })
+        .collect()
+}
+
 /// One plate of a page: every colour turned into the grey of the ink's
 /// coverage (black = full ink); registration colour prints on all plates.
 pub fn plate_page(
@@ -648,19 +697,8 @@ pub fn plate_page(
     use tracedraw_core::{Color, Fill};
     let mut p = page.clone();
     let coverage = move |c: Color| -> Color {
-        if matches!(c, Color::Registration) {
-            return Color::Gray { v: 0.0 };
-        }
-        let v = match (plate, c) {
-            (Plate::Spot(id), Color::Spot { ink, tint, .. }) if ink == id => tint,
-            (Plate::Spot(_), _) | (Plate::Process(_), Color::Spot { .. }) => 0.0,
-            (Plate::Process(i), _) => match c.convert_to("CMYK") {
-                Color::Cmyk { c, m, y, k } => [c, m, y, k].get(i).copied().unwrap_or(0.0),
-                _ => 0.0,
-            },
-        };
         Color::Gray {
-            v: 1.0 - v.clamp(0.0, 1.0),
+            v: 1.0 - ink_coverage(plate, c),
         }
     };
     for layer in p.layers.iter_mut() {
@@ -776,7 +814,8 @@ fn invert_colors(s: &mut tracedraw_core::Shape) {
 /// only, at its tint.
 /// One page per sheet and plate: the four process inks, then the spot
 /// inks, each as the grey of its coverage.
-fn separations_doc(doc: &Document) -> Document {
+/// Plates named in `excluded` are left out.
+fn separations_doc(doc: &Document, excluded: &[String]) -> Document {
     let size = doc
         .pages
         .first()
@@ -787,7 +826,7 @@ fn separations_doc(doc: &Document) -> Document {
     sep.symbols = doc.symbols.clone();
     let plates = plates(doc);
     for page in &doc.pages {
-        for (plate, name) in &plates {
+        for (plate, name) in plates.iter().filter(|(_, n)| !excluded.contains(n)) {
             let mut p = plate_page(page, *plate);
             p.name = format!("{} {}", page.name, name);
             let mut ids = sep.ids().clone();
@@ -1143,7 +1182,7 @@ mod tests {
         s.fill = Fill::Solid(doc.inks[0].color(0.6));
         s.stroke = None;
         doc.layer_mut(layer).expect("layer").shapes.push(s);
-        let pdf = tracedraw_io::pdf::document_to_pdf(&separations_doc(&doc));
+        let pdf = tracedraw_io::pdf::document_to_pdf(&separations_doc(&doc, &[]));
         let text = String::from_utf8_lossy(&pdf);
         // C, M, Y, K and the spot plate.
         assert!(
@@ -1594,7 +1633,7 @@ mod scratch_191 {
                     separations: true,
                     ..PrintState::default()
                 };
-                let doc = separations_doc(&print_sheets(&app, &st));
+                let doc = separations_doc(&print_sheets(&app, &st), &[]);
                 std::fs::write(
                     dir.join(format!("print_{tag}_seps.pdf")),
                     tracedraw_io::pdf::document_to_pdf(&doc),

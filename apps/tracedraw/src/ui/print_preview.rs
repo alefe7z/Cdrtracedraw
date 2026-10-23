@@ -278,6 +278,35 @@ pub fn show(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// The first sheet for `st`, fitted in `size`, as a texture (the Print
+/// dialog's side preview); built again when the settings change.
+pub fn thumbnail(
+    app: &App,
+    ctx: &egui::Context,
+    st: &PrintState,
+    size: egui::Vec2,
+) -> Option<egui::TextureHandle> {
+    let key = format!("{}|{:?}", settings_key(st), size);
+    let id = egui::Id::new("print_side_preview");
+    if let Some((k, tex)) = ctx.data(|d| d.get_temp::<(String, egui::TextureHandle)>(id)) {
+        if k == key {
+            return Some(tex);
+        }
+    }
+    let doc = print_sheets(app, st);
+    let page = doc.pages.first()?;
+    let zoom = (size.x as f64 / page.size.width).min(size.y as f64 / page.size.height);
+    if !(zoom.is_finite() && zoom > 0.0) {
+        return None;
+    }
+    let w = (page.size.width * zoom).round().max(1.0) as u32;
+    let h = (page.size.height * zoom).round().max(1.0) as u32;
+    let img = render_sheet(page, w, h, zoom)?;
+    let tex = ctx.load_texture("print_side_preview", img, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
+    Some(tex)
+}
+
 /// The sheet as a bitmap on white paper.
 fn render_sheet(
     page: &tracedraw_core::document::Page,

@@ -14,10 +14,17 @@ pub struct Printer {
     pub name: String,
     /// The system's default destination.
     pub default: bool,
+    /// What the system says of it ("idle", "Offline"); empty when unknown.
+    pub status: String,
+    /// Where it is, as the system was told.
+    pub location: String,
+    /// The system's description or comment.
+    pub comment: String,
 }
 
-/// The printers `lpstat -p -d` lists ("printer NAME is idle..." lines
-/// and "system default destination: NAME"), the default one first.
+/// The printers `lpstat -l -p -d` lists ("printer NAME is idle..."
+/// lines, their "Description:" and "Location:" lines and "system default
+/// destination: NAME"), the default one first.
 pub fn parse_lpstat(output: &str) -> Vec<Printer> {
     let mut out: Vec<Printer> = Vec::new();
     let mut default: Option<String> = None;
@@ -26,10 +33,29 @@ pub fn parse_lpstat(output: &str) -> Vec<Printer> {
         if let Some(rest) = line.strip_prefix("printer ") {
             let name = rest.split_whitespace().next().unwrap_or_default();
             if !name.is_empty() && !out.iter().any(|p| p.name == name) {
+                let after = rest[name.len()..].trim_start();
+                let status = after
+                    .strip_prefix("is ")
+                    .unwrap_or(after)
+                    .split(['.', ' '])
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
                 out.push(Printer {
                     name: name.to_string(),
                     default: false,
+                    status,
+                    location: String::new(),
+                    comment: String::new(),
                 });
+            }
+        } else if let Some(rest) = line.strip_prefix("Description:") {
+            if let Some(p) = out.last_mut() {
+                p.comment = rest.trim().to_string();
+            }
+        } else if let Some(rest) = line.strip_prefix("Location:") {
+            if let Some(p) = out.last_mut() {
+                p.location = rest.trim().to_string();
             }
         } else if let Some(rest) = line.strip_prefix("system default destination:") {
             let name = rest.trim();
@@ -53,7 +79,7 @@ pub fn parse_lpstat(output: &str) -> Vec<Printer> {
 #[cfg(not(target_os = "windows"))]
 pub fn system_printers() -> Vec<Printer> {
     let out = std::process::Command::new("lpstat")
-        .args(["-p", "-d"])
+        .args(["-l", "-p", "-d"])
         .env("LC_ALL", "C")
         .env("LANG", "C")
         .output();
@@ -66,9 +92,130 @@ pub fn system_printers() -> Vec<Printer> {
     }
 }
 
+/// The printers Windows has (`Win32_Printer` through PowerShell), the
+/// default one first.
 #[cfg(target_os = "windows")]
 pub fn system_printers() -> Vec<Printer> {
-    Vec::new()
+    let script = "Get-CimInstance Win32_Printer | Select-Object Name,Default,\
+                  PrinterStatus,WorkOffline,Location,Comment | ConvertTo-Csv -NoTypeInformation";
+    match hidden("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+    {
+        Ok(o) => parse_windows_printers(&String::from_utf8_lossy(&o.stdout)),
+        Err(e) => {
+            log::info!("no printer list: powershell: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// A command that opens no console window.
+#[cfg(target_os = "windows")]
+fn hidden(program: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut c = std::process::Command::new(program);
+    c.creation_flags(0x0800_0000);
+    c
+}
+
+/// The CSV PowerShell writes for the printers: a header, then one quoted
+/// row per printer (Name, Default, PrinterStatus, WorkOffline, Location,
+/// Comment). The default one comes first.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn parse_windows_printers(csv: &str) -> Vec<Printer> {
+    let mut lines = csv.lines().filter(|l| !l.trim().is_empty());
+    let Some(head) = lines.next() else {
+        return Vec::new();
+    };
+    let head = csv_fields(head);
+    let col = |row: &[String], name: &str| -> String {
+        head.iter()
+            .position(|h| h.eq_ignore_ascii_case(name))
+            .and_then(|i| row.get(i).cloned())
+            .unwrap_or_default()
+    };
+    let mut out: Vec<Printer> = Vec::new();
+    for line in lines {
+        let row = csv_fields(line);
+        let name = col(&row, "Name");
+        if name.is_empty() {
+            continue;
+        }
+        let offline = col(&row, "WorkOffline").eq_ignore_ascii_case("true");
+        // Win32_Printer.PrinterStatus: 3 idle, 4 printing, 5 warming up,
+        // 6 stopped, 7 offline.
+        let status = if offline {
+            "Offline".to_string()
+        } else {
+            match col(&row, "PrinterStatus").as_str() {
+                "3" => "Ready",
+                "4" => "Printing",
+                "5" => "Warming up",
+                "6" => "Stopped",
+                "7" => "Offline",
+                _ => "",
+            }
+            .to_string()
+        };
+        let p = Printer {
+            name,
+            default: col(&row, "Default").eq_ignore_ascii_case("true"),
+            status,
+            location: col(&row, "Location"),
+            comment: col(&row, "Comment"),
+        };
+        if p.default {
+            out.insert(0, p);
+        } else {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// The fields of one CSV line, quotes removed (`""` is a quote).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn csv_fields(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut chars = line.trim_end_matches('\r').chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                cur.push('"');
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => out.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    out.push(cur);
+    out
+}
+
+/// The gear by the Printer list: the system's own settings of `printer`
+/// (the driver's preferences on Windows).
+pub fn open_preferences(printer: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let r = hidden("rundll32")
+        .args(["printui.dll,PrintUIEntry", "/e", "/n", printer])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let r = {
+        let _ = printer;
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.Print-Scan-Settings.extension")
+            .spawn()
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let r = {
+        let _ = printer;
+        std::process::Command::new("system-config-printer").spawn()
+    };
+    r.map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// The printer the dialog starts on: the one remembered when the system
@@ -133,15 +280,32 @@ pub fn print_pdf(
     }
 }
 
+/// Send `pdf` to `printer` through the PDF program's "Print to" verb;
+/// without one that can, the PDF opens in the viewer to print from there.
 #[cfg(target_os = "windows")]
 pub fn print_pdf(
     printer: &str,
-    _pdf: &Path,
+    pdf: &Path,
     _copies: u32,
     _collate: bool,
     _title: &str,
 ) -> Result<String, String> {
-    Err(format!("no printer {printer} here"))
+    let quote = |s: &str| s.replace('\'', "''");
+    let script = format!(
+        "Start-Process -FilePath '{}' -Verb PrintTo -ArgumentList '\"{}\"' -WindowStyle Hidden",
+        quote(&pdf.display().to_string()),
+        quote(printer)
+    );
+    let ok = hidden("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        Ok(String::new())
+    } else {
+        crate::export::open_with_system(pdf).map(|_| String::new())
+    }
 }
 
 #[cfg(test)]
@@ -169,6 +333,32 @@ mod tests {
             parse_lpstat("printer A is idle.\nprinter B is idle.\nno system default destination\n");
         assert_eq!(p.len(), 2);
         assert!(!p[0].default);
+    }
+
+    #[test]
+    fn windows_printers_come_from_the_csv_with_status_and_location() {
+        let csv = "\"Name\",\"Default\",\"PrinterStatus\",\"WorkOffline\",\"Location\",\"Comment\"\r\n\
+                   \"Microsoft Print to PDF\",\"False\",\"3\",\"False\",\"\",\"\"\r\n\
+                   \"EPSON L3250, Series\",\"True\",\"3\",\"True\",\"Sala 2\",\"Tinta \"\"nova\"\"\"\r\n";
+        let p = parse_windows_printers(csv);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].name, "EPSON L3250, Series");
+        assert!(p[0].default);
+        assert_eq!(p[0].status, "Offline");
+        assert_eq!(p[0].location, "Sala 2");
+        assert_eq!(p[0].comment, "Tinta \"nova\"");
+        assert_eq!(p[1].status, "Ready");
+        assert!(parse_windows_printers("").is_empty());
+    }
+
+    #[test]
+    fn lpstat_gives_the_status_description_and_location() {
+        let p = parse_lpstat(
+            "printer Office is idle.  enabled since x\n\tDescription: HP de cor\n\tLocation: Sala 1\n",
+        );
+        assert_eq!(p[0].status, "idle");
+        assert_eq!(p[0].comment, "HP de cor");
+        assert_eq!(p[0].location, "Sala 1");
     }
 
     #[test]
