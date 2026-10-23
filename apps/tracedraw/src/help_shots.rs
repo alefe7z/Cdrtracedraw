@@ -236,6 +236,36 @@ enum Shot {
 const W: usize = 1400;
 const H: usize = 1000;
 
+/// A real-UI render used to compare the catalog with the owner's reference.
+#[test]
+#[ignore]
+fn reference_catalog_shot() {
+    let Some(dir) = std::env::var_os("REFERENCE_SHOTS") else { return };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("screenshot folder");
+    let mut sh = Shooter::new();
+    let mut app = demo_app();
+    app.settings.theme = "dark".into();
+    app.settings.language = "pt-BR".into();
+    crate::i18n::set_language("pt-BR");
+    app.show_welcome = false;
+    let mut capture = None;
+    for frame in 0..8 {
+        capture = Some(sh.frame(&mut app, |app, ctx| {
+            let id = egui::Id::new("reference_catalog_root");
+            let mut ui = egui::Ui::new(ctx.clone(), id,
+                egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO, egui::vec2(W as f32, H as f32))));
+            if frame >= 3 {
+                egui::Popup::open_id(ctx,
+                    egui::Id::new(("docker_add_menu", crate::app::DockerPlace::Right as u8)));
+            }
+            crate::ui::root(app, &mut ui);
+        }));
+    }
+    capture.expect("rendered catalog").save(&dir.join("catalog-pt-BR-dark.png"), (0, 0, W, H));
+}
+
 struct Shooter {
     ctx: egui::Context,
     tex: Textures,

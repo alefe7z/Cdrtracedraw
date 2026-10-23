@@ -2,6 +2,10 @@
 
 #[path = "docker_catalog.rs"]
 mod catalog;
+#[path = "docker_panels.rs"]
+mod reference_panels;
+#[path = "docker_icons.rs"]
+mod reference_icons;
 
 use crate::app::{App, DockerDrag, DockerPlace, DockerTab};
 use crate::i18n::{tr, trf};
@@ -58,11 +62,11 @@ pub fn tab_strip(app: &mut App, ui: &mut Ui, place: DockerPlace) {
     egui::ScrollArea::vertical()
         .id_salt(("docker_tab_scroll", place as u8))
         .max_height(tab_height)
-        .auto_shrink([false, false])
+        .auto_shrink([false, true])
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
             for tab in tabs {
-                let name = tr(tab.key());
+                let name = catalog::label(tab);
                 let active = shown && front == tab;
                 let galley = ui.painter().layout_no_wrap(
                     name.clone(),
@@ -182,12 +186,23 @@ pub fn tab_strip(app: &mut App, ui: &mut Ui, place: DockerPlace) {
     ui.painter()
         .line_segment([c + egui::vec2(0.0, -5.0), c + egui::vec2(0.0, 5.0)], s);
     let resp = resp.on_hover_text(tr("docker.add_docker"));
-    // Keep the catalog open while several boxes are toggled, as in the
-    // reference. The custom rows do not call ui.close().
-    egui::Popup::menu(&resp)
-        .id(egui::Id::new(("docker_add_menu", place as u8)))
+    // Keep the popup anchored while toggling tabs changes the plus position.
+    let menu_id = egui::Id::new(("docker_add_menu", place as u8));
+    let anchor_id = menu_id.with("anchor");
+    if resp.clicked() {
+        if egui::Popup::is_id_open(ui.ctx(), menu_id) {
+            egui::Popup::close_id(ui.ctx(), menu_id);
+        } else {
+            ui.data_mut(|d| d.insert_temp(anchor_id, resp.rect));
+            egui::Popup::open_id(ui.ctx(), menu_id);
+        }
+    }
+    let anchor = ui.data_mut(|d| d.get_temp::<egui::Rect>(anchor_id)).unwrap_or(resp.rect);
+    egui::Popup::new(menu_id, ui.ctx().clone(), anchor, ui.layer_id())
+        .kind(egui::PopupKind::Menu)
+        .open_memory(None)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .style(crate::ui::menus::menu_popup_style)
+        .style(catalog::popup_style)
         .show(|ui| catalog::show(app, ui, place));
 }
 
@@ -360,74 +375,6 @@ pub fn floating_dockers(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-type TabIcon = fn(&egui::Painter, egui::Rect);
-
-/// The small picture above a docker tab's name.
-fn tab_icon(tab: DockerTab) -> Option<TabIcon> {
-    match tab {
-        DockerTab::Hints => Some(|p, r| {
-            // A pointer with a question mark.
-            let s = egui::Stroke::new(1.2, Tokens::icon());
-            let o = r.min + egui::vec2(2.0, 1.0);
-            let pts = vec![
-                o,
-                o + egui::vec2(0.0, 11.0),
-                o + egui::vec2(3.0, 8.0),
-                o + egui::vec2(5.5, 13.0),
-                o + egui::vec2(7.0, 12.2),
-                o + egui::vec2(4.6, 7.4),
-                o + egui::vec2(8.5, 7.4),
-            ];
-            p.add(egui::epaint::PathShape::convex_polygon(
-                pts,
-                Tokens::icon(),
-                s,
-            ));
-            p.text(
-                r.min + egui::vec2(12.5, 3.5),
-                egui::Align2::CENTER_CENTER,
-                "?",
-                egui::FontId::proportional(10.0),
-                Tokens::icon(),
-            );
-        }),
-        DockerTab::Properties => Some(|p, r| {
-            // A pen over a ruled sheet.
-            let s = egui::Stroke::new(1.2, Tokens::icon());
-            let c = r.center();
-            p.line_segment([c + egui::vec2(-6.0, 6.0), c + egui::vec2(5.0, -5.0)], s);
-            p.line_segment([c + egui::vec2(-6.0, 6.0), c + egui::vec2(-3.0, 5.0)], s);
-            p.line_segment([c + egui::vec2(3.0, -7.0), c + egui::vec2(7.0, -3.0)], s);
-            for y in [2.0, 5.0] {
-                p.line_segment([c + egui::vec2(1.0, y), c + egui::vec2(7.0, y)], s);
-            }
-        }),
-        DockerTab::Objects => Some(|p, r| {
-            // Three stacked sheets.
-            let c = r.center();
-            for (k, dy) in [(0u8, 4.0f32), (1, 0.0), (2, -4.0)] {
-                let pts = vec![
-                    c + egui::vec2(-7.0, dy),
-                    c + egui::vec2(0.0, dy - 3.5),
-                    c + egui::vec2(7.0, dy),
-                    c + egui::vec2(0.0, dy + 3.5),
-                ];
-                let fill = if k == 2 {
-                    Tokens::icon()
-                } else {
-                    crate::theme::Tokens::field()
-                };
-                p.add(egui::epaint::PathShape::convex_polygon(
-                    pts,
-                    fill,
-                    egui::Stroke::new(1.0, Tokens::icon()),
-                ));
-            }
-        }),
-        _ => None,
-    }
-}
-
 /// The docker column at `place`: the title bar of the docker in front,
 /// then its page in the width the column has.
 pub fn dockers(app: &mut App, ui: &mut Ui, place: DockerPlace) {
@@ -571,6 +518,8 @@ fn docker_page(app: &mut App, ui: &mut Ui, tab: DockerTab) {
             DockerTab::Hints | DockerTab::Objects => {}
             DockerTab::Transformations => crate::ui::transform_docker::transformations(app, ui),
             DockerTab::Undo => undo_docker(app, ui),
+            DockerTab::LiveGuides | DockerTab::FitPath | DockerTab::ColorProof
+                | DockerTab::Assets | DockerTab::Views => reference_panels::show(app, ui, tab),
             other => crate::ui::dockers2::show(app, ui, other),
         });
 }

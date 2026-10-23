@@ -4,38 +4,35 @@
 use crate::app::{App, DockerPlace, DockerTab};
 use crate::i18n::tr;
 use crate::theme::Tokens;
-use crate::tools::Tool;
-use crate::ui::{icons, menu_glyphs};
 use egui::{Color32, FontId, Rect, Sense, Stroke, Ui};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Entry {
     Panel(DockerTab),
-    Unavailable(&'static str),
 }
 
 use DockerTab::*;
-use Entry::{Panel as P, Unavailable as U};
+use Entry::Panel as P;
 
 // Dedicated ordering: the Window menu keeps its own existing organization.
 const GROUPS: &[&[Entry]] = &[
     &[P(Properties), P(Objects), P(Pages), P(ObjectData), P(ObjectStyles),
         P(Symbols), P(FindReplace), P(Export)],
     &[P(Transformations), P(Coordinates)],
-    &[U("docker_catalog.live_guides"), P(Guidelines)],
-    &[P(AlignDistribute), U("docker_catalog.fit_path"), P(StepAndRepeat)],
+    &[P(LiveGuides), P(Guidelines)],
+    &[P(AlignDistribute), P(FitPath), P(StepAndRepeat)],
     &[P(Shaping), P(Corners), P(JoinCurves)],
     &[P(Text), P(FontSampler), P(Glyphs)],
     &[P(BrushStrokes), P(Bevel), P(BitmapMask), P(Blend), P(Contour),
         P(Envelope), P(Extrude), P(Lens), P(PictureMosaic), P(VectorMosaic)],
-    &[P(Color), P(Palettes), P(ColorStyles), U("docker_catalog.color_proof")],
-    &[U("docker_catalog.assets"), P(Shelf)],
+    &[P(Color), P(Palettes), P(ColorStyles), P(ColorProof)],
+    &[P(Assets), P(Shelf)],
     &[P(Links), P(Fonts)],
-    &[U("docker_catalog.views"), P(Undo), P(Scripts)],
+    &[P(Views), P(Undo), P(Scripts)],
     &[P(Hints)],
 ];
 
-fn label(tab: DockerTab) -> String {
+pub(super) fn label(tab: DockerTab) -> String {
     tr(match tab {
         Transformations => "docker_catalog.transform",
         Shaping => "docker_catalog.shape",
@@ -62,15 +59,28 @@ fn toggle(app: &mut App, tab: DockerTab, place: DockerPlace) {
     }
 }
 
+pub(super) fn popup_style(style: &mut egui::Style) {
+    crate::ui::menus::menu_popup_style(style);
+    if crate::theme::theme() == crate::theme::Theme::Dark {
+        style.visuals.window_fill = Color32::from_rgb(38, 38, 38);
+        style.visuals.window_stroke = Stroke::new(1.0, Color32::from_rgb(82, 82, 82));
+    }
+}
+
+fn label_color() -> Color32 {
+    if crate::theme::theme() == crate::theme::Theme::Dark {
+        Color32::from_rgb(202, 206, 212)
+    } else { Tokens::text() }
+}
+
 pub(super) fn show(app: &mut App, ui: &mut Ui, place: DockerPlace) {
     ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
     let width = GROUPS.iter().flat_map(|g| g.iter()).map(|entry| {
         let text = match entry {
             P(tab) => label(*tab),
-            U(key) => tr(key),
         };
         ui.painter().layout_no_wrap(text, FontId::proportional(12.0), Tokens::text()).size().x
-    }).fold(248.0_f32, f32::max) + 48.0;
+    }).fold(252.0_f32, f32::max) + 48.0;
     // The full catalog remains reachable on small screens and at large UI scales.
     let height = (ui.ctx().content_rect().height() - 32.0).max(80.0);
     egui::ScrollArea::vertical().max_height(height).show(ui, |ui| {
@@ -82,13 +92,6 @@ pub(super) fn show(app: &mut App, ui: &mut Ui, place: DockerPlace) {
                 row(app, ui, *entry, place, width);
             }
         }
-        // Keep panels beyond the reference accessible, without interleaving them.
-        separator(ui, width);
-        ui.menu_button(tr("docker_catalog.more"), |ui| {
-            for tab in [Comments, Effects, Macros] {
-                row(app, ui, P(tab), place, width);
-            }
-        });
     });
 }
 
@@ -97,123 +100,49 @@ fn separator(ui: &mut Ui, width: f32) {
     let color = if crate::theme::theme() == crate::theme::Theme::HighContrast {
         Tokens::text()
     } else {
-        Color32::from_rgb(0, 157, 194)
+        Color32::from_rgb(1, 125, 188)
     };
     ui.painter().hline(rect.x_range().shrink(3.0), rect.center().y,
         Stroke::new(1.0, color));
 }
 
 fn row(app: &mut App, ui: &mut Ui, entry: Entry, place: DockerPlace, width: f32) {
-    let (text, tab) = match entry {
-        P(tab) => (label(tab), Some(tab)),
-        U(key) => (tr(key), None),
-    };
-    let on = tab.is_some_and(|tab| app.docker_open(tab));
-    let enabled = tab.is_some();
+    let P(tab) = entry;
+    let text = label(tab);
+    let on = app.docker_open(tab);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 17.0), Sense::click());
-    let response = response.on_hover_cursor(if enabled {
-        egui::CursorIcon::Default
-    } else {
-        egui::CursorIcon::NotAllowed
-    });
-    if response.hovered() && enabled {
+    if response.hovered() {
         ui.painter().rect_filled(rect, 0.0, Tokens::menu_hover());
         ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, Tokens::menu_hover_line()),
             egui::StrokeKind::Inside);
     }
-    let color = if enabled { Tokens::text() } else { Tokens::menu_text_off() };
-    let check = Rect::from_center_size(egui::pos2(rect.left() + 9.0, rect.center().y),
-        egui::vec2(11.0, 11.0));
-    ui.painter().rect_filled(check, 2.0, Tokens::field());
-    ui.painter().rect_stroke(check, 2.0, Stroke::new(1.0, Tokens::control_border()),
+    let check = Rect::from_center_size(egui::pos2(rect.left() + 11.0, rect.center().y),
+        egui::vec2(12.0, 12.0));
+    let fill = if on && crate::theme::theme().is_dark() {
+        Color32::from_rgb(64, 64, 64)
+    } else { Tokens::field() };
+    ui.painter().rect_filled(check, 3.0, fill);
+    ui.painter().rect_stroke(check, 3.0, Stroke::new(1.0, Tokens::control_border()),
         egui::StrokeKind::Inside);
     if on {
         let c = check.center();
         ui.painter().add(egui::epaint::PathShape::line(vec![
             c + egui::vec2(-3.0, 0.0), c + egui::vec2(-0.5, 3.0),
-            c + egui::vec2(3.5, -3.5)], Stroke::new(1.4, color)));
+            c + egui::vec2(3.5, -3.5)], Stroke::new(1.4, Tokens::text())));
     }
     let icon_rect = Rect::from_center_size(
-        egui::pos2(rect.left() + 27.0, rect.center().y), egui::vec2(16.0, 16.0));
-    if let Some(tab) = tab {
-        draw_icon(ui.painter(), icon_rect, tab);
-    } else {
-        // Unavailable panels are explicit, never fake checkable panels.
-        let tool = match entry {
-            U("docker_catalog.live_guides") => Tool::AnchorEditing,
-            U("docker_catalog.fit_path") => Tool::ThreePointCurve,
-            U("docker_catalog.color_proof") => Tool::MeshFill,
-            U("docker_catalog.assets") => Tool::CommonShapes,
-            U("docker_catalog.views") => Tool::Zoom,
-            _ => Tool::Rectangle,
-        };
-        icons::draw(ui.painter(), icon_rect, tool, color);
-    }
-    ui.painter().text(egui::pos2(rect.left() + 40.0, rect.center().y),
-        egui::Align2::LEFT_CENTER, text, FontId::proportional(12.0), color);
-    if let Some(tab) = tab {
-        if response.clicked() {
-            toggle(app, tab, place);
-        }
-    } else {
-        response.on_hover_text(tr("docker_catalog.unavailable"));
+        egui::pos2(rect.left() + 29.0, rect.center().y), egui::vec2(16.0, 16.0));
+    draw_icon(ui.painter(), icon_rect, tab);
+    ui.painter().text(egui::pos2(rect.left() + 43.0, rect.center().y),
+        egui::Align2::LEFT_CENTER, text, FontId::proportional(12.0), label_color());
+    if response.clicked() {
+        toggle(app, tab, place);
     }
 }
 
 /// The same pictogram appears in the catalog and on the vertical tab.
 pub(super) fn draw_icon(painter: &egui::Painter, rect: Rect, tab: DockerTab) {
-    if let Some(icon) = super::tab_icon(tab) {
-        icon(painter, rect);
-        return;
-    }
-    use menu_glyphs::Glyph;
-    let glyph = match tab {
-        Properties => Some(Glyph::DocProperties),
-        Pages => Some(Glyph::PageDuplicate),
-        ObjectData => Some(Glyph::DocOptions),
-        ObjectStyles => Some(Glyph::CopyProperties),
-        Symbols => Some(Glyph::Symbol),
-        FindReplace => Some(Glyph::Find),
-        AlignDistribute => Some(Glyph::AlignLeft),
-        StepAndRepeat => Some(Glyph::StepRepeat),
-        JoinCurves => Some(Glyph::JoinCurves),
-        Fonts | FontSampler => Some(Glyph::FontManager),
-        Blend => Some(Glyph::Blend),
-        Contour => Some(Glyph::Contour),
-        Extrude => Some(Glyph::Extrude),
-        Lens => Some(Glyph::Lens),
-        Bevel => Some(Glyph::Bevel),
-        Color | ColorStyles => Some(Glyph::ColorManagement),
-        Scripts | Macros => Some(Glyph::Script),
-        Undo => Some(Glyph::Repeat),
-        Hints => Some(Glyph::UserGuide),
-        _ => None,
-    };
-    if let Some(glyph) = glyph {
-        menu_glyphs::draw(painter, rect, glyph, Tokens::icon());
-        return;
-    }
-    let tool = match tab {
-        Transformations => Tool::FreeTransform,
-        Coordinates => Tool::HorizontalVerticalDimension,
-        Shaping => Tool::Shape,
-        Corners => Tool::Shape,
-        Text | Glyphs => Tool::Text,
-        BrushStrokes => Tool::BrushStrokes,
-        Envelope => Tool::Envelope,
-        BitmapMask => Tool::Transparency,
-        Links => Tool::Connector,
-        Guidelines => Tool::ParallelDimension,
-        Palettes => Tool::MeshFill,
-        PictureMosaic | VectorMosaic => Tool::GraphPaper,
-        Export => Tool::Polygon,
-        Objects => Tool::Blend,
-        Shelf => Tool::CommonShapes,
-        Comments => Tool::Callout,
-        Effects => Tool::Distort,
-        _ => Tool::Rectangle,
-    };
-    icons::draw(painter, rect, tool, Tokens::icon());
+    super::reference_icons::draw(painter, rect, tab);
 }
 
 #[cfg(test)]
@@ -223,7 +152,7 @@ mod tests {
     #[test]
     fn catalog_covers_each_panel_once_including_extra_panels() {
         let mut tabs: Vec<_> = GROUPS.iter().flat_map(|g| g.iter())
-            .filter_map(|entry| match entry { P(tab) => Some(*tab), U(_) => None }).collect();
+            .map(|entry| { let P(tab) = entry; *tab }).collect();
         tabs.extend([Comments, Effects, Macros]);
         assert_eq!(tabs.len(), DockerTab::ALL.len());
         for tab in DockerTab::ALL {

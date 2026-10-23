@@ -1205,6 +1205,16 @@ impl App {
             cum.push(cum.last().copied().unwrap_or(0.0) + (w[1] - w[0]).hypot());
         }
         let total = *cum.last().unwrap_or(&0.0);
+        if !total.is_finite() || total <= 1e-9 {
+            return;
+        }
+        let prefs = self.settings.fit_path.clone();
+        let start = if prefs.start_percent.is_finite() {
+            prefs.start_percent.clamp(0.0, 100.0) / 100.0
+        } else { 0.0 };
+        let end = if prefs.end_percent.is_finite() {
+            (prefs.end_percent.clamp(0.0, 100.0) / 100.0).max(start)
+        } else { 1.0 };
         let objects = &shapes[..shapes.len() - 1];
         let n = objects.len();
         let mut cmds = Vec::new();
@@ -1214,7 +1224,8 @@ impl App {
             } else {
                 i as f64 / (n as f64 - 1.0)
             };
-            let target = t * total;
+            let t = if prefs.reverse { 1.0 - t } else { t };
+            let target = (start + t * (end - start)) * total;
             let k = cum
                 .partition_point(|c| *c <= target)
                 .saturating_sub(1)
@@ -1226,7 +1237,13 @@ impl App {
             let c = s.bounds().center();
             cmds.push(Command::TransformShapes {
                 shapes: vec![s.id],
-                transform: Affine::translate(pos - c),
+                transform: if prefs.rotate {
+                    Affine::translate(pos.to_vec2())
+                        * Affine::rotate(seg.y.atan2(seg.x))
+                        * Affine::translate(-c.to_vec2())
+                } else {
+                    Affine::translate(pos - c)
+                },
             });
         }
         if let Err(e) = self.engine.run_batch("Fit Objects to Path", &cmds) {
@@ -2872,6 +2889,32 @@ pub(crate) fn with_stand_ins(missing: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fit_objects_rotation_and_range_are_undoable() {
+        let mut app = App::headless();
+        let object = app.new_shape(ShapeKind::Rect {
+            rect: Rect::new(0.0, 0.0, 20.0, 10.0), radius: 0.0, corners: None,
+        }).expect("rectangle");
+        let mut line = BezPath::new();
+        line.move_to((100.0, 0.0));
+        line.line_to((100.0, 100.0));
+        let path = app.new_shape(ShapeKind::Path { path: line, closed: false }).expect("path");
+        app.selection = vec![object, path];
+        app.settings.fit_path.rotate = true;
+        app.settings.fit_path.start_percent = 20.0;
+        app.settings.fit_path.end_percent = 60.0;
+        app.fit_objects_to_path();
+        let bounds = app.doc().shape(object).expect("object").1.bounds();
+        assert!((bounds.center().x - 100.0).abs() < 1e-6);
+        assert!((bounds.center().y - 40.0).abs() < 1e-6);
+        assert!((bounds.width() - 10.0).abs() < 1e-6);
+        assert!((bounds.height() - 20.0).abs() < 1e-6);
+        let _ = app.engine.undo();
+        let original = app.doc().shape(object).expect("restored object").1.bounds();
+        assert!((original.center().x - 10.0).abs() < 1e-6);
+        assert!((original.center().y - 5.0).abs() < 1e-6);
+    }
 
     #[test]
     fn fit_text_to_path_waits_for_a_path_and_starts_text_on_it() {

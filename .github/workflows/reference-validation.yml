@@ -1,0 +1,63 @@
+name: Reference UI validation
+
+on:
+  push:
+    branches: [claude/rebrand-cd-draw]
+    paths:
+      - 'apps/**'
+      - 'crates/**'
+      - 'Cargo.*'
+      - '.github/workflows/reference-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reference-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Native and visual dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev xvfb openbox x11-utils libgl1-mesa-dri libxkbcommon-x11-0 python3-xlib imagemagick
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format and capture formatting patch
+        run: |
+          cargo fmt --all
+          git diff --binary > reference-format.patch
+      - name: Workspace tests
+        run: cargo test --workspace
+      - name: Library lint gate
+        run: cargo clippy --workspace --exclude tracedraw -- -D warnings
+      - name: Native build
+        run: cargo build -p tracedraw
+      - name: Render the real catalog UI
+        env:
+          REFERENCE_SHOTS: ${{ github.workspace }}/reference-shots
+        run: cargo test -p tracedraw reference_catalog_shot -- --ignored --test-threads=1
+      - name: Native smoke and interaction checks
+        env:
+          TRACEDRAW_SHOTS: ${{ github.workspace }}/native-shots
+          MONKEY_SEED: '23'
+          MONKEY_STEPS: '100'
+        run: |
+          scripts/visual/run.sh scripts/visual/smoke_edit.py
+          scripts/visual/run.sh scripts/visual/monkey.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reference-validation
+          path: |
+            reference-format.patch
+            reference-shots/
+            native-shots/

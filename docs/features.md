@@ -1,1 +1,2 @@
-| Docker plus catalog: compact grouped checkboxes and icons, multi-toggle without closing, scrolling and complete existing-panel coverage | implemented, pending compilation and native visual validation (see `behavior/docker-catalog.md`); five missing dedicated panels explicitly disabled |
+
+| Reference docker catalog: 43 active rows with dedicated icons; Live Guides, Fit Objects to Path, Color Proof, offline Assets and saved Views | implemented; native validation pending (`behavior/reference-panels.md`, `behavior/docker-catalog.md`) |

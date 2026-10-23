@@ -1507,10 +1507,15 @@ pub enum DockerTab {
     Comments,
     Effects,
     Macros,
+    LiveGuides,
+    FitPath,
+    ColorProof,
+    Assets,
+    Views,
 }
 
 impl DockerTab {
-    pub const ALL: [DockerTab; 41] = [
+    pub const ALL: [DockerTab; 46] = [
         DockerTab::Properties,
         DockerTab::Objects,
         DockerTab::Hints,
@@ -1552,6 +1557,11 @@ impl DockerTab {
         DockerTab::Shelf,
         DockerTab::Effects,
         DockerTab::Macros,
+        DockerTab::LiveGuides,
+        DockerTab::FitPath,
+        DockerTab::ColorProof,
+        DockerTab::Assets,
+        DockerTab::Views,
     ];
 
     /// Window > Panels, in groups divided by separators, in the order of
@@ -1570,8 +1580,8 @@ impl DockerTab {
             DockerTab::Export,
         ],
         &[DockerTab::Transformations, DockerTab::Coordinates],
-        &[DockerTab::Guidelines],
-        &[DockerTab::AlignDistribute, DockerTab::StepAndRepeat],
+        &[DockerTab::LiveGuides, DockerTab::Guidelines],
+        &[DockerTab::AlignDistribute, DockerTab::FitPath, DockerTab::StepAndRepeat],
         &[
             DockerTab::Shaping,
             DockerTab::Corners,
@@ -1587,9 +1597,11 @@ impl DockerTab {
             DockerTab::Color,
             DockerTab::Palettes,
             DockerTab::ColorStyles,
+            DockerTab::ColorProof,
         ],
-        &[DockerTab::Shelf, DockerTab::Links],
+        &[DockerTab::Assets, DockerTab::Shelf, DockerTab::Links],
         &[
+            DockerTab::Views,
             DockerTab::Undo,
             DockerTab::Hints,
             DockerTab::Scripts,
@@ -1656,6 +1668,11 @@ impl DockerTab {
             DockerTab::Comments => "docker.comments",
             DockerTab::Macros => "docker.macros",
             DockerTab::Effects => "docker.effects",
+            DockerTab::LiveGuides => "docker_catalog.live_guides",
+            DockerTab::FitPath => "docker_catalog.fit_path",
+            DockerTab::ColorProof => "docker_catalog.color_proof",
+            DockerTab::Assets => "docker_catalog.assets",
+            DockerTab::Views => "docker_catalog.views",
         }
     }
 

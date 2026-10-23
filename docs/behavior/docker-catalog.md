@@ -8,8 +8,8 @@ image, video or proprietary program asset is bundled.
 
 ## Layout and interaction
 
-- Rows are 17 interface points high, with an 11-point checkbox, a separate
-  16-point icon and a 12-point label. The minimum width is 296 points;
+- Rows are 17 interface points high, with a 12-point checkbox, a separate
+  16-point icon and a 12-point label. The minimum width is 300 points;
   longer translations widen the menu. Cyan rules separate the groups.
 - Checkboxes reflect whether a panel is open anywhere, including a
   collapsed column or floating window. A checked row closes that panel.
@@ -19,26 +19,33 @@ image, video or proprietary program asset is bundled.
   scrolls, and the tab column scrolls separately to keep plus reachable.
 - The same pictograms appear on vertical tabs. The active tab has a blue
   highlight in normal themes; high contrast uses the configured palette.
-- Comments, Effects and Macros remain available under More panels, after
-  the reference groups. The separate Window menu is unchanged.
+- Comments, Effects and Macros remain available from the separate Window menu.
 - Portuguese labels follow the supplied catalog. Picture Mosaic and Vector
   Mosaic appear there as PhotoCocktail and Pointillizer; these entries open
   the existing mosaic panels and do not change their algorithms.
 
-## Existing limitations
+## Reference completion pass
 
-Live Guides, Fit Objects to Path, Color Proof, Assets and Views do not
-have dedicated docker implementations in this project. They are shown
-explicitly disabled, with a translated explanation. No checkbox is
-allowed to pretend to open a nonexistent panel. This change does not
-implement those five panels or promise their reference application's
-behavior. Every one of the 41 existing panels is still reachable.
+The five entries previously disabled are now real DockerTab variants:
+Live Guides, Fit Objects to Path, Color Proof, Assets and Views. See
+`reference-panels.md` for their behavior and remaining compatibility limits.
+The catalog now has 43 active rows, in the reference order, with no extra
+More panels row. The three application-specific panels (Comments, Effects,
+Macros) remain accessible from Window > Panels.
+
+The dark menu background (38,38,38), label color (202,206,212), separator
+(1,125,188), 300-point minimum width, checkbox position and row spacing
+come from the supplied screenshot. Panel-specific original vector artwork
+replaces the earlier generic tool-icon substitutions. The plus follows the
+tab stack; its popup's anchor stays fixed while panels are toggled. Closing
+the last panel on the secondary side leaves the open catalog usable.
 
 ## Validation
 
-`ui::dockers::catalog::tests` checks complete, unique panel coverage and
-opening/closing at the requested side, including collapsed and floating
-panels. Native compilation, formatting, workspace tests, clippy and
-visual smoke/monkey checks remain pending in the authoring environment,
-which has no Rust/Cargo or display server. Do not mark native visual
-acceptance complete until a built application has been inspected.
+Coverage, popup interaction, asset deduplication, saved-view persistence,
+invalid-view rejection, path fitting with rotation and undo, and artwork
+coverage have Rust regressions. `reference-validation.yml` runs formatting,
+tests, build, library lint and native smoke/monkey checks, and uploads a
+render of the real dark pt-BR catalog. A compiled/rendered comparison must
+pass before visual equivalence is claimed. Static checks alone are not
+native validation.

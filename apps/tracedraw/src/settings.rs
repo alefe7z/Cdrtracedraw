@@ -78,6 +78,12 @@ impl Captions {
 pub struct Settings {
     pub language: String,
     pub recent_files: Vec<PathBuf>,
+    #[serde(default)]
+    pub asset_files: Vec<PathBuf>,
+    #[serde(default)]
+    pub saved_views: Vec<SavedView>,
+    #[serde(default)]
+    pub fit_path: FitPathPrefs,
     pub workspace: String,
     pub show_welcome_on_start: bool,
     /// Options > Tools > Table: what Tab does in a cell.
@@ -1169,11 +1175,38 @@ impl Default for ColorPrefs {
     }
 }
 
+/// A named view tied to a persistent page id. Kept across app restarts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedView {
+    pub name: String,
+    pub page: tracedraw_core::PageId,
+    pub zoom: f32,
+    pub center: [f64; 2],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FitPathPrefs {
+    pub rotate: bool,
+    pub reverse: bool,
+    pub start_percent: f64,
+    pub end_percent: f64,
+}
+
+impl Default for FitPathPrefs {
+    fn default() -> Self {
+        Self { rotate: false, reverse: false, start_percent: 0.0, end_percent: 100.0 }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             language: String::new(),
             recent_files: Vec::new(),
+            asset_files: Vec::new(),
+            saved_views: Vec::new(),
+            fit_path: FitPathPrefs::default(),
             workspace: "default".into(),
             show_welcome_on_start: true,
             table: Default::default(),
@@ -1317,6 +1350,8 @@ impl Settings {
     pub fn reset_keeping_history(&self) -> Settings {
         Settings {
             recent_files: self.recent_files.clone(),
+            asset_files: self.asset_files.clone(),
+            saved_views: self.saved_views.clone(),
             last_dir: self.last_dir.clone(),
             window_maximized: self.window_maximized,
             window_size: self.window_size,

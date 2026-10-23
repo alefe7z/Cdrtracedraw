@@ -1009,7 +1009,7 @@ fn guide_look(
 
 /// Options > Alignment Guides: what lines up with what while objects are
 /// moved, drawn or resized.
-fn alignment_guides_page(app: &mut App, ui: &mut Ui) {
+pub(crate) fn alignment_guides_page(app: &mut App, ui: &mut Ui) {
     ui.checkbox(
         &mut app.snap.alignment_guides,
         tr("options.alignment_guides_on"),
@@ -1064,7 +1064,7 @@ const DYNAMIC_PRESETS: [f64; 12] = [
 
 /// Options > Dynamic Guides: the angles of the guides from acquired snap
 /// points, their tip and ticks.
-fn dynamic_guides_page(app: &mut App, ui: &mut Ui) {
+pub(crate) fn dynamic_guides_page(app: &mut App, ui: &mut Ui) {
     ui.checkbox(
         &mut app.snap.dynamic_guides,
         tr("options.dynamic_guides_on"),

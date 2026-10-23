@@ -92,20 +92,19 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Codex | Reference fidelity: docker catalog/icons and five missing panel integrations; app DockerTab, ui/dockers.rs, new panel module, translations/docs | 2026-10-23 | Owner explicitly requires matching design and behavior, not approximate substitutes. Native verification remains required. |
+| Codex | Reference fidelity: docker catalog/icons and five missing panel integrations; app/settings/ops2, docker modules/icons, options helpers, help/screenshots, translations/docs, reference-validation workflow | 2026-10-23 | Owner explicitly requires matching design and behavior, not approximate substitutes. Native verification remains required. |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
 
-- Codex docker catalog: ready for native validation. Please run cargo fmt,
-  cargo test --workspace, cargo build -p tracedraw, clippy and the required
-  visual smoke/monkey checks. This environment has no Rust/Cargo or display.
-  Three new regressions cover panel coverage, side/floating toggles and
-  multiple row clicks without closing the popup. Five reference panels
-  (Live Guides, Fit Objects to Path, Color Proof, Assets, Views) have no
-  dedicated implementation and are explicitly disabled, not simulated.
-  Preserve the any-key shortcut changes when reviewing this contribution.
+- Codex reference fidelity pass: five previously unavailable entries now have
+  functional integrations (Live Guides, Fit Objects to Path, Color Proof,
+  Assets, Views). Catalog has 43 active reference rows; Comments, Effects
+  and Macros remain in Window > Panels. Dedicated vector icons replace
+  generic tool substitutions. Native validation is in progress through the
+  reference-validation workflow; do not claim visual identity before its
+  rendered catalog is inspected. Details: docs/behavior/reference-panels.md.
 
 - Codex selection flyout change (57030bb): checked by Claude on
   2026-10-23. It builds, the workspace tests (899) and clippy pass, and
@@ -131,6 +130,11 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-23, Codex: reference fidelity pass, all five missing panels wired,
+  dedicated pictograms, reference palette/geometry and stable popup anchor.
+  Persistent local assets and named views, path rotation/range preferences.
+  Static coverage/translation checks pass; native CI validation pending.
 
 - 2026-10-23, Codex: implemented the grouped docker plus catalog from the
   owner's screenshot/video: compact checkboxes and vector icons, multi-toggle,

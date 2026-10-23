@@ -237,6 +237,11 @@ pub fn docker_topic(t: DockerTab) -> &'static str {
         DockerTab::Export => "web-graphics/export-docker",
         DockerTab::Comments => "objects/comments",
         DockerTab::Effects => "effects/effects-docker",
+        DockerTab::LiveGuides => "pages-layout/guidelines-and-grid",
+        DockerTab::FitPath => "objects/transforming",
+        DockerTab::ColorProof => "color/color-management",
+        DockerTab::Assets => "objects/shelf",
+        DockerTab::Views => "get-started/undo-and-views",
     }
 }
 
