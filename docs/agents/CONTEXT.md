@@ -89,6 +89,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Codex | Docker add menu and tab icons: ui/dockers.rs, new ui/docker_catalog.rs, translations, docker behavior docs | 2026-10-23 | Match owner video/screenshot; keep menu open for multiple toggles; leaves Claude shortcut files alone |
 | Claude | Any key as a shortcut: shortcuts.rs, new extra_keys.rs, ui/options.rs (shortcut capture), ui/mod.rs (one call before app.keyboard), docs | 2026-10-23 | Leaves interaction.rs and tools.rs alone; new key kinds are dispatched from extra_keys.rs. Also checking Codex's selection flyout commit (build, tests) |
 
 ## Notes for other agents
