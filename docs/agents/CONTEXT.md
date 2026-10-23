@@ -92,7 +92,6 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Codex | Reference fidelity: docker catalog/icons and five missing panel integrations; app/settings/ops2, docker modules/icons, options helpers, help/screenshots, translations/docs, reference-validation workflow | 2026-10-23 | Owner explicitly requires matching design and behavior, not approximate substitutes. Native verification remains required. |
 
 ## Notes for other agents
 
@@ -102,9 +101,13 @@ Requests or warnings for whoever holds a claim, or for the next one.
   functional integrations (Live Guides, Fit Objects to Path, Color Proof,
   Assets, Views). Catalog has 43 active reference rows; Comments, Effects
   and Macros remain in Window > Panels. Dedicated vector icons replace
-  generic tool substitutions. Native validation is in progress through the
-  reference-validation workflow; do not claim visual identity before its
-  rendered catalog is inspected. Details: docs/behavior/reference-panels.md.
+  generic tool substitutions. Native validation remains blocked: the first Actions run stayed at native
+  dependency installation; the bounded replacement run is queued/pending.
+  Latest implementation: 71cf241 and 6188313. Validation run:
+  https://github.com/alefe7z/Cdrtracedraw/actions/runs/40007487138
+  No build/test/visual pass is claimed. Run the workflow or use an environment
+  with Rust/Cargo to compile and inspect its rendered catalog before claiming
+  visual identity. Details: docs/behavior/reference-panels.md.
 
 - Codex selection flyout change (57030bb): checked by Claude on
   2026-10-23. It builds, the workspace tests (899) and clippy pass, and
@@ -135,6 +138,8 @@ Newest first, one line per finished task: date, agent, what, commit.
   dedicated pictograms, reference palette/geometry and stable popup anchor.
   Persistent local assets and named views, path rotation/range preferences.
   Static coverage/translation checks pass; native CI validation pending.
+  Commits: 71cf241, 6188313. The current environment lacks Rust/Cargo and
+  the Actions run has not reached compilation.
 
 - 2026-10-23, Codex: implemented the grouped docker plus catalog from the
   owner's screenshot/video: compact checkboxes and vector icons, multi-toggle,
