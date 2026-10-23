@@ -325,21 +325,27 @@ pub fn tool_color(tool: Tool, plain: Color32) -> Color32 {
     }
 }
 
-/// A craft knife in the 16 by 16 grid, moved by `(ox, oy)` and scaled by
-/// `f` about the origin: the Knife icon, and the small one of Segment
-/// Delete.
-fn knife(ic: &Ic, ox: f32, oy: f32, f: f32, s: Stroke, color: Color32) {
-    let p = |x: f32, y: f32| (ox + x * f, oy + y * f);
-    // Handle.
+/// The knife of the Knife and Segment Delete icons in the 16 by 16 grid:
+/// a long diagonal edge with two shorter strokes beside it, rising from a
+/// solid wedge with a slot across it.
+fn knife(ic: &Ic, s: Stroke, color: Color32) {
+    ic.line(1.5, 15.2, 14.8, 1.5, s);
+    ic.line(9.6, 11.0, 14.8, 5.6, s);
+    ic.line(11.9, 12.5, 14.8, 9.5, s);
+    // The wedge, filled around its slot (y 13.4 to 14.4, x 5.2 to 8.8).
+    ic.fill(&[(3.24, 13.4), (7.5, 9.0), (11.05, 13.4)], color);
     ic.fill(
-        &[p(1.5, 13.0), p(3.0, 14.5), p(7.0, 10.5), p(5.5, 9.0)],
+        &[(3.24, 13.4), (5.2, 13.4), (5.2, 14.4), (2.27, 14.4)],
         color,
     );
-    // Collar.
-    let (a, b) = (p(5.0, 8.0), p(8.0, 11.0));
-    ic.line(a.0, a.1, b.0, b.1, s);
-    // Blade: a straight back to the tip, then the slanted edge.
-    ic.closed(&[p(6.0, 8.5), p(14.5, 1.5), p(9.5, 10.0), p(7.5, 10.0)], s);
+    ic.fill(
+        &[(8.8, 13.4), (11.05, 13.4), (11.85, 14.4), (8.8, 14.4)],
+        color,
+    );
+    ic.fill(
+        &[(2.27, 14.4), (11.85, 14.4), (12.5, 15.2), (1.5, 15.2)],
+        color,
+    );
 }
 
 pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
@@ -478,35 +484,45 @@ pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
 
         // Crop group.
         Tool::Crop => {
-            // Two crop marks.
-            let w = Stroke::new(1.9 * k, color);
-            ic.line(5.0, 1.5, 5.0, 11.0, w);
-            ic.line(5.0, 11.0, 14.5, 11.0, w);
-            ic.line(1.5, 5.0, 11.0, 5.0, w);
-            ic.line(11.0, 5.0, 11.0, 14.5, w);
+            // Two heavy crop marks.
+            let w = Stroke::new(1.6 * k, color);
+            ic.line(4.5, 1.0, 4.5, 11.5, w);
+            ic.line(3.5, 11.5, 15.0, 11.5, w);
+            ic.line(1.0, 4.5, 12.5, 4.5, w);
+            ic.line(11.5, 3.5, 11.5, 15.0, w);
         }
-        Tool::Knife => {
-            // A craft knife laid diagonally: solid handle at the lower left,
-            // a collar, and a slanted blade up to the tip.
-            knife(&ic, 0.0, 0.0, 1.0, s, color);
-        }
+        Tool::Knife => knife(&ic, s, color),
         Tool::SegmentDelete => {
-            // A dashed marquee in the accent colour, and a small knife over
-            // its lower right corner: the stretches it cuts away.
-            let mark = Stroke::new(1.1 * k, accent);
-            ic.dashed(1.5, 1.5, 10.5, 1.5, 1.4, mark);
-            ic.dashed(1.5, 1.5, 1.5, 10.5, 1.4, mark);
-            ic.dashed(10.5, 1.5, 10.5, 6.0, 1.4, mark);
-            ic.dashed(1.5, 10.5, 6.0, 10.5, 1.4, mark);
-            knife(&ic, 4.5, 4.5, 0.72, s, color);
+            // The knife over a dashed marquee in red, whose top and left
+            // sides show.
+            let red = if color == Tokens::icon() {
+                Color32::from_rgb(0xF0, 0x5A, 0x4E)
+            } else {
+                color
+            };
+            let mark = Stroke::new(1.3 * k, red);
+            ic.dashed(1.0, 1.0, 12.5, 1.0, 1.6, mark);
+            ic.dashed(1.0, 1.0, 1.0, 13.5, 1.6, mark);
+            knife(&ic, s, color);
         }
         Tool::Eraser => {
-            // A tilted eraser block: the sleeve outlined, the rubbing end
-            // solid, over the line it rubs out.
-            ic.closed(&[(2.5, 10.5), (9.5, 3.5), (14.0, 8.0), (7.0, 15.0)], s);
-            ic.fill(&[(2.5, 10.5), (5.5, 7.5), (10.0, 12.0), (7.0, 15.0)], color);
-            ic.line(5.5, 7.5, 10.0, 12.0, s);
-            ic.line(9.0, 15.0, 15.0, 15.0, thin);
+            // A tilted eraser block: the sleeve outlined, the rubbing half
+            // at the lower left solid.
+            ic.closed(&[(5.0, 5.0), (9.0, 1.0), (14.5, 6.5), (10.5, 10.5)], s);
+            // The end half, its two outer corners rounded off.
+            ic.fill(
+                &[
+                    (5.0, 5.0),
+                    (10.5, 10.5),
+                    (7.35, 13.65),
+                    (6.5, 14.2),
+                    (5.65, 13.65),
+                    (1.85, 9.85),
+                    (1.3, 9.0),
+                    (1.85, 8.15),
+                ],
+                color,
+            );
         }
 
         // Zoom group.
