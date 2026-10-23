@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `d129b37 Let any key be a shortcut`
-- Commits on the branch: 27
+- Last commit before this one: `b975ec5 Rework the docker catalog to follow the supplied reference`
+- Commits on the branch: 35
 
 ## Last 20 commits
 
+- `b975ec5` 2026-10-23 15:27 alefe7z: Rework the docker catalog to follow the supplied reference
 - `d129b37` 2026-10-23 18:22 Claude: Let any key be a shortcut
 - `a7ca9a0` 2026-10-23 15:19 alefe7z: Claim docker add menu reference task
 - `9c0ae11` 2026-10-23 18:11 Claude: Format the selection flyout change
@@ -23,47 +24,43 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `d87efb6` 2026-10-23 16:05 Claude: Use the new CD Draw logo for every icon
 - `d6fb1b7` 2026-10-23 15:47 Claude: Rework the Curve flyout after the reference look
 - `5e5d353` 2026-10-23 15:37 Claude: Redraw the Crop flyout icons after the reference look
-- `7d32888` 2026-10-22 17:59 Claude: Allow following and naming other programs
-- `8a2a324` 2026-10-22 17:49 Claude: Format the knife icon helper
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (5)
-- `docs/features.md` (2)
+- `docs/agents/CONTEXT.md` (6)
+- `docs/features.md` (3)
 - `apps/tracedraw/src/ui/toolbox.rs` (2)
 - `apps/tracedraw/src/ui/icons.rs` (2)
 - `apps/tracedraw/src/tools.rs` (2)
 - `apps/tracedraw/src/pick_drag_tests.rs` (2)
 - `apps/tracedraw/src/interaction.rs` (2)
-- `scripts/agent-sync.sh` (1)
+- `apps/tracedraw/lang/zh-TW.toml` (2)
+- `apps/tracedraw/lang/zh-CN.toml` (2)
+- `apps/tracedraw/lang/tr.toml` (2)
+- `apps/tracedraw/lang/ru.toml` (2)
+- `apps/tracedraw/lang/pt-BR.toml` (2)
+- `apps/tracedraw/lang/pl.toml` (2)
+- `apps/tracedraw/lang/nl.toml` (2)
+- `apps/tracedraw/lang/ja.toml` (2)
+- `apps/tracedraw/lang/it.toml` (2)
+- `apps/tracedraw/lang/id.toml` (2)
+- `apps/tracedraw/lang/hi.toml` (2)
+- `apps/tracedraw/lang/fr.toml` (2)
+- `apps/tracedraw/lang/es.toml` (2)
+- `apps/tracedraw/lang/en.toml` (2)
+- `apps/tracedraw/lang/de.toml` (2)
+- `apps/tracedraw/lang/cs.toml` (2)
+- `apps/tracedraw/lang/bn.toml` (2)
+- `apps/tracedraw/lang/ar.toml` (2)
 - `docs/behavior/shortcuts.md` (1)
 - `docs/behavior/pick-tool.md` (1)
+- `docs/behavior/docker-catalog.md` (1)
 - `apps/tracedraw/src/ui/options.rs` (1)
 - `apps/tracedraw/src/ui/mod.rs` (1)
-- `apps/tracedraw/src/shortcuts.rs` (1)
-- `apps/tracedraw/src/printers.rs` (1)
-- `apps/tracedraw/src/main.rs` (1)
-- `apps/tracedraw/src/extra_keys.rs` (1)
-- `apps/tracedraw/lang/zh-TW.toml` (1)
-- `apps/tracedraw/lang/zh-CN.toml` (1)
-- `apps/tracedraw/lang/tr.toml` (1)
-- `apps/tracedraw/lang/ru.toml` (1)
-- `apps/tracedraw/lang/pt-BR.toml` (1)
-- `apps/tracedraw/lang/pl.toml` (1)
-- `apps/tracedraw/lang/nl.toml` (1)
-- `apps/tracedraw/lang/ja.toml` (1)
-- `apps/tracedraw/lang/it.toml` (1)
-- `apps/tracedraw/lang/id.toml` (1)
-- `apps/tracedraw/lang/hi.toml` (1)
-- `apps/tracedraw/lang/fr.toml` (1)
-- `apps/tracedraw/lang/es.toml` (1)
-- `apps/tracedraw/lang/en.toml` (1)
 
 ## Open claims (from CONTEXT.md)
 
-| Agent | Area / files | Since | Note |
-| --- | --- | --- | --- |
-| Codex | Docker add menu and tab icons: ui/dockers.rs, new ui/docker_catalog.rs, translations, docker behavior docs | 2026-10-23 | Match owner video/screenshot; keep menu open for multiple toggles; leaves Claude shortcut files alone |
+None.
 
 ## Uncommitted when generated
 
