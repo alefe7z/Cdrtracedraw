@@ -6,6 +6,8 @@ full, row-by-row status.
 
 ## Unreleased
 
+- Toolbox: the Curve flyout lists Freehand, 2-Point Line, Bezier (Shift+F5), Artistic Media (I, the Brush Strokes tool, moved here), Pen (Alt+C), B-Spline (Alt+B), Polyline and 3-Point Curve, with new icons for each. Alt+C and Alt+B pick their tools instead of opening a menu.
+
 - Toolbox: the Crop flyout lists Crop, Eraser, Segment Delete and Knife, without a separator, with new icons: heavy crop marks for Crop, a tilted block with a solid rounded half for the Eraser, a knife of three diagonal strokes over a slotted wedge for the Knife, and the same knife over a red dashed marquee for Segment Delete.
 
 - Offline only: CD Draw no longer connects to the internet or to anything else. Removed: the browser version, AI Drawing, AI Generate, AI Art Styles and Remove Background with AI (Remove Background on this computer stays), File > GitHub, Help > Updates and the daily update check, Help > Community and Support, the MCP server (`tracedraw --mcp`, `--mcp-window`) and its local port, and the font downloads of the browser version. The program has no HTTP, TLS or socket code any more. Preferences of older versions open without those parts, and their stored API keys and tokens are not written back.

@@ -325,6 +325,11 @@ pub fn tool_color(tool: Tool, plain: Color32) -> Color32 {
     }
 }
 
+/// A hollow square node centred at `(x, y)` in the 16 by 16 grid.
+fn square_node(ic: &Ic, x: f32, y: f32, st: Stroke) {
+    ic.rect_s(x - 1.3, y - 1.3, x + 1.3, y + 1.3, 0.0, st);
+}
+
 /// The knife of the Knife and Segment Delete icons in the 16 by 16 grid:
 /// a long diagonal edge with two shorter strokes beside it, rising from a
 /// solid wedge with a slot across it.
@@ -546,94 +551,127 @@ pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
 
         // Curve group.
         Tool::Freehand => {
-            // The drawing cursor and a freehand scribble.
+            // The drawing cursor and a grey scribble below it.
             ic.line(1.0, 3.5, 6.0, 3.5, thin);
             ic.line(3.5, 1.0, 3.5, 6.0, thin);
-            let pts: Vec<(f32, f32)> = (0..=28)
-                .map(|i| {
-                    let t = i as f32 / 28.0;
-                    let x = 3.5 + 11.5 * t;
-                    let y = if t < 0.18 {
-                        7.5 + 30.0 * t
-                    } else {
-                        13.0 - 3.0 * ((t - 0.18) * 26.0).sin().abs()
-                    };
-                    (x, y)
-                })
-                .collect();
-            ic.open(&pts, s);
+            let grey = Stroke::new(1.1 * k, color.gamma_multiply(0.6));
+            let pts = [
+                (3.5, 14.0),
+                (3.8, 9.5),
+                (4.6, 14.0),
+                (5.6, 10.5),
+                (6.6, 14.0),
+                (7.6, 10.0),
+                (8.4, 14.0),
+                (9.6, 11.0),
+                (10.8, 14.0),
+                (12.0, 11.5),
+                (14.5, 11.5),
+            ];
+            ic.open(&pts, grey);
         }
         Tool::TwoPointLine => {
-            ic.line(3.0, 13.0, 13.0, 3.0, s);
-            ic.dot(3.0, 13.0);
-            ic.dot(13.0, 3.0);
+            // A line between two square end nodes.
+            ic.line(3.4, 12.6, 12.6, 3.4, s);
+            square_node(&ic, 2.6, 13.4, thin);
+            square_node(&ic, 13.4, 2.6, thin);
         }
         Tool::Bezier => {
-            let pts: Vec<(f32, f32)> = (0..=16)
+            // A curve through a square node, with the node's grey handle
+            // line crossing it.
+            let grey = Stroke::new(1.6 * k, color.gamma_multiply(0.55));
+            ic.line(2.5, 12.5, 14.0, 4.0, grey);
+            let pts: Vec<(f32, f32)> = (0..=14)
                 .map(|i| {
-                    let t = i as f32 / 16.0;
-                    let x = 3.0 + 10.0 * t;
-                    let y = 12.0 - 8.0 * (3.0 * t * t - 2.0 * t * t * t);
+                    let t = i as f32 / 14.0;
+                    let x = 4.5 + 10.0 * t;
+                    let y = 15.0 - 13.0 * t + 4.0 * t * (1.0 - t);
                     (x, y)
                 })
                 .collect();
             ic.open(&pts, s);
-            ic.line(3.0, 12.0, 7.5, 12.0, thin);
-            ic.line(13.0, 4.0, 8.5, 4.0, thin);
-            ic.node(3.0, 12.0);
-            ic.node(13.0, 4.0);
-            ic.node_hollow(7.5, 12.0);
-            ic.node_hollow(8.5, 4.0);
+            square_node(&ic, 7.0, 9.0, thin);
+            ic.line(5.0, 13.0, 4.5, 15.0, thin);
+        }
+        Tool::BrushStrokes => {
+            // A hook: a thin curl at the top, its stem running down into
+            // a heavy U whose right arm ends in a point.
+            let curl = ic.arc(7.2, 3.2, 1.8, 1.9, PI, PI * 2.0 + 0.45, 10);
+            ic.open(&curl, s);
+            ic.line(8.8, 4.0, 4.6, 9.0, s);
+            let u = ic.arc(7.8, 9.8, 3.4, 3.6, PI, 0.0, 16);
+            for (i, w) in u.windows(2).enumerate() {
+                let t = i as f32 / (u.len() - 1) as f32;
+                let width = 0.9 + 2.3 * (t * PI).sin();
+                ic.painter.line_segment(
+                    [ic.at(w[0].0, w[0].1), ic.at(w[1].0, w[1].1)],
+                    Stroke::new(ic.u(width), color),
+                );
+            }
+            ic.line(11.2, 9.8, 11.2, 8.0, s);
         }
         Tool::Pen => {
-            ic.nib(8.0, 14.0);
+            // A pen nib: a drop with a slit and a hole, over a base.
+            ic.closed(
+                &[
+                    (7.5, 1.2),
+                    (9.4, 4.5),
+                    (11.0, 8.0),
+                    (11.2, 10.2),
+                    (10.2, 12.0),
+                    (7.5, 12.6),
+                    (4.8, 12.0),
+                    (3.8, 10.2),
+                    (4.0, 8.0),
+                    (5.6, 4.5),
+                ],
+                s,
+            );
+            ic.line(7.5, 1.8, 7.5, 7.6, thin);
+            ic.circle_s(7.5, 8.6, 0.9, thin);
+            ic.line(4.5, 14.6, 10.5, 14.6, Stroke::new(1.6 * k, color));
         }
         Tool::BSpline => {
-            // Smooth curve hugging a dashed control polygon with hollow control points.
-            let ctrl = [(2.0, 12.0), (5.0, 3.0), (11.0, 13.0), (14.0, 4.0)];
-            for w in ctrl.windows(2) {
-                ic.dashed(w[0].0, w[0].1, w[1].0, w[1].1, 1.0, faint_stroke);
-            }
-            let pts: Vec<(f32, f32)> = (0..=20)
+            // A grey control corner between two square nodes and the
+            // curve they pull.
+            let grey = Stroke::new(1.1 * k, color.gamma_multiply(0.55));
+            ic.line(2.5, 4.0, 2.8, 13.0, grey);
+            ic.line(2.8, 13.0, 12.0, 13.0, grey);
+            let pts: Vec<(f32, f32)> = (0..=14)
                 .map(|i| {
-                    let t = i as f32 / 20.0;
-                    // Quadratic B-spline evaluated through the two inner spans.
-                    let seg = if t < 0.5 { 0 } else { 1 };
-                    let u = if seg == 0 { t * 2.0 } else { (t - 0.5) * 2.0 };
-                    let (p0, p1, p2) = (ctrl[seg], ctrl[seg + 1], ctrl[seg + 2]);
-                    let b0 = (1.0 - u) * (1.0 - u) * 0.5;
-                    let b1 = -u * u + u + 0.5;
-                    let b2 = u * u * 0.5;
-                    (
-                        p0.0 * b0 + p1.0 * b1 + p2.0 * b2,
-                        p0.1 * b0 + p1.1 * b1 + p2.1 * b2,
-                    )
+                    let t = i as f32 / 14.0;
+                    let a = (2.5, 3.0);
+                    let c = (3.0, 13.0);
+                    let b = (13.0, 13.5);
+                    let m = |p: f32, q: f32, r: f32| {
+                        (1.0 - t) * (1.0 - t) * p + 2.0 * (1.0 - t) * t * q + t * t * r
+                    };
+                    (m(a.0, c.0 + 3.0, b.0), m(a.1, c.1 - 3.0, b.1))
                 })
                 .collect();
             ic.open(&pts, s);
-            for &(x, y) in &ctrl {
-                ic.node_hollow(x, y);
-            }
+            square_node(&ic, 2.5, 2.2, thin);
+            square_node(&ic, 13.6, 13.6, thin);
         }
         Tool::Polyline => {
-            let pts = [
-                (2.0, 12.0),
-                (5.0, 4.0),
-                (8.5, 11.0),
-                (11.0, 5.0),
-                (14.0, 12.0),
-            ];
-            ic.open(&pts, s);
-            for &(x, y) in &pts {
-                ic.node(x, y);
-            }
+            // A pencil laid diagonally: a dark body, a light cap at the
+            // top right and the point at the lower left.
+            ic.fill(
+                &[(4.0, 9.5), (10.0, 3.5), (12.5, 6.0), (6.5, 12.0)],
+                color.gamma_multiply(0.55),
+            );
+            ic.closed(&[(4.0, 9.5), (10.0, 3.5), (12.5, 6.0), (6.5, 12.0)], s);
+            ic.fill(&[(10.0, 3.5), (11.5, 2.0), (14.0, 4.5), (12.5, 6.0)], color);
+            ic.closed(&[(4.0, 9.5), (6.5, 12.0), (3.0, 13.0)], thin);
+            ic.line(3.0, 13.0, 1.5, 14.5, thin);
         }
         Tool::ThreePointCurve => {
-            let a = ic.arc(8.0, 12.0, 6.0, 8.0, PI * 1.1, PI * 1.9, 14);
+            // An arch through three square nodes.
+            let a = ic.arc(8.0, 13.0, 5.6, 10.5, PI, PI * 2.0, 18);
             ic.open(&a, s);
-            ic.dot(a[0].0, a[0].1);
-            ic.dot(a[7].0, a[7].1);
-            ic.dot(a[14].0, a[14].1);
+            square_node(&ic, 2.4, 13.4, thin);
+            square_node(&ic, 8.0, 2.4, thin);
+            square_node(&ic, 13.6, 13.4, thin);
         }
         Tool::ShapeRecognition => {
             ic.pencil(2.5, 13.5, 11.0);
@@ -673,23 +711,6 @@ pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
         }
 
         // Brush strokes: a tapered brush stroke.
-        Tool::BrushStrokes => {
-            // A brush stroke shaped like an S, thickening towards a heavy,
-            // rounded end at the bottom left.
-            let mut pts = ic.arc(7.5, 5.0, 3.0, 3.2, -PI * 0.15, -PI * 1.5, 12);
-            pts.extend(ic.arc(8.0, 11.4, 4.2, 3.2, -PI * 0.5, PI * 0.85, 14));
-            for (i, w) in pts.windows(2).enumerate() {
-                let t = i as f32 / pts.len() as f32;
-                ic.painter.line_segment(
-                    [ic.at(w[0].0, w[0].1), ic.at(w[1].0, w[1].1)],
-                    Stroke::new(ic.u(0.9 + 1.4 * t), color),
-                );
-            }
-            if let Some(&(x, y)) = pts.last() {
-                ic.circle_f(x, y, 1.5, color);
-            }
-        }
-
         // Rectangle group.
         Tool::Rectangle => ic.rect_s(1.8, 1.8, 14.2, 14.2, 0.0, s),
         Tool::ThreePointRectangle => {

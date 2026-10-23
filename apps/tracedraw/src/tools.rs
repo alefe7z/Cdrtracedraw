@@ -125,6 +125,7 @@ pub const GROUPS: &[ToolGroup] = &[
             Tool::Freehand,
             Tool::TwoPointLine,
             Tool::Bezier,
+            Tool::BrushStrokes,
             Tool::Pen,
             Tool::BSpline,
             Tool::Polyline,
@@ -133,12 +134,7 @@ pub const GROUPS: &[ToolGroup] = &[
         hidden: false,
     },
     ToolGroup {
-        tools: &[
-            Tool::BrushStrokes,
-            Tool::PainterlyBrush,
-            Tool::ShapeRecognition,
-            Tool::Sketch,
-        ],
+        tools: &[Tool::PainterlyBrush, Tool::ShapeRecognition, Tool::Sketch],
         hidden: false,
     },
     ToolGroup {
@@ -369,6 +365,9 @@ impl Tool {
             Tool::Zoom => "Z",
             Tool::Pan => "H",
             Tool::Freehand => "F5",
+            Tool::Bezier => "Shift+F5",
+            Tool::Pen => "Alt+C",
+            Tool::BSpline => "Alt+B",
             Tool::Rectangle => "F6",
             Tool::Ellipse => "F7",
             Tool::Polygon => "Y",

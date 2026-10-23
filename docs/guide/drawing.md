@@ -103,7 +103,7 @@ from the curve flyout.
   press **Enter** to finish.
 - **Ctrl** keeps each segment to steps of the constrain angle.
 
-### Bezier, Pen and B-Spline
+### Bezier (`Shift+F5`), Pen (`Alt+C`) and B-Spline (`Alt+B`)
 
 These place nodes one at a time:
 

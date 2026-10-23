@@ -1439,11 +1439,23 @@ pub fn menu_bar(app: &mut App, ui: &mut Ui) {
     // instead of opening a menu; while Options waits for a shortcut's keys
     // no menu opens either.
     let capturing = app.shortcut_editor.capture.is_some();
+    // Alt+letter shortcuts of tools (the user's, else the defaults, such
+    // as Alt+C for the Pen) keep their letter from the menu bar.
+    let tool_labels = crate::tools::Tool::ALL.iter().filter_map(|t| {
+        app.settings
+            .shortcuts
+            .iter()
+            .find(|(id, _)| id == t.id())
+            .map(|(_, v)| v.clone())
+            .or_else(|| t.shortcut().map(str::to_string))
+    });
     let user_alt_keys: Vec<egui::Key> = app
         .settings
         .shortcuts
         .iter()
-        .filter_map(|(_, v)| crate::shortcuts::parse(v))
+        .map(|(_, v)| v.clone())
+        .chain(tool_labels)
+        .filter_map(|v| crate::shortcuts::parse(&v))
         .filter(|(m, _)| m.alt && !(m.ctrl || m.command || m.shift))
         .map(|(_, k)| k)
         .collect();

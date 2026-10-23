@@ -1,5 +1,8 @@
 # Brush Strokes (I)
 
+The tool is called Artistic Media in the toolbox and sits in the Curve
+flyout, after Bezier.
+
 Strokes drawn freehand (or applied to a selected curve from the Artistic
 Media panel) become filled objects in one of five modes. Defaults:
 Calligraphic mode, width 3 mm, angle 45 degrees, smoothing 25,

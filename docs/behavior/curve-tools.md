@@ -17,7 +17,7 @@ meets the start) `Path` objects with the toolbox defaults.
   constrain angle (15 degrees by default); Esc drops the first click; a
   drag in between draws freehand instead.
 
-## Bezier and Pen
+## Bezier (Shift+F5) and Pen (Alt+C)
 
 - Click-drag places a smooth node and pulls its handle out
   symmetrically (the handle follows the pointer while the button is
@@ -104,7 +104,7 @@ meets the start) `Path` objects with the toolbox defaults.
   every curve tool and the Freehand tool's two-click lines
   (`pick_drag_tests::the_constrain_key_can_be_shift_or_alt`).
 
-## B-spline
+## B-spline (Alt+B)
 
 - Each click (or the start of a drag) places a control point; there are
   no handles. The curve is the cubic B-spline of the control points: it
