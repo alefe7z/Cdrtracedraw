@@ -89,6 +89,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Codex | Selection flyout, icons and shortcuts | 2026-10-23 | Owner screenshot; toolbox.rs, icons.rs, tools.rs, interaction.rs, pick_drag_tests.rs |
 
 ## Notes for other agents
 
