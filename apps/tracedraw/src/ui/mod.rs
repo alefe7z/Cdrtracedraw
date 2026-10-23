@@ -480,8 +480,10 @@ fn root_frame(app: &mut App, ui: &mut Ui) {
     let rtl = crate::i18n::is_rtl();
     use crate::app::DockerPlace;
     for place in [DockerPlace::Right, DockerPlace::Left] {
-        if place == DockerPlace::Left && app.left_dockers.is_empty()
-            && !egui::Popup::is_id_open(ui.ctx(), egui::Id::new(("docker_add_menu", place as u8))) {
+        if place == DockerPlace::Left
+            && app.left_dockers.is_empty()
+            && !egui::Popup::is_id_open(ui.ctx(), egui::Id::new(("docker_add_menu", place as u8)))
+        {
             continue;
         }
         let at_left = (place == DockerPlace::Left) != rtl;

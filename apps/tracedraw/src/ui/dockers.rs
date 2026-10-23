@@ -2,10 +2,10 @@
 
 #[path = "docker_catalog.rs"]
 mod catalog;
-#[path = "docker_panels.rs"]
-mod reference_panels;
 #[path = "docker_icons.rs"]
 mod reference_icons;
+#[path = "docker_panels.rs"]
+mod reference_panels;
 
 use crate::app::{App, DockerDrag, DockerPlace, DockerTab};
 use crate::i18n::{tr, trf};
@@ -79,8 +79,10 @@ pub fn tab_strip(app: &mut App, ui: &mut Ui, place: DockerPlace) {
                 // A slot at the top of the tab for the close cross, shown while
                 // the pointer is over the tab.
                 let h = CLOSE_SLOT + 14.0 + icon_h + w;
-                let (r, resp) =
-                    ui.allocate_exact_size(egui::vec2(full.width(), h), egui::Sense::click_and_drag());
+                let (r, resp) = ui.allocate_exact_size(
+                    egui::vec2(full.width(), h),
+                    egui::Sense::click_and_drag(),
+                );
                 let bg = if strip_at_left(place) {
                     egui::Rect::from_min_max(r.min, egui::pos2(r.max.x - 1.0, r.max.y))
                 } else {
@@ -197,7 +199,9 @@ pub fn tab_strip(app: &mut App, ui: &mut Ui, place: DockerPlace) {
             egui::Popup::open_id(ui.ctx(), menu_id);
         }
     }
-    let anchor = ui.data_mut(|d| d.get_temp::<egui::Rect>(anchor_id)).unwrap_or(resp.rect);
+    let anchor = ui
+        .data_mut(|d| d.get_temp::<egui::Rect>(anchor_id))
+        .unwrap_or(resp.rect);
     egui::Popup::new(menu_id, ui.ctx().clone(), anchor, ui.layer_id())
         .kind(egui::PopupKind::Menu)
         .open_memory(None)
@@ -518,8 +522,11 @@ fn docker_page(app: &mut App, ui: &mut Ui, tab: DockerTab) {
             DockerTab::Hints | DockerTab::Objects => {}
             DockerTab::Transformations => crate::ui::transform_docker::transformations(app, ui),
             DockerTab::Undo => undo_docker(app, ui),
-            DockerTab::LiveGuides | DockerTab::FitPath | DockerTab::ColorProof
-                | DockerTab::Assets | DockerTab::Views => reference_panels::show(app, ui, tab),
+            DockerTab::LiveGuides
+            | DockerTab::FitPath
+            | DockerTab::ColorProof
+            | DockerTab::Assets
+            | DockerTab::Views => reference_panels::show(app, ui, tab),
             other => crate::ui::dockers2::show(app, ui, other),
         });
 }

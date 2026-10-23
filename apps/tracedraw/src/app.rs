@@ -1581,7 +1581,11 @@ impl DockerTab {
         ],
         &[DockerTab::Transformations, DockerTab::Coordinates],
         &[DockerTab::LiveGuides, DockerTab::Guidelines],
-        &[DockerTab::AlignDistribute, DockerTab::FitPath, DockerTab::StepAndRepeat],
+        &[
+            DockerTab::AlignDistribute,
+            DockerTab::FitPath,
+            DockerTab::StepAndRepeat,
+        ],
         &[
             DockerTab::Shaping,
             DockerTab::Corners,

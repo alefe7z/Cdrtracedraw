@@ -1211,10 +1211,14 @@ impl App {
         let prefs = self.settings.fit_path.clone();
         let start = if prefs.start_percent.is_finite() {
             prefs.start_percent.clamp(0.0, 100.0) / 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         let end = if prefs.end_percent.is_finite() {
             (prefs.end_percent.clamp(0.0, 100.0) / 100.0).max(start)
-        } else { 1.0 };
+        } else {
+            1.0
+        };
         let objects = &shapes[..shapes.len() - 1];
         let n = objects.len();
         let mut cmds = Vec::new();
@@ -2893,13 +2897,22 @@ mod tests {
     #[test]
     fn fit_objects_rotation_and_range_are_undoable() {
         let mut app = App::headless();
-        let object = app.new_shape(ShapeKind::Rect {
-            rect: Rect::new(0.0, 0.0, 20.0, 10.0), radius: 0.0, corners: None,
-        }).expect("rectangle");
+        let object = app
+            .new_shape(ShapeKind::Rect {
+                rect: Rect::new(0.0, 0.0, 20.0, 10.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rectangle");
         let mut line = BezPath::new();
         line.move_to((100.0, 0.0));
         line.line_to((100.0, 100.0));
-        let path = app.new_shape(ShapeKind::Path { path: line, closed: false }).expect("path");
+        let path = app
+            .new_shape(ShapeKind::Path {
+                path: line,
+                closed: false,
+            })
+            .expect("path");
         app.selection = vec![object, path];
         app.settings.fit_path.rotate = true;
         app.settings.fit_path.start_percent = 20.0;

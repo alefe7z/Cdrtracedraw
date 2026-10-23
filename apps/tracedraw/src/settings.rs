@@ -1195,7 +1195,12 @@ pub struct FitPathPrefs {
 
 impl Default for FitPathPrefs {
     fn default() -> Self {
-        Self { rotate: false, reverse: false, start_percent: 0.0, end_percent: 100.0 }
+        Self {
+            rotate: false,
+            reverse: false,
+            start_percent: 0.0,
+            end_percent: 100.0,
+        }
     }
 }
 

@@ -32,17 +32,28 @@ fn fit_path(app: &mut App, ui: &mut Ui) {
     ui.checkbox(&mut prefs.reverse, tr("reference_panels.reverse"));
     ui.horizontal(|ui| {
         ui.label(tr("reference_panels.start"));
-        ui.add(crate::ui::field::NumField::new(&mut prefs.start_percent)
-            .range(0.0..=100.0).suffix("%"));
+        ui.add(
+            crate::ui::field::NumField::new(&mut prefs.start_percent)
+                .range(0.0..=100.0)
+                .suffix("%"),
+        );
     });
     ui.horizontal(|ui| {
         ui.label(tr("reference_panels.end"));
-        ui.add(crate::ui::field::NumField::new(&mut prefs.end_percent)
-            .range(0.0..=100.0).suffix("%"));
+        ui.add(
+            crate::ui::field::NumField::new(&mut prefs.end_percent)
+                .range(0.0..=100.0)
+                .suffix("%"),
+        );
     });
     ui.horizontal(|ui| {
-        if ui.add_enabled(app.selection.len() >= 2,
-            egui::Button::new(tr("docker.apply"))).clicked() {
+        if ui
+            .add_enabled(
+                app.selection.len() >= 2,
+                egui::Button::new(tr("docker.apply")),
+            )
+            .clicked()
+        {
             app.fit_objects_to_path();
         }
         if ui.button(tr("options.reset")).clicked() {
@@ -52,10 +63,15 @@ fn fit_path(app: &mut App, ui: &mut Ui) {
 }
 
 fn proof(app: &mut App, ui: &mut Ui) {
-    let mut changed = ui.checkbox(&mut app.proof_colors,
-        tr("menu.view.proof_colors")).changed();
-    changed |= ui.checkbox(&mut app.simulate_overprints,
-        tr("menu.view.simulate_overprints")).changed();
+    let mut changed = ui
+        .checkbox(&mut app.proof_colors, tr("menu.view.proof_colors"))
+        .changed();
+    changed |= ui
+        .checkbox(
+            &mut app.simulate_overprints,
+            tr("menu.view.simulate_overprints"),
+        )
+        .changed();
     if changed {
         app.raster.borrow_mut().invalidate();
     }
@@ -93,24 +109,39 @@ fn assets(app: &mut App, ui: &mut Ui) {
     let selected_id = Id::new("reference_assets_selected");
     let mut search = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
     let selected = ui.data_mut(|d| d.get_temp::<PathBuf>(selected_id));
-    ui.add(egui::TextEdit::singleline(&mut search)
-        .hint_text(tr("reference_panels.search")).desired_width(ui.available_width()));
+    ui.add(
+        egui::TextEdit::singleline(&mut search)
+            .hint_text(tr("reference_panels.search"))
+            .desired_width(ui.available_width()),
+    );
     ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
     ui.horizontal_wrapped(|ui| {
         if ui.button(tr("reference_panels.add_files")).clicked() {
             crate::files::Dialog::new()
-                .add_filter(tr("reference_panels.asset_files"),
-                    &["cdr", "svg", "svgz", "pdf", "ai", "png", "jpg", "jpeg",
-                        "bmp", "gif", "webp", "tif", "tiff", "eps", "dxf"])
+                .add_filter(
+                    tr("reference_panels.asset_files"),
+                    &[
+                        "cdr", "svg", "svgz", "pdf", "ai", "png", "jpg", "jpeg", "bmp", "gif",
+                        "webp", "tif", "tiff", "eps", "dxf",
+                    ],
+                )
                 .pick_files(app, add_asset_paths);
         }
-        if ui.add_enabled(selected.is_some() && app.has_document(),
-            egui::Button::new(tr("reference_panels.insert"))).clicked() {
+        if ui
+            .add_enabled(
+                selected.is_some() && app.has_document(),
+                egui::Button::new(tr("reference_panels.insert")),
+            )
+            .clicked()
+        {
             if let Some(path) = &selected {
                 app.import_path(path);
             }
         }
-        if ui.add_enabled(selected.is_some(), egui::Button::new(tr("shelf.remove"))).clicked() {
+        if ui
+            .add_enabled(selected.is_some(), egui::Button::new(tr("shelf.remove")))
+            .clicked()
+        {
             if let Some(path) = &selected {
                 app.settings.asset_files.retain(|p| p != path);
                 ui.data_mut(|d| d.remove::<PathBuf>(selected_id));
@@ -120,12 +151,15 @@ fn assets(app: &mut App, ui: &mut Ui) {
     let files = app.settings.asset_files.clone();
     let query = search.to_lowercase();
     for path in files {
-        let name = path.file_name().map(|s| s.to_string_lossy().into_owned())
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
         if !name.to_lowercase().contains(&query) {
             continue;
         }
-        let response = ui.selectable_label(selected.as_ref() == Some(&path), name)
+        let response = ui
+            .selectable_label(selected.as_ref() == Some(&path), name)
             .on_hover_text(path.to_string_lossy().into_owned());
         if response.clicked() {
             ui.data_mut(|d| d.insert_temp(selected_id, path.clone()));
@@ -149,11 +183,17 @@ fn save_view(app: &mut App, name: String) -> bool {
         return false;
     }
     let saved = SavedView {
-        name: name.to_string(), page: app.page,
-        zoom: app.view.zoom.clamp(0.05, 400.0), center: [center.x, center.y],
+        name: name.to_string(),
+        page: app.page,
+        zoom: app.view.zoom.clamp(0.05, 400.0),
+        center: [center.x, center.y],
     };
-    if let Some(old) = app.settings.saved_views.iter_mut()
-        .find(|v| v.page == saved.page && v.name == saved.name) {
+    if let Some(old) = app
+        .settings
+        .saved_views
+        .iter_mut()
+        .find(|v| v.page == saved.page && v.name == saved.name)
+    {
         *old = saved;
     } else {
         app.settings.saved_views.push(saved);
@@ -162,8 +202,7 @@ fn save_view(app: &mut App, name: String) -> bool {
 }
 
 fn restore_view(app: &mut App, saved: &SavedView) -> bool {
-    if !saved.zoom.is_finite() || saved.zoom <= 0.0
-        || !saved.center.iter().all(|n| n.is_finite()) {
+    if !saved.zoom.is_finite() || saved.zoom <= 0.0 || !saved.center.iter().all(|n| n.is_finite()) {
         return false;
     }
     let Some(index) = app.doc().pages.iter().position(|p| p.id == saved.page) else {
@@ -181,14 +220,24 @@ fn restore_view(app: &mut App, saved: &SavedView) -> bool {
 fn views(app: &mut App, ui: &mut Ui) {
     let id = Id::new("reference_view_name");
     let mut name = ui.data_mut(|d| d.get_temp::<String>(id).unwrap_or_default());
-    ui.add(egui::TextEdit::singleline(&mut name)
-        .hint_text(tr("reference_panels.view_name")).desired_width(ui.available_width()));
+    ui.add(
+        egui::TextEdit::singleline(&mut name)
+            .hint_text(tr("reference_panels.view_name"))
+            .desired_width(ui.available_width()),
+    );
     ui.data_mut(|d| d.insert_temp(id, name.clone()));
-    if ui.add_enabled(app.has_document(), egui::Button::new(tr("reference_panels.save_view")))
-        .clicked() {
+    if ui
+        .add_enabled(
+            app.has_document(),
+            egui::Button::new(tr("reference_panels.save_view")),
+        )
+        .clicked()
+    {
         if name.trim().is_empty() {
-            name = trf("reference_panels.view_number",
-                &[("n", &(app.settings.saved_views.len() + 1).to_string())]);
+            name = trf(
+                "reference_panels.view_number",
+                &[("n", &(app.settings.saved_views.len() + 1).to_string())],
+            );
         }
         save_view(app, name);
     }
@@ -202,7 +251,10 @@ fn views(app: &mut App, ui: &mut Ui) {
             if ui.button(&view.name).clicked() {
                 restore_view(app, view);
             }
-            if ui.small_button(tr("reference_panels.update_view")).clicked() {
+            if ui
+                .small_button(tr("reference_panels.update_view"))
+                .clicked()
+            {
                 let page = view.page;
                 if page == app.page {
                     save_view(app, view.name.clone());
@@ -249,7 +301,8 @@ mod tests {
         assert!((restored.y - center.y).abs() < 1e-4);
         assert_eq!(app.view.zoom, 7.0);
         let encoded = serde_json::to_string(&app.settings).expect("settings serialize");
-        let decoded: crate::settings::Settings = serde_json::from_str(&encoded).expect("settings parse");
+        let decoded: crate::settings::Settings =
+            serde_json::from_str(&encoded).expect("settings parse");
         assert_eq!(decoded.saved_views, app.settings.saved_views);
         let mut invalid = saved;
         invalid.zoom = f32::NAN;

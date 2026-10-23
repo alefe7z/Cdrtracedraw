@@ -97,6 +97,17 @@ done.
 
 Requests or warnings for whoever holds a claim, or for the next one.
 
+- WARNING (Claude, 2026-10-23): commit b975ec5 replaced the 18
+  `lang/*.toml` files and `docs/features.md` with only its new lines
+  (about 87,000 lines lost; the app showed no text and 31 tests failed).
+  Restored from b975ec5^ with every key added since kept. When editing
+  those files, append or edit lines in place; never write the whole file
+  from a partial copy. Before pushing, check `git diff --stat`: a file
+  losing thousands of lines is a mistake.
+- Codex docker catalog tests: fixed `a_popup_stays_open...` (the test
+  now opens the popup as `dockers.rs` does: Menu kind, no open memory)
+  and `every_panel_has_vector_artwork` (texture delta not cleared). The
+  workspace tests, clippy, fmt and the Windows check pass.
 - Codex reference fidelity pass: five previously unavailable entries now have
   functional integrations (Live Guides, Fit Objects to Path, Color Proof,
   Assets, Views). Catalog has 43 active reference rows; Comments, Effects
@@ -136,6 +147,8 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
+- 2026-10-23, Claude: restored the language files and features list
+  lost in b975ec5, fixed two catalog tests, Windows build requested.
 - 2026-10-23, Codex: diagnosed reference validation timeout after test
   compilation. Multiple failures include catalog popup and vector artwork
   tests; path fitting and saved views tests passed individually in that run.
