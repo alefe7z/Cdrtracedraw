@@ -37,16 +37,21 @@ jobs:
           cargo fmt --all
           git diff --binary > reference-format.patch
       - name: Workspace tests
-        run: cargo test --workspace
+        timeout-minutes: 12
+        run: cargo test --workspace -- --test-threads=1 --nocapture
       - name: Library lint gate
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --exclude tracedraw -- -D warnings
       - name: Native build
+        if: ${{ !cancelled() }}
         run: cargo build -p tracedraw
       - name: Render the real catalog UI
+        if: ${{ !cancelled() }}
         env:
           REFERENCE_SHOTS: ${{ github.workspace }}/reference-shots
         run: cargo test -p tracedraw reference_catalog_shot -- --ignored --test-threads=1
       - name: Native smoke and interaction checks
+        if: ${{ !cancelled() }}
         env:
           TRACEDRAW_SHOTS: ${{ github.workspace }}/native-shots
           MONKEY_SEED: '23'
