@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `9283370 Update the agents' status file`
-- Commits on the branch: 17
+- Last commit before this one: `29c5979 Leave the tree clean on a plain agent sync`
+- Commits on the branch: 18
 
 ## Last 20 commits
 
+- `29c5979` 2026-10-23 17:50 Claude: Leave the tree clean on a plain agent sync
 - `da6f96f` 2026-10-23 17:39 Claude: Add a shared context and sync scripts for agents on one branch
 - `6027201` 2026-10-23 17:27 Claude: Print preview: a window of its own like the reference
 - `52895ef` 2026-10-23 17:12 Claude: Print dialog: seven tabs laid out like the reference
@@ -28,13 +29,14 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Files changed in the last 10 commits
 
-- `apps/tracedraw/src/ui/icons.rs` (3)
 - `apps/tracedraw/lang/pt-BR.toml` (3)
 - `apps/tracedraw/lang/en.toml` (3)
 - `CHANGELOG.md` (3)
+- `scripts/agent-sync.sh` (2)
 - `apps/tracedraw/src/ui/print_preview.rs` (2)
 - `apps/tracedraw/src/ui/print_dialog.rs` (2)
 - `apps/tracedraw/src/ui/menus.rs` (2)
+- `apps/tracedraw/src/ui/icons.rs` (2)
 - `apps/tracedraw/src/ui/dialogs.rs` (2)
 - `apps/tracedraw/lang/zh-TW.toml` (2)
 - `apps/tracedraw/lang/zh-CN.toml` (2)
@@ -54,7 +56,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `apps/tracedraw/lang/ar.toml` (2)
 - `AGENTS.md` (2)
 - `scripts/update-context.sh` (1)
-- `scripts/agent-sync.sh` (1)
 - `scripts/agent-setup.sh` (1)
 - `packaging/windows/msix/Assets/Wide310x150Logo.png` (1)
 - `packaging/windows/msix/Assets/StoreLogo.png` (1)
@@ -65,5 +66,4 @@ None.
 
 ## Uncommitted when generated
 
-    M  scripts/agent-sync.sh
     ?? docs/agents/STATUS.md.tmp
