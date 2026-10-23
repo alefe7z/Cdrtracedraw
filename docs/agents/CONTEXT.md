@@ -92,7 +92,6 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Codex | Reference validation workflow and failure diagnosis | 2026-10-23 | Serialize shared-state tests; retain failure logs and render artifacts. |
 
 ## Notes for other agents
 
@@ -136,6 +135,13 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-23, Codex: diagnosed reference validation timeout after test
+  compilation. Multiple failures include catalog popup and vector artwork
+  tests; path fitting and saved views tests passed individually in that run.
+  Improved diagnostic workflow (7108d09), run 40027436946 queued. No full
+  test or visual pass. Next: inspect immediate failure logs, fix failures,
+  inspect catalog screenshot against owner reference.
 
 - 2026-10-23, Codex: reference fidelity pass, all five missing panels wired,
   dedicated pictograms, reference palette/geometry and stable popup anchor.
