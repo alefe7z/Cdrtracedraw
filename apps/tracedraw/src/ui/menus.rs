@@ -9,7 +9,7 @@ use egui::Ui;
 use tracedraw_core::document::ShapeKind;
 use tracedraw_core::Command;
 
-const MENU_WIDTH: f32 = 250.0;
+pub(crate) const MENU_WIDTH: f32 = 250.0;
 /// Menu rows: 26 px tall, a 30 px grey gutter
 /// for icons and check marks, labels from 38 px, shortcuts right-aligned
 /// 28 px from the edge, 13 px text.
@@ -1410,9 +1410,9 @@ mod tests {
 
 /// Menu bar titles: size and spacing (about 25 px between titles, the
 /// first one 11 px from the edge).
-const BAR_FONT: f32 = 13.0;
+pub(crate) const BAR_FONT: f32 = 13.0;
 
-fn menu_bar_style(style: &mut egui::Style) {
+pub(crate) fn menu_bar_style(style: &mut egui::Style) {
     egui::containers::menu::menu_style(style);
     style.override_font_id = Some(egui::FontId::proportional(BAR_FONT));
     // An open or hovered title: light blue with a blue frame, square.

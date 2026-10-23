@@ -218,6 +218,9 @@ pub fn print_dialog(app: &mut App, ctx: &Context, st: &mut PrintState, close: &m
         }
         Some(Outcome::Preview) => {
             app.print_preview(Some(st.clone()));
+            if let Some(pv) = app.print_preview.as_mut() {
+                pv.from_dialog = true;
+            }
             *close = true;
         }
         Some(Outcome::Cancel) => *close = true,
@@ -284,6 +287,12 @@ pub fn show(
     });
     if x_closed || chrome::take_close_request(ctx) {
         out = Some(Outcome::Cancel);
+    }
+    if ctx
+        .data_mut(|d| d.remove_temp::<bool>(egui::Id::new("prt_close_now")))
+        .unwrap_or(false)
+    {
+        *close = true;
     }
     if out == Some(Outcome::Cancel) || (out == Some(Outcome::Ok) && kind == Kind::Print) {
         *close = true;
@@ -689,6 +698,17 @@ fn tab_general(app: &mut App, ui: &mut Ui, o: Pos2, st: &mut PrintState) {
 /// The print style list: Custom while the settings differ from every
 /// saved style, then Default and the saved styles.
 fn style_combo(app: &mut App, ui: &mut Ui, o: Pos2, st: &mut PrintState) {
+    style_combo_at(
+        app,
+        ui,
+        rect(141.0, 360.0, 440.0, 385.0).translate(o.to_vec2()),
+        st,
+    );
+}
+
+/// The print style list at `r` (screen coordinates); picking a style
+/// sets its settings, keeping the copies, range and printer.
+pub(crate) fn style_combo_at(app: &mut App, ui: &mut Ui, r: Rect, st: &mut PrintState) {
     let current = crate::prefs::PrintPrefs::of(st);
     let styles = app.settings.printing.styles.clone();
     let shown = styles
@@ -696,39 +716,35 @@ fn style_combo(app: &mut App, ui: &mut Ui, o: Pos2, st: &mut PrintState) {
         .find(|s| s.name == st.ex.style && s.prefs.same_settings(&current))
         .map(|s| s.name.clone())
         .unwrap_or_else(|| tr("prt.style_custom"));
+    // Cut to the list's width, as in the preview's bar.
+    let shown = fit_text(ui, &shown, r.width() - 24.0);
     let mut pick: Option<crate::prefs::PrintPrefs> = None;
-    combo(
-        ui,
-        "prt_style",
-        o,
-        rect(141.0, 360.0, 440.0, 385.0),
-        shown,
-        true,
-        |ui| {
+    combo(ui, "prt_style", Pos2::ZERO, r, shown, true, |ui| {
+        if ui
+            .selectable_label(false, tr("prt.style_default"))
+            .clicked()
+        {
+            pick = Some(crate::prefs::PrintPrefs::default());
+        }
+        for s in &styles {
             if ui
-                .selectable_label(false, tr("prt.style_default"))
+                .selectable_label(st.ex.style == s.name, s.name.as_str())
                 .clicked()
             {
-                pick = Some(crate::prefs::PrintPrefs::default());
+                let mut p = s.prefs.clone();
+                p.extra.style = s.name.clone();
+                pick = Some(p);
             }
-            for s in &styles {
-                if ui
-                    .selectable_label(st.ex.style == s.name, s.name.as_str())
-                    .clicked()
-                {
-                    let mut p = s.prefs.clone();
-                    p.extra.style = s.name.clone();
-                    pick = Some(p);
-                }
-            }
-        },
-    );
+        }
+    });
     if let Some(p) = pick {
         let mut next = p.state();
         next.copies = st.copies;
         next.range = st.range;
         next.pages = st.pages.clone();
         next.printers = std::mem::take(&mut st.printers);
+        next.printer = st.printer.clone();
+        next.destination = st.destination;
         next.preflight = st.preflight.take();
         next.tab = st.tab;
         next.ex.side_preview = st.ex.side_preview;
@@ -737,7 +753,7 @@ fn style_combo(app: &mut App, ui: &mut Ui, o: Pos2, st: &mut PrintState) {
 }
 
 /// Save As: a small window asking the style's name.
-fn save_style_window(app: &mut App, ctx: &Context, st: &mut PrintState) {
+pub(crate) fn save_style_window(app: &mut App, ctx: &Context, st: &mut PrintState) {
     let id = egui::Id::new("prt_style_name");
     let Some(Some(mut name)) = ctx.data(|d| d.get_temp::<Option<String>>(id)) else {
         return;
@@ -1192,6 +1208,12 @@ fn plates_table(app: &mut App, ui: &mut Ui, o: Pos2, st: &mut PrintState) {
             Pos2::new(table.left() + 112.0, y + 6.0),
         );
         p.rect_filled(sw, 0.0, color);
+        p.rect_stroke(
+            sw,
+            0.0,
+            Stroke::new(1.0, Tokens::control_border()),
+            egui::StrokeKind::Outside,
+        );
         p.text(
             Pos2::new(sw.right() + 7.0, y),
             Align2::LEFT_CENTER,
@@ -1550,7 +1572,12 @@ fn tab_layout(app: &mut App, ui: &mut Ui, o: Pos2, st: &mut PrintState) {
         let mut s = st.clone();
         s.tab = 3;
         app.print_preview(Some(s));
-        app.dialog = Dialog::None;
+        if let Some(pv) = app.print_preview.as_mut() {
+            pv.from_dialog = true;
+            pv.tool = crate::ui::print_preview::PvTool::Imposition;
+        }
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("prt_close_now"), true));
     }
 }
 
@@ -2147,6 +2174,8 @@ fn tab_issues(
     );
     if gear(ui, "prt_preflight_settings", o + Vec2::new(587.0, 30.0)) {
         app.dialog = Dialog::Preflight(Default::default());
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("prt_close_now"), true));
     }
     let list = rect(17.0, 49.0, 600.0, 155.0).translate(o.to_vec2());
     let p = ui.painter().clone();

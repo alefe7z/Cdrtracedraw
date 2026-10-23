@@ -8,77 +8,122 @@ viewer, where the printer is chosen. `export::print` builds it; the sheets come 
 ## Printers
 
 The Printer list holds the system's printers, the default one first,
-then "System printer (through the PDF viewer)", "PDF file" and
-"PostScript file". The printers come from CUPS (Linux and macOS):
-`lpstat -p -d` lists them when the dialog opens (`printers.rs`,
-`parse_lpstat`), and a print on one of them hands the PDF to `lp -d`
-with the number of copies and their collation (`lp_args`) and the
-drawing's name as the job title; the status bar says "Sent to printer
-name", or what `lp` complained about. The dialog starts on the printer
-printed to last when the system still has it, else on the default
-printer, else on the PDF viewer (`starting_printer`); the printer is
-remembered with the other print choices (Options > Global > Printing).
-On Windows the list has no printers and the print
-goes through the PDF viewer.
+then "PDF viewer (system)". Each printer comes with its status, location
+and comment, shown under the list (`printers.rs`).
+
+- Linux and macOS: `lpstat -l -p -d` lists the CUPS printers when the
+  dialog opens (`parse_lpstat`, which also reads the Description and
+  Location lines), and a print on one of them hands the PDF to `lp -d`
+  with the number of copies and their collation (`lp_args`) and the
+  drawing's name as the job title; the status bar says "Sent to printer
+  name", or what `lp` complained about.
+- Windows: PowerShell lists `Win32_Printer` as CSV
+  (`parse_windows_printers`: name, default, status, offline, location,
+  comment). A print hands the PDF to the PDF program's "Print to" verb
+  for that printer; with no program that can, the PDF opens in the
+  viewer.
+- The gear beside the list opens the system's settings of the printer:
+  the driver's preferences on Windows (`printui.dll,PrintUIEntry /e`),
+  the printer settings elsewhere.
+
+The dialog starts on the printer printed to last when the system still
+has it, else on the default printer, else on the PDF viewer
+(`starting_printer`); the printer is remembered with the other print
+choices (Options > Global > Printing).
 
 ## Print dialog
 
-Tabs: General, Color, Composite, Layout, Prepress, PostScript and the
-preflight's Issues ("No Issues" or the count; hidden when Options >
-Global > Printing turns the preflight off). Under them Print Preview
-(hands the settings to the preview), Print, Cancel and Apply (keeps the
-settings as Options > Global > Printing's). The dialog starts with those
-preferences, and with the drawing's own bleed as the bleed limit when it
-has one.
+One window of a fixed size (`ui/print_dialog.rs`) with seven tabs:
+General, Color, Separations, Layout, Prepress, PostScript and the
+preflight's issues ("No Issues", "1 Issue" or "n Issues"). The tab in
+front is blue. Along the bottom: help (?), Print Preview, the side
+preview button (the first sheet beside the tabs), then Print (blue, the
+default button), Cancel and Apply (keeps the settings as Options >
+Global > Printing's). Labels underline their access letter. The dialog
+starts with those preferences, and with the drawing's own bleed as the
+bleed limit when it has one.
 
-- General:
-  - Destination: Printer is one of the system's printers (above), the
-    system PDF viewer (which owns the printer and the copy count), a PDF file or a PostScript file (saved
-    where chosen). Orientation: Match orientation (the Layout tab's
-    Landscape box), Portrait or Landscape, for fixed sheets.
-  - Print range: Current document, Current page, Pages (a list such as
-    `1-3, 5, 8-`; an empty or unusable list prints them all), Selection
-    (the selected objects of the current page).
-  - Copies: a file gets its copies inside, as whole sets (Collate) or
-    each sheet repeated.
-  - Print as bitmap: each sheet becomes one picture at the resolution
-    given (36 to 1200 dpi).
-- Color: Composite or Separations (one grey page per ink and sheet: C, M,
-  Y, K, then the spot inks; black = full ink); Convert spot colors to
-  CMYK prints spot inks as their CMYK mix at their tint.
-- Composite: Print text in black (fills, outlines and character colours
-  of every text); Always overprint black (100 % black fills and outlines
-  overprint).
-- Layout: As in document, Fit to page or Scale (percent); Bleed limit
-  (how far beyond the page objects print, 4 mm by default); the
-  imposition, sheet, gap and the sketch (below).
+- General: Destination (Printer and its gear, Orientation, Use PPD,
+  Status, Location, Comment; Print to file writes a PostScript file, with
+  Single file, pages or plates to separate files). Print range: Current
+  document, Documents (with more than one open), Current page,
+  Selection, Pages (a list such as `1-3, 5, 8-`) and Even & Odd, Even or
+  Odd pages. Copies: the number, the picture of the sets and Collate.
+  Print as bitmap at a resolution. Print style: Custom while the
+  settings match no saved style, Default print settings and the saved
+  styles; Save As names a new style (kept in the preferences).
+- Color: Composite or separations; the document's or the proof's color
+  settings, the conversions, the output colors, Convert spot colors to
+  CMYK (spot inks print as their CMYK mix at their tint), the profile,
+  Preserve CMYK numbers and pure black, the rendering intent, and a note.
+- Separations: document overprints, screen frequency, In-RIP trapping,
+  Print text in black (fills, outlines and character colours of every
+  text), Always overprint black (100 % black fills and outlines
+  overprint), Print separations in color, Advanced (the inks' screens),
+  Show empty plates, and the plates with their ink and a box each: a
+  plate unticked is left out of the separations
+  (`export::separations_doc`).
+- Layout: As in document, Fit to page (with printer's marks) or
+  Reposition images to a corner or the centre; the settings for a page
+  (position, size, scale and tiles); tiled pages with marks and overlap;
+  the bleed limit (how far beyond the page objects print, 4 mm by
+  default); the imposition layout and Edit, which opens the preview with
+  the imposition tool.
 - Prepress: Invert and Mirror (the whole sheet, marks included; Invert
-  prints a negative, the sheet's empty paper black too, so black ink
-  shows clear rather than white on white paper,
-  `export::tests::black_text_prints_black_and_a_negative_blackens_the_sheet`); Print
-  file information (with its text, the drawing's name when left empty)
-  and Print page numbers (each page's number under it); Crop/fold marks;
-  Registration marks; Color bars and Densitometer scale.
-- PostScript: with a PostScript file as the destination, the language
-  level written in its header (2 or 3).
-- Issues: what the preflight finds, and the way to its dialog.
+  prints a negative, the sheet's empty paper black too,
+  `export::tests::black_text_prints_black_and_a_negative_blackens_the_sheet`);
+  registration marks and their style; Print file information (with its
+  text, the drawing's name when left empty), Print page numbers and
+  Position within page; color calibration bar, densitometer scales and
+  their densities; crop/fold marks (exterior only); bitmap downsampling;
+  marks to objects.
+- PostScript: the language level written in a PostScript file's header
+  (2 or 3), DSC, bitmap compression and JPEG quality, OPI and DCS links,
+  Type 1 fonts, PDF marks, flatness, fountain steps and fountain fills.
+- Issues: what the preflight finds; a picked issue shows its hint and
+  "Don't check for this issue in the future"; the gear opens the
+  preflight settings.
+
+Options kept but not yet changing the output: Use PPD, Print to file's
+separate files, the color conversions, profile and intent, overprints,
+screens, trapping, Reposition, tiling, the registration mark style,
+Position within page, Exterior only, downsampling, marks to objects, DSC,
+compression, OPI, DCS, fonts, PDF marks, flatness and fountain steps.
 
 ## Print Preview
 
 File > Print Preview, or Print Preview in the Print dialog (which hands
 over its settings), fills the window with the sheets exactly as Print
 sends them: the imposition, the marks, Mirror and Invert, built by the
-same function (`export::print_sheets`).
+same function (`export::print_sheets`). Closing it (Esc, the last
+button of the bar, File > Close Print Preview) goes back to the Print
+dialog when it came from there.
 
-- Top bar: Print (prints these settings and closes), Close (Esc), the
-  sheet shown with previous and next (Page Up, Page Down), the Plate
-  (Composite, then cyan, magenta, yellow, black and each spot ink) while
-  Print separations is on, and Zoom from 25 to 400 % of the fitted size
-  with Fit.
-- Left: the Print dialog's options (all pages, fit, scale, prepress and
-  layout with its sketch); every change rebuilds the sheets at once.
-- A plate shows the ink's coverage in grey, black = full ink, as the
-  separations print; registration colour shows on every plate.
+- Menu bar: File (Print, Save and Delete Print Style, Print Options,
+  Close), View (Full Screen Preview, Enable Color, To Page, To Width, To
+  Height, Actual Size), Settings (Print Options, composite or
+  separations, Invert, Mirror) and Help.
+- First bar: the print style, save (+) and delete (-) a style, Print
+  Options (the Print dialog's tabs with OK, Cancel and Apply), Print
+  (Ctrl+P), the zoom (To Page, To Width, To Height, 10 to 800 %), full
+  screen (Esc leaves it), Enable Color (plates in their ink's colour),
+  Invert, Mirror and Close.
+- Second bar: the imposition layout, then what the tool in use sets:
+  with Pick or Zoom the objects' position and size, the scale and the
+  units; with the imposition layout tool the columns, rows, gutter and
+  sheet; with the marks placement tool the printer's marks. The tile
+  button turns tiled pages on.
+- Left: Pick, Imposition Layout, Marks Placement and Zoom (click zooms
+  in, right click out; Ctrl and the wheel zoom too).
+- The sheet on the desktop with the printable area dashed, 3.5 mm in.
+- Bottom: first, previous, "n of m", next and last, then a tab per sheet,
+  or with separations per plate that prints ("Page 1 - Cyan"; empty
+  plates only with Show empty plates, unticked plates left out); Page Up
+  and Page Down go through them. A plate shows the ink's coverage,
+  in the ink's colour with Enable Color, else in grey (black = full ink);
+  registration colour shows on every plate.
+- Status bar: the selection, the printer, and "CMYK Seps" or
+  "Composite".
 
 ## Imposition
 
