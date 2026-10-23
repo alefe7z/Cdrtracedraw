@@ -6,6 +6,9 @@ decompile or disassemble any program, never use decompiled code or dumps,
 and never port code from libcdr or any other format implementation.
 `CLEANROOM.md` records where each piece of format knowledge came from.
 
+Other agents work on the same branch: follow "Several agents on one
+branch" in `AGENTS.md` and keep `docs/agents/CONTEXT.md` current.
+
 ## Windows .exe on request
 
 When the user asks for a `.exe` (a Windows build), commit and push the

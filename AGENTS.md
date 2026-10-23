@@ -6,6 +6,16 @@ webview or browser build.
 The product name is **CD Draw** in prose; machine names are `tracedraw`
 (`tracedraw-core`, `tracedraw-cdr`, `.tdraw` files).
 
+## Several agents on one branch
+
+Other AI agents may be working on the same branch right now. Before
+anything else run `scripts/agent-setup.sh` and `scripts/agent-sync.sh`,
+then read `docs/agents/CONTEXT.md` (claims, the owner's standing orders,
+the project's state) and `docs/agents/STATUS.md` (generated from git on
+every commit). Claim your task there before you start, push with
+`scripts/agent-sync.sh --push`, never force-push, and update the context
+when you finish.
+
 ## Golden rules
 
 1. **Everything is a command.** New user-visible behaviour is a variant of

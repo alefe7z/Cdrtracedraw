@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && scripts/agent-sync.sh 2>&1 | tail -20 || true"
+          }
+        ]
+      }
+    ]
+  }
+}

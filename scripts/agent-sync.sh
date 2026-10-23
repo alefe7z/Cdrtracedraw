@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Bring the shared branch up to date before working and before pushing:
+# fetch it, rebase local commits on top (uncommitted changes are stashed
+# and put back), regenerate docs/agents/STATUS.md and print what changed
+# since the last sync. With --push, also push (retrying after a rejected
+# push, when another agent pushed in between).
+# Usage: scripts/agent-sync.sh [--push]
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+scripts/agent-setup.sh >/dev/null
+branch=$(git symbolic-ref --short HEAD)
+before=$(git rev-parse HEAD)
+
+fetch() {
+    for wait in 0 2 4 8 16; do
+        sleep "$wait"
+        git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" && return 0
+    done
+    echo "error: could not fetch origin/$branch" >&2
+    return 1
+}
+
+rebase() {
+    if git merge-base --is-ancestor "origin/$branch" HEAD; then
+        return 0
+    fi
+    if ! git rebase -q --autostash "origin/$branch"; then
+        # Only the generated status file may conflict: take theirs and go on.
+        while git status --porcelain | grep -q '^UU docs/agents/STATUS.md$' &&
+              [[ $(git diff --name-only --diff-filter=U | wc -l) -eq 1 ]]; do
+            git checkout -q --theirs docs/agents/STATUS.md
+            git add docs/agents/STATUS.md
+            GIT_EDITOR=true git rebase --continue || true
+        done
+        if [[ -d "$(git rev-parse --git-path rebase-merge)" || -d "$(git rev-parse --git-path rebase-apply)" ]]; then
+            echo "CONFLICT: resolve the files below, then 'git add' them and 'git rebase --continue'" >&2
+            git diff --name-only --diff-filter=U >&2
+            exit 2
+        fi
+    fi
+}
+
+if git ls-remote --exit-code -q origin "refs/heads/$branch" >/dev/null 2>&1; then
+    fetch
+    rebase
+fi
+scripts/update-context.sh
+
+if [[ "${1:-}" == "--push" ]]; then
+    if [[ -n "$(git status --porcelain docs/agents/STATUS.md)" ]]; then
+        git add docs/agents/STATUS.md
+        git commit -q -s -m "Update the agents' status file" --no-verify
+    fi
+    for wait in 0 2 4 8 16; do
+        sleep "$wait"
+        if git push -q -u origin "$branch" 2>/dev/null; then
+            git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" || true
+            echo "pushed $branch at $(git rev-parse --short HEAD)"
+            exit 0
+        fi
+        # Rejected: someone pushed first. Take their work and try again.
+        fetch && rebase
+    done
+    echo "error: push failed" >&2
+    exit 1
+fi
+
+if [[ "$before" != "$(git rev-parse HEAD)" ]]; then
+    echo "new commits from the branch:"
+    git log --oneline "$before..HEAD" | grep -v "$before" || true
+else
+    echo "up to date with origin/$branch"
+fi
+echo "read docs/agents/CONTEXT.md (claims and state) before starting"

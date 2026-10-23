@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Keep docs/agents/STATUS.md current in every commit (see
+# scripts/update-context.sh). Turned on by scripts/agent-setup.sh.
+set -e
+root=$(git rev-parse --show-toplevel)
+"$root/scripts/update-context.sh" && git add "$root/docs/agents/STATUS.md"
