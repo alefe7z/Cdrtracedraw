@@ -2555,7 +2555,15 @@ impl App {
                 }
                 self.set_selection_group(n, ids);
             }
-            if pressed(k, Modifiers::NONE) {
+            // Tool shortcuts take precedence over recalling a numbered group.
+            let pick_shortcut = self.settings.shortcuts.iter()
+                .find(|(id, _)| id == Tool::Pick.id())
+                .map(|(_, value)| value.as_str())
+                .or_else(|| Tool::Pick.shortcut())
+                .unwrap_or("");
+            let pick_uses_number = crate::shortcuts::parse(pick_shortcut)
+                == Some((Modifiers::NONE, k));
+            if pressed(k, Modifiers::NONE) && !pick_uses_number {
                 self.recall_selection_group(n);
             }
         }
@@ -2585,8 +2593,12 @@ impl App {
         if pressed(Key::D, cmd) && !(segments && self.duplicate_segments()) {
             self.duplicate();
         }
-        // Ctrl+Space: the Pick tool, whatever tool is active.
-        if pressed(Key::Space, cmd) && self.tool != Tool::Pick {
+        // Space remains a selection alias outside curve drawing. During a
+        // transform it still drops a copy, and Bezier uses it to finish.
+        let space_pick = pressed(Key::Space, Modifiers::NONE)
+            && self.tool != Tool::Bezier
+            && matches!(self.drag, Drag::None);
+        if (pressed(Key::Space, cmd) || space_pick) && self.tool != Tool::Pick {
             self.set_tool(Tool::Pick);
         }
         // Order: Ctrl+Home/End to the front/back of the page, Shift+PgUp/PgDn
@@ -2750,6 +2762,7 @@ impl App {
         // key, it switches to Pick).
         if pressed(Key::Space, Modifiers::NONE) && self.tool == Tool::Bezier {
             self.finish_curve();
+            self.set_tool(Tool::Pick);
         }
         // Esc with a menu or a list open only closes it.
         // Esc with a crop area waiting only clears it.

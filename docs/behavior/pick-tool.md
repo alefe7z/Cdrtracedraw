@@ -217,3 +217,24 @@ break instead.
 - `drop_menu::tests::fill_outline_and_properties_go_onto_the_target`
 - `drop_menu::tests::place_inside_makes_the_target_a_clip_frame`
 - `drop_menu::tests::a_ctrl_drag_keeps_to_one_direction`
+
+## Selection flyout and shortcuts
+
+The first toolbox flyout contains exactly two rows: Pick (`1`) and
+Freehand Pick (`Shift+1`). The current tool has a framed icon tile;
+shortcuts align at the right, with no checkmark column or separator.
+The icons are monochrome, with a pointer for Pick and a lasso for
+Freehand Pick. Free Transform remains available in command customization.
+The flyout opens with the arrow, right click, drag or a held press;
+choosing a row activates the tool and closes it. Escape dismisses it.
+
+Space and Ctrl+Space still switch to Pick. Space during a transform
+keeps dropping a copy; Space during Bezier drawing finishes the curve
+before switching to Pick. The default `1` tool shortcut takes precedence
+over recalling selection group 1; assign Pick a different shortcut to
+restore plain `1` group recall. Ctrl+1 and Alt+1 still store/add the group.
+
+Regression coverage: `selection_reference_shortcuts_preserve_selection_and_space_alias`,
+`selection_flyout_has_only_the_two_reference_tools`, and the existing
+freehand lasso, move-copy and Bezier Space tests. Visual comparison in
+the native application is still required for this screenshot adjustment.

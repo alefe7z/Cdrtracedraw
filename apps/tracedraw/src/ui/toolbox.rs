@@ -205,7 +205,11 @@ fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
                 ui.painter(),
                 icon_rect,
                 shown,
-                icons::tool_color(shown, Tokens::icon()),
+                if matches!(shown, Tool::Pick | Tool::FreeformPick) {
+                    Tokens::icon()
+                } else {
+                    icons::tool_color(shown, Tokens::icon())
+                },
             );
         }
         if captions.caption() {
@@ -324,6 +328,14 @@ fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
     quick_customize(app, ui, horizontal);
 }
 
+fn tools_for_flyout(group: &crate::tools::ToolGroup) -> &[Tool] {
+    if group.tools.first() == Some(&Tool::Pick) {
+        &[Tool::Pick, Tool::FreeformPick]
+    } else {
+        group.tools
+    }
+}
+
 /// The flyout of group `gi`, opened beside its button: to the right of a
 /// toolbox on the left or floating, to the left of one on the right,
 /// below one along the top and above one along the bottom.
@@ -350,6 +362,10 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
             egui::Align2::LEFT_TOP,
         ),
     };
+    // The selection reference has two rows. Free Transform remains available
+    // through command customization and its existing tool implementation.
+    let selection = gi == 0;
+    let flyout_tools = tools_for_flyout(group);
     let shown = app.toolbox_last.get(gi).copied().unwrap_or(group.tools[0]);
     let mut close = false;
     let area = egui::Area::new(egui::Id::new(("flyout", gi)))
@@ -362,8 +378,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                 .inner_margin(egui::Margin::symmetric(2, 3))
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(0.0, 0.0);
-                    let row_w = group
-                        .tools
+                    let row_w = flyout_tools
                         .iter()
                         .map(|t| {
                             let name = ui.painter().layout_no_wrap(
@@ -374,19 +389,26 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             name.size().x
                         })
                         .fold(0.0_f32, f32::max)
-                        + 22.0
-                        + 24.0
-                        + 70.0;
-                    for t in group.tools {
-                        let (r, rr) =
-                            ui.allocate_exact_size(Vec2::new(row_w, 24.0), Sense::click());
+                        + if selection { 90.0 } else { 116.0 };
+                    let row_w = if selection { row_w.max(216.0) } else { row_w };
+                    for t in flyout_tools {
+                        let (r, rr) = ui.allocate_exact_size(
+                            Vec2::new(row_w, if selection { 22.0 } else { 24.0 }),
+                            Sense::click(),
+                        );
                         let current =
                             *t == app.tool || (*t == shown && !group.tools.contains(&app.tool));
                         if rr.hovered() {
                             ui.painter().rect_filled(r, 0.0, Tokens::tool_hover());
                         }
                         // A check mark beside the tool the button shows.
-                        if current {
+                        if current && selection {
+                            let tile = Rect::from_min_size(r.min, Vec2::new(22.0, r.height()));
+                            ui.painter().rect_filled(tile, 0.0, Tokens::tool_hover());
+                            ui.painter().rect_stroke(tile, 0.0,
+                                Stroke::new(1.0, Tokens::control_border()), egui::StrokeKind::Inside);
+                        }
+                        if current && !selection {
                             let c = Pos2::new(r.min.x + 9.0, r.center().y);
                             let s = Stroke::new(1.4, Tokens::icon());
                             ui.painter().line_segment(
@@ -399,17 +421,21 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             );
                         }
                         let icon = Rect::from_center_size(
-                            Pos2::new(r.min.x + 30.0, r.center().y),
+                            Pos2::new(r.min.x + if selection { 11.0 } else { 30.0 }, r.center().y),
                             Vec2::splat(18.0),
                         );
                         icons::draw(
                             ui.painter(),
                             icon,
                             *t,
-                            icons::tool_color(*t, Tokens::icon()),
+                            if selection {
+                                Tokens::icon()
+                            } else {
+                                icons::tool_color(*t, Tokens::icon())
+                            },
                         );
                         ui.painter().text(
-                            Pos2::new(r.min.x + 46.0, r.center().y),
+                            Pos2::new(r.min.x + if selection { 28.0 } else { 46.0 }, r.center().y),
                             egui::Align2::LEFT_CENTER,
                             t.name(),
                             egui::FontId::proportional(12.0),
@@ -428,7 +454,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             app.set_tool(*t);
                             close = true;
                         }
-                        if SEPARATE_AFTER.contains(t) {
+                        if !selection && SEPARATE_AFTER.contains(t) {
                             let (sr, _) =
                                 ui.allocate_exact_size(Vec2::new(row_w, 7.0), Sense::hover());
                             ui.painter().hline(
@@ -462,7 +488,8 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
             p.x <= button.max.x + 2.0 && p.x >= button.min.x - 4.0
         }
     });
-    if close || clicked_elsewhere || (away && !over_toolbox) {
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if close || escape || clicked_elsewhere || (away && !over_toolbox) {
         app.flyout_open = None;
     }
 }
@@ -537,6 +564,15 @@ pub fn reset_toolbox(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_flyout_has_only_the_two_reference_tools() {
+        assert_eq!(tools_for_flyout(&GROUPS[0]), &[Tool::Pick, Tool::FreeformPick]);
+        assert!(Tool::ALL.contains(&Tool::FreeTransform));
+        for group in GROUPS.iter().skip(1) {
+            assert_eq!(tools_for_flyout(group), group.tools);
+        }
+    }
 
     /// The buttons follow the default button size, or the toolbox's
     /// own; captions widen them by the widest tool name.

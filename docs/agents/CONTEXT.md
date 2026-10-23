@@ -89,17 +89,23 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Codex | Selection flyout, icons and shortcuts | 2026-10-23 | Owner screenshot; toolbox.rs, icons.rs, tools.rs, interaction.rs, pick_drag_tests.rs |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
 
-- (none)
+- Codex selection flyout change: Rust/Cargo and native display are unavailable in
+  this environment. Run cargo fmt, workspace tests, clippy, build and the
+  required native visual/smoke checks before treating it as validated.
 
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-23, Codex: implemented the two-row selection reference flyout,
+  monochrome pointer/lasso icons, 1 and Shift+1 shortcuts, Space compatibility,
+  Escape dismissal and regression tests. Compilation and visual validation
+  are pending because Rust/Cargo and native display are unavailable.
 
 - 2026-10-23, Claude: shared context, status file, sync scripts and
   hooks for agents on the same branch.

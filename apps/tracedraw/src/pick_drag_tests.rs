@@ -3768,3 +3768,21 @@ fn the_constrain_key_can_be_shift_or_alt() {
         assert!(!level(&app), "{key:?}: another key does not constrain");
     }
 }
+
+#[test]
+fn selection_reference_shortcuts_preserve_selection_and_space_alias() {
+    let (ctx, mut app, id) = setup();
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    app.select(vec![id]);
+    app.set_tool(Tool::Rectangle);
+    let selected = app.selection.clone();
+    frame(&ctx, &mut app, vec![key(egui::Key::Num1, Modifiers::NONE)], Modifiers::NONE);
+    assert_eq!(app.tool, Tool::Pick);
+    assert_eq!(app.selection, selected, "1 must not recall an empty numbered group");
+    frame(&ctx, &mut app, vec![key(egui::Key::Num1, Modifiers::SHIFT)], Modifiers::SHIFT);
+    assert_eq!(app.tool, Tool::FreeformPick);
+    assert_eq!(app.selection, selected);
+    frame(&ctx, &mut app, vec![key(egui::Key::Space, Modifiers::NONE)], Modifiers::NONE);
+    assert_eq!(app.tool, Tool::Pick);
+    assert_eq!(app.selection, selected);
+}
