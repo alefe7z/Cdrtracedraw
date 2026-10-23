@@ -92,6 +92,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Codex | Reference fidelity: docker catalog/icons and five missing panel integrations; app DockerTab, ui/dockers.rs, new panel module, translations/docs | 2026-10-23 | Owner explicitly requires matching design and behavior, not approximate substitutes. Native verification remains required. |
 
 ## Notes for other agents
 
