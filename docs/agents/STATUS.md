@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `828f50d Update the agents' status file`
-- Commits on the branch: 23
+- Last commit before this one: `9c0ae11 Format the selection flyout change`
+- Commits on the branch: 24
 
 ## Last 20 commits
 
+- `9c0ae11` 2026-10-23 18:11 Claude: Format the selection flyout change
 - `e8ec67b` 2026-10-23 18:06 Claude: Claim the any-key shortcuts task
 - `57030bb` 2026-10-23 15:03 alefe7z: Match the selection flyout reference and selection shortcuts
 - `9811073` 2026-10-23 15:02 alefe7z: Claim selection flyout reference task
@@ -25,40 +26,39 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `74a6e9e` 2026-10-22 17:48 Claude: Reorder the Crop flyout and redraw the Knife, Segment Delete and Eraser icons
 - `5201356` 2026-10-22 14:21 Claude: Make CD Draw desktop only and fully offline
 - `12dc441` 2026-10-22 13:23 Claude: Request a Windows build [exe]
-- `0098f43` 2026-10-22 13:23 Claude: Trigger the Windows build from an [exe] commit as well as a tag
 
 ## Files changed in the last 10 commits
 
 - `docs/agents/CONTEXT.md` (4)
 - `scripts/agent-sync.sh` (2)
-- `apps/tracedraw/src/ui/print_preview.rs` (2)
-- `apps/tracedraw/src/ui/print_dialog.rs` (2)
-- `apps/tracedraw/src/ui/dialogs.rs` (2)
-- `apps/tracedraw/lang/zh-TW.toml` (2)
-- `apps/tracedraw/lang/zh-CN.toml` (2)
-- `apps/tracedraw/lang/tr.toml` (2)
-- `apps/tracedraw/lang/ru.toml` (2)
-- `apps/tracedraw/lang/pt-BR.toml` (2)
-- `apps/tracedraw/lang/pl.toml` (2)
-- `apps/tracedraw/lang/nl.toml` (2)
-- `apps/tracedraw/lang/ja.toml` (2)
-- `apps/tracedraw/lang/it.toml` (2)
-- `apps/tracedraw/lang/id.toml` (2)
-- `apps/tracedraw/lang/hi.toml` (2)
-- `apps/tracedraw/lang/fr.toml` (2)
-- `apps/tracedraw/lang/es.toml` (2)
-- `apps/tracedraw/lang/en.toml` (2)
-- `apps/tracedraw/lang/de.toml` (2)
-- `apps/tracedraw/lang/cs.toml` (2)
-- `apps/tracedraw/lang/bn.toml` (2)
-- `apps/tracedraw/lang/ar.toml` (2)
+- `apps/tracedraw/src/ui/toolbox.rs` (2)
+- `apps/tracedraw/src/ui/icons.rs` (2)
+- `apps/tracedraw/src/tools.rs` (2)
+- `apps/tracedraw/src/pick_drag_tests.rs` (2)
+- `apps/tracedraw/src/interaction.rs` (2)
 - `scripts/update-context.sh` (1)
 - `scripts/agent-setup.sh` (1)
 - `docs/features.md` (1)
 - `docs/behavior/printing.md` (1)
 - `docs/behavior/pick-tool.md` (1)
-- `apps/tracedraw/src/ui/toolbox.rs` (1)
-- `apps/tracedraw/src/ui/mod.rs` (1)
+- `apps/tracedraw/src/ui/print_preview.rs` (1)
+- `apps/tracedraw/src/ui/print_dialog.rs` (1)
+- `apps/tracedraw/src/ui/menus.rs` (1)
+- `apps/tracedraw/src/ui/dialogs.rs` (1)
+- `apps/tracedraw/lang/zh-TW.toml` (1)
+- `apps/tracedraw/lang/zh-CN.toml` (1)
+- `apps/tracedraw/lang/tr.toml` (1)
+- `apps/tracedraw/lang/ru.toml` (1)
+- `apps/tracedraw/lang/pt-BR.toml` (1)
+- `apps/tracedraw/lang/pl.toml` (1)
+- `apps/tracedraw/lang/nl.toml` (1)
+- `apps/tracedraw/lang/ja.toml` (1)
+- `apps/tracedraw/lang/it.toml` (1)
+- `apps/tracedraw/lang/id.toml` (1)
+- `apps/tracedraw/lang/hi.toml` (1)
+- `apps/tracedraw/lang/fr.toml` (1)
+- `apps/tracedraw/lang/es.toml` (1)
+- `apps/tracedraw/lang/en.toml` (1)
 
 ## Open claims (from CONTEXT.md)
 
@@ -68,9 +68,4 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Uncommitted when generated
 
-    M  apps/tracedraw/src/interaction.rs
-    M  apps/tracedraw/src/pick_drag_tests.rs
-    M  apps/tracedraw/src/tools.rs
-    M  apps/tracedraw/src/ui/icons.rs
-    M  apps/tracedraw/src/ui/toolbox.rs
     ?? docs/agents/STATUS.md.tmp
