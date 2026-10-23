@@ -101,10 +101,12 @@ Requests or warnings for whoever holds a claim, or for the next one.
   functional integrations (Live Guides, Fit Objects to Path, Color Proof,
   Assets, Views). Catalog has 43 active reference rows; Comments, Effects
   and Macros remain in Window > Panels. Dedicated vector icons replace
-  generic tool substitutions. Native validation remains blocked: the first Actions run stayed at native
-  dependency installation; the bounded replacement run is queued/pending.
-  Latest implementation: 71cf241 and 6188313. Validation run:
-  https://github.com/alefe7z/Cdrtracedraw/actions/runs/40007487138
+  generic tool substitutions. Native validation remains blocked: the first Actions run spent setup downloading unrelated Ubuntu 26.04
+  system/font/printing packages. It was cancelled. The replacement is pinned
+  to Ubuntu 24.04, installs without recommendations and bounds network/setup
+  waits; it is queued/pending. No code validation result is available yet.
+  Latest implementation: 71cf241 and 6188313; validation setup: 1fc276d. Validation run:
+  https://github.com/alefe7z/Cdrtracedraw/actions/runs/40007817066
   No build/test/visual pass is claimed. Run the workflow or use an environment
   with Rust/Cargo to compile and inspect its rendered catalog before claiming
   visual identity. Details: docs/behavior/reference-panels.md.
