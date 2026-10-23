@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `cedcca9 Restore the language files and the features list`
-- Commits on the branch: 41
+- Last commit before this one: `a4ca6fe Update the agents' status file`
+- Commits on the branch: 42
 
 ## Last 20 commits
 
@@ -25,40 +25,39 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `d129b37` 2026-10-23 18:22 Claude: Let any key be a shortcut
 - `a7ca9a0` 2026-10-23 15:19 alefe7z: Claim docker add menu reference task
 - `9c0ae11` 2026-10-23 18:11 Claude: Format the selection flyout change
-- `e8ec67b` 2026-10-23 18:06 Claude: Claim the any-key shortcuts task
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (6)
-- `.github/workflows/reference-validation.yml` (4)
-- `apps/tracedraw/src/ui/dockers.rs` (3)
-- `apps/tracedraw/src/ui/docker_panels.rs` (3)
-- `docs/features.md` (2)
-- `apps/tracedraw/src/ui/mod.rs` (2)
-- `apps/tracedraw/src/ui/docker_icons.rs` (2)
-- `apps/tracedraw/src/ui/docker_catalog.rs` (2)
-- `apps/tracedraw/src/settings.rs` (2)
-- `apps/tracedraw/src/ops2.rs` (2)
-- `apps/tracedraw/src/help_shots.rs` (2)
-- `apps/tracedraw/src/app.rs` (2)
-- `apps/tracedraw/lang/zh-TW.toml` (2)
-- `apps/tracedraw/lang/zh-CN.toml` (2)
-- `apps/tracedraw/lang/tr.toml` (2)
-- `apps/tracedraw/lang/ru.toml` (2)
-- `apps/tracedraw/lang/pt-BR.toml` (2)
-- `apps/tracedraw/lang/pl.toml` (2)
-- `apps/tracedraw/lang/nl.toml` (2)
-- `apps/tracedraw/lang/ja.toml` (2)
-- `apps/tracedraw/lang/it.toml` (2)
-- `apps/tracedraw/lang/id.toml` (2)
-- `apps/tracedraw/lang/hi.toml` (2)
-- `apps/tracedraw/lang/fr.toml` (2)
-- `apps/tracedraw/lang/es.toml` (2)
-- `apps/tracedraw/lang/en.toml` (2)
-- `apps/tracedraw/lang/de.toml` (2)
-- `apps/tracedraw/lang/cs.toml` (2)
-- `apps/tracedraw/lang/bn.toml` (2)
-- `apps/tracedraw/lang/ar.toml` (2)
+- `docs/agents/CONTEXT.md` (5)
+- `.github/workflows/reference-validation.yml` (3)
+- `apps/tracedraw/src/ui/dockers.rs` (2)
+- `apps/tracedraw/src/ui/docker_panels.rs` (2)
+- `docs/features.md` (1)
+- `apps/tracedraw/src/ui/mod.rs` (1)
+- `apps/tracedraw/src/ui/docker_icons.rs` (1)
+- `apps/tracedraw/src/ui/docker_catalog.rs` (1)
+- `apps/tracedraw/src/settings.rs` (1)
+- `apps/tracedraw/src/ops2.rs` (1)
+- `apps/tracedraw/src/help_shots.rs` (1)
+- `apps/tracedraw/src/app.rs` (1)
+- `apps/tracedraw/lang/zh-TW.toml` (1)
+- `apps/tracedraw/lang/zh-CN.toml` (1)
+- `apps/tracedraw/lang/tr.toml` (1)
+- `apps/tracedraw/lang/ru.toml` (1)
+- `apps/tracedraw/lang/pt-BR.toml` (1)
+- `apps/tracedraw/lang/pl.toml` (1)
+- `apps/tracedraw/lang/nl.toml` (1)
+- `apps/tracedraw/lang/ja.toml` (1)
+- `apps/tracedraw/lang/it.toml` (1)
+- `apps/tracedraw/lang/id.toml` (1)
+- `apps/tracedraw/lang/hi.toml` (1)
+- `apps/tracedraw/lang/fr.toml` (1)
+- `apps/tracedraw/lang/es.toml` (1)
+- `apps/tracedraw/lang/en.toml` (1)
+- `apps/tracedraw/lang/de.toml` (1)
+- `apps/tracedraw/lang/cs.toml` (1)
+- `apps/tracedraw/lang/bn.toml` (1)
+- `apps/tracedraw/lang/ar.toml` (1)
 
 ## Open claims (from CONTEXT.md)
 
