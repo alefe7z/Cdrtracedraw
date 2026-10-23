@@ -328,7 +328,7 @@ pub fn floating_dockers(app: &mut App, ctx: &egui::Context) {
             .clamp(screen.top(), (screen.bottom() - TITLE_H).max(screen.top()));
         let size = fd.size;
         let place = std::mem::take(&mut fd.place);
-        let mut window = egui::Window::new(tr(tab.key()))
+        let mut window = egui::Window::new(catalog::label(tab))
             .id(egui::Id::new(("floating_docker", tab.key())))
             .title_bar(false)
             .collapsible(false)
@@ -416,7 +416,7 @@ fn docker_title(app: &mut App, ui: &mut Ui, tab: DockerTab, place: DockerPlace) 
     ui.painter().text(
         egui::pos2(bar.left() + 7.0, bar.center().y),
         egui::Align2::LEFT_CENTER,
-        tr(tab.key()),
+        catalog::label(tab),
         egui::FontId::proportional(12.0),
         Tokens::text(),
     );

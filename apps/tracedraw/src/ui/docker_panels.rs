@@ -94,7 +94,7 @@ fn assets(app: &mut App, ui: &mut Ui) {
     let mut search = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
     let selected = ui.data_mut(|d| d.get_temp::<PathBuf>(selected_id));
     ui.add(egui::TextEdit::singleline(&mut search)
-        .hint_text(tr("reference_panels.search")));
+        .hint_text(tr("reference_panels.search")).desired_width(ui.available_width()));
     ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
     ui.horizontal_wrapped(|ui| {
         if ui.button(tr("reference_panels.add_files")).clicked() {
@@ -126,7 +126,7 @@ fn assets(app: &mut App, ui: &mut Ui) {
             continue;
         }
         let response = ui.selectable_label(selected.as_ref() == Some(&path), name)
-            .on_hover_text(path.to_string_lossy());
+            .on_hover_text(path.to_string_lossy().into_owned());
         if response.clicked() {
             ui.data_mut(|d| d.insert_temp(selected_id, path.clone()));
         }
@@ -182,7 +182,7 @@ fn views(app: &mut App, ui: &mut Ui) {
     let id = Id::new("reference_view_name");
     let mut name = ui.data_mut(|d| d.get_temp::<String>(id).unwrap_or_default());
     ui.add(egui::TextEdit::singleline(&mut name)
-        .hint_text(tr("reference_panels.view_name")));
+        .hint_text(tr("reference_panels.view_name")).desired_width(ui.available_width()));
     ui.data_mut(|d| d.insert_temp(id, name.clone()));
     if ui.add_enabled(app.has_document(), egui::Button::new(tr("reference_panels.save_view")))
         .clicked() {
@@ -225,6 +225,7 @@ mod tests {
     #[test]
     fn assets_are_deduplicated_without_changing_existing_order() {
         let mut app = App::headless();
+        app.settings.asset_files.clear();
         let a = PathBuf::from("a.svg");
         let b = PathBuf::from("b.png");
         add_asset_paths(&mut app, vec![a.clone(), b.clone(), a.clone()]);
@@ -234,6 +235,7 @@ mod tests {
     #[test]
     fn a_saved_view_restores_zoom_and_center_and_round_trips_settings() {
         let mut app = App::headless();
+        app.settings.saved_views.clear();
         app.view.zoom = 7.0;
         app.canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
         let center = app.view.to_page(app.canvas_rect.center());
