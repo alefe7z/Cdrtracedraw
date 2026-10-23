@@ -4,11 +4,13 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `29c5979 Leave the tree clean on a plain agent sync`
-- Commits on the branch: 18
+- Last commit before this one: `57030bb Match the selection flyout reference and selection shortcuts`
+- Commits on the branch: 21
 
 ## Last 20 commits
 
+- `57030bb` 2026-10-23 15:03 alefe7z: Match the selection flyout reference and selection shortcuts
+- `9811073` 2026-10-23 15:02 alefe7z: Claim selection flyout reference task
 - `29c5979` 2026-10-23 17:50 Claude: Leave the tree clean on a plain agent sync
 - `da6f96f` 2026-10-23 17:39 Claude: Add a shared context and sync scripts for agents on one branch
 - `6027201` 2026-10-23 17:27 Claude: Print preview: a window of its own like the reference
@@ -25,23 +27,19 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `0098f43` 2026-10-22 13:23 Claude: Trigger the Windows build from an [exe] commit as well as a tag
 - `fb3edcd` 2026-10-22 13:22 Claude: Add an on-request Windows build triggered by exe-* tags
 - `fc8aca1` 2026-10-22 13:10 Claude: Rename the product to CD Draw in everything the user sees
-- `9ed7284` 2026-10-22 05:10 Ighor Toth: Variable Outline tool gets its own toolbox button (#348)
 
 ## Files changed in the last 10 commits
 
-- `apps/tracedraw/lang/pt-BR.toml` (3)
-- `apps/tracedraw/lang/en.toml` (3)
-- `CHANGELOG.md` (3)
+- `docs/agents/CONTEXT.md` (3)
 - `scripts/agent-sync.sh` (2)
 - `apps/tracedraw/src/ui/print_preview.rs` (2)
 - `apps/tracedraw/src/ui/print_dialog.rs` (2)
-- `apps/tracedraw/src/ui/menus.rs` (2)
-- `apps/tracedraw/src/ui/icons.rs` (2)
 - `apps/tracedraw/src/ui/dialogs.rs` (2)
 - `apps/tracedraw/lang/zh-TW.toml` (2)
 - `apps/tracedraw/lang/zh-CN.toml` (2)
 - `apps/tracedraw/lang/tr.toml` (2)
 - `apps/tracedraw/lang/ru.toml` (2)
+- `apps/tracedraw/lang/pt-BR.toml` (2)
 - `apps/tracedraw/lang/pl.toml` (2)
 - `apps/tracedraw/lang/nl.toml` (2)
 - `apps/tracedraw/lang/ja.toml` (2)
@@ -50,20 +48,26 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `apps/tracedraw/lang/hi.toml` (2)
 - `apps/tracedraw/lang/fr.toml` (2)
 - `apps/tracedraw/lang/es.toml` (2)
+- `apps/tracedraw/lang/en.toml` (2)
 - `apps/tracedraw/lang/de.toml` (2)
 - `apps/tracedraw/lang/cs.toml` (2)
 - `apps/tracedraw/lang/bn.toml` (2)
 - `apps/tracedraw/lang/ar.toml` (2)
-- `AGENTS.md` (2)
 - `scripts/update-context.sh` (1)
 - `scripts/agent-setup.sh` (1)
 - `packaging/windows/msix/Assets/Wide310x150Logo.png` (1)
 - `packaging/windows/msix/Assets/StoreLogo.png` (1)
+- `packaging/windows/msix/Assets/Square44x44Logo.png` (1)
+- `packaging/windows/msix/Assets/Square310x310Logo.png` (1)
+- `packaging/windows/msix/Assets/Square150x150Logo.png` (1)
 
 ## Open claims (from CONTEXT.md)
 
-None.
+| Agent | Area / files | Since | Note |
+| --- | --- | --- | --- |
+| Claude | Any key as a shortcut: shortcuts.rs, new extra_keys.rs, ui/options.rs (shortcut capture), ui/mod.rs (one call before app.keyboard), docs | 2026-10-23 | Leaves interaction.rs and tools.rs alone; new key kinds are dispatched from extra_keys.rs. Also checking Codex's selection flyout commit (build, tests) |
 
 ## Uncommitted when generated
 
+    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
