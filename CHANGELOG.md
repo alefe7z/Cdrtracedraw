@@ -6,6 +6,8 @@ full, row-by-row status.
 
 ## Unreleased
 
+- New logo: a white pencil on a green rounded square (`assets/icon/cd-draw-logo.svg`). The application icon, the Windows `.ico`, the Store tiles, the macOS and Linux icons, the splash screen, the About box and the Help use it.
+
 - Toolbox: the Curve flyout lists Freehand, 2-Point Line, Bezier (Shift+F5), Artistic Media (I, the Brush Strokes tool, moved here), Pen (Alt+C), B-Spline (Alt+B), Polyline and 3-Point Curve, with new icons for each. Alt+C and Alt+B pick their tools instead of opening a menu.
 
 - Toolbox: the Crop flyout lists Crop, Eraser, Segment Delete and Knife, without a separator, with new icons: heavy crop marks for Crop, a tilted block with a solid rounded half for the Eraser, a knife of three diagonal strokes over a slotted wedge for the Knife, and the same knife over a red dashed marquee for Segment Delete.

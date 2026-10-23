@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Creator: CorelDRAW 2026 -->
+<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="179.391mm" height="178.741mm" version="1.1" style="shape-rendering:geometricPrecision; text-rendering:geometricPrecision; image-rendering:optimizeQuality; fill-rule:evenodd; clip-rule:evenodd"
+viewBox="0 0 17924.81 17859.95"
+ xmlns:xlink="http://www.w3.org/1999/xlink"
+ xmlns:xodm="http://www.corel.com/coreldraw/odm/2003">
+ <defs>
+  <style type="text/css">
+   <![CDATA[
+    .fil1 {fill:#FEFEFE}
+    .fil0 {fill:url(#id0)}
+   ]]>
+  </style>
+  <radialGradient id="id0" gradientUnits="userSpaceOnUse" gradientTransform="matrix(-1.39749 -1.01299 -0.998941 1.49329 21967 3723)" cx="6632.18" cy="6072.39" r="8245.42" fx="6632.18" fy="6072.39">
+   <stop offset="0" style="stop-opacity:1; stop-color:#6FFF00"/>
+   <stop offset="1" style="stop-opacity:1; stop-color:#06BD00"/>
+  </radialGradient>
+ </defs>
+ <g id="Camada_x0020_1">
+  <metadata id="CorelCorpID_0Corel-Layer"/>
+  <g id="_1616597899952">
+   <path class="fil0" d="M1140.4 0l13218.16 0c1961.56,0 3566.25,1604.7 3566.25,3566.16l0 10727.64c0,1961.46 -1604.69,3566.16 -3566.25,3566.16l-10792.33 0c-1961.55,0 -3566.24,-1604.7 -3566.24,-3566.16l0 -13153.29c0,-627.25 513.25,-1140.5 1140.4,-1140.5z"/>
+   <polygon class="fil1" points="3948.09,5398.66 6800.92,3314.42 13078.43,11790.57 12903.28,14544.76 10226.07,13874.49 "/>
+  </g>
+ </g>
+</svg>
