@@ -405,8 +405,12 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                         if current && selection {
                             let tile = Rect::from_min_size(r.min, Vec2::new(22.0, r.height()));
                             ui.painter().rect_filled(tile, 0.0, Tokens::tool_hover());
-                            ui.painter().rect_stroke(tile, 0.0,
-                                Stroke::new(1.0, Tokens::control_border()), egui::StrokeKind::Inside);
+                            ui.painter().rect_stroke(
+                                tile,
+                                0.0,
+                                Stroke::new(1.0, Tokens::control_border()),
+                                egui::StrokeKind::Inside,
+                            );
                         }
                         if current && !selection {
                             let c = Pos2::new(r.min.x + 9.0, r.center().y);
@@ -567,7 +571,10 @@ mod tests {
 
     #[test]
     fn selection_flyout_has_only_the_two_reference_tools() {
-        assert_eq!(tools_for_flyout(&GROUPS[0]), &[Tool::Pick, Tool::FreeformPick]);
+        assert_eq!(
+            tools_for_flyout(&GROUPS[0]),
+            &[Tool::Pick, Tool::FreeformPick]
+        );
         assert!(Tool::ALL.contains(&Tool::FreeTransform));
         for group in GROUPS.iter().skip(1) {
             assert_eq!(tools_for_flyout(group), group.tools);

@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `e8ec67b Claim the any-key shortcuts task`
-- Commits on the branch: 22
+- Last commit before this one: `828f50d Update the agents' status file`
+- Commits on the branch: 23
 
 ## Last 20 commits
 
@@ -26,7 +26,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `5201356` 2026-10-22 14:21 Claude: Make CD Draw desktop only and fully offline
 - `12dc441` 2026-10-22 13:23 Claude: Request a Windows build [exe]
 - `0098f43` 2026-10-22 13:23 Claude: Trigger the Windows build from an [exe] commit as well as a tag
-- `fb3edcd` 2026-10-22 13:22 Claude: Add an on-request Windows build triggered by exe-* tags
 
 ## Files changed in the last 10 commits
 
@@ -69,4 +68,9 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/src/interaction.rs
+    M  apps/tracedraw/src/pick_drag_tests.rs
+    M  apps/tracedraw/src/tools.rs
+    M  apps/tracedraw/src/ui/icons.rs
+    M  apps/tracedraw/src/ui/toolbox.rs
     ?? docs/agents/STATUS.md.tmp

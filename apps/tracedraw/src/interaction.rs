@@ -2556,13 +2556,16 @@ impl App {
                 self.set_selection_group(n, ids);
             }
             // Tool shortcuts take precedence over recalling a numbered group.
-            let pick_shortcut = self.settings.shortcuts.iter()
+            let pick_shortcut = self
+                .settings
+                .shortcuts
+                .iter()
                 .find(|(id, _)| id == Tool::Pick.id())
                 .map(|(_, value)| value.as_str())
                 .or_else(|| Tool::Pick.shortcut())
                 .unwrap_or("");
-            let pick_uses_number = crate::shortcuts::parse(pick_shortcut)
-                == Some((Modifiers::NONE, k));
+            let pick_uses_number =
+                crate::shortcuts::parse(pick_shortcut) == Some((Modifiers::NONE, k));
             if pressed(k, Modifiers::NONE) && !pick_uses_number {
                 self.recall_selection_group(n);
             }

@@ -387,8 +387,16 @@ pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
             // An open lasso with a loose tail, drawn on the design grid.
             let loop_pts = ic.arc(8.0, 6.3, 5.5, 4.7, 0.35, TAU + 0.05, 28);
             ic.open(&loop_pts, thin);
-            ic.open(&[(12.5, 8.7), (10.8, 10.9), (7.0, 12.3),
-                (5.3, 14.1), (7.8, 15.0)], thin);
+            ic.open(
+                &[
+                    (12.5, 8.7),
+                    (10.8, 10.9),
+                    (7.0, 12.3),
+                    (5.3, 14.1),
+                    (7.8, 15.0),
+                ],
+                thin,
+            );
         }
         Tool::FreeTransform => {
             ic.cursor(2.5, 3.5, 0.8, true);

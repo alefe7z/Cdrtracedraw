@@ -475,7 +475,13 @@ mod selection_shortcut_tests {
     fn selection_shortcuts_match_the_flyout() {
         assert_eq!(Tool::Pick.shortcut(), Some("1"));
         assert_eq!(Tool::FreeformPick.shortcut(), Some("Shift+1"));
-        assert_eq!(crate::shortcuts::parse("1"), Some((egui::Modifiers::NONE, egui::Key::Num1)));
-        assert_eq!(crate::shortcuts::parse("Shift+1"), Some((egui::Modifiers::SHIFT, egui::Key::Num1)));
+        assert_eq!(
+            crate::shortcuts::parse("1"),
+            Some((egui::Modifiers::NONE, egui::Key::Num1))
+        );
+        assert_eq!(
+            crate::shortcuts::parse("Shift+1"),
+            Some((egui::Modifiers::SHIFT, egui::Key::Num1))
+        );
     }
 }
