@@ -94,10 +94,11 @@ name.
 
 - Clicking a command's button ("Set shortcut") makes it wait for keys:
   the next key pressed, with the Ctrl, Alt and Shift held at the time,
-  becomes its shortcut (shown as `Ctrl+Alt+Shift+Key`). Esc, Tab,
-  Enter, Backspace and Space alone are not taken (they edit text, move
-  focus or close dialogs); Esc stops the wait without closing the
-  options. Changing page or closing the options stops it too.
+  becomes its shortcut (shown as `Ctrl+Alt+Shift+Key`). Any key is
+  taken, Esc, Tab, Enter, Backspace and Space alone too (Esc then does
+  not close the options), and so is Shift, Ctrl, Alt or the Windows key
+  tapped alone (see "Any key"). Clicking the button again, changing page
+  or closing the options stops the wait.
 - A shortcut of your own runs its command wherever the command's menu
   item would: the menus are walked without being shown and the item
   reports a click, so the command does exactly what the menu does. A
@@ -154,3 +155,40 @@ name.
 - Alt and a title's letter opens that menu, except E, S, X, Q and Z,
   which commands use with Alt.
 - While any menu or list is open, the drawing's shortcuts do not run.
+
+## Any key
+
+Every key of the keyboard can be a shortcut, alone or with Ctrl, Alt and
+Shift (`shortcuts.rs`, `extra_keys.rs`):
+
+- The keys egui reports: letters, digits, F1 to F35, arrows, Home, End,
+  PgUp, PgDn, Insert, Delete, punctuation, Esc, Tab, Enter, Backspace,
+  Space, the ISO key beside the left Shift and Browser Back.
+- Keys egui does not report, read from Windows every frame while the
+  window has the focus: Pause, CapsLock, PrintScreen, ScrollLock,
+  NumLock, Menu (the context menu key), Numpad0 to Numpad9,
+  NumpadMultiply, NumpadAdd, NumpadSubtract, NumpadDecimal,
+  NumpadDivide, Clear, Help, Select, Execute, Sleep, the browser keys
+  (BrowserForward, BrowserRefresh, BrowserStop, BrowserSearch,
+  BrowserFavorites, BrowserHome), the volume and media keys (VolumeMute,
+  VolumeDown, VolumeUp, MediaNext, MediaPrevious, MediaStop,
+  MediaPlayPause), LaunchMail, LaunchMedia, LaunchApp1, LaunchApp2 and
+  the input method keys Convert, NonConvert, Kana and Kanji. A keypad key
+  is its own key: `Numpad1` is not `1`, and a shortcut on it takes the
+  digit it would also type. On Linux and macOS these keys are not read;
+  the keypad works as the digits and signs.
+- A modifier tapped alone, left and right apart: `LShift`, `RShift`,
+  `LCtrl`, `RCtrl`, `LAlt`, `RAlt`, `LWin`, `RWin`. A tap is a press and
+  release with no other key, click or wheel between, so Ctrl+E is not
+  also a tap of Ctrl; other modifiers held with it come along
+  (`Ctrl+RAlt`).
+
+The system keeps some keys before the program sees them: Windows opens
+the Start menu on a tap of the Windows key and takes Ctrl+Alt+Del,
+Alt+Tab and Win+L; Print Screen may also save a screenshot. Those still
+run their shortcut where Windows lets the key through.
+
+Shortcuts on these keys run like the others (the command's menu item,
+or the tool), from `extra_keys::frame`, which `ui::show` calls before
+`App::keyboard`; they run only when no dialog, field, text edit or menu
+has the keyboard.

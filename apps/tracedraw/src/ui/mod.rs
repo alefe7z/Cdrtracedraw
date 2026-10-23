@@ -228,6 +228,9 @@ fn root_frame(app: &mut App, ui: &mut Ui) {
     apply_shadows(&ctx, app.settings.ui_shadows);
     crate::ui::icons::set_colored(app.settings.colored_icons);
     menus::invoke::set_bindings(&app.settings.shortcuts);
+    // Keys beyond egui's, modifier taps, and the keys of a command
+    // waiting for its shortcut, before anything else reads the keyboard.
+    crate::extra_keys::frame(app, &ctx);
     // F1: the Help page of the open dialog, the docker or the tool.
     if app.shortcut_editor.capture.is_none() {
         crate::help::handle_f1(app, &ctx);

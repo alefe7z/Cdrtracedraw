@@ -25,6 +25,7 @@ pub struct Printer {
 /// The printers `lpstat -l -p -d` lists ("printer NAME is idle..."
 /// lines, their "Description:" and "Location:" lines and "system default
 /// destination: NAME"), the default one first.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn parse_lpstat(output: &str) -> Vec<Printer> {
     let mut out: Vec<Printer> = Vec::new();
     let mut default: Option<String> = None;
@@ -232,6 +233,7 @@ pub fn starting_printer(remembered: Option<&str>, printers: &[Printer]) -> Optio
 
 /// The `lp` command that prints `pdf` on `printer`: `copies` copies,
 /// collated as whole sets or sheet by sheet, under `title` in the queue.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn lp_args(printer: &str, pdf: &Path, copies: u32, collate: bool, title: &str) -> Vec<String> {
     let mut args = vec!["-d".to_string(), printer.to_string()];
     if copies > 1 {

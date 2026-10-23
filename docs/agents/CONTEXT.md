@@ -81,6 +81,9 @@ open claims); do not edit that one by hand.
   `$TRACEDRAW_SHOTS/config/settings.json` and run with
   `TRACEDRAW_KEEP_SETTINGS=1`. Language files are compiled in: rebuild
   after editing `lang/*.toml`.
+- Windows-only code: `rustup target add x86_64-pc-windows-msvc` then
+  `cargo check -p tracedraw --target x86_64-pc-windows-msvc` (checks,
+  does not link; must stay warning-free).
 
 ## Claims
 
@@ -90,19 +93,42 @@ done.
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
 | Codex | Docker add menu and tab icons: ui/dockers.rs, new ui/docker_catalog.rs, translations, docker behavior docs | 2026-10-23 | Match owner video/screenshot; keep menu open for multiple toggles; leaves Claude shortcut files alone |
-| Claude | Any key as a shortcut: shortcuts.rs, new extra_keys.rs, ui/options.rs (shortcut capture), ui/mod.rs (one call before app.keyboard), docs | 2026-10-23 | Leaves interaction.rs and tools.rs alone; new key kinds are dispatched from extra_keys.rs. Also checking Codex's selection flyout commit (build, tests) |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
 
-- Codex selection flyout change: Rust/Cargo and native display are unavailable in
-  this environment. Run cargo fmt, workspace tests, clippy, build and the
-  required native visual/smoke checks before treating it as validated.
+- Codex selection flyout change (57030bb): checked by Claude on
+  2026-10-23. It builds, the workspace tests (899) and clippy pass, and
+  cargo fmt was applied (cedfe19). Only the visual check in the real app
+  is still to do.
+- Shortcuts (Claude, 2026-10-23): any key can now be a shortcut. Read
+  `docs/behavior/shortcuts.md`, "Any key", before touching keys:
+  - `shortcuts.rs` has `Code` = `Key` (egui) | `Extra` (keys egui does
+    not report: Pause, PrintScreen, keypad, media...) | `Tap` (Shift,
+    Ctrl, Alt, Win pressed alone: LShift, RCtrl...). Use `parse_code`,
+    `format_code` and `same` for shortcut text; `parse` still returns
+    egui keys only, so `interaction.rs` keeps working unchanged.
+  - `extra_keys.rs` runs once a frame from `ui/mod.rs`, before
+    `App::keyboard`: it reads the extra keys from Windows, detects taps,
+    runs the user's shortcuts on them, and does the capture of
+    Options > Customization > Commands (any key, Esc included; click the
+    button again to stop waiting). `ui/options.rs` no longer captures.
+  - `shortcuts::allowed` no longer refuses Esc, Tab, Enter, Backspace or
+    Space alone.
+  - Built-in default shortcuts (`tools.rs`, `interaction.rs`) were not
+    changed.
 
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-23, Claude: any key as a shortcut (extra keys on Windows,
+  modifier taps, Esc/Space/Enter alone), `extra_keys.rs`.
+- 2026-10-23, Claude: verified and formatted Codex's selection flyout
+  change (`cedfe19`).
+- 2026-10-23, Codex: selection flyout and 1 / Shift+1 shortcuts
+  (`57030bb`).
 
 - 2026-10-23, Codex: implemented the two-row selection reference flyout,
   monochrome pointer/lasso icons, 1 and Shift+1 shortcuts, Space compatibility,

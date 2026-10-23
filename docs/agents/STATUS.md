@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `9c0ae11 Format the selection flyout change`
-- Commits on the branch: 24
+- Last commit before this one: `a7ca9a0 Claim docker add menu reference task`
+- Commits on the branch: 26
 
 ## Last 20 commits
 
+- `a7ca9a0` 2026-10-23 15:19 alefe7z: Claim docker add menu reference task
 - `9c0ae11` 2026-10-23 18:11 Claude: Format the selection flyout change
 - `e8ec67b` 2026-10-23 18:06 Claude: Claim the any-key shortcuts task
 - `57030bb` 2026-10-23 15:03 alefe7z: Match the selection flyout reference and selection shortcuts
@@ -24,48 +25,52 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `7d32888` 2026-10-22 17:59 Claude: Allow following and naming other programs
 - `8a2a324` 2026-10-22 17:49 Claude: Format the knife icon helper
 - `74a6e9e` 2026-10-22 17:48 Claude: Reorder the Crop flyout and redraw the Knife, Segment Delete and Eraser icons
-- `5201356` 2026-10-22 14:21 Claude: Make CD Draw desktop only and fully offline
-- `12dc441` 2026-10-22 13:23 Claude: Request a Windows build [exe]
 
 ## Files changed in the last 10 commits
 
 - `docs/agents/CONTEXT.md` (4)
-- `scripts/agent-sync.sh` (2)
 - `apps/tracedraw/src/ui/toolbox.rs` (2)
 - `apps/tracedraw/src/ui/icons.rs` (2)
 - `apps/tracedraw/src/tools.rs` (2)
 - `apps/tracedraw/src/pick_drag_tests.rs` (2)
 - `apps/tracedraw/src/interaction.rs` (2)
-- `scripts/update-context.sh` (1)
-- `scripts/agent-setup.sh` (1)
+- `scripts/agent-sync.sh` (1)
 - `docs/features.md` (1)
-- `docs/behavior/printing.md` (1)
 - `docs/behavior/pick-tool.md` (1)
-- `apps/tracedraw/src/ui/print_preview.rs` (1)
-- `apps/tracedraw/src/ui/print_dialog.rs` (1)
-- `apps/tracedraw/src/ui/menus.rs` (1)
-- `apps/tracedraw/src/ui/dialogs.rs` (1)
-- `apps/tracedraw/lang/zh-TW.toml` (1)
-- `apps/tracedraw/lang/zh-CN.toml` (1)
-- `apps/tracedraw/lang/tr.toml` (1)
-- `apps/tracedraw/lang/ru.toml` (1)
-- `apps/tracedraw/lang/pt-BR.toml` (1)
-- `apps/tracedraw/lang/pl.toml` (1)
-- `apps/tracedraw/lang/nl.toml` (1)
-- `apps/tracedraw/lang/ja.toml` (1)
-- `apps/tracedraw/lang/it.toml` (1)
-- `apps/tracedraw/lang/id.toml` (1)
-- `apps/tracedraw/lang/hi.toml` (1)
-- `apps/tracedraw/lang/fr.toml` (1)
-- `apps/tracedraw/lang/es.toml` (1)
-- `apps/tracedraw/lang/en.toml` (1)
 
 ## Open claims (from CONTEXT.md)
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Claude | Any key as a shortcut: shortcuts.rs, new extra_keys.rs, ui/options.rs (shortcut capture), ui/mod.rs (one call before app.keyboard), docs | 2026-10-23 | Leaves interaction.rs and tools.rs alone; new key kinds are dispatched from extra_keys.rs. Also checking Codex's selection flyout commit (build, tests) |
+| Codex | Docker add menu and tab icons: ui/dockers.rs, new ui/docker_catalog.rs, translations, docker behavior docs | 2026-10-23 | Match owner video/screenshot; keep menu open for multiple toggles; leaves Claude shortcut files alone |
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/lang/ar.toml
+    M  apps/tracedraw/lang/bn.toml
+    M  apps/tracedraw/lang/cs.toml
+    M  apps/tracedraw/lang/de.toml
+    M  apps/tracedraw/lang/en.toml
+    M  apps/tracedraw/lang/es.toml
+    M  apps/tracedraw/lang/fr.toml
+    M  apps/tracedraw/lang/hi.toml
+    M  apps/tracedraw/lang/id.toml
+    M  apps/tracedraw/lang/it.toml
+    M  apps/tracedraw/lang/ja.toml
+    M  apps/tracedraw/lang/nl.toml
+    M  apps/tracedraw/lang/pl.toml
+    M  apps/tracedraw/lang/pt-BR.toml
+    M  apps/tracedraw/lang/ru.toml
+    M  apps/tracedraw/lang/tr.toml
+    M  apps/tracedraw/lang/zh-CN.toml
+    M  apps/tracedraw/lang/zh-TW.toml
+    A  apps/tracedraw/src/extra_keys.rs
+    M  apps/tracedraw/src/main.rs
+    M  apps/tracedraw/src/printers.rs
+    M  apps/tracedraw/src/shortcuts.rs
+    M  apps/tracedraw/src/ui/mod.rs
+    M  apps/tracedraw/src/ui/options.rs
+    M  docs/agents/CONTEXT.md
+    M  docs/behavior/shortcuts.md
+    M  docs/features.md
     ?? docs/agents/STATUS.md.tmp

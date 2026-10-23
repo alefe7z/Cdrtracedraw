@@ -49,6 +49,7 @@ mod envelope_edit;
 mod envelope_shapes;
 mod export;
 mod export_assets;
+mod extra_keys;
 mod extrude_tool;
 mod eyedropper;
 mod files;

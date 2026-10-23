@@ -252,7 +252,7 @@ Counts: works 189, partial 6 (`.cdr` content coverage; CMX import; print preview
 | Bitmap plug-ins (third-party filters) | not applicable: no plug-in host; the built-in bitmap effects cover the stock filters |
 | User interface in 18 languages with system fallback fonts | works |
 | Keyboard shortcuts (every menu shortcut bound; Esc closes dialogs) | works (see `behavior/shortcuts.md`) |
-| Shortcuts of your own for every menu command (Options > Customization > Commands: search, press the keys, conflicts named, shown in the menus) | works (see `behavior/shortcuts.md`) |
+| Shortcuts of your own for every menu command and tool (Options > Customization > Commands: search, press the keys, conflicts named, shown in the menus); any key, Esc, Space, Pause, Print Screen, the keypad, media keys and Shift, Ctrl, Alt or Win tapped alone included | works (see `behavior/shortcuts.md`) |
 | Workspace export and import (`.tdws`: shortcuts, bars and toolbox, palette options, appearance; part by part) and the bars shown kept across restarts | works (see `behavior/workspaces.md`) |
 | Reset all settings: Options > Global, F8 while starting, `--reset-settings` (see `behavior/about-and-startup.md`) | works |
 | Shelf: objects and colours (document palette and colour styles) kept for any drawing and after restarts (Add Selection, Add Colours, Add to Shelf on the object menu), placed by double click or by dragging onto the page, renamed, reordered and removed; symbols become objects, linked styles go along (see `behavior/shelf.md`) | works |

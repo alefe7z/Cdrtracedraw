@@ -1434,7 +1434,7 @@ fn user_shortcut(app: &App, id: &str) -> Option<String> {
 /// Give the menu command `id` the shortcut `text`. Another command of the
 /// user's with it loses it; commands and tools that have it built in are
 /// named in the note, since the shortcut now runs this command.
-fn set_menu_shortcut(app: &mut App, id: &str, text: &str) {
+pub(crate) fn set_menu_shortcut(app: &mut App, id: &str, text: &str) {
     use crate::shortcuts::same;
     let mut others: Vec<String> = Vec::new();
     for (k, v) in &app.settings.shortcuts {
@@ -1561,7 +1561,6 @@ fn commands_page(app: &mut App, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         app.shortcut_editor.entries = crate::ui::menus::commands(app, &ctx);
     }
-    capture_keys(app, ui);
     let category_name = |c: Option<&str>| match c {
         None => tr("options.all_commands"),
         Some(TOOLBOX) => tr("menu.window.toolbar_toolbox"),
@@ -1833,38 +1832,6 @@ fn reset_category_shortcuts(app: &mut App, category: &str) {
     app.settings.shortcuts.retain(|(k, _)| !ids.contains(k));
     app.shortcut_editor.note = None;
     app.shortcut_editor.capture = None;
-}
-
-/// The command waiting for its keys takes the next key pressed (Shift,
-/// Ctrl and Alt alone keep it waiting); tools take the same keys as
-/// menu commands.
-fn capture_keys(app: &mut App, ui: &mut Ui) {
-    let Some(target) = app.shortcut_editor.capture.clone() else {
-        return;
-    };
-    let pressed = ui.input(|i| {
-        i.events.iter().find_map(|e| match e {
-            egui::Event::Key {
-                key,
-                pressed: true,
-                modifiers,
-                ..
-            } if !crate::shortcuts::is_modifier(*key) => Some((*key, *modifiers)),
-            _ => None,
-        })
-    });
-    let Some((key, mods)) = pressed else {
-        return;
-    };
-    if key == egui::Key::Escape && !(mods.ctrl || mods.alt || mods.command) {
-        app.shortcut_editor.capture = None;
-        return;
-    }
-    if crate::shortcuts::allowed(mods, key) {
-        let text = crate::shortcuts::format(mods, key);
-        set_menu_shortcut(app, &target, &text);
-        app.shortcut_editor.capture = None;
-    }
 }
 
 /// Customization > Command Bars: the bars shown, in a list, with Reset;
@@ -2761,14 +2728,42 @@ mod tests {
         assert!(app.shortcut_editor.capture.is_none());
         let note = app.shortcut_editor.note.clone().unwrap_or_default();
         assert!(note.contains(&tr("menu.edit.duplicate")), "{note}");
-        // Keys that edit text or close dialogs are not shortcuts alone.
+        // Every key is a shortcut, Enter and Esc alone too; Esc taken so
+        // does not close the options.
         app.shortcut_editor.capture = Some("menu.file.import".into());
         frame(&ctx, &mut app, vec![key(Key::Enter, Modifiers::NONE)]);
-        assert!(user_shortcut(&app, "menu.file.import").is_none());
-        // Esc stops waiting and leaves the options open.
+        assert_eq!(
+            user_shortcut(&app, "menu.file.import").as_deref(),
+            Some("Enter")
+        );
+        app.shortcut_editor.capture = Some("menu.file.import".into());
         frame(&ctx, &mut app, vec![key(Key::Escape, Modifiers::NONE)]);
+        assert_eq!(
+            user_shortcut(&app, "menu.file.import").as_deref(),
+            Some("Esc")
+        );
         assert!(app.shortcut_editor.capture.is_none());
         assert!(matches!(app.dialog, Dialog::Options));
+        // A modifier tapped alone is one too.
+        app.shortcut_editor.capture = Some("menu.file.import".into());
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                key(Key::ShiftRight, Modifiers::SHIFT),
+                egui::Event::Key {
+                    key: Key::ShiftRight,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        assert_eq!(
+            user_shortcut(&app, "menu.file.import").as_deref(),
+            Some("RShift")
+        );
         // Keys of the user's move to the command given them last.
         set_menu_shortcut(&mut app, "menu.file.import", "ctrl+d");
         assert!(user_shortcut(&app, "menu.file.export").is_none());
