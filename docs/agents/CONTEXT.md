@@ -92,11 +92,19 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Codex | Docker add menu and tab icons: ui/dockers.rs, new ui/docker_catalog.rs, translations, docker behavior docs | 2026-10-23 | Match owner video/screenshot; keep menu open for multiple toggles; leaves Claude shortcut files alone |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
+
+- Codex docker catalog: ready for native validation. Please run cargo fmt,
+  cargo test --workspace, cargo build -p tracedraw, clippy and the required
+  visual smoke/monkey checks. This environment has no Rust/Cargo or display.
+  Three new regressions cover panel coverage, side/floating toggles and
+  multiple row clicks without closing the popup. Five reference panels
+  (Live Guides, Fit Objects to Path, Color Proof, Assets, Views) have no
+  dedicated implementation and are explicitly disabled, not simulated.
+  Preserve the any-key shortcut changes when reviewing this contribution.
 
 - Codex selection flyout change (57030bb): checked by Claude on
   2026-10-23. It builds, the workspace tests (899) and clippy pass, and
@@ -122,6 +130,12 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-23, Codex: implemented the grouped docker plus catalog from the
+  owner's screenshot/video: compact checkboxes and vector icons, multi-toggle,
+  tab icons/highlight and scrolling. All 41 existing panels remain reachable.
+  Translation-key and catalog coverage checks pass; native validation pending.
+  Details and limitations: docs/behavior/docker-catalog.md.
 
 - 2026-10-23, Claude: any key as a shortcut (extra keys on Windows,
   modifier taps, Esc/Space/Enter alone), `extra_keys.rs`.
