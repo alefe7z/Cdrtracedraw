@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `da6f96f Add a shared context and sync scripts for agents on one branch`
-- Commits on the branch: 16
+- Last commit before this one: `9283370 Update the agents' status file`
+- Commits on the branch: 17
 
 ## Last 20 commits
 
@@ -28,15 +28,14 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Files changed in the last 10 commits
 
-- `apps/tracedraw/src/ui/icons.rs` (4)
-- `CHANGELOG.md` (4)
+- `apps/tracedraw/src/ui/icons.rs` (3)
 - `apps/tracedraw/lang/pt-BR.toml` (3)
 - `apps/tracedraw/lang/en.toml` (3)
+- `CHANGELOG.md` (3)
 - `apps/tracedraw/src/ui/print_preview.rs` (2)
 - `apps/tracedraw/src/ui/print_dialog.rs` (2)
 - `apps/tracedraw/src/ui/menus.rs` (2)
 - `apps/tracedraw/src/ui/dialogs.rs` (2)
-- `apps/tracedraw/src/tools.rs` (2)
 - `apps/tracedraw/lang/zh-TW.toml` (2)
 - `apps/tracedraw/lang/zh-CN.toml` (2)
 - `apps/tracedraw/lang/tr.toml` (2)
@@ -58,6 +57,7 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `scripts/agent-sync.sh` (1)
 - `scripts/agent-setup.sh` (1)
 - `packaging/windows/msix/Assets/Wide310x150Logo.png` (1)
+- `packaging/windows/msix/Assets/StoreLogo.png` (1)
 
 ## Open claims (from CONTEXT.md)
 
@@ -65,4 +65,5 @@ None.
 
 ## Uncommitted when generated
 
+    M  scripts/agent-sync.sh
     ?? docs/agents/STATUS.md.tmp
