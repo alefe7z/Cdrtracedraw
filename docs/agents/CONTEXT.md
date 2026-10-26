@@ -92,6 +92,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Claude | Options dialog after the third video: `ui/options.rs`, `ui/options_global.rs`, `lang/*.toml` (append), `docs/reference/ui-reference.md` | 2026-10-26 | category icons header, page lists |
 
 ## Notes for other agents
 
