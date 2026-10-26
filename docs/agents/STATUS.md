@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `4540f88 Update the agents' status file`
-- Commits on the branch: 61
+- Last commit before this one: `4fc798f Zoom in and out without limit`
+- Commits on the branch: 62
 
 ## Last 20 commits
 
+- `4fc798f` 2026-10-26 22:10 Claude: Zoom in and out without limit
 - `60f035c` 2026-10-26 21:07 Claude: Claim the unlimited zoom
 - `ede9ac0` 2026-10-26 21:03 Claude: Record the owner's rule on private, personal use
 - `30d1f11` 2026-10-26 21:01 Claude: Let the owner decide on looks, names, logos and assets
@@ -24,34 +25,34 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - `docs/agents/CONTEXT.md` (5)
 - `docs/reference/ui-reference.md` (2)
+- `docs/behavior/zoom-and-pan.md` (1)
 - `docs/behavior/shelf.md` (1)
+- `docs/behavior/reference-panels.md` (1)
 - `docs/behavior/pick-tool.md` (1)
 - `docs/behavior/options.md` (1)
 - `docs/behavior/bitmap-tracing.md` (1)
+- `crates/render/src/lib.rs` (1)
+- `crates/core/src/lib.rs` (1)
+- `crates/core/src/clip.rs` (1)
+- `apps/tracedraw/src/view.rs` (1)
+- `apps/tracedraw/src/variable_outline.rs` (1)
+- `apps/tracedraw/src/ui/window_bars.rs` (1)
+- `apps/tracedraw/src/ui/toolbar.rs` (1)
+- `apps/tracedraw/src/ui/rulers.rs` (1)
 - `apps/tracedraw/src/ui/options_pages.rs` (1)
 - `apps/tracedraw/src/ui/options_global.rs` (1)
 - `apps/tracedraw/src/ui/options.rs` (1)
 - `apps/tracedraw/src/ui/mod.rs` (1)
 - `apps/tracedraw/src/ui/layout_options.rs` (1)
+- `apps/tracedraw/src/ui/docker_panels.rs` (1)
+- `apps/tracedraw/src/ui/cursors.rs` (1)
 - `apps/tracedraw/src/ui/chrome.rs` (1)
-- `apps/tracedraw/src/help.rs` (1)
-- `apps/tracedraw/lang/zh-TW.toml` (1)
-- `apps/tracedraw/lang/zh-CN.toml` (1)
-- `apps/tracedraw/lang/tr.toml` (1)
-- `apps/tracedraw/lang/ru.toml` (1)
-- `apps/tracedraw/lang/pt-BR.toml` (1)
-- `apps/tracedraw/lang/pl.toml` (1)
-- `apps/tracedraw/lang/nl.toml` (1)
-- `apps/tracedraw/lang/ja.toml` (1)
-- `apps/tracedraw/lang/it.toml` (1)
-- `apps/tracedraw/lang/id.toml` (1)
-- `apps/tracedraw/lang/hi.toml` (1)
-- `apps/tracedraw/lang/fr.toml` (1)
-- `apps/tracedraw/lang/es.toml` (1)
-- `apps/tracedraw/lang/en.toml` (1)
-- `apps/tracedraw/lang/de.toml` (1)
-- `apps/tracedraw/lang/cs.toml` (1)
-- `apps/tracedraw/lang/bn.toml` (1)
+- `apps/tracedraw/src/text_nodes.rs` (1)
+- `apps/tracedraw/src/table_tool.rs` (1)
+- `apps/tracedraw/src/snap.rs` (1)
+- `apps/tracedraw/src/shape_tool.rs` (1)
+- `apps/tracedraw/src/shadow_tool.rs` (1)
+- `apps/tracedraw/src/segment_delete.rs` (1)
 
 ## Open claims (from CONTEXT.md)
 
@@ -59,48 +60,4 @@ None.
 
 ## Uncommitted when generated
 
-    M  apps/tracedraw/src/anchors.rs
-    M  apps/tracedraw/src/app.rs
-    M  apps/tracedraw/src/canvas.rs
-    M  apps/tracedraw/src/color_drop.rs
-    M  apps/tracedraw/src/connectors.rs
-    M  apps/tracedraw/src/crop_tool.rs
-    M  apps/tracedraw/src/curve_join.rs
-    M  apps/tracedraw/src/dimensions.rs
-    M  apps/tracedraw/src/distort_tool.rs
-    M  apps/tracedraw/src/documents.rs
-    M  apps/tracedraw/src/drawing_scale.rs
-    M  apps/tracedraw/src/drop_menu.rs
-    M  apps/tracedraw/src/envelope_edit.rs
-    M  apps/tracedraw/src/extrude_tool.rs
-    M  apps/tracedraw/src/fill_tool.rs
-    M  apps/tracedraw/src/guides.rs
-    M  apps/tracedraw/src/interaction.rs
-    M  apps/tracedraw/src/interaction2.rs
-    M  apps/tracedraw/src/multipage.rs
-    M  apps/tracedraw/src/node_edit.rs
-    M  apps/tracedraw/src/ops2.rs
-    M  apps/tracedraw/src/painterly_tool.rs
-    M  apps/tracedraw/src/pen_look.rs
-    M  apps/tracedraw/src/pick_drag_tests.rs
-    M  apps/tracedraw/src/raster.rs
-    M  apps/tracedraw/src/segment_delete.rs
-    M  apps/tracedraw/src/shadow_tool.rs
-    M  apps/tracedraw/src/shape_tool.rs
-    M  apps/tracedraw/src/snap.rs
-    M  apps/tracedraw/src/table_tool.rs
-    M  apps/tracedraw/src/text_nodes.rs
-    M  apps/tracedraw/src/ui/cursors.rs
-    M  apps/tracedraw/src/ui/docker_panels.rs
-    M  apps/tracedraw/src/ui/rulers.rs
-    M  apps/tracedraw/src/ui/toolbar.rs
-    M  apps/tracedraw/src/ui/window_bars.rs
-    M  apps/tracedraw/src/variable_outline.rs
-    M  apps/tracedraw/src/view.rs
-    A  crates/core/src/clip.rs
-    M  crates/core/src/lib.rs
-    M  crates/render/src/lib.rs
-    M  docs/agents/CONTEXT.md
-    M  docs/behavior/reference-panels.md
-    M  docs/behavior/zoom-and-pan.md
     ?? docs/agents/STATUS.md.tmp
