@@ -175,7 +175,7 @@ fn assets(app: &mut App, ui: &mut Ui) {
 
 fn save_view(app: &mut App, name: String) -> bool {
     let name = name.trim();
-    if name.is_empty() || !app.has_document() || !app.view.zoom.is_finite() {
+    if name.is_empty() || !app.has_document() || !app.view.zoom().is_finite() {
         return false;
     }
     let center = app.view.to_page(app.canvas_rect.center());
@@ -185,7 +185,7 @@ fn save_view(app: &mut App, name: String) -> bool {
     let saved = SavedView {
         name: name.to_string(),
         page: app.page,
-        zoom: app.view.zoom.clamp(0.05, 400.0),
+        zoom: app.view.zoom(),
         center: [center.x, center.y],
     };
     if let Some(old) = app
@@ -210,10 +210,10 @@ fn restore_view(app: &mut App, saved: &SavedView) -> bool {
     };
     app.goto_page(index);
     app.fit_pending = false;
-    app.view.zoom = saved.zoom.clamp(0.05, 400.0);
+    app.view.set_zoom(saved.zoom);
     let center = Point::new(saved.center[0], saved.center[1]);
     let at = app.view.to_screen(center);
-    app.view.origin += app.canvas_rect.center() - at;
+    app.view.pan(app.canvas_rect.center() - at);
     true
 }
 
@@ -288,18 +288,18 @@ mod tests {
     fn a_saved_view_restores_zoom_and_center_and_round_trips_settings() {
         let mut app = App::headless();
         app.settings.saved_views.clear();
-        app.view.zoom = 7.0;
+        app.view.set_zoom(7.0);
         app.canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
         let center = app.view.to_page(app.canvas_rect.center());
         assert!(save_view(&mut app, " Detail ".into()));
         let saved = app.settings.saved_views[0].clone();
-        app.view.zoom = 2.0;
-        app.view.origin = egui::pos2(20.0, 40.0);
+        app.view.set_zoom(2.0);
+        app.view.set_origin(egui::pos2(20.0, 40.0));
         assert!(restore_view(&mut app, &saved));
         let restored = app.view.to_page(app.canvas_rect.center());
         assert!((restored.x - center.x).abs() < 1e-4);
         assert!((restored.y - center.y).abs() < 1e-4);
-        assert_eq!(app.view.zoom, 7.0);
+        assert_eq!(app.view.zoom(), 7.0);
         let encoded = serde_json::to_string(&app.settings).expect("settings serialize");
         let decoded: crate::settings::Settings =
             serde_json::from_str(&encoded).expect("settings parse");

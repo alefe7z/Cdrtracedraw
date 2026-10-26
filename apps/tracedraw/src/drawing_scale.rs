@@ -198,16 +198,16 @@ mod tests {
         // Linux, where a point is a pixel).
         let base = crate::ui::BASE_ZOOM;
         app.set_zoom_percent(100.0);
-        assert!((app.view.zoom - 96.0 / base / 25.4).abs() < 1e-4);
+        assert!((app.view.zoom() - 96.0 / base / 25.4).abs() < 1e-4);
         app.settings.screen_ppi = 120.0;
         assert!((app.zoom_percent() - 80.0).abs() < 1e-3);
         app.set_zoom_percent(100.0);
-        assert!((app.view.zoom - 120.0 / base / 25.4).abs() < 1e-4);
+        assert!((app.view.zoom() - 120.0 / base / 25.4).abs() < 1e-4);
         // A larger interface leaves real sizes real: at 125 % a point is
         // 1.25 times as large, so there are fewer of them per millimetre.
         app.settings.ui_size = 1.25;
         app.set_zoom_percent(100.0);
-        assert!((app.view.zoom - 120.0 / (1.25 * base) / 25.4).abs() < 1e-4);
+        assert!((app.view.zoom() - 120.0 / (1.25 * base) / 25.4).abs() < 1e-4);
         // Out of range values are kept within 48 to 400.
         app.settings.screen_ppi = 5000.0;
         assert_eq!(crate::settings::screen_ppi(&app.settings), 400.0);

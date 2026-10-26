@@ -17,6 +17,24 @@
   on the standard toolbar steps through 10, 25, 50, 75, 100, 150, 200,
   300, 400, 800 and 1600 % (beyond the last step the factor doubles).
 
+## Range
+
+- The zoom has no steps or caps of its own: it goes in and out as far as
+  double-precision numbers can show, from about 0.00000003 % (a
+  kilometre is a millionth of a pixel) to about 26 trillion % (a pixel is
+  a trillionth of a millimetre): `view::MIN_ZOOM` and `view::MAX_ZOOM`,
+  1e-9 to 1e12 pixels per mm. The view (zoom and origin) is kept in double
+  precision, so the point under the pointer stays put all the way.
+- The zoom box takes any positive value, decimals and powers of ten
+  included (`0.0001`, `1e9`), and shows small levels with decimals and
+  levels past 10^15 % as powers of ten.
+- At deep zooms objects stay exact and cheap: paths are cut down to the
+  area around the screen in double precision before they are filled,
+  stroked or flattened (`tracedraw_core::clip`), and an outline wider
+  than the render (a thin line seen enormously enlarged) is made in
+  double precision and filled. Rulers widen the step between numbers so
+  long numbers keep apart; the grid thins out as before.
+
 ## Mouse wheel
 
 - Default (Options > Tools > Default action for mouse wheel: Zoom): the

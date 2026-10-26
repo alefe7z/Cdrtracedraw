@@ -571,7 +571,7 @@ impl App {
     /// `p`: its two ends (page space).
     pub fn segment_ends_at(&self, p: Point) -> Option<(Point, Point)> {
         use tracedraw_core::geometry::{ParamCurve, ParamCurveNearest};
-        let tol = 6.0 / self.view.zoom as f64;
+        let tol = 6.0 / self.view.zoom() as f64;
         let mut best: Option<(Point, Point, f64)> = None;
         for layer in self.page_layers() {
             if !layer.visible || layer.locked {
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn previews_and_segments() {
         let mut app = App::headless();
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         app.tool = crate::tools::Tool::HorizontalVerticalDimension;
         assert!(app.dimension_preview(Point::ZERO).is_none());
         app.dimension_points = vec![Point::new(0.0, 0.0), Point::new(30.0, 4.0)];

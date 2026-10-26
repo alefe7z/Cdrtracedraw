@@ -58,7 +58,7 @@ impl App {
     /// The handle under a page point, within 6 screen pixels.
     pub fn fountain_handle_at(&self, p: Point) -> Option<FountainHandle> {
         let (_, f, b) = self.selected_fountain()?;
-        let tol = 6.0 / self.view.zoom as f64;
+        let tol = 6.0 / self.view.zoom() as f64;
         fountain_handles(&f, b)
             .into_iter()
             .find(|(_, hp)| (*hp - p).hypot() <= tol)

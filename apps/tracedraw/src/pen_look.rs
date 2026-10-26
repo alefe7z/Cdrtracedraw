@@ -279,7 +279,7 @@ impl App {
         if !c.smooth || c.bspline || c.dragging_handle || c.closing.is_some() {
             return None;
         }
-        let zoom = f64::from(self.view.zoom.max(1e-6));
+        let zoom = f64::from(self.view.zoom().max(1e-6));
         let join = self.curve_end_reach_px() / zoom;
         let last = c.nodes.len().checked_sub(1)?;
         // The first and last nodes keep their own meaning.
@@ -453,7 +453,7 @@ mod tests {
     fn the_first_node_is_kept_for_closing_with_auto_add_delete() {
         let mut app = App::headless();
         app.set_tool(Tool::Pen);
-        app.view.zoom = 4.0;
+        app.view.set_zoom(4.0);
         app.settings.curves.pen_auto_add_delete = true;
         app.curve = Some(sample());
         // Pick reach wider than the join reach: the gap between the two
@@ -475,7 +475,7 @@ mod tests {
     fn the_pen_deletes_and_adds_on_the_curve_being_drawn() {
         let mut app = App::headless();
         app.set_tool(Tool::Pen);
-        app.view.zoom = 4.0;
+        app.view.set_zoom(4.0);
         app.curve = Some(sample());
         // The middle node: delete; the last: a cusp (not here); the first
         // with three nodes: closes (not here).

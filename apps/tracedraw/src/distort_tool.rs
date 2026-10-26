@@ -386,7 +386,7 @@ impl App {
     /// centre; on an object, distort it about `at`. False when there is
     /// nothing there.
     pub fn begin_distort(&mut self, at: Point) -> bool {
-        let tol = 6.0 / self.view.zoom.max(1e-6) as f64;
+        let tol = 6.0 / self.view.zoom().max(1e-6) as f64;
         if let Some((id, c)) = self
             .distortion_centers()
             .into_iter()
@@ -460,7 +460,7 @@ impl App {
                 self.distort.amplitude = (d.hypot() / 4.0).clamp(0.0, 100.0);
             }
             DistortMode::Twister => {
-                let tol = 2.0 / self.view.zoom.max(1e-6) as f64;
+                let tol = 2.0 / self.view.zoom().max(1e-6) as f64;
                 if d.hypot() > tol {
                     let a = d.atan2();
                     if let Some(last) = dd.last_angle {

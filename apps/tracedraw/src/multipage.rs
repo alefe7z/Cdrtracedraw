@@ -101,9 +101,9 @@ impl App {
         else {
             return;
         };
-        self.view.origin = self
-            .view
-            .to_screen(tracedraw_core::geometry::Point::new(r.x0, r.y0));
+        let (ox, oy) = self.view.origin64();
+        let z = self.view.zoom64();
+        self.view.set_origin64(ox + r.x0 * z, oy - r.y0 * z);
         self.page = page;
         self.selection.clear();
         self.focus.clear();
@@ -162,10 +162,11 @@ pub fn draw_other_pages(app: &App, painter: &Painter, rect: ERect) {
             painter.rect_filled(paper, 0.0, crate::theme::Tokens::PAGE);
             let clip = paper.intersect(rect);
             if clip.width() >= 1.0 && clip.height() >= 1.0 {
-                let view = View {
-                    zoom: app.view.zoom,
-                    origin: paper.left_bottom(),
-                };
+                // The paper's corner in full precision, not its rounded
+                // screen rect.
+                let (ox, oy) = app.view.origin64();
+                let z = app.view.zoom64();
+                let view = View::new64(z, ox + r.x0 * z, oy - r.y0 * z);
                 let raster = rasters.entry(*id).or_default();
                 if let Some(tex) = raster.texture(
                     ctx,

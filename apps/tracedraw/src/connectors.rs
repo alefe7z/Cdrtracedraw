@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn connectors_follow_their_objects() {
         let mut app = App::headless();
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         let a = rect(&mut app, 0.0, 0.0);
         let b = rect(&mut app, 60.0, 0.0);
         // From a's right side to b's left side.

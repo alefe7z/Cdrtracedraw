@@ -242,7 +242,7 @@ impl App {
 
     /// The character node under the pointer (5 px).
     pub fn text_node_at(&self, p: Point) -> Option<(ShapeId, usize)> {
-        let tol = 5.0 / self.view.zoom.max(1e-6) as f64;
+        let tol = 5.0 / self.view.zoom().max(1e-6) as f64;
         let mut best: Option<(ShapeId, usize, f64)> = None;
         for s in self.node_texts() {
             for (c, q) in char_nodes(&s) {

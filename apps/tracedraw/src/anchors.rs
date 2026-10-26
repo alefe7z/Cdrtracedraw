@@ -120,7 +120,7 @@ impl App {
 
     /// Anchor hit radius in mm at the current zoom.
     pub fn anchor_tolerance(&self) -> f64 {
-        HIT_PX / (self.view.zoom as f64).max(1e-6)
+        HIT_PX / (self.view.zoom() as f64).max(1e-6)
     }
 
     fn custom_anchor_at(&self, id: ShapeId, p: Point) -> Option<usize> {

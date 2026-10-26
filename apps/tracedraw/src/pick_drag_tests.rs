@@ -1187,14 +1187,14 @@ fn plus_duplicates_in_place_and_edits_nodes_in_the_shape_tool() {
     assert_eq!(count(&app), before);
     // Nothing chosen: + zooms.
     app.node_selection.clear();
-    let zoom = app.view.zoom;
+    let zoom = app.view.zoom();
     frame(
         &ctx,
         &mut app,
         vec![key(egui::Key::Plus, Modifiers::NONE)],
         Modifiers::NONE,
     );
-    assert!(app.view.zoom > zoom);
+    assert!(app.view.zoom() > zoom);
 }
 
 #[test]
@@ -1783,7 +1783,7 @@ fn handles_stand_outside_the_box_and_grabbing_one_does_not_jump() {
         Vec::new(),
     );
     let after = bounds(&app, id);
-    let grown = 20.0 / app.view.zoom as f64;
+    let grown = 20.0 / app.view.zoom() as f64;
     assert!(
         close(after.width(), before.width() + grown),
         "{before:?} {after:?}"
@@ -1952,12 +1952,12 @@ fn selection_groups_store_recall_add_and_zoom() {
     press(&mut app, egui::Key::Num3, none);
     assert_eq!(app.selection, vec![id]);
     // 3 again zooms to it.
-    let zoom = app.view.zoom;
+    let zoom = app.view.zoom();
     press(&mut app, egui::Key::Num3, none);
     assert!(
-        (app.view.zoom - zoom).abs() > 1e-6,
+        (app.view.zoom() - zoom).abs() > 1e-6,
         "{zoom} {}",
-        app.view.zoom
+        app.view.zoom()
     );
     // Alt+3 adds another object to the group.
     let other = app
@@ -2745,7 +2745,7 @@ fn through_cdr(app: &App) -> App {
     let (doc, _) = tracedraw_cdr::open_bytes(&bytes, "t").expect("read back");
     let mut back = App::headless();
     back.open_document(doc, None);
-    back.view.zoom = 1.0;
+    back.view.set_zoom(1.0);
     back
 }
 
@@ -2780,7 +2780,7 @@ fn first_of(app: &App, kind: &str) -> ShapeId {
 #[test]
 fn text_over_a_rectangle_read_from_cdr_is_hit_first() {
     let mut app = App::headless();
-    app.view.zoom = 1.0;
+    app.view.set_zoom(1.0);
     let (rect, text) = text_and_frame(&mut app, true, false);
     let p = text_middle(&app, text);
     assert_eq!(app.hit_test(p), Some(text));
@@ -2923,7 +2923,7 @@ fn ctrl_click_takes_the_contents_of_a_clip_frame() {
 fn clipped_away_contents_are_not_hit() {
     use tracedraw_core::TextSpan;
     let mut app = App::headless();
-    app.view.zoom = 1.0;
+    app.view.set_zoom(1.0);
     let frame = app
         .new_shape(ShapeKind::Rect {
             rect: Rect::new(10.0, 10.0, 40.0, 80.0),

@@ -2086,7 +2086,7 @@ impl App {
     /// The Text tool clicked on the outline of a path (not a text): a new
     /// text starts on that path. True when it did.
     pub fn start_text_on_path_at(&mut self, p: Point) -> bool {
-        let tolerance = 4.0 / f64::from(self.view.zoom).max(1e-6);
+        let tolerance = 4.0 / f64::from(self.view.zoom()).max(1e-6);
         let Some(id) = self.hit_test(p) else {
             return false;
         };

@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `60f035c Claim the unlimited zoom`
-- Commits on the branch: 60
+- Last commit before this one: `4540f88 Update the agents' status file`
+- Commits on the branch: 61
 
 ## Last 20 commits
 
@@ -19,7 +19,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `8c90865` 2026-10-26 18:34 Claude: Redo the Properties docker after the owner's reference
 - `dcbd80a` 2026-10-26 18:10 Claude: Claim the Properties docker redesign
 - `aafc52d` 2026-10-23 23:19 Claude: Request a Windows build [exe]
-- `cedcca9` 2026-10-23 23:19 Claude: Restore the language files and the features list
 
 ## Files changed in the last 10 commits
 
@@ -56,10 +55,52 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-| Agent | Area / files | Since | Note |
-| --- | --- | --- | --- |
-| Claude | Unlimited zoom: `view.rs` (f64), `raster.rs`, `canvas.rs`, `crates/core/src/clip.rs`, `crates/render`, and `view.zoom` -> `view.zoom()` across `apps/tracedraw` | 2026-10-26 | mechanical rename in many files |
+None.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/src/anchors.rs
+    M  apps/tracedraw/src/app.rs
+    M  apps/tracedraw/src/canvas.rs
+    M  apps/tracedraw/src/color_drop.rs
+    M  apps/tracedraw/src/connectors.rs
+    M  apps/tracedraw/src/crop_tool.rs
+    M  apps/tracedraw/src/curve_join.rs
+    M  apps/tracedraw/src/dimensions.rs
+    M  apps/tracedraw/src/distort_tool.rs
+    M  apps/tracedraw/src/documents.rs
+    M  apps/tracedraw/src/drawing_scale.rs
+    M  apps/tracedraw/src/drop_menu.rs
+    M  apps/tracedraw/src/envelope_edit.rs
+    M  apps/tracedraw/src/extrude_tool.rs
+    M  apps/tracedraw/src/fill_tool.rs
+    M  apps/tracedraw/src/guides.rs
+    M  apps/tracedraw/src/interaction.rs
+    M  apps/tracedraw/src/interaction2.rs
+    M  apps/tracedraw/src/multipage.rs
+    M  apps/tracedraw/src/node_edit.rs
+    M  apps/tracedraw/src/ops2.rs
+    M  apps/tracedraw/src/painterly_tool.rs
+    M  apps/tracedraw/src/pen_look.rs
+    M  apps/tracedraw/src/pick_drag_tests.rs
+    M  apps/tracedraw/src/raster.rs
+    M  apps/tracedraw/src/segment_delete.rs
+    M  apps/tracedraw/src/shadow_tool.rs
+    M  apps/tracedraw/src/shape_tool.rs
+    M  apps/tracedraw/src/snap.rs
+    M  apps/tracedraw/src/table_tool.rs
+    M  apps/tracedraw/src/text_nodes.rs
+    M  apps/tracedraw/src/ui/cursors.rs
+    M  apps/tracedraw/src/ui/docker_panels.rs
+    M  apps/tracedraw/src/ui/rulers.rs
+    M  apps/tracedraw/src/ui/toolbar.rs
+    M  apps/tracedraw/src/ui/window_bars.rs
+    M  apps/tracedraw/src/variable_outline.rs
+    M  apps/tracedraw/src/view.rs
+    A  crates/core/src/clip.rs
+    M  crates/core/src/lib.rs
+    M  crates/render/src/lib.rs
+    M  docs/agents/CONTEXT.md
+    M  docs/behavior/reference-panels.md
+    M  docs/behavior/zoom-and-pan.md
     ?? docs/agents/STATUS.md.tmp

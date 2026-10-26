@@ -69,7 +69,7 @@ pub struct AlignCache {
 impl App {
     /// The snapping radius (Options > Snapping, screen pixels) in mm.
     fn snap_tolerance(&self) -> f64 {
-        self.settings.snap.threshold_px.clamp(1.0, 100.0) / self.view.zoom.max(1e-6) as f64
+        self.settings.snap.threshold_px.clamp(1.0, 100.0) / self.view.zoom().max(1e-6) as f64
     }
 
     /// Candidate x and y values to snap to; `bounds` adds the page's and
@@ -853,7 +853,7 @@ mod tests {
     /// A headless app at 1 px per mm: the 10 px radius is 10 mm.
     fn app() -> App {
         let mut app = App::headless();
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         app.snap = SnapSettings::default();
         app
     }

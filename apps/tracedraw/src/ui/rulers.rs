@@ -44,7 +44,7 @@ pub fn major_step(px_per_unit: f64) -> f64 {
     if !(px_per_unit.is_finite() && px_per_unit > 0.0) {
         return 1.0;
     }
-    for k in -6..=12 {
+    for k in -16..=16 {
         for m in [1.0, 2.0, 5.0] {
             let step = m * 10f64.powi(k);
             if step * px_per_unit >= MIN_MAJOR_PX {
@@ -52,7 +52,32 @@ pub fn major_step(px_per_unit: f64) -> f64 {
             }
         }
     }
-    1e12
+    1e16
+}
+
+/// The step between numbered marks for the values `v0` to `v1` on show:
+/// [`major_step`], made larger while the numbers it gives would be wider
+/// than the room between them (deep zooms show long numbers).
+pub fn major_step_for(px_per_unit: f64, v0: f64, v1: f64) -> f64 {
+    let mut step = major_step(px_per_unit);
+    let widest = v0.abs().max(v1.abs());
+    for _ in 0..60 {
+        let chars = label(widest, step).chars().count() as f64;
+        if step * px_per_unit >= chars * 6.5 + 14.0 {
+            break;
+        }
+        // 1, 2, 5, 10, 20, 50...
+        let e = 10f64.powf(step.log10().floor());
+        let m = (step / e).round();
+        step = if m < 1.5 {
+            2.0 * e
+        } else if m < 3.5 {
+            5.0 * e
+        } else {
+            10.0 * e
+        };
+    }
+    step
 }
 
 /// Ticks per numbered step: the tick divisions setting, or fewer when the
@@ -78,7 +103,7 @@ pub fn divisions(major: f64, px_per_unit: f64, wanted: u32) -> u32 {
 /// kind. `wanted` is the tick divisions setting.
 pub fn ticks(v0: f64, v1: f64, px_per_unit: f64, wanted: u32) -> Vec<(f64, TickKind)> {
     let (v0, v1) = (v0.min(v1), v0.max(v1));
-    let major = major_step(px_per_unit);
+    let major = major_step_for(px_per_unit, v0, v1);
     let d = divisions(major, px_per_unit, wanted);
     let minor = major / d as f64;
     let first = (v0 / minor).floor() as i64;
@@ -293,10 +318,10 @@ fn draw_horizontal(app: &App, painter: &Painter, top: Rect) {
     );
     let view = &app.view;
     let rulers = app.doc().metadata.rulers.clone();
-    let ppu = view.zoom as f64 * app.units.world_mm();
+    let ppu = view.zoom() as f64 * app.units.world_mm();
     let a = value_of(app, view.to_page(top.left_top()).x, rulers.origin_x);
     let b = value_of(app, view.to_page(top.right_top()).x, rulers.origin_x);
-    let major = major_step(ppu);
+    let major = major_step_for(ppu, a.min(b), a.max(b));
     let font = label_font();
 
     // The unit name at the right end, over a patch of background so the
@@ -369,11 +394,11 @@ fn draw_vertical(app: &App, painter: &Painter, left: Rect) {
     );
     let view = &app.view;
     let rulers = app.doc().metadata.rulers.clone();
-    let ppu = view.zoom as f64 * app.units.world_mm();
+    let ppu = view.zoom() as f64 * app.units.world_mm();
     // Y up: the bottom of the ruler has the smaller values.
     let a = value_of(app, view.to_page(left.left_bottom()).y, rulers.origin_y);
     let b = value_of(app, view.to_page(left.left_top()).y, rulers.origin_y);
-    let major = major_step(ppu);
+    let major = major_step_for(ppu, a.min(b), a.max(b));
     let font = label_font();
     let base = left.right() - TICK_GAP;
     let mut pixels = Pixels::default();
@@ -511,6 +536,11 @@ mod tests {
             assert!(s * ppu >= MIN_MAJOR_PX, "{ppu}");
             assert!(s * ppu < MIN_MAJOR_PX * 2.6, "{ppu}");
         }
+        // Deep in: long numbers get the room they need.
+        let s = major_step_for(1.0e12, 171.38, 171.38 + 1.0e-9);
+        let chars = label(171.38, s).chars().count() as f64;
+        assert!(s * 1.0e12 >= chars * 6.5 + 14.0, "{s}");
+        assert!(s * 1.0e12 < (chars * 6.5 + 14.0) * 2.6, "{s}");
         assert_eq!(major_step(0.0), 1.0);
         assert_eq!(major_step(f64::NAN), 1.0);
     }

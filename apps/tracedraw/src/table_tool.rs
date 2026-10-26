@@ -405,7 +405,7 @@ impl App {
         {
             self.table_drag_end();
         }
-        let tol = REACH_PX / self.view.zoom.max(1e-3) as f64;
+        let tol = REACH_PX / self.view.zoom().max(1e-3) as f64;
         let target = self.table_target();
         let hit = target.as_ref().and_then(|(id, tf, t)| {
             let local = tf.inverse() * p;
@@ -490,7 +490,7 @@ impl App {
             return ToolCursor::Badge(Tool::Table);
         };
         let p = self.view.to_page(pos);
-        let tol = REACH_PX / self.view.zoom.max(1e-3) as f64;
+        let tol = REACH_PX / self.view.zoom().max(1e-3) as f64;
         if let Some((_, tf, t)) = self.table_target() {
             match t.hit(tf.inverse() * p, tol / scale_of(&tf)) {
                 Some(TableHit::ColLine(_)) => {

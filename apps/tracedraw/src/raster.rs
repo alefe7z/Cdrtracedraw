@@ -104,11 +104,11 @@ impl ProofLut {
 struct Key {
     revision: u64,
     page: PageId,
-    zoom: f32,
+    zoom: f64,
     /// The page origin relative to the canvas: what the render uses. A
     /// canvas that moves (a bar docked elsewhere) without changing size
     /// still needs a new render when the view stays put.
-    offset: egui::Vec2,
+    offset: (f64, f64),
     size: (u32, u32),
     preview: Option<(Vec<ShapeId>, [f64; 6])>,
     wireframe: bool,
@@ -141,11 +141,11 @@ const MAX_PIXELS: i64 = 8192;
 /// least one physical screen pixel (`ppp` per point); below that the
 /// normal render already shows them.
 pub fn pixel_window(view: &View, rect: Rect, dpi: f64, ppp: f32) -> Option<PixelWindow> {
-    if !dpi.is_finite() || dpi <= 0.0 || !view.zoom.is_finite() || view.zoom <= 0.0 {
+    if !dpi.is_finite() || dpi <= 0.0 {
         return None;
     }
     let k = dpi / 25.4;
-    if (view.zoom * ppp) as f64 / k < 1.0 {
+    if view.zoom64() * ppp as f64 / k < 1.0 {
         return None;
     }
     let tl = view.to_page(rect.left_top());
@@ -214,8 +214,11 @@ impl Raster {
         let key = Key {
             revision,
             page,
-            zoom: view.zoom,
-            offset: view.origin - rect.min,
+            zoom: view.zoom64(),
+            offset: {
+                let (ox, oy) = view.origin64();
+                (ox - rect.min.x as f64, oy - rect.min.y as f64)
+            },
             size: (w, h),
             preview: preview.as_ref().map(|(s, t)| (s.clone(), t.as_coeffs())),
             wireframe,
@@ -265,9 +268,9 @@ impl Raster {
                 origin_y: win.iy1 as f64,
             },
             _ => ViewTransform {
-                zoom: (view.zoom * ppp) as f64,
-                origin_x: ((view.origin.x - rect.min.x) * ppp) as f64,
-                origin_y: ((view.origin.y - rect.min.y) * ppp) as f64,
+                zoom: view.zoom64() * ppp as f64,
+                origin_x: (view.origin64().0 - rect.min.x as f64) * ppp as f64,
+                origin_y: (view.origin64().1 - rect.min.y as f64) * ppp as f64,
             },
         };
         let opts = RenderOptions {
@@ -432,7 +435,7 @@ mod tests {
         assert!(raster.settle.is_some());
         // Zoomed: the texture scaled about the page, still the old one.
         let mut zoomed = moved;
-        zoomed.zoom *= 2.0;
+        zoomed.set_zoom(zoomed.zoom() * 2.0);
         let (tex, screen) = pass(&ctx, &mut raster, &doc, &zoomed, rect, 0.05);
         assert_eq!(tex, first);
         assert!((screen.width() - 640.0).abs() < 1e-3, "{screen:?}");
@@ -505,7 +508,7 @@ mod tests {
         assert_ne!(raster.key, first);
         assert_eq!(
             raster.key.as_ref().map(|k| k.offset),
-            Some(view.origin - egui::pos2(40.0, 107.0))
+            Some((view.origin64().0 - 40.0, view.origin64().1 - 107.0))
         );
     }
 
@@ -513,10 +516,7 @@ mod tests {
     fn the_pixels_view_draws_whole_document_pixels_as_blocks() {
         // 72 dpi: a document pixel is 0.3528 mm; at 10 screen pixels per
         // mm it covers 3.5 screen pixels.
-        let view = View {
-            zoom: 10.0,
-            origin: egui::pos2(0.0, 500.0),
-        };
+        let view = View::new(10.0, egui::pos2(0.0, 500.0));
         let rect = Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 500.0));
         let win = pixel_window(&view, rect, 72.0, 1.0).expect("window");
         assert_eq!(win.ix0, 0);
@@ -531,7 +531,7 @@ mod tests {
         assert!((win.screen.max.y - 500.0).abs() < 1e-3);
         // Zoomed out below one screen pixel per document pixel: the normal
         // render.
-        let far = View { zoom: 1.0, ..view };
+        let far = View::new(1.0, view.origin());
         assert_eq!(pixel_window(&far, rect, 72.0, 1.0), None);
         assert_eq!(pixel_window(&view, rect, 0.0, 1.0), None);
         assert_eq!(pixel_window(&view, rect, f64::NAN, 1.0), None);
@@ -544,10 +544,7 @@ mod tests {
         let ctx = Context::default();
         let doc = Document::new("t", Size::new(100.0, 50.0));
         let page = doc.pages[0].id;
-        let view = View {
-            zoom: 40.0,
-            origin: egui::pos2(0.0, 400.0),
-        };
+        let view = View::new(40.0, egui::pos2(0.0, 400.0));
         let rect = Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
         let mut raster = Raster::default();
         let (_, at) = raster

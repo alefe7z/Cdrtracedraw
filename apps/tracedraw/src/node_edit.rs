@@ -215,7 +215,7 @@ impl App {
 
     /// The node transform handle under the pointer.
     pub fn node_transform_handle_at(&self, p: Point) -> Option<Handle> {
-        let tol = 5.0 / self.view.zoom.max(1e-6) as f64;
+        let tol = 5.0 / self.view.zoom().max(1e-6) as f64;
         self.node_transform_handles()
             .into_iter()
             .find(|(_, q)| (*q - p).hypot() <= tol)

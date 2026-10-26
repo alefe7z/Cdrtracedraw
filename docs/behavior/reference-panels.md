@@ -49,7 +49,7 @@ file requires adding its new path; this is not a cloud asset service.
 Save View stores a name, persistent page id, zoom and page-space center.
 Saving the same name on the same page replaces it. Restoring uses the
 current canvas center, so it works when the window size changes, and
-clamps zoom to the existing 0.05..400 limits. Views for pages outside the
+keeps the zoom within the view's limits (`zoom-and-pan.md`, Range). Views for pages outside the
 active drawing are hidden. Update replaces the current page's named
 view; Remove removes it from preferences. Names and views persist in
 settings, not inside exported third-party drawings. Invalid/nonfinite

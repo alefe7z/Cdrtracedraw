@@ -163,7 +163,7 @@ impl App {
     /// A selected picture's corner under the pointer: the picture and the
     /// corner (0 to 3, in [`bitmap_corners`] order).
     fn bitmap_corner_at(&self, p: Point) -> Option<(ShapeId, usize)> {
-        let tol = self.settings.nodes.pick_px() / self.view.zoom as f64;
+        let tol = self.settings.nodes.pick_px() / self.view.zoom() as f64;
         self.selected_shapes().iter().find_map(|s| {
             bitmap_corners(s)?
                 .iter()
@@ -242,7 +242,7 @@ impl App {
         // The nearest node within the pick distance, measured on the page:
         // a curve with a scale of its own (text converted to curves, for
         // one) takes the same reach as any other.
-        let tol = self.settings.nodes.pick_px() / self.view.zoom as f64;
+        let tol = self.settings.nodes.pick_px() / self.view.zoom() as f64;
         let mut best: Option<(NodeHit, f64)> = None;
         for id in &self.node_targets() {
             let Some((path, _, t)) = self.path_of(*id) else {
@@ -266,7 +266,7 @@ impl App {
     /// of a chosen node or a rectangle, ellipse or polygon node of the
     /// selection: a press there that took nothing is a near miss.
     pub(crate) fn near_selected_nodes(&self, p: Point) -> bool {
-        let reach = 3.0 * self.settings.nodes.pick_px() / self.view.zoom as f64;
+        let reach = 3.0 * self.settings.nodes.pick_px() / self.view.zoom() as f64;
         for id in &self.node_targets() {
             let Some((path, _, t)) = self.path_of(*id) else {
                 continue;
@@ -294,7 +294,7 @@ impl App {
         &self,
         p: Point,
     ) -> Option<(tracedraw_core::Shape, crate::kind_nodes::KindNode)> {
-        let tol = self.settings.nodes.pick_px() / self.view.zoom as f64;
+        let tol = self.settings.nodes.pick_px() / self.view.zoom() as f64;
         self.shape_tool_shapes()
             .into_iter()
             .find_map(|s| crate::kind_nodes::node_at(&s, p, tol).map(|n| (s, n)))
@@ -303,7 +303,7 @@ impl App {
     /// A selected B-spline whose control polygon lies under the pointer,
     /// with its control points plus one at the pointer.
     pub(crate) fn spline_polygon_at(&self, p: Point) -> Option<(ShapeId, Vec<Point>)> {
-        let tol = (self.settings.nodes.pick_px() + 1.0) / self.view.zoom as f64;
+        let tol = (self.settings.nodes.pick_px() + 1.0) / self.view.zoom() as f64;
         self.shape_tool_shapes()
             .into_iter()
             .find_map(|s| crate::kind_nodes::spline_with_point(&s, p, tol).map(|pts| (s.id, pts)))
@@ -312,7 +312,7 @@ impl App {
     /// Control handle under the pointer, for selected nodes only.
     pub(crate) fn ctrl_handle_at(&self, p: Point) -> Option<(ShapeId, usize, Which)> {
         // The nearest handle within the pick distance, on the page.
-        let tol = self.settings.nodes.pick_px() / self.view.zoom as f64;
+        let tol = self.settings.nodes.pick_px() / self.view.zoom() as f64;
         let mut best: Option<((ShapeId, usize, Which), f64)> = None;
         for (id, index) in &self.node_selection {
             let Some((path, _, t)) = self.path_of(*id) else {
@@ -597,7 +597,7 @@ impl App {
                 Drag::NodeLasso { mut points } => {
                     if points
                         .last()
-                        .is_none_or(|q| (*q - p).hypot() > 0.2 / self.view.zoom as f64)
+                        .is_none_or(|q| (*q - p).hypot() > 0.2 / self.view.zoom() as f64)
                     {
                         points.push(p);
                     }
@@ -781,7 +781,7 @@ impl App {
 
     /// Nearest segment of a selected curve within a few pixels.
     pub(crate) fn segment_at(&self, p: Point) -> Option<(ShapeId, usize, f64)> {
-        let tol = (self.settings.nodes.pick_px() + 1.0) / self.view.zoom as f64;
+        let tol = (self.settings.nodes.pick_px() + 1.0) / self.view.zoom() as f64;
         let mut best: Option<(ShapeId, usize, f64, f64)> = None;
         for id in &self.node_targets() {
             let Some((path, _, t)) = self.path_of(*id) else {
@@ -831,7 +831,7 @@ impl App {
 
     /// Reduce Nodes: simplify the selected curves (all nodes when none are selected).
     pub fn reduce_selected_nodes(&mut self) {
-        let tol = 0.3 / self.view.zoom.max(0.05) as f64;
+        let tol = 0.3 / self.view.zoom().max(0.05) as f64;
         let ids: Vec<ShapeId> = if self.node_selection.is_empty() {
             self.selection.clone()
         } else {
@@ -1154,7 +1154,7 @@ impl App {
         else {
             return;
         };
-        let tol = (self.settings.nodes.pick_px() + 1.0) / self.view.zoom as f64;
+        let tol = (self.settings.nodes.pick_px() + 1.0) / self.view.zoom() as f64;
         let mut near: Vec<((ShapeId, usize), f64)> = Vec::new();
         for other in self.node_targets() {
             let Some((op, _, ot)) = self.path_of(other) else {
@@ -1395,7 +1395,7 @@ mod constrain_tests {
     /// snapping radius at 10 px (10 mm).
     fn app_with_guide() -> App {
         let mut app = App::headless();
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         let page = app.page;
         app.run(Command::AddGuide {
             page,
@@ -1508,7 +1508,7 @@ mod bitmap_node_tests {
         let corners = bitmap_corners(app.doc().find_shape(id).expect("shape")).expect("corners");
         assert_eq!(corners[0], Point::new(10.0, 10.0));
         // A corner of the selected picture is a node for the Shape tool.
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         assert_eq!(app.bitmap_corner_at(Point::new(10.5, 10.5)), Some((id, 0)));
         // Cropping: the picture goes into a clip frame of its rectangle,
         // whose nodes the Shape tool now edits.

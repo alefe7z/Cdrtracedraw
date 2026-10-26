@@ -127,7 +127,7 @@ fn horizontal(app: &mut App, ui: &mut Ui, bar: Rect, canvas: Rect) {
     );
     if resp.dragged() {
         let d = resp.drag_delta().x / track.width() * w as f32;
-        app.view.pan(Vec2::new(-d * app.view.zoom, 0.0));
+        app.view.pan(Vec2::new(-d * app.view.zoom(), 0.0));
     } else if resp.clicked() {
         // A click on the track pages towards the click.
         if let Some(pos) = resp.interact_pointer_pos() {
@@ -186,7 +186,7 @@ fn vertical(app: &mut App, ui: &mut Ui, bar: Rect, canvas: Rect) {
     );
     if resp.dragged() {
         let d = resp.drag_delta().y / track.height() * h as f32;
-        app.view.pan(Vec2::new(0.0, -d * app.view.zoom));
+        app.view.pan(Vec2::new(0.0, -d * app.view.zoom()));
     } else if resp.clicked() {
         if let Some(pos) = resp.interact_pointer_pos() {
             let page = canvas.height() * 0.9;

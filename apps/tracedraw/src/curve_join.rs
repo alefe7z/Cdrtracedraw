@@ -214,7 +214,7 @@ impl App {
 
     /// The join distance in page millimetres.
     fn join_tolerance(&self) -> f64 {
-        self.settings.curves.join_px() / f64::from(self.view.zoom.max(1e-6))
+        self.settings.curves.join_px() / f64::from(self.view.zoom().max(1e-6))
     }
 
     /// `p` (page) is on an end node of the selected open curve, where a new
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn drawn_lines_join_the_selected_curve_in_its_own_space() {
         let mut app = App::headless();
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         let id = app
             .add_drawn_line(line((10.0, 10.0), (50.0, 10.0)))
             .expect("line");

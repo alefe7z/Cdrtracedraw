@@ -181,6 +181,23 @@ fn zoom_level_menu(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// A zoom level as the zoom box shows it: whole percents from 1 % up,
+/// enough decimals to tell small levels apart below, powers of ten past
+/// what decimals can show.
+pub fn zoom_text(pct: f64) -> String {
+    if !pct.is_finite() || pct <= 0.0 {
+        return "0%".into();
+    }
+    if !(1.0e-6..1.0e15).contains(&pct) {
+        return format!("{pct:.2e}%");
+    }
+    if pct >= 1.0 {
+        return format!("{pct:.0}%");
+    }
+    let decimals = (-pct.log10()).ceil() as usize + 1;
+    format!("{pct:.decimals$}%")
+}
+
 /// The zoom box: the zoom level as text (type a value and press Enter)
 /// and the list of levels behind its arrow.
 pub(crate) fn zoom_box_pub(app: &mut App, ui: &mut Ui, id: &str, width: f32) {
@@ -191,7 +208,7 @@ fn zoom_box(app: &mut App, ui: &mut Ui, id: &str, width: f32) {
     let edit_id = egui::Id::new((id, "text"));
     let mut text = ui
         .data(|d| d.get_temp::<String>(edit_id))
-        .unwrap_or_else(|| format!("{:.0}%", app.zoom_percent()));
+        .unwrap_or_else(|| zoom_text(app.zoom_percent() as f64));
     let field = egui::Frame::new()
         .fill(crate::theme::Tokens::field())
         .stroke(egui::Stroke::new(1.0, Tokens::control_border()))
@@ -212,9 +229,10 @@ fn zoom_box(app: &mut App, ui: &mut Ui, id: &str, width: f32) {
                 ui.data_mut(|d| d.remove::<String>(edit_id));
             }
             if r.lost_focus() {
-                if let Ok(v) = text.trim().trim_end_matches('%').trim().parse::<f32>() {
-                    if v > 0.0 {
-                        app.set_zoom_percent(v);
+                let typed = text.trim().trim_end_matches('%').trim().replace(',', ".");
+                if let Ok(v) = typed.parse::<f64>() {
+                    if v.is_finite() && v > 0.0 {
+                        app.set_zoom_percent64(v);
                     }
                 }
             }

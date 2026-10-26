@@ -62,7 +62,7 @@ impl App {
     /// A freehand drag ended: the points become a smoothed curve painted
     /// with the brush.
     pub fn add_painterly_stroke(&mut self, points: &[Point]) -> Option<ShapeId> {
-        let tol = self.settings.curves.freehand_tolerance_px() / self.view.zoom.max(1e-6) as f64;
+        let tol = self.settings.curves.freehand_tolerance_px() / self.view.zoom().max(1e-6) as f64;
         let pts = tracedraw_core::geometry::simplify(points, tol.max(0.02));
         if pts.len() < 2 {
             return None;

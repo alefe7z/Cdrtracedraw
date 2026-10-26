@@ -311,7 +311,7 @@ impl App {
     /// The handle of the crop area near `p` (page space), if any.
     fn crop_handle_at(&self, p: Point) -> Option<usize> {
         let r = self.crop_area?;
-        let tol = 6.0 / self.view.zoom.max(1e-6) as f64;
+        let tol = 6.0 / self.view.zoom().max(1e-6) as f64;
         handles(r).iter().position(|h| (*h - p).hypot() <= tol)
     }
 

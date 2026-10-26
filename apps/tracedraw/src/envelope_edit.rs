@@ -209,7 +209,7 @@ impl App {
 
     /// The envelope part under `p` (page space): handles first, then nodes.
     pub fn envelope_part_at(&self, p: Point) -> Option<(ShapeId, Part)> {
-        let tol = 5.0 / self.view.zoom as f64;
+        let tol = 5.0 / self.view.zoom() as f64;
         let shapes = self.enveloped_selection();
         for (s, f) in &shapes {
             for (seg, end, h, _) in self.envelope_handles(s.id, f) {
@@ -230,7 +230,7 @@ impl App {
 
     /// The frame segment under `p`: (object, segment, parameter).
     pub fn envelope_segment_at(&self, p: Point) -> Option<(ShapeId, usize, f64)> {
-        let tol = 4.0 / self.view.zoom as f64;
+        let tol = 4.0 / self.view.zoom() as f64;
         for (s, f) in self.enveloped_selection() {
             // Measure on the page: the frame moved there.
             let page = f.transformed(s.transform);
@@ -750,7 +750,7 @@ mod tests {
         assert!(app.envelope_handles(id, &f2).is_empty());
         // A double-click on the bottom adds a node; on it, removes it; a
         // corner stays.
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         assert!(app.envelope_double_click(Point::new(10.0, 0.0)));
         assert_eq!(app.envelope_of(id).expect("e").1.len(), 9);
         assert!(app.envelope_double_click(Point::new(10.0, 0.0)));
@@ -769,7 +769,7 @@ mod tests {
         app.select(vec![id]);
         app.apply_envelope_preset(Preset::Arch);
         app.select(Vec::new());
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         // Above the rectangle, inside the arch (rectangles are filled).
         let fill = tracedraw_core::Fill::Solid(tracedraw_core::Color::BLACK);
         app.run(Command::SetFill {

@@ -129,7 +129,7 @@ impl App {
             drag.current = p;
             self.right_drag = None;
             let offset = drag.offset(constrain);
-            if offset.hypot() * self.view.zoom as f64 >= 2.0 {
+            if offset.hypot() * self.view.zoom() as f64 >= 2.0 {
                 let selection = self.selection.clone();
                 self.drop_menu = Some(DropMenu {
                     screen: self.view.to_screen(p),

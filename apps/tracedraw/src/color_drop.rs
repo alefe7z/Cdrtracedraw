@@ -44,7 +44,7 @@ impl App {
         let Some(shape) = self.doc().find_shape(id) else {
             return ColorTarget::Nothing;
         };
-        let tol = OUTLINE_PX / f64::from(self.view.zoom.max(1e-6));
+        let tol = OUTLINE_PX / f64::from(self.view.zoom().max(1e-6));
         if crate::canvas::distance_to_path(&shape.page_path(), p) <= tol {
             ColorTarget::Outline(id)
         } else {

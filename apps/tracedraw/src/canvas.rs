@@ -17,23 +17,37 @@ pub fn to_color32(c: Color) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
+/// A page-space path as screen polylines (each with whether it is
+/// closed), flattened to a quarter pixel. The path is mapped to the screen
+/// in double precision and cut down to the area around the screen first,
+/// so an object at an enormous zoom stays cheap and exact where it shows.
 pub fn flatten(path: &BezPath, view: &View) -> Vec<(Vec<Pos2>, bool)> {
+    // Screens are a few thousand points across; the cut edges lie well
+    // outside any of them.
+    const REACH: f64 = 1.0e6;
+    let screen = view.affine() * path.clone();
+    let screen =
+        tracedraw_core::clip::clip_path_to_rect(&screen, Rect::new(-REACH, -REACH, REACH, REACH));
     let mut out: Vec<(Vec<Pos2>, bool)> = Vec::new();
     let mut cur: Vec<Pos2> = Vec::new();
     let mut closed = false;
-    let tol = 0.25 / view.zoom.max(0.05) as f64;
-    kurbo::flatten(path.elements().iter().copied(), tol, &mut |el| match el {
-        PathEl::MoveTo(p) => {
-            if !cur.is_empty() {
-                out.push((std::mem::take(&mut cur), closed));
+    let at = |p: Point| Pos2::new(p.x as f32, p.y as f32);
+    kurbo::flatten(
+        screen.elements().iter().copied(),
+        0.25,
+        &mut |el| match el {
+            PathEl::MoveTo(p) => {
+                if !cur.is_empty() {
+                    out.push((std::mem::take(&mut cur), closed));
+                }
+                closed = false;
+                cur.push(at(p));
             }
-            closed = false;
-            cur.push(view.to_screen(p));
-        }
-        PathEl::LineTo(p) => cur.push(view.to_screen(p)),
-        PathEl::ClosePath => closed = true,
-        _ => {}
-    });
+            PathEl::LineTo(p) => cur.push(at(p)),
+            PathEl::ClosePath => closed = true,
+            _ => {}
+        },
+    );
     if !cur.is_empty() {
         out.push((cur, closed));
     }
@@ -589,7 +603,7 @@ fn dashed_selection_line(painter: &Painter, pts: &[Pos2]) {
 fn draw_creation_preview(app: &App, painter: &Painter, path: &BezPath) {
     let view = &app.view;
     let stroke = match &app.default_stroke() {
-        Some(s) => EStroke::new((s.width as f32 * view.zoom).max(1.0), to_color32(s.color)),
+        Some(s) => EStroke::new((s.width as f32 * view.zoom()).max(1.0), to_color32(s.color)),
         None => EStroke::new(1.0, Tokens::SELECTION),
     };
     for (pts, closed) in flatten(path, view) {
@@ -738,7 +752,7 @@ fn draw_symmetry_lines(app: &App, painter: &Painter, rect: ERect) {
                 continue;
             };
             let n = (*lines).clamp(1, 12) as usize;
-            let far = 100_000.0 / view.zoom.max(0.01) as f64;
+            let far = 100_000.0 / view.zoom().max(0.01) as f64;
             for k in 0..n {
                 let a = (angle + 180.0 * k as f64 / n as f64).to_radians();
                 let d = tracedraw_core::geometry::Vec2::new(a.cos(), a.sin());
@@ -1325,7 +1339,7 @@ pub fn grid_thinning(spacing_px: f64, min_px: f64) -> f64 {
     if !(spacing_px.is_finite() && spacing_px > 0.0) {
         return f64::INFINITY;
     }
-    for k in 0..12 {
+    for k in 0..24 {
         for m in [1.0, 2.0, 5.0] {
             let f = m * 10f64.powi(k);
             if spacing_px * f >= min_px {
@@ -1358,7 +1372,7 @@ fn draw_grid(app: &App, painter: &Painter, rect: ERect) {
     let view = &app.view;
     let meta = &app.doc().metadata;
     let (grid, rulers) = (meta.grid, meta.rulers.clone());
-    let zoom = view.zoom as f64;
+    let zoom = view.zoom() as f64;
     let dots = grid.display == tracedraw_core::document::GridDisplay::Dots;
     let min_px = if dots { 8.0 } else { 6.0 };
     let sx = grid.spacing_x.max(1e-6) * grid_thinning(grid.spacing_x * zoom, min_px);
@@ -1412,7 +1426,7 @@ fn hline_rect(y: f32, r: ERect) -> ERect {
 /// the "start from top" distance down, in the grid's colour.
 fn draw_baseline_grid(app: &App, painter: &Painter, rect: ERect, paper: ERect) {
     let grid = app.doc().metadata.grid;
-    if grid.baseline_spacing * (app.view.zoom as f64) < 2.0 {
+    if grid.baseline_spacing * (app.view.zoom() as f64) < 2.0 {
         return;
     }
     let color = to_color32(grid.baseline_color);
@@ -1428,7 +1442,7 @@ fn draw_baseline_grid(app: &App, painter: &Painter, rect: ERect, paper: ERect) {
 
 /// Screen pixels per document pixel at the current zoom.
 pub fn screen_px_per_doc_px(app: &App) -> f64 {
-    app.view.zoom as f64 * 25.4 / app.document_dpi().max(1.0)
+    app.view.zoom() as f64 * 25.4 / app.document_dpi().max(1.0)
 }
 
 /// The pixel grid: one cell per document pixel, aligned with the page's
@@ -1951,7 +1965,7 @@ fn draw_guide_line(
         GuideLine::Angled { .. } => {
             // Extend far beyond the viewport in both directions.
             let (o, d) = line.point_and_direction();
-            let far = 100_000.0 / view.zoom.max(0.01) as f64;
+            let far = 100_000.0 / view.zoom().max(0.01) as f64;
             let s0 = view.to_screen(o - d * far);
             let s1 = view.to_screen(o + d * far);
             if let Some((c0, c1)) = clip_segment(s0, s1, rect) {
@@ -2351,7 +2365,7 @@ pub fn draw_live_guides(app: &App, painter: &Painter, canvas: ERect) {
             if along.length() > 0.5 {
                 let n = egui::vec2(-along.y, along.x).normalized() * 3.0;
                 // Ticks closer than 3 px would be a smear: skip them.
-                let step_px = dopt.tick_mm.max(0.01) as f32 * app.view.zoom;
+                let step_px = dopt.tick_mm.max(0.01) as f32 * app.view.zoom();
                 if step_px >= 3.0 {
                     for t in crate::live_guides::ticks(h.anchor, h.point, dopt.tick_mm, 1000) {
                         let s = app.view.to_screen(t);

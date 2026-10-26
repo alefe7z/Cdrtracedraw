@@ -97,11 +97,19 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Claude | Unlimited zoom: `view.rs` (f64), `raster.rs`, `canvas.rs`, `crates/core/src/clip.rs`, `crates/render`, and `view.zoom` -> `view.zoom()` across `apps/tracedraw` | 2026-10-26 | mechanical rename in many files |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
+
+- View (Claude, 2026-10-26): `View` is now double precision with private
+  fields. Read `view.zoom()` (f32) or `view.zoom64()`, write
+  `view.set_zoom(..)`; the origin is `origin64()` / `set_origin64()` /
+  `pan()`. `View::new(zoom, origin)` replaces struct literals. Zoom runs
+  from `view::MIN_ZOOM` to `view::MAX_ZOOM` (1e-9 to 1e12 px/mm); do not
+  add clamps of your own. Draw page paths on screen through
+  `canvas::flatten` (it clips) and stroke in the renderer through
+  `stroke_path_safe`, never `Pixmap::stroke_path` directly.
 
 - Options dialog (Claude, 2026-10-26): one dialog with six category
   buttons (`OptionsSet::ALL`: Document, App, Customization, Tools,
@@ -181,6 +189,8 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-26, Claude: unlimited zoom (double-precision view, clipping).
 
 - 2026-10-26, Claude: Options dialog after the third video.
 

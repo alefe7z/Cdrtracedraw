@@ -104,7 +104,7 @@ impl App {
         if !self.show_guides {
             return None;
         }
-        let tol = PICK_PX / self.view.zoom.max(1e-6) as f64;
+        let tol = PICK_PX / self.view.zoom().max(1e-6) as f64;
         let page = self.doc().page(self.page).ok()?;
         page.guides.iter().rposition(|g| g.distance(p).abs() <= tol)
     }
@@ -458,7 +458,7 @@ impl App {
             _ => g.line,
         };
         let (_, d) = line.point_and_direction();
-        let reach = ROTATE_HANDLE_PX / self.view.zoom.max(1e-6) as f64;
+        let reach = ROTATE_HANDLE_PX / self.view.zoom().max(1e-6) as f64;
         let pivot = self.guide_pivot;
         Some((index, pivot, [pivot + d * reach, pivot - d * reach]))
     }
@@ -470,7 +470,7 @@ impl App {
 
     fn rotate_handle_at(&self, p: Point) -> Option<(usize, Point)> {
         let (index, pivot, handles) = self.guide_rotate_handles()?;
-        let tol = HANDLE_PICK_PX / self.view.zoom.max(1e-6) as f64;
+        let tol = HANDLE_PICK_PX / self.view.zoom().max(1e-6) as f64;
         handles
             .iter()
             .any(|h| (*h - p).hypot() <= tol)
@@ -484,7 +484,7 @@ mod tests {
 
     fn app() -> App {
         let mut app = App::headless();
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         app.canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
         app
     }

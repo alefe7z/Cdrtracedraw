@@ -650,8 +650,7 @@ impl Renderer<'_> {
             if let Some(stroke) = &shape.stroke {
                 let (mut paint, sk_stroke) = self.stroke_paint(stroke, transform);
                 paint.blend_mode = self.blend_for(shape.overprint_outline);
-                self.pixmap
-                    .stroke_path(&sk, &paint, &sk_stroke, Transform::identity(), None);
+                stroke_path_safe(self.pixmap, &sk, &paint, &sk_stroke);
             } else if self.flags.wireframe {
                 let mut paint = Paint::default();
                 paint.set_color_rgba8(0, 0, 0, 255);
@@ -659,8 +658,7 @@ impl Renderer<'_> {
                     width: 0.0,
                     ..Default::default()
                 };
-                self.pixmap
-                    .stroke_path(&sk, &paint, &s, Transform::identity(), None);
+                stroke_path_safe(self.pixmap, &sk, &paint, &s);
             }
             return;
         }
@@ -778,8 +776,7 @@ impl Renderer<'_> {
                     self.draw_fill(&fill, &b.to_path(0.01), &band, FillRule::Winding);
                 }
             } else {
-                self.pixmap
-                    .stroke_path(&sk, &paint, &sk_stroke, Transform::identity(), None);
+                stroke_path_safe(self.pixmap, &sk, &paint, &sk_stroke);
             }
             for head in tracedraw_core::style::arrowhead_paths(&page_path, stroke) {
                 if let Some(hp) = to_sk_path(&(self.screen * head)) {
@@ -800,8 +797,7 @@ impl Renderer<'_> {
                 width: 0.0,
                 ..Default::default()
             };
-            self.pixmap
-                .stroke_path(&sk, &paint, &s, Transform::identity(), None);
+            stroke_path_safe(self.pixmap, &sk, &paint, &s);
         }
     }
 
@@ -842,8 +838,7 @@ impl Renderer<'_> {
             width: 0.0,
             ..Default::default()
         };
-        self.pixmap
-            .stroke_path(sk, &paint, &s, Transform::identity(), None);
+        stroke_path_safe(self.pixmap, sk, &paint, &s);
     }
 
     /// Lens: transform the pixels already drawn beneath the shape's area.
@@ -1318,7 +1313,7 @@ impl Renderer<'_> {
                             width: 0.7,
                             ..Default::default()
                         };
-                        layer.stroke_path(&path, &paint, &s, Transform::identity(), None);
+                        stroke_path_safe(&mut layer, &path, &paint, &s);
                     }
                 }
             }
@@ -2078,7 +2073,102 @@ pub fn sk_color(c: Color) -> SkColor {
     SkColor::from_rgba8(r, g, b, 255)
 }
 
+/// How far from the render, in pixels, a path's points may lie before it
+/// is cut down (`tracedraw_core::clip`): at an enormous zoom an object can
+/// be millions of times larger than the image, more than single-precision
+/// drawing can place or stroke. Renders are at most a few thousand pixels
+/// wide, so the cut edges lie far outside them.
+pub const CLIP_REACH: f64 = (1u64 << 24) as f64;
+
+/// Stroke `path` (render pixels) onto `pixmap`. An outline that reaches
+/// far past the render (an object seen at an enormous zoom, where a thin
+/// outline can be millions of pixels wide) is made here instead, in
+/// double precision, cut down to the render and filled, which the
+/// rasteriser can always do.
+fn stroke_path_safe(pixmap: &mut Pixmap, path: &SkPath, paint: &Paint, stroke: &SkStroke) {
+    let (w, h) = (pixmap.width() as f32, pixmap.height() as f32);
+    let reach = stroke.width * 0.5 * stroke.miter_limit.max(1.0) + 2.0;
+    let b = path.bounds();
+    let near = 4096.0;
+    if b.left() - reach >= -near
+        && b.top() - reach >= -near
+        && b.right() + reach <= w + near
+        && b.bottom() + reach <= h + near
+    {
+        pixmap.stroke_path(path, paint, stroke, Transform::identity(), None);
+        return;
+    }
+    if stroke.width <= 0.0 {
+        // Hairlines are drawn a pixel wide wherever they are.
+        let cut = clip_to_render(path, w, h, 0.0);
+        if let Some(cut) = cut {
+            pixmap.stroke_path(&cut, paint, stroke, Transform::identity(), None);
+        }
+        return;
+    }
+    let dashed;
+    let path = match &stroke.dash {
+        Some(dash) => {
+            dashed = path.dash(dash, 1.0);
+            match &dashed {
+                Some(d) => d,
+                None => return,
+            }
+        }
+        None => path,
+    };
+    let plain = SkStroke {
+        dash: None,
+        ..stroke.clone()
+    };
+    // Cut the centre line first so the outline is made of what can reach
+    // the render only, then cut the outline itself.
+    let Some(centre) = clip_to_render(path, w, h, reach) else {
+        return;
+    };
+    let Some(outline) = centre.stroke(&plain, 1.0) else {
+        return;
+    };
+    if let Some(cut) = clip_to_render(&outline, w, h, 0.0) {
+        pixmap.fill_path(&cut, paint, FillRule::Winding, Transform::identity(), None);
+    }
+}
+
+/// `path` cut down to the render of `w` by `h` pixels widened by `extra`
+/// and a margin, through double precision.
+fn clip_to_render(path: &SkPath, w: f32, h: f32, extra: f32) -> Option<SkPath> {
+    let mut bez = BezPath::new();
+    for seg in path.segments() {
+        use tiny_skia::PathSegment as S;
+        let p = |q: tiny_skia::Point| Point::new(q.x as f64, q.y as f64);
+        match seg {
+            S::MoveTo(a) => bez.move_to(p(a)),
+            S::LineTo(a) => bez.line_to(p(a)),
+            S::QuadTo(c, a) => bez.quad_to(p(c), p(a)),
+            S::CubicTo(c1, c2, a) => bez.curve_to(p(c1), p(c2), p(a)),
+            S::Close => bez.close_path(),
+        }
+    }
+    let m = extra as f64 + 1024.0;
+    let cut = tracedraw_core::clip::clip_path_to_rect(
+        &bez,
+        Rect::new(-m, -m, w as f64 + m, h as f64 + m),
+    );
+    to_sk_path(&cut)
+}
+
 pub fn to_sk_path(path: &BezPath) -> Option<SkPath> {
+    let reach = Rect::new(-CLIP_REACH, -CLIP_REACH, CLIP_REACH, CLIP_REACH);
+    let cut;
+    let path = {
+        let b = path.control_box();
+        if b.x0 < reach.x0 || b.y0 < reach.y0 || b.x1 > reach.x1 || b.y1 > reach.y1 {
+            cut = tracedraw_core::clip::clip_path_to_rect(path, reach);
+            &cut
+        } else {
+            path
+        }
+    };
     let mut pb = PathBuilder::new();
     for el in path.elements() {
         match el {
@@ -3784,5 +3874,68 @@ mod culling_tests {
         doc.layer_mut(layer).unwrap().shapes.push(inside);
         let px = render_page(&doc, page, &opts).unwrap();
         assert!(px.pixels().iter().any(|p| p.alpha() > 0));
+    }
+}
+
+#[cfg(test)]
+mod deep_zoom_tests {
+    use super::*;
+    use tracedraw_core::document::{Shape, ShapeKind};
+
+    /// An outlined ellipse seen with its edge across the middle of a
+    /// render at zoom after zoom, up to a trillion pixels per millimetre:
+    /// it renders, without panicking, with the fill on its side of the
+    /// edge and nothing on the other.
+    #[test]
+    fn outlined_objects_render_at_any_zoom() {
+        let mut doc = Document::new("t", tracedraw_core::geometry::Size::new(300.0, 300.0));
+        let page = doc.pages[0].id;
+        let layer = doc.pages[0].layers[0].id;
+        let mut s = Shape::new(
+            tracedraw_core::ShapeId(1),
+            ShapeKind::Ellipse {
+                rect: Rect::new(50.0, 50.0, 250.0, 150.0),
+                arc: None,
+            },
+        );
+        s.fill = tracedraw_core::Fill::Solid(Color::rgb8(200, 30, 30));
+        s.stroke = Some(tracedraw_core::Stroke::new(Color::BLACK, 0.2));
+        doc.layer_mut(layer).unwrap().shapes.push(s);
+        // The ellipse's leftmost point, (50, 100), at the render's centre.
+        for k in 0..=12 {
+            let zoom = 10f64.powi(k);
+            let (w, h) = (400u32, 300u32);
+            let opts = RenderOptions {
+                width: w,
+                height: h,
+                view: ViewTransform {
+                    zoom,
+                    origin_x: w as f64 / 2.0 - 50.0 * zoom,
+                    origin_y: h as f64 / 2.0 + 100.0 * zoom,
+                },
+                ..RenderOptions::default()
+            };
+            let px = render_page(&doc, page, &opts).expect("render");
+            if k >= 4 {
+                // Far inside: red; far outside: empty. The outline, 0.2 mm
+                // wide, covers the middle once it is wider than the render.
+                let at = |x: u32, y: u32| px.pixels()[(y * w + x) as usize];
+                let inside = at(w - 5, h / 2);
+                let outside = at(4, h / 2);
+                let stroke_px = 0.2 * zoom;
+                if stroke_px < 100.0 {
+                    assert!(
+                        inside.red() > 150 && inside.green() < 80,
+                        "k {k} {inside:?}"
+                    );
+                    assert_eq!(outside.alpha(), 0, "k {k}");
+                } else {
+                    assert!(
+                        inside.red() < 30 && inside.alpha() > 200,
+                        "k {k} {inside:?}"
+                    );
+                }
+            }
+        }
     }
 }

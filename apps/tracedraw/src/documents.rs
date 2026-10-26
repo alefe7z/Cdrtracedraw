@@ -686,21 +686,21 @@ mod tests {
         let a = add_rect(&mut app);
         let b = add_rect(&mut app);
         app.select(vec![a]);
-        app.view.zoom = 5.0;
+        app.view.set_zoom(5.0);
         app.new_window();
         // The new window starts as the first one shows the drawing.
-        assert_eq!(app.view.zoom, 5.0);
+        assert_eq!(app.view.zoom(), 5.0);
         assert_eq!(app.selection, vec![a]);
-        app.view.zoom = 9.0;
+        app.view.set_zoom(9.0);
         app.select(vec![b]);
         let first_page = app.page;
         app.open_document(Document::new("Away", Size::new(50.0, 50.0)), None);
         app.switch_document(0);
-        assert_eq!(app.view.zoom, 5.0);
+        assert_eq!(app.view.zoom(), 5.0);
         assert_eq!(app.selection, vec![a]);
         assert_eq!(app.page, first_page);
         app.switch_document(1);
-        assert_eq!(app.view.zoom, 9.0);
+        assert_eq!(app.view.zoom(), 9.0);
         assert_eq!(app.selection, vec![b]);
         // An object deleted in one window leaves the other's selection.
         app.switch_document(0);
@@ -839,7 +839,7 @@ mod tests {
         let mut app = App::headless();
         add_rect(&mut app);
         app.new_window();
-        app.view.zoom = 7.0;
+        app.view.set_zoom(7.0);
         let draw = |app: &mut App| {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

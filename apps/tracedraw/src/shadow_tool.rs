@@ -63,7 +63,7 @@ impl App {
             return None;
         }
         let (_, sh, b) = self.selected_shadow()?;
-        let tol = HANDLE_PX / f64::from(self.view.zoom.max(1e-6));
+        let tol = HANDLE_PX / f64::from(self.view.zoom().max(1e-6));
         shadow_handles(&sh, b)
             .into_iter()
             .find(|(_, hp)| (*hp - p).hypot() <= tol)

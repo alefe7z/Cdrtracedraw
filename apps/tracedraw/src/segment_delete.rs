@@ -526,7 +526,7 @@ impl App {
     /// Remove the virtual segment under `p` (page space). False when no
     /// outline is near.
     pub fn delete_virtual_segment_at(&mut self, p: Point) -> bool {
-        let tol = 5.0 / self.view.zoom.max(1e-6) as f64;
+        let tol = 5.0 / self.view.zoom().max(1e-6) as f64;
         let all = self.segment_targets();
         // The nearest outline within reach (the topmost of equals).
         let mut found: Option<(Shape, Vec<Sub>, usize, f64, f64)> = None;

@@ -460,7 +460,7 @@ impl App {
 
     /// Start a drag at `at` (page space). False when nothing is there.
     pub fn begin_extrude(&mut self, at: Point) -> bool {
-        let tol = 6.0 / self.view.zoom.max(1e-6) as f64;
+        let tol = 6.0 / self.view.zoom().max(1e-6) as f64;
         if let Some((id, h, anchor)) = self
             .extrusion_handles()
             .into_iter()

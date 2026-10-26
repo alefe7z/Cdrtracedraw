@@ -504,7 +504,7 @@ impl App {
     /// Effect nodes (perspective, mesh) under the pointer, for the Shape
     /// and Mesh Fill tools: (shape, node index).
     pub fn effect_node_at(&self, p: Point) -> Option<(ShapeId, usize)> {
-        let tol = 5.0 / self.view.zoom as f64;
+        let tol = 5.0 / self.view.zoom() as f64;
         for s in self.selected_shapes() {
             for (i, q) in effect_nodes(&s) {
                 if (q - p).hypot() <= tol {

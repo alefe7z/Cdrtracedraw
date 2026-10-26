@@ -105,7 +105,7 @@ impl App {
     /// there with the reach the outline has; elsewhere, the object under
     /// the pointer is selected.
     pub fn variable_outline_press(&mut self, p: Point, one_side: bool) {
-        let grab = GRAB_PX / self.view.zoom.max(1e-6) as f64;
+        let grab = GRAB_PX / self.view.zoom().max(1e-6) as f64;
         if let Some(id) = self.variable_outline_target() {
             if let Some((path, stroke, scale)) = self.variable_outline_geometry(id) {
                 // A node under the pointer.

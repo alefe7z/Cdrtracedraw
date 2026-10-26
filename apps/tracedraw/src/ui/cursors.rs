@@ -314,7 +314,7 @@ pub fn for_tool(
             ToolCursor::System(egui::CursorIcon::Move)
         }
         Tool::Eraser => ToolCursor::Nib {
-            radius: nib_px(app.eraser_width / 2.0, app.view.zoom),
+            radius: nib_px(app.eraser_width / 2.0, app.view.zoom()),
             square: app.eraser_square,
         },
         Tool::Smooth
@@ -323,7 +323,7 @@ pub fn for_tool(
         | Tool::AttractRepel
         | Tool::Smudge
         | Tool::Roughen => ToolCursor::Nib {
-            radius: nib_px(app.brush_radius, app.view.zoom),
+            radius: nib_px(app.brush_radius, app.view.zoom()),
             square: false,
         },
         t @ (Tool::Freehand
@@ -972,7 +972,7 @@ mod tests {
         // The Eraser and the brushes show their nib at its size on screen.
         app.tool = Tool::Eraser;
         app.eraser_width = 10.0;
-        app.view.zoom = 2.0;
+        app.view.set_zoom(2.0);
         assert_eq!(
             for_tool(&app, false, false, false, None),
             ToolCursor::Nib {

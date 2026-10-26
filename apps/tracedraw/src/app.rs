@@ -3335,7 +3335,7 @@ impl App {
     /// cascaded or moved, a bar docked elsewhere, the rulers shown).
     pub fn anchor_view(&mut self, at: egui::Pos2) {
         if let Some(before) = self.view_anchor {
-            self.view.origin += at - before;
+            self.view.pan(at - before);
         }
         self.view_anchor = Some(at);
     }
@@ -5904,13 +5904,19 @@ impl App {
     }
 
     pub fn zoom_percent(&self) -> f32 {
-        self.view.zoom / self.zoom_100() * 100.0
+        (self.view.zoom64() / self.zoom_100() as f64 * 100.0) as f32
     }
 
+    /// Zoom to `pct` percent about the canvas centre (no upper or lower
+    /// bound but the view's, `view::MAX_ZOOM` and `view::MIN_ZOOM`).
     pub fn set_zoom_percent(&mut self, pct: f32) {
+        self.set_zoom_percent64(pct as f64);
+    }
+
+    pub fn set_zoom_percent64(&mut self, pct: f64) {
         let anchor: Pos2 = self.canvas_rect.center();
-        let target = pct / 100.0 * self.zoom_100();
-        self.view.zoom_at(anchor, target / self.view.zoom);
+        let target = pct / 100.0 * self.zoom_100() as f64;
+        self.view.zoom_at64(anchor, target / self.view.zoom64());
     }
 
     pub fn add_page(&mut self) {
@@ -6591,7 +6597,7 @@ mod tests {
     #[test]
     fn unfilled_objects_hit_only_near_the_outline_unless_treated_as_filled() {
         let mut app = App::headless();
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         let id = rect_shape(&mut app, Rect::new(10.0, 10.0, 60.0, 60.0), false);
         let inside = Point::new(35.0, 35.0);
         // Treated as filled by default: a click inside takes it.
@@ -6607,7 +6613,7 @@ mod tests {
     #[test]
     fn filled_ellipses_are_hit_inside_their_curve_not_their_box() {
         let mut app = App::headless();
-        app.view.zoom = 1.0;
+        app.view.set_zoom(1.0);
         let id = app
             .new_shape(ShapeKind::Ellipse {
                 rect: Rect::new(0.0, 0.0, 100.0, 100.0),

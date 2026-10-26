@@ -196,7 +196,7 @@ impl App {
         if self.focus_shape_on_page().is_some() {
             return None;
         }
-        let tol = 3.0 / self.view.zoom as f64;
+        let tol = 3.0 / self.view.zoom() as f64;
         self.page_layers()
             .into_iter()
             .rev()
@@ -209,7 +209,7 @@ impl App {
 
     /// The topmost object at `p` that `skip` does not rule out.
     pub fn hit_test_where(&self, p: Point, skip: impl Fn(ShapeId) -> bool) -> Option<ShapeId> {
-        let tol = 3.0 / self.view.zoom as f64;
+        let tol = 3.0 / self.view.zoom() as f64;
         // Focus mode: only the parts of the object in focus (or itself).
         if let Some(f) = self.focus_shape_on_page() {
             return match &f.kind {
@@ -370,7 +370,7 @@ impl App {
     /// is), down to the innermost object.
     pub fn hit_test_step(&self, p: Point) -> Option<ShapeId> {
         let top = self.hit_test(p)?;
-        let tol = 3.0 / self.view.zoom as f64;
+        let tol = 3.0 / self.view.zoom() as f64;
         let mut chain = vec![top];
         let mut current = self.doc().shape(top).ok()?.1.clone();
         while let Some(c) = self.children_hit(&current, p, tol).into_iter().next() {
@@ -388,7 +388,7 @@ impl App {
     /// `deep` the innermost objects inside groups (Alt+click digs through
     /// these, Ctrl+Alt+click through the deep ones).
     pub fn hits_at(&self, p: Point, deep: bool) -> Vec<ShapeId> {
-        let tol = 3.0 / self.view.zoom as f64;
+        let tol = 3.0 / self.view.zoom() as f64;
         let mut out = Vec::new();
         fn leaves(
             app: &App,
@@ -1595,7 +1595,7 @@ impl App {
         {
             self.curve_step();
         }
-        let reach = self.curve_end_reach_px() / self.view.zoom as f64;
+        let reach = self.curve_end_reach_px() / self.view.zoom() as f64;
         let near = |q: Point| (q - raw).hypot() <= reach;
         let start_close = self
             .curve
@@ -1811,7 +1811,7 @@ impl App {
         if self.on_join_end(p) {
             return None;
         }
-        let tol = self.settings.nodes.pick_px() / self.view.zoom as f64;
+        let tol = self.settings.nodes.pick_px() / self.view.zoom() as f64;
         let lp = shape.transform.inverse() * p;
         if let Some(n) = tracedraw_core::nodes::nodes(path)
             .iter()
@@ -2047,7 +2047,7 @@ impl App {
             Drag::Freehand { points } => {
                 // Smoothing (Options > Tools > Curves, the property bar)
                 // sets how far the stroke may be simplified, on screen.
-                let tol = self.settings.curves.freehand_tolerance_px() / self.view.zoom as f64;
+                let tol = self.settings.curves.freehand_tolerance_px() / self.view.zoom() as f64;
                 let pts = tracedraw_core::geometry::simplify(&points, tol.max(0.02));
                 if pts.len() >= 2 {
                     let path = tracedraw_core::geometry::smooth_path(&pts, false);
