@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `a4ca6fe Update the agents' status file`
-- Commits on the branch: 42
+- Last commit before this one: `aafc52d Request a Windows build [exe]`
+- Commits on the branch: 43
 
 ## Last 20 commits
 
+- `aafc52d` 2026-10-23 23:19 Claude: Request a Windows build [exe]
 - `cedcca9` 2026-10-23 23:19 Claude: Restore the language files and the features list
 - `10eb37c` 2026-10-23 18:32 alefe7z: docs: record validation failures and diagnostic follow-up
 - `7108d09` 2026-10-23 18:31 alefe7z: ci: expose test failures and preserve independent visual validation
@@ -29,11 +30,11 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 ## Files changed in the last 10 commits
 
 - `docs/agents/CONTEXT.md` (5)
-- `.github/workflows/reference-validation.yml` (3)
-- `apps/tracedraw/src/ui/dockers.rs` (2)
-- `apps/tracedraw/src/ui/docker_panels.rs` (2)
+- `.github/workflows/reference-validation.yml` (2)
 - `docs/features.md` (1)
 - `apps/tracedraw/src/ui/mod.rs` (1)
+- `apps/tracedraw/src/ui/dockers.rs` (1)
+- `apps/tracedraw/src/ui/docker_panels.rs` (1)
 - `apps/tracedraw/src/ui/docker_icons.rs` (1)
 - `apps/tracedraw/src/ui/docker_catalog.rs` (1)
 - `apps/tracedraw/src/settings.rs` (1)
@@ -61,8 +62,11 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-None.
+| Agent | Area / files | Since | Note |
+| --- | --- | --- | --- |
+| Claude | Properties docker redesign after the owner's video: new ui/properties_docker.rs, the Properties dispatch and helper visibility in ui/dockers.rs, lang/*.toml (appended keys), docs/behavior/workspaces.md | 2026-10-26 | Avoid ui/dockers.rs properties()/outline_editor*/fill_editor* until done |
 
 ## Uncommitted when generated
 
+    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp

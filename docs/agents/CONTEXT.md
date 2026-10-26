@@ -92,6 +92,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Claude | Properties docker redesign after the owner's video: new ui/properties_docker.rs, the Properties dispatch and helper visibility in ui/dockers.rs, lang/*.toml (appended keys), docs/behavior/workspaces.md | 2026-10-26 | Avoid ui/dockers.rs properties()/outline_editor*/fill_editor* until done |
 
 ## Notes for other agents
 
