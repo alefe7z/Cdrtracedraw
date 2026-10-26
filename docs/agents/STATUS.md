@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `ede9ac0 Record the owner's rule on private, personal use`
-- Commits on the branch: 58
+- Last commit before this one: `6edb617 Update the agents' status file`
+- Commits on the branch: 59
 
 ## Last 20 commits
 
@@ -20,7 +20,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `aafc52d` 2026-10-23 23:19 Claude: Request a Windows build [exe]
 - `cedcca9` 2026-10-23 23:19 Claude: Restore the language files and the features list
 - `10eb37c` 2026-10-23 18:32 alefe7z: docs: record validation failures and diagnostic follow-up
-- `7108d09` 2026-10-23 18:31 alefe7z: ci: expose test failures and preserve independent visual validation
 
 ## Files changed in the last 10 commits
 
@@ -57,8 +56,11 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-None.
+| Agent | Area / files | Since | Note |
+| --- | --- | --- | --- |
+| Claude | Unlimited zoom: `view.rs` (f64), `raster.rs`, `canvas.rs`, `crates/core/src/clip.rs`, `crates/render`, and `view.zoom` -> `view.zoom()` across `apps/tracedraw` | 2026-10-26 | mechanical rename in many files |
 
 ## Uncommitted when generated
 
+    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp

@@ -97,6 +97,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Claude | Unlimited zoom: `view.rs` (f64), `raster.rs`, `canvas.rs`, `crates/core/src/clip.rs`, `crates/render`, and `view.zoom` -> `view.zoom()` across `apps/tracedraw` | 2026-10-26 | mechanical rename in many files |
 
 ## Notes for other agents
 
