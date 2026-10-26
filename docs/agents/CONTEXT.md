@@ -92,12 +92,22 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Claude | Menus and toolbox flyouts after the owner's second reference video: ui/menus.rs (order, density), toolbox flyout rows (ui/toolbox.rs), lang/*.toml (menu and tool labels), new docs/reference/ui-reference.md | 2026-10-26 | Tools' order in tools.rs GROUPS may change for the polygon group |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
 
+- Menus and flyouts (Claude, 2026-10-26): follow
+  `docs/reference/ui-reference.md` (the owner's second video, item by
+  item). Menu rows are 22 px; items the reference shows that CD Draw
+  lacks are greyed (Collect for Output, Bring to Focus, Split View, Image
+  Adjustment Lab...). Moved, not removed: page sorter (View > Page),
+  draw in perspective (Object > Perspective), font sampler, placeholder
+  text, custom hyphens and font manager (Text > Writing Tools), Border
+  and Grommet (Layout), macros (Tools > Scripts), effect picker
+  (Window > Dockers). Dropped from the menus: Object > Transformations
+  (Alt+F7 to Alt+F10 still work), Layout > Fit Page (in Page Size),
+  Window > Combine/Dock, Help > Help Topics and Highlight What's New.
 - Properties docker (Claude, 2026-10-26): now lives in
   `ui/properties_docker.rs` (the old `properties()` in `ui/dockers.rs`
   is gone; `dockers.rs` keeps the shared editors, now `pub(crate)`:
@@ -155,6 +165,7 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
+- 2026-10-26, Claude: menus and toolbox flyouts after the second video.
 - 2026-10-26, Claude: Properties docker redone after the owner's video.
 - 2026-10-23, Claude: restored the language files and features list
   lost in b975ec5, fixed two catalog tests, Windows build requested.

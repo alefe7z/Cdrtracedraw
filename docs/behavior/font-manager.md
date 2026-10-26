@@ -1,6 +1,6 @@
 # Font Manager
 
-Tools > Font Manager (and Launch > Font Manager) opens a window of its
+Text > Writing Tools > Font Manager (and Launch > Font Manager) opens a window of its
 own, resizable (1000 x 720 at first), over the drawing. Like the other
 dialogs it keeps the rest of the application waiting until it closes.
 

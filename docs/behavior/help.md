@@ -15,7 +15,7 @@ opens them from the app. Nothing is fetched online.
   docker on show, else the active tool. F1 works with a dialog open, and
   is left to the shortcut field while Options > Customization > Commands
   waits for a key.
-- Help > Help Topics opens the first page of the Help. Help > Product
+- Help > User Guide opens the first page of the Help. Help > Product
   Help (F1) opens the page of the docker on show, else of the tool.
 - The Hints docker's "Learn more" link opens the page of the tool or
   topic it shows; its first page links to the first page of the Help.

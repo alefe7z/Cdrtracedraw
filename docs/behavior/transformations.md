@@ -4,7 +4,7 @@ Five pages, chosen with the picture buttons at the top of the panel:
 Position, Rotate, Scale and Mirror, Size and Skew. Alt+F7, Alt+F8,
 Alt+F9 and Alt+F10 open the panel on Position, Rotate, Scale and Mirror
 and Size (pressed again on the page shown, they close the docker
-column); Object > Transformations opens any of the five.
+column); Window > Dockers opens the panel.
 
 Each page is laid out the same way: a line under the
 picture buttons, the page's name with a colon (Rotate shows a turning

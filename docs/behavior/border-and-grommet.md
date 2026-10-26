@@ -1,6 +1,6 @@
 # Border and Grommet
 
-Tools > Border and Grommet: finishing for large-format prints (banners,
+Layout > Border and Grommet: finishing for large-format prints (banners,
 canvases). The dialog grows the page by a border and places grommet
 marks on its edge.
 

@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `f969640 Claim the menus and flyouts after the second reference`
-- Commits on the branch: 48
+- Last commit before this one: `eb53c61 Update the agents' status file`
+- Commits on the branch: 49
 
 ## Last 20 commits
 
@@ -25,7 +25,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `71cf241` 2026-10-23 15:50 alefe7z: Complete reference catalog panels and dedicated vector pictograms
 - `04d7889` 2026-10-23 15:37 alefe7z: Claim reference fidelity and missing panel integration task
 - `ded3c6a` 2026-10-23 15:28 alefe7z: Regenerate shared agent status after the docker catalog change
-- `b975ec5` 2026-10-23 15:27 alefe7z: Rework the docker catalog to follow the supplied reference
 
 ## Files changed in the last 10 commits
 
@@ -62,10 +61,39 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-| Agent | Area / files | Since | Note |
-| --- | --- | --- | --- |
-| Claude | Menus and toolbox flyouts after the owner's second reference video: ui/menus.rs (order, density), toolbox flyout rows (ui/toolbox.rs), lang/*.toml (menu and tool labels), new docs/reference/ui-reference.md | 2026-10-26 | Tools' order in tools.rs GROUPS may change for the polygon group |
+None.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/lang/ar.toml
+    M  apps/tracedraw/lang/bn.toml
+    M  apps/tracedraw/lang/cs.toml
+    M  apps/tracedraw/lang/de.toml
+    M  apps/tracedraw/lang/en.toml
+    M  apps/tracedraw/lang/es.toml
+    M  apps/tracedraw/lang/fr.toml
+    M  apps/tracedraw/lang/hi.toml
+    M  apps/tracedraw/lang/id.toml
+    M  apps/tracedraw/lang/it.toml
+    M  apps/tracedraw/lang/ja.toml
+    M  apps/tracedraw/lang/nl.toml
+    M  apps/tracedraw/lang/pl.toml
+    M  apps/tracedraw/lang/pt-BR.toml
+    M  apps/tracedraw/lang/ru.toml
+    M  apps/tracedraw/lang/tr.toml
+    M  apps/tracedraw/lang/zh-CN.toml
+    M  apps/tracedraw/lang/zh-TW.toml
+    M  apps/tracedraw/src/tools.rs
+    M  apps/tracedraw/src/ui/menus.rs
+    M  apps/tracedraw/src/ui/toolbox.rs
+    M  docs/agents/CONTEXT.md
+    M  docs/behavior/border-and-grommet.md
+    M  docs/behavior/font-manager.md
+    M  docs/behavior/help.md
+    M  docs/behavior/shortcuts.md
+    M  docs/behavior/transformations.md
+    M  docs/behavior/vba.md
+    M  docs/features.md
+    M  docs/guide/selecting-and-transforming.md
+    A  docs/reference/ui-reference.md
     ?? docs/agents/STATUS.md.tmp

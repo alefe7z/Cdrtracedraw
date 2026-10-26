@@ -183,7 +183,7 @@ For exact moves, turns and sizes, open the Transformations panel:
 | `Alt+F9` | Scale and Mirror |
 | `Alt+F10` | Size |
 
-**Object > Transformations** opens any of its five pages, including
+**Window > Dockers > Transformations** opens its pages, including
 **Skew**.
 
 To use it:

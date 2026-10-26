@@ -148,11 +148,11 @@ pub const GROUPS: &[ToolGroup] = &[
     ToolGroup {
         tools: &[
             Tool::Polygon,
-            Tool::Star,
-            Tool::Spiral,
-            Tool::CommonShapes,
-            Tool::ActionLines,
             Tool::GraphPaper,
+            Tool::Spiral,
+            Tool::Star,
+            Tool::ActionLines,
+            Tool::CommonShapes,
         ],
         hidden: false,
     },

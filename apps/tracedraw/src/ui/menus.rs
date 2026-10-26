@@ -10,14 +10,14 @@ use tracedraw_core::document::ShapeKind;
 use tracedraw_core::Command;
 
 pub(crate) const MENU_WIDTH: f32 = 250.0;
-/// Menu rows: 26 px tall, a 30 px grey gutter
-/// for icons and check marks, labels from 38 px, shortcuts right-aligned
-/// 28 px from the edge, 13 px text.
-const ROW_HEIGHT: f32 = 26.0;
-const GUTTER: f32 = 30.0;
-const LABEL_X: f32 = 38.0;
-const SHORTCUT_PAD: f32 = 28.0;
-const FONT: f32 = 13.0;
+/// Menu rows as in the reference (docs/reference/ui-reference.md): 22 px
+/// tall, a 28 px gutter for icons and check marks, labels from 34 px,
+/// shortcuts right-aligned 22 px from the edge, 12.5 px text.
+const ROW_HEIGHT: f32 = 22.0;
+const GUTTER: f32 = 28.0;
+const LABEL_X: f32 = 34.0;
+const SHORTCUT_PAD: f32 = 22.0;
+const FONT: f32 = 12.5;
 const SEPARATOR_HEIGHT: f32 = 7.0;
 
 /// The style of menu pop-ups: white, a one-pixel grey frame, square
@@ -514,6 +514,11 @@ fn menu_pic(key: &str) -> Option<crate::ui::propbar::Pic> {
 /// A checkable item (check mark in the gutter when `on`).
 pub(crate) fn check(ui: &mut Ui, key: &str, shortcut: &str, on: bool) -> bool {
     mark_item(ui, key, shortcut, Mark::Check(on))
+}
+
+/// A checkable item that can be unavailable.
+pub(crate) fn check_if(ui: &mut Ui, key: &str, shortcut: &str, on: bool, enabled: bool) -> bool {
+    mark_item_if(ui, key, shortcut, Mark::Check(on), enabled)
 }
 
 /// One of a set of exclusive items (a dot in the gutter when `on`).
@@ -1235,7 +1240,8 @@ mod tests {
             find("menu.effects.flatten").expect("flatten").path,
             ["menu.effects"]
         );
-        assert!(find("menu.effects.picker").is_none_or(|e| e.path == ["menu.window"]));
+        assert!(find("menu.effects.picker")
+            .is_none_or(|e| e.path == ["menu.window", "menu.window.dockers"]));
         assert_eq!(
             find("menu.effects.contour").expect("contour").shortcut,
             "Ctrl+F9"
@@ -1610,14 +1616,12 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
             }
         }
     });
-    sep(ui);
     if item(ui, "menu.file.close", "", doc) {
         app.close_document();
     }
     if item(ui, "menu.file.close_all", "", doc) {
         app.close_all_documents();
     }
-    sep(ui);
     if item(ui, "menu.file.save", "Ctrl+S", doc) {
         app.save(false);
     }
@@ -1645,14 +1649,13 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.file.export", "Ctrl+E", doc) {
         app.export();
     }
-    sub(ui, "menu.file.export_for", |ui| {
-        if item(ui, "menu.file.export_for_web", "", doc) {
-            app.dialog = Dialog::Export(crate::ui::dialogs::ExportState::web());
-        }
-        if item(ui, "menu.file.export_for_office", "", doc) {
-            app.dialog = Dialog::Export(crate::ui::dialogs::ExportState::office());
-        }
-    });
+    // Export for Office and the Web, straight in the menu.
+    if item(ui, "menu.file.export_office", "", doc) {
+        app.dialog = Dialog::Export(crate::ui::dialogs::ExportState::office());
+    }
+    if item(ui, "menu.file.export_web", "", doc) {
+        app.dialog = Dialog::Export(crate::ui::dialogs::ExportState::web());
+    }
     sub(ui, "menu.file.send_to", |ui| {
         use crate::export::SendTarget;
         for (key, t) in [
@@ -1665,10 +1668,10 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
             }
         }
     });
-    if item(ui, "menu.file.publish_to_pdf", "", doc) {
-        app.publish_pdf();
-    }
     sep(ui);
+    if item(ui, "menu.file.print", "Ctrl+P", doc) {
+        app.print();
+    }
     sub(ui, "menu.file.print_merge", |ui| {
         if item(ui, "menu.file.print_merge_create", "", doc) {
             app.dialog = Dialog::PrintMerge(Default::default());
@@ -1685,15 +1688,16 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
             }
         }
     });
-    sep(ui);
-    if item(ui, "menu.file.print", "Ctrl+P", doc) {
-        app.print();
-    }
     if item(ui, "menu.file.print_preview", "", doc) {
         app.print_preview(None);
     }
+    item(ui, "menu.file.collect_for_output", "", false);
     if item(ui, "menu.file.preflight", "", doc) {
         app.dialog = Dialog::Preflight(Default::default());
+    }
+    sep(ui);
+    if item(ui, "menu.file.publish_to_pdf", "", doc) {
+        app.publish_pdf();
     }
     sep(ui);
     if item(ui, "menu.file.document_properties", "", doc) {
@@ -1703,6 +1707,15 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.file.exit", "Alt+F4", true) {
         app.request_exit();
     }
+    sep(ui);
+    sub(ui, "menu.file.export_for", |ui| {
+        if item(ui, "menu.file.export_for_web", "", doc) {
+            app.dialog = Dialog::Export(crate::ui::dialogs::ExportState::web());
+        }
+        if item(ui, "menu.file.export_for_office", "", doc) {
+            app.dialog = Dialog::Export(crate::ui::dialogs::ExportState::office());
+        }
+    });
 }
 
 fn edit_menu(app: &mut App, ui: &mut Ui) {
@@ -1746,6 +1759,9 @@ fn edit_menu(app: &mut App, ui: &mut Ui) {
         app.repeat_last();
     }
     sep(ui);
+    item(ui, "menu.edit.bring_to_focus", "", false);
+    item(ui, "menu.edit.exit_focus_mode", "", false);
+    sep(ui);
     if item(ui, "menu.edit.cut", "Ctrl+X", has) {
         app.cut();
     }
@@ -1756,7 +1772,6 @@ fn edit_menu(app: &mut App, ui: &mut Ui) {
         app.pending_copy_properties = true;
         app.status = tr("status.click_source_object");
     }
-    sep(ui);
     if item(ui, "menu.edit.paste", "Ctrl+V", true) {
         app.paste_any();
     }
@@ -1771,7 +1786,6 @@ fn edit_menu(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.edit.paste_special", "", true) {
         app.dialog = Dialog::PasteSpecial(Default::default());
     }
-    sep(ui);
     if item(ui, "menu.edit.delete", "Delete", has) {
         app.delete_selection();
     }
@@ -1798,7 +1812,8 @@ fn edit_menu(app: &mut App, ui: &mut Ui) {
         }
     });
     sep(ui);
-    if item(ui, "menu.edit.find_and_replace", "Ctrl+F", true) {
+    let finding = app.show_dockers && app.docker_tab == DockerTab::FindReplace;
+    if check(ui, "menu.edit.find_and_replace", "Ctrl+F", finding) {
         app.show_dockers = true;
         app.docker_tab = DockerTab::FindReplace;
     }
@@ -1833,22 +1848,8 @@ fn view_menu(app: &mut App, ui: &mut Ui) {
         app.preview_selected_only = true;
         app.fullscreen_preview = true;
     }
-    if check(ui, "menu.view.page_sorter", "", app.page_sorter) {
-        app.page_sorter = !app.page_sorter;
-        if app.page_sorter {
-            app.multipage = false;
-        }
-    }
     if check(ui, "menu.view.multipage", "", app.multipage) {
         app.set_multipage(!app.multipage);
-    }
-    if check(
-        ui,
-        "menu.view.draw_in_perspective",
-        "",
-        app.perspective.is_some(),
-    ) {
-        app.toggle_perspective_drawing();
     }
     sep(ui);
     if item(ui, "menu.view.zoom_in", "Ctrl++", true) {
@@ -1884,6 +1885,13 @@ fn view_menu(app: &mut App, ui: &mut Ui) {
     }
     sep(ui);
     sub(ui, "menu.view.page", |ui| {
+        if check(ui, "menu.view.page_sorter", "", app.page_sorter) {
+            app.page_sorter = !app.page_sorter;
+            if app.page_sorter {
+                app.multipage = false;
+            }
+        }
+        sep(ui);
         if check(ui, "menu.view.page_border", "", app.show_page_border) {
             app.show_page_border = !app.show_page_border;
         }
@@ -1952,10 +1960,15 @@ fn view_menu(app: &mut App, ui: &mut Ui) {
         if check(ui, "menu.view.snap_page", "", app.snap.page) {
             app.snap.page = !app.snap.page;
         }
+        sep(ui);
+        if check(ui, "menu.view.snap_off", "Alt+Q", app.snap.off) {
+            app.snap.off = !app.snap.off;
+        }
     });
-    if check(ui, "menu.view.snap_off", "Alt+Q", app.snap.off) {
-        app.snap.off = !app.snap.off;
-    }
+    item(ui, "menu.view.split_view", "U", false);
+    sep(ui);
+    check_if(ui, "menu.view.document_navigator", "", true, false);
+    check_if(ui, "menu.view.scroll_bars", "", true, false);
 }
 
 pub(crate) fn layout_menu(app: &mut App, ui: &mut Ui) {
@@ -2039,25 +2052,13 @@ pub(crate) fn layout_menu(app: &mut App, ui: &mut Ui) {
         app.dialog = Dialog::Options;
         app.options_page = crate::ui::dialogs::OptionsPage::Layout;
     }
-    if item(
-        ui,
-        "menu.layout.fit_page_selection",
-        "",
-        !app.selection.is_empty(),
-    ) {
-        app.fit_page_to_selection();
-    }
-    if item(
-        ui,
-        "menu.layout.fit_page_drawing",
-        "",
-        app.drawing_bounds().is_some(),
-    ) {
-        app.fit_page_to_drawing();
-    }
     if item(ui, "menu.layout.page_background", "", true) {
         app.dialog = Dialog::Options;
         app.options_page = crate::ui::dialogs::OptionsPage::Background;
+    }
+    sep(ui);
+    if item(ui, "menu.tools.border_and_grommet", "", true) {
+        app.dialog = Dialog::BorderGrommet(Default::default());
     }
 }
 
@@ -2200,20 +2201,6 @@ fn object_menu(app: &mut App, ui: &mut Ui) {
     });
     todo_sub(ui, "menu.object.rollover");
     sep(ui);
-    sub(ui, "menu.object.transformations", |ui| {
-        use crate::app::TransformTab;
-        for (key, shortcut, tab) in [
-            ("menu.object.tf_position", "Alt+F7", TransformTab::Position),
-            ("menu.object.tf_rotate", "Alt+F8", TransformTab::Rotate),
-            ("menu.object.tf_scale", "Alt+F9", TransformTab::Scale),
-            ("menu.object.tf_size", "Alt+F10", TransformTab::Size),
-            ("menu.object.tf_skew", "", TransformTab::Skew),
-        ] {
-            if item(ui, key, shortcut, true) {
-                crate::ui::transform_docker::open(app, tab, false);
-            }
-        }
-    });
     if item(ui, "menu.object.clear_transformations", "", has) {
         app.clear_transformations();
     }
@@ -2398,9 +2385,19 @@ fn object_menu(app: &mut App, ui: &mut Ui) {
     } else if item(ui, "menu.object.break_apart", "Ctrl+K", has) {
         app.break_apart();
     }
-    if item(ui, "menu.object.add_perspective", "", has) {
-        app.add_perspective();
-    }
+    sub(ui, "menu.object.perspective", |ui| {
+        if item(ui, "menu.object.add_perspective", "", has) {
+            app.add_perspective();
+        }
+        if check(
+            ui,
+            "menu.view.draw_in_perspective",
+            "",
+            app.perspective.is_some(),
+        ) {
+            app.toggle_perspective_drawing();
+        }
+    });
     sep(ui);
     if item(
         ui,
@@ -2480,6 +2477,14 @@ fn object_menu(app: &mut App, ui: &mut Ui) {
         app.docker_shown(DockerTab::Objects),
     ) {
         app.open_docker(DockerTab::Objects);
+    }
+    if check(
+        ui,
+        "menu.object.pages",
+        "",
+        app.docker_shown(DockerTab::Pages),
+    ) {
+        app.open_docker(DockerTab::Pages);
     }
 }
 
@@ -2565,9 +2570,13 @@ fn bitmaps_menu(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.bitmaps.convert_to_bitmap", "", has) {
         app.dialog = Dialog::ConvertToBitmap(Default::default());
     }
+    sep(ui);
     if item(ui, "menu.bitmaps.straighten_image", "", has_bitmap) {
         app.dialog = Dialog::StraightenImage(Default::default());
     }
+    item(ui, "menu.bitmaps.image_adjustment_lab", "", false);
+    item(ui, "menu.bitmaps.remove_jpeg_artifacts", "", false);
+    sep(ui);
     if item(
         ui,
         "menu.bitmaps.edit_bitmap",
@@ -2576,15 +2585,16 @@ fn bitmaps_menu(app: &mut App, ui: &mut Ui) {
     ) {
         app.edit_bitmap_externally();
     }
+    if item(ui, "menu.bitmaps.remove_background_local", "", has_bitmap) {
+        app.dialog = Dialog::RemoveBackground(Default::default());
+    }
     if item(ui, "menu.bitmaps.crop_bitmap", "", has_bitmap) {
         app.set_tool(crate::tools::Tool::Crop);
     }
     if item(ui, "menu.bitmaps.resample", "", has_bitmap) {
         app.open_resample();
     }
-    if item(ui, "menu.bitmaps.remove_background_local", "", has_bitmap) {
-        app.dialog = Dialog::RemoveBackground(Default::default());
-    }
+    sep(ui);
     // Black and white, duotone and paletted open their dialogs; the
     // others convert at once.
     sub(ui, "menu.bitmaps.mode", |ui| {
@@ -2711,10 +2721,6 @@ fn text_menu(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.text.text_statistics", "", true) {
         app.dialog = Dialog::TextStatistics;
     }
-    if item(ui, "menu.text.font_sampler", "", true) {
-        app.show_dockers = true;
-        app.docker_tab = DockerTab::FontSampler;
-    }
     sep(ui);
     // Vertical text, offered with a CJK interface language or for text
     // in those scripts (#257).
@@ -2726,9 +2732,6 @@ fn text_menu(app: &mut App, ui: &mut Ui) {
     }
     if item(ui, "menu.text.edit_text", "Ctrl+Shift+T", is_text) {
         app.edit_selected_text();
-    }
-    if item(ui, "menu.text.insert_placeholder_text", "", is_para) {
-        app.insert_placeholder_text();
     }
     sub(ui, "menu.text.insert_formatting_code", |ui| {
         for (key, code) in [
@@ -2801,9 +2804,6 @@ fn text_menu(app: &mut App, ui: &mut Ui) {
             app.set_edit_spans(spans);
         }
     }
-    if item(ui, "menu.text.custom_hyphens", "", true) {
-        app.dialog = Dialog::CustomHyphens(Default::default());
-    }
     sub(ui, "menu.text.writing_tools", |ui| {
         if item(ui, "menu.text.spell_check", "Ctrl+F12", true) {
             app.dialog =
@@ -2819,6 +2819,20 @@ fn text_menu(app: &mut App, ui: &mut Ui) {
         }
         if item(ui, "menu.text.autocorrect", "", true) {
             app.dialog = Dialog::Autocorrect(Default::default());
+        }
+        sep(ui);
+        if item(ui, "menu.text.custom_hyphens", "", true) {
+            app.dialog = Dialog::CustomHyphens(Default::default());
+        }
+        if item(ui, "menu.text.insert_placeholder_text", "", is_para) {
+            app.insert_placeholder_text();
+        }
+        if item(ui, "menu.text.font_sampler", "", true) {
+            app.show_dockers = true;
+            app.docker_tab = DockerTab::FontSampler;
+        }
+        if item(ui, "menu.tools.font_manager", "", true) {
+            app.dialog = Dialog::FontManager(Default::default());
         }
     });
     sep(ui);
@@ -3026,14 +3040,9 @@ fn tools_menu(app: &mut App, ui: &mut Ui) {
         if check(ui, "menu.tools.scripts_record", "", app.recording.is_some()) {
             app.toggle_recording();
         }
+        sep(ui);
+        sub(ui, "menu.tools.macros", |ui| macros_items(app, ui));
     });
-    sub(ui, "menu.tools.macros", |ui| macros_items(app, ui));
-    if item(ui, "menu.tools.font_manager", "", true) {
-        app.dialog = Dialog::FontManager(Default::default());
-    }
-    if item(ui, "menu.tools.border_and_grommet", "", true) {
-        app.dialog = Dialog::BorderGrommet(Default::default());
-    }
     sep(ui);
     let doc = app.has_document() && !app.show_welcome;
     if item(ui, "menu.tools.time_tracker", "", doc) {
@@ -3103,20 +3112,9 @@ fn window_menu(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.window.new_window", "", doc) {
         app.new_window();
     }
-    if item(ui, "menu.window.refresh_window", "Ctrl+W", true) {
-        app.raster.borrow_mut().invalidate();
-    }
-    if item(ui, "menu.window.close_window", "Ctrl+F4", true) {
-        app.close_document();
-    }
-    if item(ui, "menu.window.close_all", "", true) {
-        app.close_all_documents();
-    }
-    sep(ui);
     {
+        // Cascade as in the reference; tiling kept beside it.
         use crate::ui::windows::{set_layout, WindowLayout};
-        let has = app.has_document();
-        let arranged = app.window_layout != WindowLayout::Tabs;
         for (key, layout) in [
             ("menu.window.cascade", WindowLayout::Cascade),
             (
@@ -3125,91 +3123,13 @@ fn window_menu(app: &mut App, ui: &mut Ui) {
             ),
             ("menu.window.tile_vertically", WindowLayout::TileVertical),
         ] {
-            if item(ui, key, "", has) {
+            if item(ui, key, "", app.has_document()) {
                 app.show_welcome = false;
                 set_layout(app, layout);
             }
         }
-        for key in ["menu.window.combine_windows", "menu.window.dock_window"] {
-            if item(ui, key, "", arranged) {
-                set_layout(app, WindowLayout::Tabs);
-            }
-        }
     }
     sep(ui);
-    sub(ui, "menu.window.workspace", |ui| {
-        for (key, ws) in [
-            (
-                "menu.window.workspace_default",
-                crate::app::Workspace::Default,
-            ),
-            ("menu.window.workspace_lite", crate::app::Workspace::Lite),
-            (
-                "menu.window.workspace_classic",
-                crate::app::Workspace::Classic,
-            ),
-            (
-                "menu.window.workspace_illustration",
-                crate::app::Workspace::Illustration,
-            ),
-            (
-                "menu.window.workspace_page_layout",
-                crate::app::Workspace::PageLayout,
-            ),
-            ("menu.window.workspace_touch", crate::app::Workspace::Touch),
-        ] {
-            if check(ui, key, "", app.workspace == ws) {
-                app.set_workspace(ws);
-            }
-        }
-        sep(ui);
-        // Every part, whatever the options chose.
-        if item(ui, "menu.window.workspace_export", "", true) {
-            app.export_workspace_dialog(crate::workspace_file::WorkspaceParts::ALL);
-        }
-        if item(ui, "menu.window.workspace_import", "", true) {
-            app.import_workspace_dialog(crate::workspace_file::WorkspaceParts::ALL, true);
-        }
-    });
-    sep(ui);
-    sub(ui, "menu.window.dockers", |ui| {
-        let row = |ui: &mut Ui, app: &mut App, tab: DockerTab| {
-            if check(ui, tab.key(), tab.shortcut(), app.docker_shown(tab)) {
-                app.open_docker(tab);
-            }
-        };
-        for (i, group) in DockerTab::MENU_GROUPS.iter().enumerate() {
-            if i > 0 {
-                sep(ui);
-            }
-            for tab in group.iter() {
-                row(ui, app, *tab);
-            }
-            // The effect panels follow the text group, as a submenu.
-            if i == 5 {
-                sep(ui);
-                sub(ui, "menu.window.dockers_effects", |ui| {
-                    for tab in DockerTab::EFFECTS_MENU {
-                        row(ui, app, tab);
-                    }
-                });
-            }
-        }
-    });
-    if check(ui, "menu.effects.picker", "", app.effect_picker.open) {
-        app.effect_picker.open = !app.effect_picker.open;
-    }
-    sub(ui, "menu.window.toolbars", |ui| {
-        toolbars_list(app, ui);
-        sep(ui);
-        let locked = app.settings.bars.locked;
-        if check(ui, "bars.lock", "", locked) {
-            app.settings.bars.locked = !locked;
-        }
-        if item(ui, "bars.reset", "", true) {
-            crate::ui::bars::reset(app);
-        }
-    });
     sub(ui, "menu.window.color_palettes", |ui| {
         let entries: Vec<(usize, String, bool)> = app
             .palettes
@@ -3260,9 +3180,55 @@ fn window_menu(app: &mut App, ui: &mut Ui) {
             app.palette_from_selection();
         }
     });
+    sub(ui, "menu.window.dockers", |ui| {
+        let row = |ui: &mut Ui, app: &mut App, tab: DockerTab| {
+            if check(ui, tab.key(), tab.shortcut(), app.docker_shown(tab)) {
+                app.open_docker(tab);
+            }
+        };
+        for (i, group) in DockerTab::MENU_GROUPS.iter().enumerate() {
+            if i > 0 {
+                sep(ui);
+            }
+            for tab in group.iter() {
+                row(ui, app, *tab);
+            }
+            // The effect panels follow the text group, as a submenu.
+            if i == 5 {
+                sep(ui);
+                sub(ui, "menu.window.dockers_effects", |ui| {
+                    for tab in DockerTab::EFFECTS_MENU {
+                        row(ui, app, tab);
+                    }
+                });
+            }
+        }
+        sep(ui);
+        if check(ui, "menu.effects.picker", "", app.effect_picker.open) {
+            app.effect_picker.open = !app.effect_picker.open;
+        }
+    });
+    sub(ui, "menu.window.toolbars", |ui| {
+        toolbars_list(app, ui);
+        sep(ui);
+        let locked = app.settings.bars.locked;
+        if check(ui, "bars.lock", "", locked) {
+            app.settings.bars.locked = !locked;
+        }
+        if item(ui, "bars.reset", "", true) {
+            crate::ui::bars::reset(app);
+        }
+    });
     sep(ui);
-    if radio(ui, "menu.window.welcome_screen", "", app.show_welcome) {
-        app.show_welcome = true;
+    if item(ui, "menu.window.close_window", "Ctrl+F4", true) {
+        app.close_document();
+    }
+    if item(ui, "menu.window.close_all", "", true) {
+        app.close_all_documents();
+    }
+    sep(ui);
+    if item(ui, "menu.window.refresh_window", "Ctrl+W", true) {
+        app.raster.borrow_mut().invalidate();
     }
     // One entry per open drawing; a dot marks the one in front.
     for i in 0..app.docs.len() {
@@ -3273,24 +3239,63 @@ fn window_menu(app: &mut App, ui: &mut Ui) {
             app.switch_document(i);
         }
     }
+    sub(ui, "menu.window.workspace", |ui| {
+        for (key, ws) in [
+            (
+                "menu.window.workspace_default",
+                crate::app::Workspace::Default,
+            ),
+            ("menu.window.workspace_lite", crate::app::Workspace::Lite),
+            (
+                "menu.window.workspace_classic",
+                crate::app::Workspace::Classic,
+            ),
+            (
+                "menu.window.workspace_illustration",
+                crate::app::Workspace::Illustration,
+            ),
+            (
+                "menu.window.workspace_page_layout",
+                crate::app::Workspace::PageLayout,
+            ),
+            ("menu.window.workspace_touch", crate::app::Workspace::Touch),
+        ] {
+            if check(ui, key, "", app.workspace == ws) {
+                app.set_workspace(ws);
+            }
+        }
+        sep(ui);
+        // Every part, whatever the options chose.
+        if item(ui, "menu.window.workspace_export", "", true) {
+            app.export_workspace_dialog(crate::workspace_file::WorkspaceParts::ALL);
+        }
+        if item(ui, "menu.window.workspace_import", "", true) {
+            app.import_workspace_dialog(crate::workspace_file::WorkspaceParts::ALL, true);
+        }
+    });
 }
 
 fn help_menu(app: &mut App, ui: &mut Ui) {
-    if item(ui, "menu.help.help_topics", "", true) {
-        app.open_help(crate::help::HOME);
-    }
     // The page of the active docker, else of the active tool (F1).
     if item(ui, "menu.help.product_help", "F1", true) {
         let topic = crate::help::context_topic(app);
         app.open_help(topic);
     }
+    if item(ui, "menu.help.video_tutorials", "", true) {
+        app.show_welcome = true;
+        app.welcome_tab = crate::app::WelcomeTab::Learn;
+    }
+    if item(ui, "menu.help.quick_start_guide", "", true) {
+        app.show_welcome = true;
+        app.welcome_tab = crate::app::WelcomeTab::Learn;
+    }
     sep(ui);
     if item(ui, "menu.help.welcome_screen", "", true) {
         app.show_welcome = true;
     }
-    if item(ui, "menu.help.video_tutorials", "", true) {
-        app.show_welcome = true;
-        app.welcome_tab = crate::app::WelcomeTab::Learn;
+    if item(ui, "menu.help.message_settings", "", true) {
+        app.dialog = Dialog::Options;
+        app.options_page = crate::ui::dialogs::OptionsPage::General;
     }
     let hints_open = app.docker_shown(DockerTab::Hints);
     if check(ui, "menu.help.hints", "", hints_open) {
@@ -3300,35 +3305,18 @@ fn help_menu(app: &mut App, ui: &mut Ui) {
             app.open_docker(DockerTab::Hints);
         }
     }
-    if item(ui, "menu.help.quick_start_guide", "", true) {
-        app.show_welcome = true;
-        app.welcome_tab = crate::app::WelcomeTab::Learn;
-    }
-    if item(ui, "menu.help.user_guide", "", true) {
-        app.show_welcome = true;
-        app.welcome_tab = crate::app::WelcomeTab::Learn;
-    }
     sep(ui);
     if item(ui, "menu.help.whats_new", "", true) {
         app.show_welcome = true;
         app.welcome_tab = crate::app::WelcomeTab::News;
     }
-    if check(
-        ui,
-        "menu.help.highlight_whats_new",
-        "",
-        app.highlight_whats_new,
-    ) {
-        app.highlight_whats_new = !app.highlight_whats_new;
-    }
-    sep(ui);
-    if item(ui, "menu.help.message_settings", "", true) {
-        app.dialog = Dialog::Options;
-        app.options_page = crate::ui::dialogs::OptionsPage::General;
-    }
     sep(ui);
     if item(ui, "menu.help.about", "", true) {
         app.dialog = Dialog::About;
+    }
+    sep(ui);
+    if item(ui, "menu.help.user_guide", "", true) {
+        app.open_help(crate::help::HOME);
     }
 }
 

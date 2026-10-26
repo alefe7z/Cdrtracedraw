@@ -677,7 +677,7 @@ desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
 - Debug.Print lines go to the Scripts panel's output.
 - While a macro runs, after a moment a notice at the bottom says so with
   a Stop button. Stop, Esc (with no message or modal form open) and
-  Tools > Macros > Stop Macro end it at its next statement (a loop
+  Tools > Scripts > Macros > Stop Macro end it at its next statement (a loop
   checks every 256 statements), also while it waits for a message or a
   form. What it changed until then stays, as one undo step, and the
   status line says it was stopped.
@@ -728,13 +728,13 @@ desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
 
 ### Macro Manager
 
-- Tools > Macros > Macro Manager opens a docker (also in Window >
+- Tools > Scripts > Macros > Macro Manager opens a docker (also in Window >
   Panels) with the loaded projects as a tree: each project, its modules
   with their kind (module, class, form, document), and each module's
   macros (public Subs without arguments).
 - A padlock marks a password-protected project (its code is still
   read) and modules saved without their code, which cannot run.
-- Load... (Tools > Macros > Load Macro Project...) takes a `.gms`
+- Load... (Tools > Scripts > Macros > Load Macro Project...) takes a `.gms`
   project, or `.bas`, `.cls` and `.frm` modules (the `.frx` beside a
   `.frm` comes along) that become one project. A copy is kept in the
   `macros` folder of the settings folder, and every copy there loads
@@ -751,10 +751,10 @@ desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
   FileCopy, Dir...), Shell, objects other than `Scripting.Dictionary`
   given to CreateObject, modules without code, and protection. A "!"
   beside the project shows them too.
-- Tools > Macros > Run Macro... (Alt+Shift+F8; Alt+F8 stays the Transformations panel's Rotate) lists every macro of every
+- Tools > Scripts > Macros > Run Macro... (Alt+Shift+F8; Alt+F8 stays the Transformations panel's Rotate) lists every macro of every
   project as "Project > Module.Macro" with a search field; Run, Edit,
   Cancel; Enter runs the chosen one.
-- Tools > Macros also lists each project as a submenu of its macros.
+- Tools > Scripts > Macros also lists each project as a submenu of its macros.
   These are commands: Options > Customization > Commands has them under
   the Macros category (and under Tools), so each macro can get a
   shortcut key. The app has no toolbar editing for any command, so
@@ -762,7 +762,7 @@ desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
 
 ### Macro Editor
 
-- Tools > Macros > Macro Editor... (Alt+F11) opens a window on the
+- Tools > Scripts > Macros > Macro Editor... (Alt+F11) opens a window on the
   chosen project (the first one, or a new "Macros" project with a sample
   module when none is loaded): the modules on the left, the code on
   the right with line numbers and VBA colouring (keywords, comments,

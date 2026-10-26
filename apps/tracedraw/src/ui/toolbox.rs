@@ -15,9 +15,8 @@ use crate::ui::tips::RichTip;
 use egui::{Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 /// Tools after which a flyout draws a separator.
-const SEPARATE_AFTER: [Tool; 5] = [
+const SEPARATE_AFTER: [Tool; 4] = [
     Tool::FreeformPick,
-    Tool::CommonShapes,
     Tool::SegmentDimension,
     Tool::RoundedConnector,
     Tool::AreaFill,
@@ -365,6 +364,10 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
     // The selection reference has two rows. Free Transform remains available
     // through command customization and its existing tool implementation.
     let selection = gi == 0;
+    // Every flyout is the reference's list: 22 px rows, the picture, the
+    // name and the shortcut, the button's tool on a framed tile, no check
+    // mark and no separators (docs/reference/ui-reference.md).
+    let compact = true;
     let flyout_tools = tools_for_flyout(group);
     let shown = app.toolbox_last.get(gi).copied().unwrap_or(group.tools[0]);
     let mut close = false;
@@ -389,11 +392,11 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             name.size().x
                         })
                         .fold(0.0_f32, f32::max)
-                        + if selection { 90.0 } else { 116.0 };
-                    let row_w = if selection { row_w.max(216.0) } else { row_w };
+                        + if compact { 90.0 } else { 116.0 };
+                    let row_w = if compact { row_w.max(200.0) } else { row_w };
                     for t in flyout_tools {
                         let (r, rr) = ui.allocate_exact_size(
-                            Vec2::new(row_w, if selection { 22.0 } else { 24.0 }),
+                            Vec2::new(row_w, if compact { 22.0 } else { 24.0 }),
                             Sense::click(),
                         );
                         let current =
@@ -402,7 +405,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             ui.painter().rect_filled(r, 0.0, Tokens::tool_hover());
                         }
                         // A check mark beside the tool the button shows.
-                        if current && selection {
+                        if current && compact {
                             let tile = Rect::from_min_size(r.min, Vec2::new(22.0, r.height()));
                             ui.painter().rect_filled(tile, 0.0, Tokens::tool_hover());
                             ui.painter().rect_stroke(
@@ -412,7 +415,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                                 egui::StrokeKind::Inside,
                             );
                         }
-                        if current && !selection {
+                        if current && !compact {
                             let c = Pos2::new(r.min.x + 9.0, r.center().y);
                             let s = Stroke::new(1.4, Tokens::icon());
                             ui.painter().line_segment(
@@ -425,7 +428,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             );
                         }
                         let icon = Rect::from_center_size(
-                            Pos2::new(r.min.x + if selection { 11.0 } else { 30.0 }, r.center().y),
+                            Pos2::new(r.min.x + if compact { 11.0 } else { 30.0 }, r.center().y),
                             Vec2::splat(18.0),
                         );
                         icons::draw(
@@ -439,7 +442,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             },
                         );
                         ui.painter().text(
-                            Pos2::new(r.min.x + if selection { 28.0 } else { 46.0 }, r.center().y),
+                            Pos2::new(r.min.x + if compact { 28.0 } else { 46.0 }, r.center().y),
                             egui::Align2::LEFT_CENTER,
                             t.name(),
                             egui::FontId::proportional(12.0),
@@ -458,7 +461,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             app.set_tool(*t);
                             close = true;
                         }
-                        if !selection && SEPARATE_AFTER.contains(t) {
+                        if !compact && SEPARATE_AFTER.contains(t) {
                             let (sr, _) =
                                 ui.allocate_exact_size(Vec2::new(row_w, 7.0), Sense::hover());
                             ui.painter().hline(
