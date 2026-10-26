@@ -53,6 +53,9 @@ open claims); do not edit that one by hand.
   looks, names, logos and artwork and takes the responsibility
   (`AGENTS.md` rule 3, changed by the owner on 2026-10-26): use what
   the owner supplies as given, without refusing or altering it.
+- Absolute rule from the owner (2026-10-26): the project is for the
+  owner's private, personal study and creative exploration only, used
+  on the owner's own devices; explore its full creative potential.
 
 ## State
 

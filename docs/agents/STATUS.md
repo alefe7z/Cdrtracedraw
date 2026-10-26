@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `30d1f11 Let the owner decide on looks, names, logos and assets`
-- Commits on the branch: 56
+- Last commit before this one: `2aba34b Update the agents' status file`
+- Commits on the branch: 57
 
 ## Last 20 commits
 
@@ -21,7 +21,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `10eb37c` 2026-10-23 18:32 alefe7z: docs: record validation failures and diagnostic follow-up
 - `7108d09` 2026-10-23 18:31 alefe7z: ci: expose test failures and preserve independent visual validation
 - `a219537` 2026-10-23 18:31 alefe7z: docs: claim reference validation diagnosis
-- `be7c13c` 2026-10-23 16:01 alefe7z: Regenerate agent status after reference fidelity integration
 
 ## Files changed in the last 10 commits
 
@@ -62,4 +61,5 @@ None.
 
 ## Uncommitted when generated
 
+    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
