@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `eb53c61 Update the agents' status file`
-- Commits on the branch: 49
+- Last commit before this one: `7232ea0 Lay out the menus and toolbox flyouts after the second reference`
+- Commits on the branch: 50
 
 ## Last 20 commits
 
+- `7232ea0` 2026-10-26 19:15 Claude: Lay out the menus and toolbox flyouts after the second reference
 - `f969640` 2026-10-26 18:56 Claude: Claim the menus and flyouts after the second reference
 - `8c90865` 2026-10-26 18:34 Claude: Redo the Properties docker after the owner's reference
 - `dcbd80a` 2026-10-26 18:10 Claude: Claim the Properties docker redesign
@@ -24,40 +25,39 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `6188313` 2026-10-23 15:56 alefe7z: Bound dependency setup and polish reference panel compatibility
 - `71cf241` 2026-10-23 15:50 alefe7z: Complete reference catalog panels and dedicated vector pictograms
 - `04d7889` 2026-10-23 15:37 alefe7z: Claim reference fidelity and missing panel integration task
-- `ded3c6a` 2026-10-23 15:28 alefe7z: Regenerate shared agent status after the docker catalog change
 
 ## Files changed in the last 10 commits
 
 - `docs/agents/CONTEXT.md` (5)
-- `docs/features.md` (2)
+- `docs/features.md` (3)
+- `apps/tracedraw/lang/zh-TW.toml` (3)
+- `apps/tracedraw/lang/zh-CN.toml` (3)
+- `apps/tracedraw/lang/tr.toml` (3)
+- `apps/tracedraw/lang/ru.toml` (3)
+- `apps/tracedraw/lang/pt-BR.toml` (3)
+- `apps/tracedraw/lang/pl.toml` (3)
+- `apps/tracedraw/lang/nl.toml` (3)
+- `apps/tracedraw/lang/ja.toml` (3)
+- `apps/tracedraw/lang/it.toml` (3)
+- `apps/tracedraw/lang/id.toml` (3)
+- `apps/tracedraw/lang/hi.toml` (3)
+- `apps/tracedraw/lang/fr.toml` (3)
+- `apps/tracedraw/lang/es.toml` (3)
+- `apps/tracedraw/lang/en.toml` (3)
+- `apps/tracedraw/lang/de.toml` (3)
+- `apps/tracedraw/lang/cs.toml` (3)
+- `apps/tracedraw/lang/bn.toml` (3)
+- `apps/tracedraw/lang/ar.toml` (3)
 - `apps/tracedraw/src/ui/mod.rs` (2)
 - `apps/tracedraw/src/ui/dockers.rs` (2)
-- `apps/tracedraw/lang/zh-TW.toml` (2)
-- `apps/tracedraw/lang/zh-CN.toml` (2)
-- `apps/tracedraw/lang/tr.toml` (2)
-- `apps/tracedraw/lang/ru.toml` (2)
-- `apps/tracedraw/lang/pt-BR.toml` (2)
-- `apps/tracedraw/lang/pl.toml` (2)
-- `apps/tracedraw/lang/nl.toml` (2)
-- `apps/tracedraw/lang/ja.toml` (2)
-- `apps/tracedraw/lang/it.toml` (2)
-- `apps/tracedraw/lang/id.toml` (2)
-- `apps/tracedraw/lang/hi.toml` (2)
-- `apps/tracedraw/lang/fr.toml` (2)
-- `apps/tracedraw/lang/es.toml` (2)
-- `apps/tracedraw/lang/en.toml` (2)
-- `apps/tracedraw/lang/de.toml` (2)
-- `apps/tracedraw/lang/cs.toml` (2)
-- `apps/tracedraw/lang/bn.toml` (2)
-- `apps/tracedraw/lang/ar.toml` (2)
+- `docs/reference/ui-reference.md` (1)
+- `docs/guide/selecting-and-transforming.md` (1)
 - `docs/behavior/workspaces.md` (1)
-- `apps/tracedraw/src/ui/toolbar.rs` (1)
-- `apps/tracedraw/src/ui/properties_docker.rs` (1)
-- `apps/tracedraw/src/ui/docker_panels.rs` (1)
-- `apps/tracedraw/src/ui/docker_icons.rs` (1)
-- `apps/tracedraw/src/ui/docker_catalog.rs` (1)
-- `apps/tracedraw/src/ui/color_picker.rs` (1)
-- `apps/tracedraw/src/settings.rs` (1)
+- `docs/behavior/vba.md` (1)
+- `docs/behavior/transformations.md` (1)
+- `docs/behavior/shortcuts.md` (1)
+- `docs/behavior/help.md` (1)
+- `docs/behavior/font-manager.md` (1)
 
 ## Open claims (from CONTEXT.md)
 
@@ -65,35 +65,4 @@ None.
 
 ## Uncommitted when generated
 
-    M  apps/tracedraw/lang/ar.toml
-    M  apps/tracedraw/lang/bn.toml
-    M  apps/tracedraw/lang/cs.toml
-    M  apps/tracedraw/lang/de.toml
-    M  apps/tracedraw/lang/en.toml
-    M  apps/tracedraw/lang/es.toml
-    M  apps/tracedraw/lang/fr.toml
-    M  apps/tracedraw/lang/hi.toml
-    M  apps/tracedraw/lang/id.toml
-    M  apps/tracedraw/lang/it.toml
-    M  apps/tracedraw/lang/ja.toml
-    M  apps/tracedraw/lang/nl.toml
-    M  apps/tracedraw/lang/pl.toml
-    M  apps/tracedraw/lang/pt-BR.toml
-    M  apps/tracedraw/lang/ru.toml
-    M  apps/tracedraw/lang/tr.toml
-    M  apps/tracedraw/lang/zh-CN.toml
-    M  apps/tracedraw/lang/zh-TW.toml
-    M  apps/tracedraw/src/tools.rs
-    M  apps/tracedraw/src/ui/menus.rs
-    M  apps/tracedraw/src/ui/toolbox.rs
-    M  docs/agents/CONTEXT.md
-    M  docs/behavior/border-and-grommet.md
-    M  docs/behavior/font-manager.md
-    M  docs/behavior/help.md
-    M  docs/behavior/shortcuts.md
-    M  docs/behavior/transformations.md
-    M  docs/behavior/vba.md
-    M  docs/features.md
-    M  docs/guide/selecting-and-transforming.md
-    A  docs/reference/ui-reference.md
     ?? docs/agents/STATUS.md.tmp
