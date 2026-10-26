@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `2aba34b Update the agents' status file`
-- Commits on the branch: 57
+- Last commit before this one: `ede9ac0 Record the owner's rule on private, personal use`
+- Commits on the branch: 58
 
 ## Last 20 commits
 
+- `ede9ac0` 2026-10-26 21:03 Claude: Record the owner's rule on private, personal use
 - `30d1f11` 2026-10-26 21:01 Claude: Let the owner decide on looks, names, logos and assets
 - `113d894` 2026-10-26 20:14 Claude: Lay out Tools > Options after the third reference video
 - `a97825d` 2026-10-26 19:40 Claude: Claim the Options dialog after the third reference
@@ -20,7 +21,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `cedcca9` 2026-10-23 23:19 Claude: Restore the language files and the features list
 - `10eb37c` 2026-10-23 18:32 alefe7z: docs: record validation failures and diagnostic follow-up
 - `7108d09` 2026-10-23 18:31 alefe7z: ci: expose test failures and preserve independent visual validation
-- `a219537` 2026-10-23 18:31 alefe7z: docs: claim reference validation diagnosis
 
 ## Files changed in the last 10 commits
 
@@ -61,5 +61,4 @@ None.
 
 ## Uncommitted when generated
 
-    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
