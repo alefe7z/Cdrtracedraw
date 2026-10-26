@@ -510,6 +510,11 @@ fn docker_page(app: &mut App, ui: &mut Ui, tab: DockerTab) {
         crate::ui::hints::hints_docker(app, ui);
         return;
     }
+    // Properties keeps its section buttons above what scrolls.
+    if tab == DockerTab::Properties {
+        crate::ui::properties_docker::show(app, ui);
+        return;
+    }
     // Objects keeps its New Layer and Delete bar under the tree.
     if tab == DockerTab::Objects {
         crate::ui::objects_docker::objects_docker(app, ui);
@@ -518,8 +523,7 @@ fn docker_page(app: &mut App, ui: &mut Ui, tab: DockerTab) {
     egui::ScrollArea::vertical()
         .id_salt(("docker_scroll", tab.key()))
         .show(ui, |ui| match tab {
-            DockerTab::Properties => properties(app, ui),
-            DockerTab::Hints | DockerTab::Objects => {}
+            DockerTab::Properties | DockerTab::Hints | DockerTab::Objects => {}
             DockerTab::Transformations => crate::ui::transform_docker::transformations(app, ui),
             DockerTab::Undo => undo_docker(app, ui),
             DockerTab::LiveGuides
@@ -572,7 +576,7 @@ fn set_extra_paint(app: &mut App, fills: Vec<Fill>, strokes: Vec<tracedraw_core:
 
 /// The further fills of the selection (the first object's): each with
 /// its editor and a cross; Add Fill puts a copy of the fill on top.
-fn extra_fills(app: &mut App, ui: &mut Ui, first: &tracedraw_core::Shape) {
+pub(crate) fn extra_fills(app: &mut App, ui: &mut Ui, first: &tracedraw_core::Shape) {
     let mut fills = first.extra_fills.clone();
     let mut changed = false;
     let mut remove = None;
@@ -611,7 +615,7 @@ fn extra_fills(app: &mut App, ui: &mut Ui, first: &tracedraw_core::Shape) {
 }
 
 /// The further outlines of the selection, as [`extra_fills`].
-fn extra_strokes(app: &mut App, ui: &mut Ui, first: &tracedraw_core::Shape) {
+pub(crate) fn extra_strokes(app: &mut App, ui: &mut Ui, first: &tracedraw_core::Shape) {
     let mut strokes = first.extra_strokes.clone();
     let custom = crate::ui::line_style::OutlineLib::of(app);
     let mut changed = false;
@@ -662,258 +666,8 @@ fn extra_strokes(app: &mut App, ui: &mut Ui, first: &tracedraw_core::Shape) {
 
 /// Where the fill editors find the current colours (see
 /// `App::current_colors`).
-fn current_colors_id() -> egui::Id {
+pub(crate) fn current_colors_id() -> egui::Id {
     egui::Id::new("fill_editor_current_colors")
-}
-
-fn properties(app: &mut App, ui: &mut Ui) {
-    let cc = app.current_colors;
-    ui.data_mut(|d| d.insert_temp(current_colors_id(), cc));
-    let shapes = app.selected_shapes();
-    if shapes.is_empty() {
-        ui.label(egui::RichText::new(tr("docker.no_objects_selected")).color(Tokens::text_dim()));
-        ui.add_space(6.0);
-        ui.strong(tr("docker.default_properties"));
-        let mut fill = app.default_fill();
-        if fill_editor(ui, &mut fill) {
-            app.set_default_properties(tracedraw_core::DefaultKind::Graphic, |p| p.fill = fill);
-        }
-        ui.separator();
-        let mut stroke = app.default_stroke();
-        let custom = crate::ui::line_style::OutlineLib::of(app);
-        if outline_editor(ui, &mut stroke, &custom) {
-            app.set_default_properties(tracedraw_core::DefaultKind::Graphic, |p| p.stroke = stroke);
-        }
-        return;
-    }
-    let first = &shapes[0];
-    ui.strong(format!(
-        "{}{}",
-        kind_name(&first.kind),
-        if shapes.len() > 1 {
-            trf(
-                "docker.and_n_more",
-                &[("n", &(shapes.len() - 1).to_string())],
-            )
-        } else {
-            String::new()
-        }
-    ));
-    let b = app.selection_bounds().unwrap_or_default();
-    let o = app.to_ruler(tracedraw_core::geometry::Point::new(b.x0, b.y0));
-    ui.label(
-        egui::RichText::new(format!(
-            "x {:.2}  y {:.2}  w {:.2}  h {:.2} {}",
-            app.units.world_from_mm(o.x),
-            app.units.world_from_mm(o.y),
-            app.units.world_from_mm(b.width()),
-            app.units.world_from_mm(b.height()),
-            app.units.short()
-        ))
-        .monospace()
-        .size(11.0),
-    );
-
-    ui.separator();
-    // A jump from elsewhere (F11 to the fill, the outline from the status
-    // bar) opens that section.
-    if let Some(i) = app.properties_open.take() {
-        let id = if i == 0 { "fill" } else { "outline" };
-        app.settings.properties_closed.retain(|c| c != id);
-    }
-    // The sections this object has, in the docker's order, with the
-    // buttons that open and close them.
-    let mut sections: Vec<(&'static str, &'static str, SectionIcon)> = Vec::new();
-    // A QR code object's own settings come first.
-    if first.qr.is_some() {
-        sections.push(("qr", "qr.section", SectionIcon::Qr));
-    }
-    sections.extend([
-        (
-            "outline",
-            "docker.outline",
-            SectionIcon::Tool(crate::tools::Tool::OutlinePen),
-        ),
-        (
-            "fill",
-            "docker.fill",
-            SectionIcon::Tool(crate::tools::Tool::InteractiveFill),
-        ),
-        (
-            "transparency",
-            "docker.transparency",
-            SectionIcon::Tool(crate::tools::Tool::Transparency),
-        ),
-    ]);
-    let corners = first.page_corners();
-    if corners.is_some() {
-        sections.push((
-            "corners",
-            "kind.rectangle",
-            SectionIcon::Tool(crate::tools::Tool::Rectangle),
-        ));
-    }
-    // Bitmap effects: a bitmap's, or a vector object's.
-    sections.push(("effects", "docker.fx", SectionIcon::Effects));
-    if matches!(first.kind, ShapeKind::Text { .. }) {
-        sections.push((
-            "character",
-            "docker.character",
-            SectionIcon::Tool(crate::tools::Tool::Text),
-        ));
-    }
-    sections.push(("summary", "docker.summary", SectionIcon::Summary));
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        for (id, key, icon) in &sections {
-            let open = !app.settings.properties_closed.iter().any(|c| c == id);
-            let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
-            let fill = if open {
-                Some(Tokens::tool_active())
-            } else if resp.hovered() {
-                Some(Tokens::tool_hover())
-            } else {
-                None
-            };
-            if let Some(c) = fill {
-                ui.painter().rect_filled(rect, 2.0, c);
-            }
-            icon.paint(
-                ui.painter(),
-                egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 18.0)),
-            );
-            if resp.on_hover_text(tr(key)).clicked() {
-                toggle_section(app, id);
-            }
-        }
-    });
-    ui.add_space(2.0);
-    for (id, key, _) in sections {
-        if !section_header(app, ui, id, &tr(key)) {
-            continue;
-        }
-        ui.add_space(2.0);
-        match id {
-            "qr" => {
-                if let Some(qr) = &first.qr {
-                    qr_section(app, ui, first.id, qr);
-                }
-            }
-            "outline" if app.text_selection_active() => {
-                // Characters selected in the text being edited: their own
-                // outline, and an edit goes to them alone.
-                let old = app.text_selection_stroke().unwrap_or(None);
-                let mut stroke = old.clone();
-                let custom = crate::ui::line_style::OutlineLib::of(app);
-                if outline_editor(ui, &mut stroke, &custom) {
-                    app.text_apply_outline(stroke);
-                }
-            }
-            "outline" => {
-                // A group shows what is inside it; values that differ
-                // across the selection show as mixed, and an edit changes
-                // only what was edited on each object.
-                let base = app.paint_targets().into_iter().next();
-                let old = base
-                    .as_ref()
-                    .map_or(first.stroke.clone(), |b| b.stroke.clone());
-                let mix = app.selection_stroke_mix();
-                let mut stroke = old.clone();
-                let custom = crate::ui::line_style::OutlineLib::of(app);
-                let mut touched = Vec::new();
-                if outline_editor_mixed(ui, &mut stroke, &custom, &mix, &mut touched) {
-                    // Dragging in the picker (or a slider): one step, and
-                    // a new colour joins the document palette on release.
-                    let live = app.live_stroke.is_some() || ui.input(|i| i.pointer.any_down());
-                    if live {
-                        app.patch_selection_stroke_live(&old, &stroke, &touched);
-                    } else {
-                        app.patch_selection_stroke(&old, &stroke, &touched);
-                    }
-                }
-                extra_strokes(app, ui, first);
-            }
-            "fill" if app.text_selection_active() => {
-                // Characters selected in the text being edited: their own
-                // fill, and an edit goes to them alone.
-                let old = app.text_selection_fill().unwrap_or(Fill::None);
-                let mut fill = old.clone();
-                if fill_editor(ui, &mut fill) {
-                    app.text_apply_fill(fill);
-                }
-            }
-            "fill" => {
-                let base = app.paint_targets().into_iter().next();
-                let old = base.as_ref().map_or(first.fill.clone(), |b| b.fill.clone());
-                let mix = app.selection_fill_mix();
-                let mut fill = old.clone();
-                let mut touched = Vec::new();
-                if fill_editor_mixed(ui, &mut fill, &mix, &mut touched) {
-                    // Dragging in the picker: one step, and the colour
-                    // joins the document palette on release.
-                    let live = app.live_fill.is_some() || ui.input(|i| i.pointer.any_down());
-                    if live && !matches!(fill, Fill::Fountain(_)) {
-                        app.apply_fill_live(fill);
-                    } else {
-                        app.patch_selection_fill(&old, &fill, &touched);
-                    }
-                }
-                extra_fills(app, ui, first);
-            }
-            "transparency" => {
-                crate::ui::toolbar::transparency_section(app, ui);
-            }
-            "corners" => {
-                if let Some(c) = corners {
-                    rectangle_section(app, ui, c);
-                }
-            }
-            "effects" => {
-                let id = first.id;
-                crate::ui::effect_dialog::fx_section(app, ui, id);
-            }
-            "character" => {
-                if let ShapeKind::Text { spans, .. } = &first.kind {
-                    // The selected characters' span while text is edited,
-                    // else the first span.
-                    let chosen = app.text_selection_span();
-                    if let Some(sp) = chosen.as_ref().or(spans.first()) {
-                        ui.label(format!(
-                            "{} {} pt{}{}",
-                            sp.font_family,
-                            sp.size_pt,
-                            if sp.bold {
-                                format!(" {}", tr("docker.bold"))
-                            } else {
-                                String::new()
-                            },
-                            if sp.italic {
-                                format!(" {}", tr("docker.italic"))
-                            } else {
-                                String::new()
-                            }
-                        ));
-                    }
-                    ui.label(
-                        egui::RichText::new(tr("docker.edit_with_text_tool"))
-                            .color(Tokens::text_dim())
-                            .size(11.0),
-                    );
-                }
-            }
-            _ => {
-                for s in &shapes {
-                    ui.label(format!(
-                        "{}  id {}  {}",
-                        kind_name(&s.kind),
-                        s.id.raw(),
-                        s.name.clone().unwrap_or_default()
-                    ));
-                }
-            }
-        }
-        ui.add_space(6.0);
-    }
 }
 
 /// The QR Code section of Properties: the kind of content and its
@@ -921,7 +675,7 @@ fn properties(app: &mut App, ui: &mut Ui) {
 /// outline, the pixel size, and Validate. Each change makes the code again
 /// (one undo step); content that cannot be encoded is shown in red and
 /// changes nothing.
-fn qr_section(
+pub(crate) fn qr_section(
     app: &mut App,
     ui: &mut Ui,
     id: tracedraw_core::ShapeId,
@@ -1062,7 +816,7 @@ fn qr_kind_key(k: tracedraw_core::QrKind) -> &'static str {
 
 /// The picture on a Properties section's button.
 #[derive(Debug, Clone, Copy)]
-enum SectionIcon {
+pub(crate) enum SectionIcon {
     Tool(crate::tools::Tool),
     Effects,
     Summary,
@@ -1070,7 +824,7 @@ enum SectionIcon {
 }
 
 impl SectionIcon {
-    fn paint(self, painter: &egui::Painter, r: egui::Rect) {
+    pub(crate) fn paint(self, painter: &egui::Painter, r: egui::Rect) {
         match self {
             SectionIcon::Tool(t) => crate::ui::icons::draw(painter, r, t, Tokens::icon()),
             SectionIcon::Effects => {
@@ -1119,65 +873,10 @@ impl SectionIcon {
     }
 }
 
-/// Open or close a Properties section (kept in the preferences).
-fn toggle_section(app: &mut App, id: &str) {
-    let closed = &mut app.settings.properties_closed;
-    if closed.iter().any(|c| c == id) {
-        closed.retain(|c| c != id);
-    } else {
-        closed.push(id.to_string());
-    }
-}
-
-/// A Properties section's header: a bar with the open or closed triangle
-/// and the title; a click opens or closes the section. True when open.
-fn section_header(app: &mut App, ui: &mut Ui, id: &str, title: &str) -> bool {
-    let open = !app.settings.properties_closed.iter().any(|c| c == id);
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
-    let fill = if resp.hovered() {
-        Tokens::tool_hover()
-    } else {
-        crate::theme::Tokens::control_fill()
-    };
-    ui.painter().rect_filled(rect, 2.0, fill);
-    let c = egui::pos2(rect.left() + 10.0, rect.center().y);
-    let points = if open {
-        vec![
-            c + egui::vec2(-4.0, -2.0),
-            c + egui::vec2(4.0, -2.0),
-            c + egui::vec2(0.0, 3.0),
-        ]
-    } else {
-        vec![
-            c + egui::vec2(-2.0, -4.0),
-            c + egui::vec2(3.0, 0.0),
-            c + egui::vec2(-2.0, 4.0),
-        ]
-    };
-    ui.painter().add(egui::epaint::PathShape::convex_polygon(
-        points,
-        Tokens::icon(),
-        egui::Stroke::NONE,
-    ));
-    ui.painter().text(
-        egui::pos2(rect.left() + 20.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        title,
-        crate::theme::bold(12.5),
-        Tokens::text(),
-    );
-    if resp.clicked() {
-        toggle_section(app, id);
-        return !open;
-    }
-    open
-}
-
 /// The Properties docker's rectangle part: corner style, the four corner
 /// sizes, editing them together and relative corner scaling, as on the
 /// property bar.
-fn rectangle_section(app: &mut App, ui: &mut Ui, c: tracedraw_core::Corners) {
+pub(crate) fn rectangle_section(app: &mut App, ui: &mut Ui, c: tracedraw_core::Corners) {
     use crate::ui::propbar::{edit_corners, CornerEdit};
     use tracedraw_core::{CornerKind, Corners};
     let mut edit = None;
@@ -1356,7 +1055,7 @@ fn fill_editor(ui: &mut Ui, fill: &mut Fill) -> bool {
 /// until one is picked), a uniform colour that differs shows no colour.
 /// A choice that equals the value shown still applies to every object:
 /// it is added to `touched`.
-fn fill_editor_mixed(
+pub(crate) fn fill_editor_mixed(
     ui: &mut Ui,
     fill: &mut Fill,
     mix: &FillMix,
@@ -1903,7 +1602,7 @@ fn texture_editor(ui: &mut Ui, t: &mut Texture) -> bool {
     changed
 }
 
-fn arrow_combo(
+pub(crate) fn arrow_combo(
     ui: &mut Ui,
     id: &str,
     label: &str,
@@ -1943,7 +1642,7 @@ fn arrow_combo(
 
 /// An outline's paint as a fill: its own fill, or its colour as a
 /// uniform fill.
-fn outline_paint_of(s: &Stroke) -> Fill {
+pub(crate) fn outline_paint_of(s: &Stroke) -> Fill {
     match s.fill.as_deref() {
         Some(f) if !matches!(f, Fill::None | Fill::Solid(_)) => f.clone(),
         _ => Fill::Solid(s.color),
@@ -1953,7 +1652,7 @@ fn outline_paint_of(s: &Stroke) -> Fill {
 /// Give an outline the paint chosen in its fill editor: a uniform paint
 /// becomes its colour, the other kinds its own fill. True when the
 /// paint is none (the outline goes).
-fn set_outline_paint(s: &mut Stroke, paint: Fill) -> bool {
+pub(crate) fn set_outline_paint(s: &mut Stroke, paint: Fill) -> bool {
     match paint {
         Fill::None => true,
         Fill::Solid(c) => {
@@ -2976,11 +2675,11 @@ mod tests {
         app.docker_tab = DockerTab::Properties;
         assert!(app.settings.properties_closed.is_empty());
         draw(&ctx, &mut app);
-        toggle_section(&mut app, "fill");
-        toggle_section(&mut app, "transparency");
+        crate::ui::properties_docker::toggle_section(&mut app, "fill");
+        crate::ui::properties_docker::toggle_section(&mut app, "transparency");
         assert_eq!(app.settings.properties_closed, ["fill", "transparency"]);
         draw(&ctx, &mut app);
-        toggle_section(&mut app, "transparency");
+        crate::ui::properties_docker::toggle_section(&mut app, "transparency");
         assert_eq!(app.settings.properties_closed, ["fill"]);
         // F11 (the fill) opens the fill section again.
         app.properties_open = Some(0);

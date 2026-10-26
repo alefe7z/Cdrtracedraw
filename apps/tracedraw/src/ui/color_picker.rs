@@ -87,9 +87,43 @@ pub fn from_viewer(h: f32, s: f32, b: f32, model: &str) -> Color {
 
 /// A colour swatch that opens the picker. True when the colour changed.
 pub fn color_button(ui: &mut Ui, c: &mut Color) -> bool {
-    let (swatch, resp) = ui.allocate_exact_size(Vec2::new(40.0, 18.0), Sense::click());
+    color_button_sized(ui, c, Vec2::new(40.0, 18.0), false)
+}
+
+/// [`color_button`] of `size`; with `arrow`, a list's frame with the
+/// swatch and a down arrow (the Properties docker's outline colour).
+pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -> bool {
+    let (frame, resp) = ui.allocate_exact_size(size, Sense::click());
     let id = resp.id.with("color_picker");
     let [r, g, b] = c.to_rgb8();
+    let swatch = if arrow {
+        ui.painter().rect(
+            frame,
+            3.0,
+            if resp.hovered() {
+                Tokens::tool_hover()
+            } else {
+                Tokens::control_fill()
+            },
+            Stroke::new(1.0, Tokens::control_border()),
+            egui::StrokeKind::Inside,
+        );
+        let a = egui::pos2(frame.right() - 11.0, frame.center().y);
+        ui.painter().line_segment(
+            [a + Vec2::new(-4.0, -2.0), a + Vec2::new(0.0, 2.0)],
+            Stroke::new(1.3, Tokens::icon()),
+        );
+        ui.painter().line_segment(
+            [a + Vec2::new(0.0, 2.0), a + Vec2::new(4.0, -2.0)],
+            Stroke::new(1.3, Tokens::icon()),
+        );
+        Rect::from_min_max(
+            frame.min + Vec2::new(4.0, 4.0),
+            egui::pos2(frame.right() - 22.0, frame.bottom() - 4.0),
+        )
+    } else {
+        frame
+    };
     ui.painter()
         .rect_filled(swatch.shrink(1.0), 2.0, Color32::from_rgb(r, g, b));
     ui.painter().rect_stroke(

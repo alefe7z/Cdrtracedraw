@@ -70,6 +70,7 @@ pub mod preview;
 pub mod print_dialog;
 pub mod print_preview;
 pub mod propbar;
+pub mod properties_docker;
 pub mod publish_pdf;
 pub mod rulers;
 pub mod save_as;

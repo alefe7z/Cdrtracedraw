@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `dcbd80a Claim the Properties docker redesign`
-- Commits on the branch: 44
+- Last commit before this one: `0979855 Update the agents' status file`
+- Commits on the branch: 45
 
 ## Last 20 commits
 
@@ -30,7 +30,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 ## Files changed in the last 10 commits
 
 - `docs/agents/CONTEXT.md` (5)
-- `.github/workflows/reference-validation.yml` (2)
 - `docs/features.md` (1)
 - `apps/tracedraw/src/ui/mod.rs` (1)
 - `apps/tracedraw/src/ui/dockers.rs` (1)
@@ -59,13 +58,38 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `apps/tracedraw/lang/cs.toml` (1)
 - `apps/tracedraw/lang/bn.toml` (1)
 - `apps/tracedraw/lang/ar.toml` (1)
+- `.github/workflows/reference-validation.yml` (1)
 
 ## Open claims (from CONTEXT.md)
 
-| Agent | Area / files | Since | Note |
-| --- | --- | --- | --- |
-| Claude | Properties docker redesign after the owner's video: new ui/properties_docker.rs, the Properties dispatch and helper visibility in ui/dockers.rs, lang/*.toml (appended keys), docs/behavior/workspaces.md | 2026-10-26 | Avoid ui/dockers.rs properties()/outline_editor*/fill_editor* until done |
+None.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/lang/ar.toml
+    M  apps/tracedraw/lang/bn.toml
+    M  apps/tracedraw/lang/cs.toml
+    M  apps/tracedraw/lang/de.toml
+    M  apps/tracedraw/lang/en.toml
+    M  apps/tracedraw/lang/es.toml
+    M  apps/tracedraw/lang/fr.toml
+    M  apps/tracedraw/lang/hi.toml
+    M  apps/tracedraw/lang/id.toml
+    M  apps/tracedraw/lang/it.toml
+    M  apps/tracedraw/lang/ja.toml
+    M  apps/tracedraw/lang/nl.toml
+    M  apps/tracedraw/lang/pl.toml
+    M  apps/tracedraw/lang/pt-BR.toml
+    M  apps/tracedraw/lang/ru.toml
+    M  apps/tracedraw/lang/tr.toml
+    M  apps/tracedraw/lang/zh-CN.toml
+    M  apps/tracedraw/lang/zh-TW.toml
+    M  apps/tracedraw/src/ui/color_picker.rs
+    M  apps/tracedraw/src/ui/dockers.rs
+    M  apps/tracedraw/src/ui/mod.rs
+    A  apps/tracedraw/src/ui/properties_docker.rs
+    M  apps/tracedraw/src/ui/toolbar.rs
+    M  docs/agents/CONTEXT.md
+    M  docs/behavior/workspaces.md
+    M  docs/features.md
     ?? docs/agents/STATUS.md.tmp

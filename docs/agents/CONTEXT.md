@@ -92,12 +92,18 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Claude | Properties docker redesign after the owner's video: new ui/properties_docker.rs, the Properties dispatch and helper visibility in ui/dockers.rs, lang/*.toml (appended keys), docs/behavior/workspaces.md | 2026-10-26 | Avoid ui/dockers.rs properties()/outline_editor*/fill_editor* until done |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
 
+- Properties docker (Claude, 2026-10-26): now lives in
+  `ui/properties_docker.rs` (the old `properties()` in `ui/dockers.rs`
+  is gone; `dockers.rs` keeps the shared editors, now `pub(crate)`:
+  `fill_editor_mixed`, `extra_fills`, `extra_strokes`, `qr_section`,
+  `rectangle_section`, `SectionIcon`...). Layout and behaviour are in
+  `docs/behavior/workspaces.md`, Properties docker. The look in the real
+  app on Windows is still to be checked by the owner.
 - WARNING (Claude, 2026-10-23): commit b975ec5 replaced the 18
   `lang/*.toml` files and `docs/features.md` with only its new lines
   (about 87,000 lines lost; the app showed no text and 31 tests failed).
@@ -148,6 +154,7 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
+- 2026-10-26, Claude: Properties docker redone after the owner's video.
 - 2026-10-23, Claude: restored the language files and features list
   lost in b975ec5, fixed two catalog tests, Windows build requested.
 - 2026-10-23, Codex: diagnosed reference validation timeout after test

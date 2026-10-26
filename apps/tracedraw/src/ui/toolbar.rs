@@ -1586,13 +1586,6 @@ pub fn transparency_part(app: &mut App, ui: &mut Ui) {
     transparency_controls(app, ui, false);
 }
 
-/// The same settings for the Properties docker, in rows that keep to the
-/// docker's width: the kind and what it applies to, then the amount (or
-/// the fountain's angle and kind), then the merge mode.
-pub fn transparency_section(app: &mut App, ui: &mut Ui) {
-    ui.vertical(|ui| transparency_controls(app, ui, true));
-}
-
 /// `f` in a row of its own when `stacked`, else straight in `ui`.
 fn part_row(ui: &mut Ui, stacked: bool, f: impl FnOnce(&mut Ui)) {
     if stacked {

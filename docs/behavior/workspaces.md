@@ -69,30 +69,47 @@ Checks: `app::tests::a_closed_docker_stays_closed_the_next_time`.
 
 ## Properties docker
 
-With objects selected: the first one's kind and box, a row of buttons,
-then its sections, in this order: Outline, Fill, Transparency, then
-what the kind has (Rectangle: its corners; a bitmap: its effects; text:
-its character settings), then Summary. Each section has a header bar
-with a triangle; the buttons (the outline pen, the fill bucket, the
-transparency checker, a rectangle, "fx", "A", "i") show which sections
-are open and open or close them, as a click on a header does. Sections
-come open; the ones closed are kept in the preferences
-(`properties_closed`). F11 and the status bar's fill and outline open
-their section again. The fill kinds are pictures (none, uniform,
-gradient, pattern, texture, mesh) with their names as tooltips; the
-Transparency section holds the Transparency tool's settings in rows
-that keep to the docker's width: the kind and what it applies to, then
-the amount (or the gradient's angle and kind), then the merge mode. The
-Rectangle section lists the corner kinds (round, scalloped, chamfered)
-one under the other and the four radii two by two as the corners lie,
-each named above its field. The docker keeps the width it has (340
-points by default, or what the edge was dragged to): selecting an
-object never widens it, and its contents are laid out within it and
-clipped to it. Every section of every kind of object (rectangle,
-ellipse, polygon, artistic and paragraph text, bitmap) with each fill
-and transparency kind fits the default width, in English, German,
-Russian and Brazilian Portuguese.
-Checks: `ui::dockers::tests::properties_sections_open_close_and_jump`,
+Laid out after the owner's reference video (`ui/properties_docker.rs`).
+
+- A row of section buttons stays above what scrolls: the outline pen,
+  the fill bucket, the transparency checker, then the selected object's
+  own (QR code first, Rectangle, "fx", Character, Summary "i"). A button
+  opens its section, scrolls smoothly to it and stays lit. At the right:
+  make the selection's outline and fill the default for new objects (a
+  tray with an arrow), and Show only the section picked (a page with a
+  crossed eye).
+- Each section has a "^ Title" header (bold, no bar); a click closes it
+  ("v") or opens it. Closed sections are kept in the preferences
+  (`properties_closed`). F11 and the status bar's fill and outline go to
+  their section.
+- Outline: the colour (a list's frame with the swatch; no outline shows
+  a crossed white swatch), the width box with its list (None, Hairline,
+  0.1 to 10 mm) and the unit by name, the line style list drawn as lines
+  with "..." for Edit Line Style, three dash fittings (as they come,
+  fitted to corners and ends, set in Edit Line Style; greyed for a solid
+  line). A small arrow hides or shows the lower rows, their labels
+  right-aligned: Miter limit, Corners, Line caps and Position as
+  pictures. Then Arrowheads (start and end lists, "..." to swap or
+  remove, Share attributes sets both), Variable Outline (a ruler with
+  the width nodes, the picked node's position, sides and total; greyed
+  without nodes; the flame picks the Variable Outline tool) and
+  Calligraphy (stretch in percent, angle, the nib drawn, reset; Behind
+  fill, Scale with object; Overprint outline greyed, it is set when
+  printing). Further outlines follow.
+- Fill: the kinds as pictures and their settings; with no fill, "The
+  default has no fill." (nothing selected) or "The object has no fill.".
+  Further fills follow.
+- Transparency: the merge mode across the section, the kinds as
+  pictures (none with a red dot, uniform, fountain, pattern, texture),
+  then the amount or the fountain's angle and what it applies to.
+- With nothing selected the Outline, Fill and Transparency sections set
+  what new objects (and the Transparency tool) start with.
+
+The docker keeps the width it has (340 points by default, or what the
+edge was dragged to): selecting an object never widens it, and its
+contents are laid out within it and clipped to it.
+Checks: `ui::properties_docker::tests`,
+`ui::dockers::tests::properties_sections_open_close_and_jump`,
 `ui::dockers::tests::properties_sections_fit_the_default_docker_width`;
 every kind's sections draw in
 `ui::mod::tests::window_draws_with_every_docker_tool_and_selection`.
