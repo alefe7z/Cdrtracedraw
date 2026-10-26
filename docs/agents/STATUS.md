@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `aafc52d Request a Windows build [exe]`
-- Commits on the branch: 43
+- Last commit before this one: `dcbd80a Claim the Properties docker redesign`
+- Commits on the branch: 44
 
 ## Last 20 commits
 
+- `dcbd80a` 2026-10-26 18:10 Claude: Claim the Properties docker redesign
 - `aafc52d` 2026-10-23 23:19 Claude: Request a Windows build [exe]
 - `cedcca9` 2026-10-23 23:19 Claude: Restore the language files and the features list
 - `10eb37c` 2026-10-23 18:32 alefe7z: docs: record validation failures and diagnostic follow-up
@@ -25,7 +26,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `b975ec5` 2026-10-23 15:27 alefe7z: Rework the docker catalog to follow the supplied reference
 - `d129b37` 2026-10-23 18:22 Claude: Let any key be a shortcut
 - `a7ca9a0` 2026-10-23 15:19 alefe7z: Claim docker add menu reference task
-- `9c0ae11` 2026-10-23 18:11 Claude: Format the selection flyout change
 
 ## Files changed in the last 10 commits
 
@@ -68,5 +68,4 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Uncommitted when generated
 
-    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
