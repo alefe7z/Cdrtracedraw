@@ -92,6 +92,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Claude | Menus and toolbox flyouts after the owner's second reference video: ui/menus.rs (order, density), toolbox flyout rows (ui/toolbox.rs), lang/*.toml (menu and tool labels), new docs/reference/ui-reference.md | 2026-10-26 | Tools' order in tools.rs GROUPS may change for the polygon group |
 
 ## Notes for other agents
 

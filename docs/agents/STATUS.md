@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `8c90865 Redo the Properties docker after the owner's reference`
-- Commits on the branch: 46
+- Last commit before this one: `f82616e Update the agents' status file`
+- Commits on the branch: 47
 
 ## Last 20 commits
 
@@ -25,7 +25,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `04d7889` 2026-10-23 15:37 alefe7z: Claim reference fidelity and missing panel integration task
 - `ded3c6a` 2026-10-23 15:28 alefe7z: Regenerate shared agent status after the docker catalog change
 - `b975ec5` 2026-10-23 15:27 alefe7z: Rework the docker catalog to follow the supplied reference
-- `d129b37` 2026-10-23 18:22 Claude: Let any key be a shortcut
 
 ## Files changed in the last 10 commits
 
@@ -62,8 +61,11 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-None.
+| Agent | Area / files | Since | Note |
+| --- | --- | --- | --- |
+| Claude | Menus and toolbox flyouts after the owner's second reference video: ui/menus.rs (order, density), toolbox flyout rows (ui/toolbox.rs), lang/*.toml (menu and tool labels), new docs/reference/ui-reference.md | 2026-10-26 | Tools' order in tools.rs GROUPS may change for the polygon group |
 
 ## Uncommitted when generated
 
+    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
