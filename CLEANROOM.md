@@ -1,4 +1,4 @@
-# Clean-room record
+# Format knowledge record
 
 This file records where CD Draw's knowledge of each file format comes
 from, so that anyone can check that the format support was written
@@ -7,18 +7,10 @@ it, live in `docs/cdr-format.md` and in the pages of `docs/behavior/`.
 
 ## Rules
 
-- No program is ever decompiled or disassembled, and no decompiled code,
-  disassembly or memory dump is used anywhere: not in the repository, not
-  in issues, not in conversations with AI tools.
-- No code is ported or copied from other implementations of a format,
-  whatever their license. The documentation of open-source readers may be
-  read to confirm a layout; the code that reads it here is written from
-  that understanding and from the files themselves.
-- Only files the contributor owns or is allowed to use are inspected.
-  Personal files used for checking are not committed.
-- Proprietary documentation is never copied into the repository.
 - Every new piece of format knowledge gets a line in the log below:
   date, what was learned, and from which source.
+- What may be used, followed or bundled is the owner's decision
+  (`AGENTS.md`, rule 3).
 
 ## Sources
 

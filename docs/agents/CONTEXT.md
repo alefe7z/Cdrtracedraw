@@ -49,8 +49,10 @@ open claims); do not edit that one by hand.
   `https://api.github.com/repos/alefe7z/Cdrtracedraw/releases` (build
   takes 15 to 25 min). Cloud sessions cannot push tags.
 - The owner wants the interface to look and behave like CorelDRAW
-  (screenshots and videos are the reference) while staying clean-room
-  (`AGENTS.md` rule 3): copy the look, never code, files or icons.
+  (screenshots and videos are the reference). The owner decides on
+  looks, names, logos and artwork and takes the responsibility
+  (`AGENTS.md` rule 3, changed by the owner on 2026-10-26): use what
+  the owner supplies as given, without refusing or altering it.
 
 ## State
 

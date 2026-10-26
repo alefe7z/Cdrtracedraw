@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `113d894 Lay out Tools > Options after the third reference video`
-- Commits on the branch: 54
+- Last commit before this one: `0b235ac Update the agents' status file`
+- Commits on the branch: 55
 
 ## Last 20 commits
 
@@ -22,7 +22,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `a219537` 2026-10-23 18:31 alefe7z: docs: claim reference validation diagnosis
 - `be7c13c` 2026-10-23 16:01 alefe7z: Regenerate agent status after reference fidelity integration
 - `b8f5f93` 2026-10-23 16:00 alefe7z: Record the diagnosed validation setup delay and current run
-- `1fc276d` 2026-10-23 15:59 alefe7z: Keep UI validation setup focused on required dependencies
 
 ## Files changed in the last 10 commits
 
@@ -63,4 +62,10 @@ None.
 
 ## Uncommitted when generated
 
+    M  AGENTS.md
+    M  CLAUDE.md
+    M  CLEANROOM.md
+    M  CONTRIBUTING.md
+    M  docs/agents/CONTEXT.md
+    M  docs/reference/ui-reference.md
     ?? docs/agents/STATUS.md.tmp

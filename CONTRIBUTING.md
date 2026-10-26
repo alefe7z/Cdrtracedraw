@@ -4,21 +4,15 @@ Thank you for helping. Read `AGENTS.md` first: it holds the engineering
 rules (commands, no panics on input, layering, tests, units, language).
 This file covers what every contribution must also respect.
 
-## Clean contributions
+## Contributions
 
-- Send only work you wrote yourself, or work under a license compatible
-  with MIT OR Apache-2.0 that you have the right to submit, with its
-  origin stated in the pull request.
-- Never send code, data or assets that were decompiled, disassembled or
-  dumped from any program, or copied from proprietary software, its
-  documentation or its installation files. This includes material
-  produced by AI tools from such sources.
-- Never port code from other implementations of a file format. Write it
-  from public format notes and from files you own, and record what you
-  learned, its source and the date in `CLEANROOM.md`.
-- Bundle only original or openly licensed assets (icons, fonts, images,
-  palettes, templates, test files) and list each one in
-  `ATTRIBUTION.md` with its author, source and license.
+- State the origin of third-party code, data or assets in the pull
+  request and list them in `ATTRIBUTION.md` with their author, source and
+  license.
+- Record new format knowledge, its source and the date in
+  `CLEANROOM.md`.
+- What the project follows, uses or bundles is the owner's decision
+  (`AGENTS.md`, rule 3).
 
 ## Sign-off (DCO)
 

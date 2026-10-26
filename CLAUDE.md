@@ -1,9 +1,8 @@
 # CLAUDE.md
 
 Read `AGENTS.md` first and follow it. It holds the project rules for every
-AI agent and contributor, including the clean-room rules (rule 3): never
-decompile or disassemble any program, never use decompiled code or dumps,
-and never port code from libcdr or any other format implementation.
+AI agent and contributor. Rule 3: the owner decides on looks, names,
+logos, artwork and assets, and takes responsibility for those choices.
 `CLEANROOM.md` records where each piece of format knowledge came from.
 
 Other agents work on the same branch: follow "Several agents on one

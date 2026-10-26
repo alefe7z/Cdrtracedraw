@@ -1,9 +1,9 @@
 # Interface reference (owner's videos, October 2026)
 
 What the owner's reference recordings of the program CD Draw follows show,
-written down so every agent works from the same notes. The look is
-followed; no code, file or icon of that program is used (`AGENTS.md`,
-rule 3). Items that need the internet, an account or AI are left out:
+written down so every agent works from the same notes. How closely it
+is followed, and what artwork is used, is the owner's decision
+(`AGENTS.md`, rule 3). Items that need the internet, an account or AI are left out:
 CD Draw is offline only (`AGENTS.md`, "Offline only").
 
 The second video (87 s, 1280 x 698, recorded from a screen about 1.5

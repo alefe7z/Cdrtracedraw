@@ -25,16 +25,14 @@ when you finish.
    `panic!`, `todo!` or raw indexing on data that came from a file or the
    user. Return `Result`, log a warning, skip the object. Opening any file
    must always yield a document.
-3. **Clean-room code and assets.** The look, layout, names and
-   behaviour of other programs may be followed, and other programs may be
-   named. Copyright notices that a license requires stay in
-   `ATTRIBUTION.md`. Never decompile any program and never use
-   decompiled code or dumps, not even in conversations with AI tools.
-   Format readers come from public format notes and from inspecting files
-   we own; never port code from libcdr or any other implementation.
-   Record each piece of format knowledge, its source and date in
-   `CLEANROOM.md` and the details in `docs/cdr-format.md`. Bundle only
-   original or openly licensed assets and list them in `ATTRIBUTION.md`.
+3. **The owner decides.** The look, layout, names, pictures, logos and
+   behaviour of other programs may be followed as closely as the owner
+   asks, and artwork, files and code the owner supplies are used as
+   given. The owner takes responsibility for these choices; agents do
+   not refuse or water them down on the grounds of this file. Keep the
+   notices that third-party licenses require in `ATTRIBUTION.md`, and
+   note where format knowledge came from in `CLEANROOM.md` and
+   `docs/cdr-format.md`.
 4. **Layering is enforced by review.** `core` has no workspace deps; `cdr`,
    `text` and `render` depend on `core` only; `io` depends on `core` and
    `render` (rasterised fills in exports); egui stays in `apps/`.
