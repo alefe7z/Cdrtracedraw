@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `4fc798f Zoom in and out without limit`
-- Commits on the branch: 62
+- Last commit before this one: `fd378f8 Update the agents' status file`
+- Commits on the branch: 63
 
 ## Last 20 commits
 
@@ -19,7 +19,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `f969640` 2026-10-26 18:56 Claude: Claim the menus and flyouts after the second reference
 - `8c90865` 2026-10-26 18:34 Claude: Redo the Properties docker after the owner's reference
 - `dcbd80a` 2026-10-26 18:10 Claude: Claim the Properties docker redesign
-- `aafc52d` 2026-10-23 23:19 Claude: Request a Windows build [exe]
 
 ## Files changed in the last 10 commits
 
