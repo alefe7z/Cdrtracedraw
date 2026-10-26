@@ -9,98 +9,134 @@ use crate::i18n::{tr, trf};
 use crate::settings::{AutoCenter, NodeShape, NodeSize, Startup};
 use crate::theme::Tokens;
 use crate::ui::chrome;
+use crate::ui::options_pages::{
+    heading, note, off_button, off_check, off_combo, off_radio, sep, slider, tabbed,
+};
 use egui::{Context, Ui};
-use tracedraw_core::{geometry::Size, Color, Command, Fill};
+use tracedraw_core::{Color, Command, Fill};
 
-/// Which dialog a page belongs to.
+/// Which category of Tools > Options a page belongs to: the six buttons
+/// at the top right of the dialog, in their order there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionsSet {
+    Document,
     App,
     Customization,
     Tools,
     Global,
     Workspaces,
-    Document,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OptionsPage {
-    // Tools > Options > CD Draw.
+    // CD Draw.
     #[default]
     General,
+    TabletMode,
     Display,
     Edit,
     NodesAndHandles,
     ClipFrame,
+    BitmapTracing,
     Snapping,
-    AlignmentGuides,
-    DynamicGuides,
     Save,
     Text,
-    // Tools > Options > Customization.
+    PenSettings,
+    Warnings,
+    Macros,
+    Plugins,
+    // Customization.
     Appearance,
-    Commands,
     CommandBars,
+    Commands,
     ColorPalette,
-    // Tools > Options > Tools.
+    // Tools.
     Pick,
+    Eraser,
     ZoomPan,
     Curves,
+    SmartDrawing,
     Rectangle,
     Ellipse,
-    Polygon,
-    Spiral,
     GraphPaper,
+    Spiral,
     Table,
-    Eraser,
-    // Tools > Options > Global.
+    Dimension,
+    AngularDimension,
+    Connector,
+    MeshFill,
+    // Global.
     GlobalGeneral,
     Printing,
-    FileFormats,
-    BitmapTracing,
-    Warnings,
     FileLocations,
-    // Tools > Options > Workspaces.
+    FileFormats,
+    GlobalColor,
+    // Workspaces.
     Workspace,
-    // Layout > Document Options.
+    // Document (also Layout > Document Options).
     DocumentGeneral,
     PageSize,
     Layout,
     Background,
-    Bleed,
-    Rulers,
-    Grid,
     Guidelines,
+    Grid,
+    Rulers,
+    DocumentSave,
 }
 
 impl OptionsSet {
+    /// The six categories in the order of their buttons.
+    pub const ALL: [OptionsSet; 6] = [
+        OptionsSet::Document,
+        OptionsSet::App,
+        OptionsSet::Customization,
+        OptionsSet::Tools,
+        OptionsSet::Global,
+        OptionsSet::Workspaces,
+    ];
+
     pub fn pages(self) -> &'static [OptionsPage] {
         use OptionsPage::*;
         match self {
             OptionsSet::App => &[
                 General,
+                TabletMode,
                 Display,
                 Edit,
                 NodesAndHandles,
                 ClipFrame,
+                BitmapTracing,
                 Snapping,
-                AlignmentGuides,
-                DynamicGuides,
                 Save,
                 Text,
+                PenSettings,
+                Warnings,
+                Macros,
+                Plugins,
             ],
             OptionsSet::Customization => &[Appearance, CommandBars, Commands, ColorPalette],
             OptionsSet::Tools => &[
-                Pick, ZoomPan, Curves, Rectangle, Ellipse, Polygon, Spiral, GraphPaper, Table,
+                Pick,
                 Eraser,
+                ZoomPan,
+                Curves,
+                SmartDrawing,
+                Rectangle,
+                Ellipse,
+                GraphPaper,
+                Spiral,
+                Table,
+                Dimension,
+                AngularDimension,
+                Connector,
+                MeshFill,
             ],
             OptionsSet::Global => &[
                 GlobalGeneral,
                 Printing,
-                FileFormats,
-                BitmapTracing,
-                Warnings,
                 FileLocations,
+                FileFormats,
+                GlobalColor,
             ],
             OptionsSet::Workspaces => &[Workspace],
             OptionsSet::Document => &[
@@ -108,82 +144,107 @@ impl OptionsSet {
                 PageSize,
                 Layout,
                 Background,
-                Bleed,
-                Rulers,
-                Grid,
                 Guidelines,
+                Grid,
+                Rulers,
+                DocumentSave,
             ],
         }
     }
 
-    fn title(self) -> String {
+    /// The category's name, at the top left of the dialog and as its
+    /// button's tip.
+    pub fn title(self) -> String {
         match self {
-            OptionsSet::App => trf("options.title_app", &[("app", "CD Draw")]),
-            OptionsSet::Customization => tr("options.title_customization"),
-            OptionsSet::Tools => tr("options.title_tools"),
-            OptionsSet::Global => tr("options.title_global"),
-            OptionsSet::Workspaces => tr("options.title_workspaces"),
-            OptionsSet::Document => tr("dialog.document_options"),
+            OptionsSet::App => "CD Draw".into(),
+            OptionsSet::Customization => tr("opt.set.customization"),
+            OptionsSet::Tools => tr("opt.set.tools"),
+            OptionsSet::Global => tr("opt.set.global"),
+            OptionsSet::Workspaces => tr("opt.set.workspaces"),
+            OptionsSet::Document => tr("opt.set.document"),
         }
     }
 }
 
 impl OptionsPage {
     pub fn set(self) -> OptionsSet {
-        [
-            OptionsSet::App,
-            OptionsSet::Customization,
-            OptionsSet::Tools,
-            OptionsSet::Global,
-            OptionsSet::Workspaces,
-            OptionsSet::Document,
-        ]
-        .into_iter()
-        .find(|s| s.pages().contains(&self))
-        .unwrap_or(OptionsSet::App)
+        OptionsSet::ALL
+            .into_iter()
+            .find(|s| s.pages().contains(&self))
+            .unwrap_or(OptionsSet::App)
     }
 
+    /// The page's name in the list (its i18n key).
     pub fn key(self) -> &'static str {
         use OptionsPage::*;
         match self {
             General | GlobalGeneral | DocumentGeneral => "options.general",
+            TabletMode => "opt.page.tablet_mode",
             Display => "options.display",
             Edit => "options.edit",
-            NodesAndHandles => "options.nodes_and_handles",
+            NodesAndHandles => "opt.page.nodes",
             ClipFrame => "options.clip_frame",
-            Snapping => "options.snapping",
-            AlignmentGuides => "options.alignment_guides",
-            DynamicGuides => "options.dynamic_guides",
-            Save => "options.save",
+            BitmapTracing => "opt.page.tracing",
+            Snapping => "opt.page.snapping",
+            Save | DocumentSave => "options.save",
             Text => "options.text",
+            PenSettings => "opt.page.pen",
+            Warnings => "options.warnings",
+            Macros => "opt.page.macros",
+            Plugins => "opt.page.plugins",
             Appearance => "options.appearance",
+            CommandBars => "opt.page.command_bars",
             Commands => "options.commands",
-            CommandBars => "options.command_bars",
             ColorPalette => "options.color_palette",
             Pick => "tool.pick",
-            ZoomPan => "options.zoom_pan",
-            Curves => "options.curve_tools",
+            Eraser => "tool.eraser",
+            ZoomPan => "opt.page.zoom_pan",
+            Curves => "opt.page.curves",
+            SmartDrawing => "opt.page.smart_drawing",
             Rectangle => "tool.rectangle",
             Ellipse => "tool.ellipse",
-            Polygon => "tool.polygon",
-            Spiral => "tool.spiral",
             GraphPaper => "tool.graph_paper",
+            Spiral => "tool.spiral",
             Table => "tool.table",
-            Eraser => "tool.eraser",
-            FileLocations => "options.file_locations",
-            Printing => "options.printing",
-            FileFormats => "options.file_formats",
-            BitmapTracing => "options.bitmap_tracing",
-            Warnings => "options.warnings",
+            Dimension => "opt.page.dimension",
+            AngularDimension => "tool.angular_dimension",
+            Connector => "opt.page.connector",
+            MeshFill => "tool.mesh_fill",
+            Printing => "opt.page.printing",
+            FileLocations => "opt.page.file_locations",
+            FileFormats => "opt.page.file_formats",
+            GlobalColor => "opt.page.color",
             Workspace => "options.workspace",
             PageSize => "options.page_size",
             Layout => "options.layout",
             Background => "options.background",
-            Bleed => "options.bleed_page",
-            Rulers => "options.rulers",
-            Grid => "options.grid",
             Guidelines => "options.guidelines",
+            Grid => "options.grid",
+            Rulers => "options.rulers",
         }
+    }
+
+    /// The tool whose picture the Tools list shows before the page's name.
+    pub fn tool(self) -> Option<crate::tools::Tool> {
+        use crate::tools::Tool as T;
+        use OptionsPage::*;
+        Some(match self {
+            Pick => T::Pick,
+            Eraser => T::Eraser,
+            ZoomPan => T::Zoom,
+            Curves => T::Freehand,
+            SmartDrawing => T::ShapeRecognition,
+            Rectangle => T::Rectangle,
+            Ellipse => T::Ellipse,
+            GraphPaper => T::GraphPaper,
+            Spiral => T::Spiral,
+            Table => T::Table,
+            Dimension => T::ParallelDimension,
+            AngularDimension => T::AngularDimension,
+            Connector => T::Connector,
+            MeshFill => T::MeshFill,
+            _ => return None,
+        })
     }
 }
 
@@ -227,6 +288,9 @@ pub struct OptionsSnapshot {
     table_cols: u32,
     eraser_width: f64,
     eraser_square: bool,
+    mesh_rows: u32,
+    mesh_cols: u32,
+    dimension_style: crate::dimensions::DimensionStyle,
     text_font: String,
     text_size_pt: f64,
     text_hyphenation: bool,
@@ -274,6 +338,9 @@ impl OptionsSnapshot {
             table_cols: app.table_cols,
             eraser_width: app.eraser_width,
             eraser_square: app.eraser_square,
+            mesh_rows: app.mesh_rows,
+            mesh_cols: app.mesh_cols,
+            dimension_style: app.dimension_style.clone(),
             text_font: app.text_font.clone(),
             text_size_pt: app.text_size_pt,
             text_hyphenation: app.text_hyphenation,
@@ -330,6 +397,9 @@ impl OptionsSnapshot {
         app.table_cols = self.table_cols;
         app.eraser_width = self.eraser_width;
         app.eraser_square = self.eraser_square;
+        app.mesh_rows = self.mesh_rows;
+        app.mesh_cols = self.mesh_cols;
+        app.dimension_style = self.dimension_style;
         app.text_font = self.text_font;
         app.text_size_pt = self.text_size_pt;
         app.text_hyphenation = self.text_hyphenation;
@@ -345,7 +415,18 @@ fn undo_depth(app: &App) -> usize {
     app.engine.history_labels().0.len()
 }
 
-/// Draw the options dialog of the set `app.options_page` belongs to.
+/// The dialog's size at 100 % interface size (borders and title bar in).
+pub const SIZE: egui::Vec2 = egui::vec2(802.0, 676.0);
+/// The page list's width.
+const PAGE_LIST_W: f32 = 180.0;
+/// Rows of the page list.
+const LIST_ROW: f32 = 25.0;
+
+/// Draw Tools > Options: the title "Options", the category's name at the
+/// top left and its six buttons at the top right, the page list on the
+/// left (with Save as Default under it for the document, Import for the
+/// workspaces), the page on the right, the help button at the bottom left,
+/// OK and Cancel at the bottom right. Cancel puts back what it changed.
 pub fn options_dialog(app: &mut App, ctx: &Context, close: &mut bool) {
     if app.options_snapshot.is_none() {
         app.options_snapshot = Some(OptionsSnapshot::take(app));
@@ -353,81 +434,64 @@ pub fn options_dialog(app: &mut App, ctx: &Context, close: &mut bool) {
     let set = app.options_page.set();
     let mut ok = false;
     let mut cancel = false;
-    let x_closed = chrome::dialog(
-        ctx,
-        "options_dialog",
-        &set.title(),
-        egui::vec2(887.0, 663.0),
-        |ui| {
-            let body = ui.max_rect();
-            let list = egui::Rect::from_min_size(
-                body.min + egui::vec2(14.0, 10.0),
-                egui::vec2(225.0, 566.0),
-            );
-            let page = egui::Rect::from_min_size(
-                body.min + egui::vec2(251.0, 10.0),
-                egui::vec2(622.0, 566.0),
-            );
-            page_list(app, ui, list, set);
-            ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
-                chrome::panel()
-                    .inner_margin(egui::Margin {
-                        left: 20,
-                        right: 20,
-                        top: 16,
-                        bottom: 12,
-                    })
+    let x_closed = chrome::dialog(ctx, "options_dialog", &tr("opt.title"), SIZE, |ui| {
+        let body = ui.max_rect();
+        let left = body.left() + 1.0 + 10.0;
+        let right = body.left() + SIZE.x - 10.0;
+        let top = body.top();
+        header(
+            app,
+            ui,
+            set,
+            egui::Rect::from_x_y_ranges(left..=right, top..=top + 36.0),
+        );
+        let bottom = body.top() + SIZE.y - chrome::TITLE_BAR - 44.0;
+        let list = egui::Rect::from_x_y_ranges(left..=left + PAGE_LIST_W, top + 38.0..=bottom);
+        let page = egui::Rect::from_x_y_ranges(list.right() + 7.0..=right, list.y_range());
+        list_column(app, ui, list, set);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
+            frame_box(ui, page);
+            let inner = page.shrink2(egui::vec2(12.0, 10.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                // Both ways, so a page wider than the dialog scrolls
+                // instead of widening it.
+                egui::ScrollArea::both()
+                    .id_salt(("options_page", app.options_page.key(), set.title()))
+                    .auto_shrink([false, false])
+                    .max_height(inner.height())
                     .show(ui, |ui| {
-                        ui.set_min_size(page.size() - egui::vec2(42.0, 30.0));
-                        ui.set_max_width(page.width() - 42.0);
-                        egui::ScrollArea::vertical()
-                            .id_salt(("options_page", app.options_page.key()))
-                            .auto_shrink([false, false])
-                            .max_height(page.height() - 30.0)
-                            .show(ui, |ui| {
-                                ui.spacing_mut().item_spacing.y = 7.0;
-                                draw_page(app, ui);
-                            });
+                        ui.set_max_width(inner.width() - 14.0);
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        draw_page(app, ui);
                     });
             });
-            let buttons = egui::Rect::from_min_size(
-                body.min + egui::vec2(14.0, 10.0 + 566.0 + 15.0),
-                egui::vec2(859.0, 27.0),
-            );
-            ui.scope_builder(egui::UiBuilder::new().max_rect(buttons), |ui| {
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_sized([27.0, 27.0], egui::Button::new("?"))
-                        .on_hover_text(tr("dialog.help"))
-                        .clicked()
-                    {
-                        app.open_help(crate::help::options_topic(app.options_page));
-                    }
-                    if set == OptionsSet::Document
-                        && ui
-                            .add_sized(
-                                [150.0, 27.0],
-                                egui::Button::new(tr("options.save_as_default")),
-                            )
-                            .clicked()
-                    {
-                        app.settings.document_defaults =
-                            crate::settings::DocumentDefaults::of(app.doc());
-                        app.status = tr("status.settings_saved");
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if chrome::button(ui, &tr("dialog.cancel")).clicked() {
-                            cancel = true;
-                        }
-                        ui.add_space(5.0);
-                        if chrome::button(ui, &tr("dialog.ok")).clicked() {
-                            ok = true;
-                        }
-                    });
-                });
-            });
-        },
-    );
+        });
+        let row = egui::Rect::from_x_y_ranges(left..=right, bottom + 10.0..=bottom + 34.0);
+        if ui
+            .put(
+                egui::Rect::from_min_size(row.min, egui::vec2(24.0, 24.0)),
+                egui::Button::new("?"),
+            )
+            .on_hover_text(tr("dialog.help"))
+            .clicked()
+        {
+            app.open_help(crate::help::options_topic(app.options_page));
+        }
+        let cancel_r = egui::Rect::from_min_size(
+            egui::pos2(row.right() - 80.0, row.top()),
+            egui::vec2(80.0, 24.0),
+        );
+        let ok_r = cancel_r.translate(egui::vec2(-86.0, 0.0));
+        if accent_button(ui, ok_r, &tr("dialog.ok")).clicked() {
+            ok = true;
+        }
+        if ui
+            .put(cancel_r, egui::Button::new(tr("dialog.cancel")))
+            .clicked()
+        {
+            cancel = true;
+        }
+    });
     if ok {
         app.options_snapshot = None;
         app.apply_runtime_settings();
@@ -441,54 +505,237 @@ pub fn options_dialog(app: &mut App, ctx: &Context, close: &mut bool) {
     }
 }
 
-/// The page list: one row per page, the current one highlighted.
-fn page_list(app: &mut App, ui: &mut Ui, rect: egui::Rect, set: OptionsSet) {
-    let painter = ui.painter();
-    painter.rect_filled(rect, 0.0, crate::theme::Tokens::field());
-    painter.rect_stroke(
+/// A push button filled with the accent colour (the default button).
+pub(crate) fn accent_button(ui: &mut Ui, rect: egui::Rect, text: &str) -> egui::Response {
+    ui.put(
+        rect,
+        egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
+            .fill(Tokens::ACCENT),
+    )
+}
+
+/// The frame of the page list and of the page.
+fn frame_box(ui: &Ui, rect: egui::Rect) {
+    ui.painter().rect(
         rect,
         0.0,
-        egui::Stroke::new(1.0, crate::theme::Tokens::border()),
+        Tokens::field(),
+        egui::Stroke::new(1.0, Tokens::control_border()),
         egui::StrokeKind::Inside,
     );
-    for (i, p) in set.pages().iter().enumerate() {
-        let row = egui::Rect::from_min_size(
-            rect.min + egui::vec2(5.0, 5.0 + i as f32 * 23.0),
-            egui::vec2(rect.width() - 10.0, 22.0),
+}
+
+/// The category's name at the left and its six buttons at the right.
+fn header(app: &mut App, ui: &mut Ui, set: OptionsSet, rect: egui::Rect) {
+    ui.painter().text(
+        rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        set.title(),
+        crate::theme::bold(13.0),
+        Tokens::text(),
+    );
+    let side = 26.0;
+    let gap = 6.0;
+    for (i, s) in OptionsSet::ALL.iter().enumerate() {
+        let x = rect.right() - (6 - i) as f32 * (side + gap) + gap;
+        let r = egui::Rect::from_center_size(
+            egui::pos2(x + side / 2.0, rect.center().y),
+            egui::vec2(side, side),
         );
-        let resp = ui.interact(
-            row,
-            egui::Id::new(("options_list", p.key(), i)),
-            egui::Sense::click(),
-        );
-        let selected = app.options_page == *p;
-        if selected {
-            ui.painter()
-                .rect_filled(row, 0.0, crate::theme::Tokens::selected_row());
-            ui.painter().rect_stroke(
-                row,
-                0.0,
-                egui::Stroke::new(1.0, crate::theme::Tokens::selected_row_line()),
-                egui::StrokeKind::Inside,
-            );
+        let resp = ui
+            .interact(r, egui::Id::new(("options_set", i)), egui::Sense::click())
+            .on_hover_text(s.title());
+        let on = *s == set;
+        if on {
+            ui.painter().rect_filled(r, 3.0, Tokens::ACCENT);
         } else if resp.hovered() {
-            ui.painter()
-                .rect_filled(row, 0.0, crate::theme::Tokens::hovered_row());
+            ui.painter().rect_filled(r, 3.0, Tokens::hovered_row());
         }
-        ui.painter().text(
-            row.left_center() + egui::vec2(5.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            tr(p.key()),
-            egui::FontId::proportional(13.0),
-            Tokens::text(),
-        );
-        if resp.clicked() {
-            app.options_page = *p;
+        let color = if on {
+            egui::Color32::WHITE
+        } else {
+            Tokens::icon()
+        };
+        set_icon(ui.painter(), r.shrink(5.0), *s, color);
+        if resp.clicked() && !on {
+            app.options_page = s.pages()[0];
         }
     }
 }
 
+/// The pictures of the six categories: a page, the program's mark, three
+/// sliders, the pointer, a bulb and a screen.
+fn set_icon(p: &egui::Painter, r: egui::Rect, set: OptionsSet, color: egui::Color32) {
+    let st = egui::Stroke::new(1.3, color);
+    let c = r.center();
+    let w = r.width();
+    match set {
+        OptionsSet::Document => {
+            let page = egui::Rect::from_center_size(c, egui::vec2(w * 0.62, w * 0.86));
+            p.rect_stroke(page, 1.0, st, egui::StrokeKind::Inside);
+        }
+        OptionsSet::App => {
+            // A drop and a pen nib in a rounded square.
+            p.rect_stroke(r.shrink(0.5), 3.0, st, egui::StrokeKind::Inside);
+            p.circle_stroke(c + egui::vec2(-1.5, 1.5), w * 0.2, st);
+            p.line_segment(
+                [
+                    c + egui::vec2(0.5, -0.5),
+                    c + egui::vec2(w * 0.32, -w * 0.32),
+                ],
+                st,
+            );
+        }
+        OptionsSet::Customization => {
+            for (i, k) in [0.3f32, 0.7, 0.45].iter().enumerate() {
+                let y = r.top() + w * (0.22 + i as f32 * 0.28);
+                p.line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], st);
+                let x = r.left() + w * k;
+                p.rect_filled(
+                    egui::Rect::from_center_size(egui::pos2(x, y), egui::vec2(3.0, 5.0)),
+                    0.5,
+                    color,
+                );
+            }
+        }
+        OptionsSet::Tools => crate::ui::icons::draw(p, r, crate::tools::Tool::Pick, color),
+        OptionsSet::Global => {
+            let bulb = c + egui::vec2(0.0, -w * 0.12);
+            p.circle_filled(bulb, w * 0.32, color);
+            p.rect_filled(
+                egui::Rect::from_center_size(
+                    c + egui::vec2(0.0, w * 0.36),
+                    egui::vec2(w * 0.3, w * 0.16),
+                ),
+                1.0,
+                color,
+            );
+        }
+        OptionsSet::Workspaces => {
+            let screen = egui::Rect::from_min_max(
+                r.min + egui::vec2(0.0, w * 0.08),
+                egui::pos2(r.right(), r.top() + w * 0.72),
+            );
+            p.rect_stroke(screen, 1.0, st, egui::StrokeKind::Inside);
+            p.line_segment(
+                [
+                    egui::pos2(c.x, screen.bottom()),
+                    egui::pos2(c.x, r.bottom() - 1.0),
+                ],
+                st,
+            );
+            p.line_segment(
+                [
+                    egui::pos2(c.x - w * 0.25, r.bottom() - 1.0),
+                    egui::pos2(c.x + w * 0.25, r.bottom() - 1.0),
+                ],
+                st,
+            );
+        }
+    }
+}
+
+/// The column at the left: the pages of the category (the workspaces for
+/// Workspaces), with Save as Default under the document's pages and
+/// Import under the workspaces.
+fn list_column(app: &mut App, ui: &mut Ui, rect: egui::Rect, set: OptionsSet) {
+    let below = matches!(set, OptionsSet::Document | OptionsSet::Workspaces);
+    let list = if below {
+        egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.bottom() - 30.0))
+    } else {
+        rect
+    };
+    frame_box(ui, list);
+    if set == OptionsSet::Workspaces {
+        crate::ui::options_pages::workspace_list(app, ui, list);
+    } else {
+        for (i, p) in set.pages().iter().enumerate() {
+            let row = egui::Rect::from_min_size(
+                list.min + egui::vec2(2.0, 3.0 + i as f32 * LIST_ROW),
+                egui::vec2(list.width() - 4.0, LIST_ROW - 1.0),
+            );
+            let selected = app.options_page == *p;
+            if list_row(
+                ui,
+                row,
+                &tr(p.key()),
+                p.tool(),
+                selected,
+                ("options_list", i),
+            )
+            .clicked()
+            {
+                app.options_page = *p;
+            }
+        }
+    }
+    if below {
+        let b = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 24.0), rect.max);
+        if set == OptionsSet::Document {
+            let enabled = app.has_document();
+            if ui
+                .put(
+                    b,
+                    egui::Button::new(tr("opt.save_as_default")).sense(if enabled {
+                        egui::Sense::click()
+                    } else {
+                        egui::Sense::hover()
+                    }),
+                )
+                .clicked()
+            {
+                app.settings.document_defaults = crate::settings::DocumentDefaults::of(app.doc());
+                app.status = tr("status.settings_saved");
+            }
+        } else if ui.put(b, egui::Button::new(tr("opt.import"))).clicked() {
+            let parts = app.settings.workspace_parts;
+            app.import_workspace_dialog(parts, false);
+        }
+    }
+}
+
+/// One row of the list at the left: the grey bar when picked or under the
+/// pointer, a tool's picture when it has one, the name.
+pub(crate) fn list_row(
+    ui: &mut Ui,
+    row: egui::Rect,
+    text: &str,
+    tool: Option<crate::tools::Tool>,
+    selected: bool,
+    id: impl std::hash::Hash + std::fmt::Debug,
+) -> egui::Response {
+    let resp = ui.interact(row, egui::Id::new(id), egui::Sense::click());
+    if selected {
+        ui.painter().rect_filled(row, 0.0, Tokens::control_fill());
+    } else if resp.hovered() {
+        ui.painter().rect_filled(row, 0.0, Tokens::hovered_row());
+    }
+    let mut x = row.left() + 6.0;
+    if let Some(t) = tool {
+        let r = egui::Rect::from_center_size(
+            egui::pos2(x + 8.0, row.center().y),
+            egui::vec2(16.0, 16.0),
+        );
+        crate::ui::icons::draw(
+            ui.painter(),
+            r,
+            t,
+            crate::ui::icons::tool_color(t, Tokens::icon()),
+        );
+        x += 22.0;
+    }
+    ui.painter().text(
+        egui::pos2(x, row.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(12.5),
+        Tokens::text(),
+    );
+    resp
+}
+
 fn draw_page(app: &mut App, ui: &mut Ui) {
+    use crate::ui::options_pages as pg;
     use OptionsPage::*;
     // A command waits for its keys only while its page is shown.
     if !matches!(app.options_page, Commands) {
@@ -496,44 +743,51 @@ fn draw_page(app: &mut App, ui: &mut Ui) {
     }
     match app.options_page {
         General => general_page(app, ui),
+        TabletMode => pg::tablet_mode_page(app, ui),
         Display => display_page(app, ui),
         Edit => edit_page(app, ui),
         NodesAndHandles => nodes_page(app, ui),
         ClipFrame => clip_frame_page(app, ui),
+        BitmapTracing => crate::ui::options_global::bitmap_tracing_page(app, ui),
         Snapping => snapping_page(app, ui),
-        AlignmentGuides => alignment_guides_page(app, ui),
-        DynamicGuides => dynamic_guides_page(app, ui),
         Save => save_page(app, ui),
         Text => text_page(app, ui),
+        PenSettings => pg::pen_page(app, ui),
+        Warnings => crate::ui::options_global::warnings_page(app, ui),
+        Macros => pg::macros_page(app, ui),
+        Plugins => pg::plugins_page(app, ui),
         Appearance => appearance_page(app, ui),
         Commands => commands_page(app, ui),
         CommandBars => command_bars_page(app, ui),
         ColorPalette => color_palette_page(app, ui),
         Pick => pick_page(app, ui),
+        Eraser => eraser_page(app, ui),
         ZoomPan => zoom_pan_page(app, ui),
+        Curves => curves_page(app, ui),
+        SmartDrawing => pg::smart_drawing_page(app, ui),
         Rectangle => rectangle_page(app, ui),
         Ellipse => ellipse_page(app, ui),
-        Polygon => polygon_page(app, ui),
-        Spiral => spiral_page(app, ui),
         GraphPaper => graph_paper_page(app, ui),
+        Spiral => spiral_page(app, ui),
         Table => table_page(app, ui),
-        Eraser => eraser_page(app, ui),
-        Curves => curves_page(app, ui),
+        Dimension => pg::dimension_page(app, ui, false),
+        AngularDimension => pg::dimension_page(app, ui, true),
+        Connector => pg::connector_page(app, ui),
+        MeshFill => pg::mesh_fill_page(app, ui),
         GlobalGeneral => global_general_page(app, ui),
         Printing => crate::ui::options_global::printing_page(app, ui),
-        FileFormats => crate::ui::options_global::file_formats_page(app, ui),
-        BitmapTracing => crate::ui::options_global::bitmap_tracing_page(app, ui),
-        Warnings => crate::ui::options_global::warnings_page(app, ui),
         FileLocations => file_locations_page(app, ui),
+        FileFormats => crate::ui::options_global::file_formats_page(app, ui),
+        GlobalColor => pg::global_color_page(app, ui),
         Workspace => workspace_page(app, ui),
         DocumentGeneral => document_general_page(app, ui),
         PageSize => crate::ui::dialogs::page_size_page(app, ui),
         Layout => layout_page(app, ui),
         Background => background_page(app, ui),
-        Bleed => bleed_page(app, ui),
-        Rulers => crate::ui::layout_options::rulers_page(app, ui),
-        Grid => crate::ui::layout_options::grid_page(app, ui),
         Guidelines => crate::ui::layout_options::guidelines_page(app, ui),
+        Grid => crate::ui::layout_options::grid_page(app, ui),
+        Rulers => crate::ui::layout_options::rulers_page(app, ui),
+        DocumentSave => pg::document_save_page(app, ui),
     }
 }
 
@@ -586,57 +840,61 @@ fn rgb_button(ui: &mut Ui, rgb: &mut [u8; 3]) -> bool {
 // ----- CD Draw options -------------------------------------------------
 
 fn general_page(app: &mut App, ui: &mut Ui) {
-    chrome::section(ui, &tr("options.getting_started"));
-    ui.indent("gs", |ui| {
-        grid("startup").show(ui, |ui| {
-            row_label(ui, &trf("options.on_startup", &[("app", "CD Draw")]));
-            let mut s = app.settings.startup;
-            if combo(ui, "startup", &mut s, &Startup::ALL, |v| tr(v.key()), 240.0) {
-                app.settings.startup = s;
-                app.settings.show_welcome_on_start = s == Startup::WelcomeScreen;
-            }
-            ui.end_row();
-        });
-        ui.checkbox(
-            &mut app.settings.show_new_document_dialog,
-            tr("options.show_new_document_dialog"),
-        );
-        ui.checkbox(&mut app.settings.show_splash, tr("options.show_splash"));
+    heading(ui, &tr("opt.getting_started"));
+    grid("startup").show(ui, |ui| {
+        row_label(ui, &trf("opt.on_startup", &[("app", "CD Draw")]));
+        let mut s = app.settings.startup;
+        if combo(ui, "startup", &mut s, &Startup::ALL, |v| tr(v.key()), 150.0) {
+            app.settings.startup = s;
+            app.settings.show_welcome_on_start = s == Startup::WelcomeScreen;
+        }
+        ui.end_row();
     });
-    chrome::section(ui, &tr("options.undo_levels"));
-    ui.indent("undo", |ui| {
-        grid("undo_grid").show(ui, |ui| {
-            row_label(ui, &tr("options.undo_regular"));
-            ui.add_sized(
-                [70.0, 22.0],
-                egui::DragValue::new(&mut app.settings.undo_levels).range(1..=99_999),
-            );
-            ui.end_row();
-        });
+    ui.checkbox(
+        &mut app.settings.show_new_document_dialog,
+        tr("opt.show_new_document_dialog"),
+    );
+    ui.checkbox(&mut app.settings.show_splash, tr("options.show_splash"));
+    sep(ui);
+    heading(ui, &tr("opt.undo_levels"));
+    grid("undo_grid").show(ui, |ui| {
+        row_label(ui, &tr("opt.undo_regular"));
+        ui.add_sized(
+            [64.0, 22.0],
+            egui::DragValue::new(&mut app.settings.undo_levels).range(1..=99_999),
+        );
+        ui.end_row();
     });
 }
 
 fn display_page(app: &mut App, ui: &mut Ui) {
-    ui.checkbox(&mut app.proof_colors, tr("menu.view.proof_colors"));
-    chrome::section(ui, &tr("options.other_controls"));
-    ui.indent("oc", |ui| {
-        ui.checkbox(&mut app.settings.show_tooltips, tr("options.show_tooltips"));
-        ui.checkbox(
+    ui.checkbox(&mut app.proof_colors, tr("opt.proof_colors"));
+    sep(ui);
+    heading(ui, &tr("options.other_controls"));
+    ui.columns(2, |c| {
+        off_check(&mut c[0], false, &tr("opt.interruptible_refresh"));
+        off_check(&mut c[0], false, &tr("opt.manual_refresh"));
+        off_check(&mut c[0], true, &tr("opt.auto_panning"));
+        c[0].checkbox(&mut app.settings.show_tooltips, tr("opt.show_tooltips"));
+        off_check(&mut c[1], true, &tr("opt.antialiased_bitmaps"));
+        c[1].checkbox(
             &mut app.settings.hide_bbox_curve_tools,
-            tr("options.hide_bbox_curve_tools"),
+            tr("opt.hide_bbox_curve_tools"),
         );
-        ui.checkbox(&mut app.settings.node_tracking, tr("options.node_tracking"));
+        off_check(&mut c[1], false, &tr("opt.highlight_selected_outline"));
     });
-    chrome::section(ui, &tr("options.full_screen_preview"));
-    ui.indent("fsp", |ui| {
-        ui.checkbox(
-            &mut app.settings.preview_page_border,
-            tr("options.show_page_border"),
-        );
-    });
-    ui.separator();
+    sep(ui);
+    heading(ui, &tr("options.full_screen_preview"));
+    off_radio(ui, false, &tr("opt.use_normal_view"));
+    off_radio(ui, true, &tr("opt.use_enhanced_view"));
+    ui.checkbox(
+        &mut app.settings.preview_page_border,
+        tr("options.show_page_border"),
+    );
+    sep(ui);
+    heading(ui, &tr("opt.navigation"));
     grid("display_wheel").show(ui, |ui| {
-        row_label(ui, &tr("options.wheel_default_action"));
+        row_label(ui, &tr("opt.wheel_default_action"));
         let mut zoom = app.settings.wheel_zooms;
         combo(
             ui,
@@ -645,43 +903,24 @@ fn display_page(app: &mut App, ui: &mut Ui) {
             &[true, false],
             |v| {
                 tr(if v {
-                    "options.wheel_zoom"
+                    "opt.wheel_zoom"
                 } else {
-                    "options.wheel_scroll"
+                    "opt.wheel_scroll"
                 })
             },
-            120.0,
+            110.0,
         );
         app.settings.wheel_zooms = zoom;
         ui.end_row();
-    });
-    chrome::section(ui, &tr("options.ruler_calibration"));
-    ui.label(
-        egui::RichText::new(tr("options.calibrate_help"))
-            .color(Tokens::text_dim())
-            .size(12.0),
-    );
-    ui.horizontal(|ui| {
-        ui.label(tr("options.screen_resolution"));
-        let mut ppi = crate::settings::screen_ppi(&app.settings);
-        if ui
-            .add_sized(
-                [80.0, 22.0],
-                egui::DragValue::new(&mut ppi)
-                    .range(48.0..=400.0)
-                    .speed(0.1)
-                    .max_decimals(1),
-            )
-            .changed()
-        {
-            app.settings.screen_ppi = ppi;
-        }
-        ui.label(tr("options.points_per_inch"));
-        if ui.button(tr("options.reset")).clicked() {
-            app.settings.screen_ppi = 96.0;
+        for key in ["opt.zoom_rate", "opt.alternate_zoom_rate"] {
+            row_label(ui, &tr(key));
+            ui.horizontal(|ui| {
+                off_combo(ui, key, "100%", 70.0);
+                off_button(ui, &tr("options.reset"));
+            });
+            ui.end_row();
         }
     });
-    calibration_rulers(ui, crate::settings::screen_points_per_inch(&app.settings));
 }
 
 /// Two rulers drawn at the calibrated resolution, 100 mm and 4 inches
@@ -749,10 +988,10 @@ fn calibration_rulers(ui: &mut Ui, ppi: f32) {
 
 fn edit_page(app: &mut App, ui: &mut Ui) {
     grid("edit").show(ui, |ui| {
-        row_label(ui, &tr("options.constrain_angle"));
+        row_label(ui, &tr("opt.constrain_angle"));
         ui.horizontal(|ui| {
             ui.add_sized(
-                [80.0, 22.0],
+                [64.0, 22.0],
                 egui::DragValue::new(&mut app.settings.constrain_angle)
                     .range(0.1..=90.0)
                     .max_decimals(1)
@@ -761,42 +1000,40 @@ fn edit_page(app: &mut App, ui: &mut Ui) {
             ui.label(tr("options.degrees"));
         });
         ui.end_row();
-        row_label(ui, &tr("options.drawing_precision"));
+        row_label(ui, &tr("opt.drawing_precision"));
         ui.horizontal(|ui| {
             ui.add_sized(
-                [80.0, 22.0],
+                [64.0, 22.0],
                 egui::DragValue::new(&mut app.settings.precision).range(0..=10),
             );
             ui.label(tr("options.decimal_places"));
         });
         ui.end_row();
     });
-    // Focus mode.
-    crate::ui::chrome::section(ui, &tr("options.focus_inactive"));
+    off_check(ui, true, &tr("opt.double_click_edit_bitmaps"));
+    sep(ui);
+    heading(ui, &tr("opt.inactive_visibility"));
     ui.horizontal(|ui| {
         let mut v = app.settings.focus_visibility as f32;
-        if ui
-            .add(
-                egui::Slider::new(&mut v, 0.0..=100.0)
-                    .suffix(" %")
-                    .integer(),
-            )
-            .changed()
+        if slider(
+            ui,
+            egui::Slider::new(&mut v, 0.0..=100.0)
+                .suffix(" %")
+                .integer(),
+        )
+        .changed()
         {
             app.settings.focus_visibility = v.round() as u8;
         }
-        if ui.button(tr("dialog.reset")).clicked() {
+        if ui.button(tr("options.reset")).clicked() {
             app.settings.focus_visibility = 20;
         }
     });
-    ui.label(
-        egui::RichText::new(tr("options.focus_inactive_hint"))
-            .color(crate::theme::Tokens::text_dim()),
-    );
-    ui.add_space(6.0);
+    note(ui, &tr("options.focus_inactive_hint"));
+    ui.add_space(4.0);
     ui.checkbox(
         &mut app.settings.focus_double_click,
-        tr("options.focus_double_click"),
+        tr("opt.focus_double_click"),
     );
 }
 
@@ -811,44 +1048,45 @@ fn shape_label(s: NodeShape) -> String {
 fn nodes_page(app: &mut App, ui: &mut Ui) {
     let n = &mut app.settings.nodes;
     grid("node_size").show(ui, |ui| {
-        row_label(ui, &tr("options.node_size"));
+        row_label(ui, &tr("opt.node_size"));
         combo(
             ui,
             "node_size",
             &mut n.size,
             &NodeSize::ALL,
             |v| tr(v.key()),
-            100.0,
+            90.0,
         );
         ui.end_row();
     });
-    chrome::section(ui, &tr("options.node_shape"));
+    sep(ui);
+    heading(ui, &tr("opt.node_shape"));
     grid("node_shapes").show(ui, |ui| {
-        row_label(ui, &tr("options.node_cusp"));
-        combo(ui, "cusp", &mut n.cusp, &NodeShape::ALL, shape_label, 50.0);
+        row_label(ui, &tr("opt.node_cusp"));
+        combo(ui, "cusp", &mut n.cusp, &NodeShape::ALL, shape_label, 40.0);
         ui.end_row();
-        row_label(ui, &tr("options.node_smooth"));
+        row_label(ui, &tr("opt.node_smooth"));
         combo(
             ui,
             "smooth",
             &mut n.smooth,
             &NodeShape::ALL,
             shape_label,
-            50.0,
+            40.0,
         );
         ui.end_row();
-        row_label(ui, &tr("options.node_symmetrical"));
+        row_label(ui, &tr("opt.node_symmetrical"));
         combo(
             ui,
             "symmetrical",
             &mut n.symmetrical,
             &NodeShape::ALL,
             shape_label,
-            50.0,
+            40.0,
         );
         ui.end_row();
         ui.label("");
-        if chrome::button(ui, &tr("options.reset")).clicked() {
+        if ui.button(tr("options.reset")).clicked() {
             let d = crate::settings::NodePrefs::default();
             n.cusp = d.cusp;
             n.smooth = d.smooth;
@@ -856,7 +1094,8 @@ fn nodes_page(app: &mut App, ui: &mut Ui) {
         }
         ui.end_row();
     });
-    ui.checkbox(&mut n.show_direction, tr("options.show_curve_direction"));
+    ui.checkbox(&mut n.show_direction, tr("opt.show_curve_direction"));
+    ui.checkbox(&mut app.settings.node_tracking, tr("opt.node_tracking"));
     ui.horizontal(|ui| {
         ui.label(tr("options.node_pick_distance"));
         ui.add(
@@ -868,102 +1107,153 @@ fn nodes_page(app: &mut App, ui: &mut Ui) {
         )
         .on_hover_text(tr("options.node_pick_distance_tip"));
     });
-    chrome::section(ui, &tr("options.colors"));
+    sep(ui);
+    heading(ui, &tr("options.colors"));
+    // The scheme is Custom as soon as a colour is not the default one;
+    // choosing Default puts both back.
+    let d = crate::settings::NodePrefs::default();
+    let mut custom = n.main_rgb != d.main_rgb || n.secondary_rgb != d.secondary_rgb;
+    let custom_id = ui.id().with("node_scheme_custom");
+    custom |= ui.data(|m| m.get_temp(custom_id)).unwrap_or(false);
     grid("node_colors").show(ui, |ui| {
-        row_label(ui, &tr("options.main_color"));
-        ui.horizontal(|ui| {
-            rgb_button(ui, &mut n.main_rgb);
-            if ui.button(tr("options.reset")).clicked() {
-                n.main_rgb = crate::settings::NodePrefs::default().main_rgb;
-            }
+        row_label(ui, &tr("opt.color_scheme"));
+        let before = custom;
+        combo(
+            ui,
+            "node_scheme",
+            &mut custom,
+            &[false, true],
+            |v| {
+                tr(if v {
+                    "opt.scheme_custom"
+                } else {
+                    "opt.scheme_default"
+                })
+            },
+            150.0,
+        );
+        if before && !custom {
+            n.main_rgb = d.main_rgb;
+            n.secondary_rgb = d.secondary_rgb;
+        }
+        ui.end_row();
+        row_label(ui, &tr("opt.main_color"));
+        ui.add_enabled_ui(custom, |ui| {
+            ui.horizontal(|ui| {
+                rgb_button(ui, &mut n.main_rgb);
+                if ui.button(tr("options.reset")).clicked() {
+                    n.main_rgb = d.main_rgb;
+                }
+            });
         });
         ui.end_row();
-        row_label(ui, &tr("options.secondary_color"));
-        ui.horizontal(|ui| {
-            rgb_button(ui, &mut n.secondary_rgb);
-            if ui.button(tr("options.reset")).clicked() {
-                n.secondary_rgb = crate::settings::NodePrefs::default().secondary_rgb;
-            }
+        row_label(ui, &tr("opt.secondary_color"));
+        ui.add_enabled_ui(custom, |ui| {
+            ui.horizontal(|ui| {
+                rgb_button(ui, &mut n.secondary_rgb);
+                if ui.button(tr("options.reset")).clicked() {
+                    n.secondary_rgb = d.secondary_rgb;
+                }
+            });
         });
         ui.end_row();
     });
-    ui.checkbox(
-        &mut n.unselected_filled,
-        tr("options.unselected_nodes_filled"),
-    );
+    ui.data_mut(|m| m.insert_temp(custom_id, custom));
+    ui.checkbox(&mut n.unselected_filled, tr("opt.show_highlight"));
+    off_check(ui, false, &tr("opt.node_types_colors"));
 }
 
 fn clip_frame_page(app: &mut App, ui: &mut Ui) {
     let p = &mut app.settings.clip_frame;
-    ui.label(tr("options.auto_center"));
-    ui.indent("ac", |ui| {
-        for (v, key) in [
-            (AutoCenter::WhenOutside, "options.auto_center_outside"),
-            (AutoCenter::Always, "options.auto_center_always"),
-            (AutoCenter::Never, "options.auto_center_never"),
-        ] {
-            ui.radio_value(&mut p.auto_center, v, tr(key));
-        }
+    ui.horizontal(|ui| {
+        ui.label(tr("opt.clip_drag_into"));
+        off_combo(ui, "clip_drag", &tr("opt.clip_frame_with_content"), 170.0);
     });
-    ui.separator();
-    ui.checkbox(&mut p.empty_lines, tr("options.empty_frame_lines"));
+    ui.indent("clip_drag_choices", |ui| {
+        ui.add_space(4.0);
+        off_radio(ui, true, &tr("opt.clip_ignore_frame"));
+        off_radio(ui, false, &tr("opt.clip_add_to_frame"));
+        off_radio(ui, false, &tr("opt.clip_replace_contents"));
+    });
+    sep(ui);
+    ui.label(tr("opt.auto_center"));
+    for (v, key) in [
+        (AutoCenter::WhenOutside, "opt.auto_center_outside"),
+        (AutoCenter::Always, "opt.auto_center_always"),
+        (AutoCenter::Never, "opt.auto_center_never"),
+    ] {
+        ui.radio_value(&mut p.auto_center, v, tr(key));
+    }
+    note(ui, &tr("opt.auto_center_note"));
+    sep(ui);
+    ui.checkbox(&mut p.empty_lines, tr("opt.empty_frame_lines"));
+    off_radio(ui, true, &tr("opt.empty_lines_always"));
+    off_radio(ui, false, &tr("opt.empty_lines_screen"));
+    sep(ui);
+    note(ui, &tr("opt.clip_note"));
 }
 
 fn snapping_page(app: &mut App, ui: &mut Ui) {
-    ui.checkbox(&mut app.snap.objects, tr("options.snap_to_objects"));
-    ui.checkbox(&mut app.snap.page, tr("options.snap_to_page"));
+    ui.checkbox(&mut app.snap.objects, tr("opt.snap_to_objects"));
+    off_check(ui, true, &tr("opt.snap_to_self"));
+    ui.checkbox(&mut app.snap.page, tr("opt.snap_to_page"));
     ui.horizontal(|ui| {
-        ui.add_space(16.0);
-        ui.label(tr("options.snapping_radius"));
+        ui.label(tr("opt.snapping_radius"));
         ui.add_sized(
-            [70.0, 22.0],
+            [64.0, 22.0],
             egui::DragValue::new(&mut app.settings.snap.threshold_px).range(1.0..=100.0),
         );
         ui.label(tr("options.pixels"));
     });
-    ui.checkbox(&mut app.snap.guides, tr("options.snap_to_guidelines"));
-    ui.checkbox(&mut app.snap.grid, tr("options.snap_to_grid"));
-    ui.checkbox(
-        &mut app.snap.baseline_grid,
-        tr("menu.view.snap_baseline_grid"),
+    ui.checkbox(&mut app.settings.snap.show_marks, tr("opt.show_snap_marks"));
+    ui.add_enabled(
+        app.settings.snap.show_marks,
+        egui::Checkbox::new(
+            &mut app.settings.snap.screen_tips,
+            tr("opt.snap_screen_tip"),
+        ),
     );
-    ui.checkbox(&mut app.snap.pixels, tr("options.snap_to_pixels"));
-    ui.checkbox(
-        &mut app.settings.snap.show_marks,
-        tr("options.show_snap_marks"),
-    );
-    ui.horizontal(|ui| {
-        ui.add_space(16.0);
-        ui.add_enabled(
-            app.settings.snap.show_marks,
-            egui::Checkbox::new(
-                &mut app.settings.snap.screen_tips,
-                tr("options.snap_screen_tip"),
-            ),
-        );
-    });
-    chrome::section(ui, &tr("options.snap_modes"));
-    ui.indent("snap_modes", |ui| {
-        let modes = &mut app.settings.snap.modes;
-        for m in crate::snap_points::SnapMode::ALL {
-            ui.horizontal(|ui| {
-                let mut on = modes.get(m);
-                if ui.checkbox(&mut on, "").changed() {
-                    modes.set(m, on);
-                }
-                let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                crate::canvas::draw_snap_glyph(ui.painter(), r.center(), m, Tokens::icon());
-                ui.label(tr(m.key()));
-            });
-        }
-        ui.horizontal(|ui| {
-            if ui.button(tr("options.select_all")).clicked() {
-                *modes = crate::snap_points::SnapModes::default();
-            }
-            if ui.button(tr("options.deselect_all")).clicked() {
-                *modes = crate::snap_points::SnapModes::none();
-            }
+    sep(ui);
+    heading(ui, &tr("opt.snap_modes"));
+    let modes = &mut app.settings.snap.modes;
+    egui::Frame::new()
+        .fill(Tokens::field())
+        .stroke(egui::Stroke::new(1.0, Tokens::control_border()))
+        .inner_margin(egui::Margin::same(4))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical()
+                .id_salt("snap_modes_list")
+                .max_height(150.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    for m in crate::snap_points::SnapMode::ALL {
+                        ui.horizontal(|ui| {
+                            let mut on = modes.get(m);
+                            if ui.checkbox(&mut on, "").changed() {
+                                modes.set(m, on);
+                            }
+                            let (r, _) = ui
+                                .allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                            crate::canvas::draw_snap_glyph(
+                                ui.painter(),
+                                r.center(),
+                                m,
+                                Tokens::icon(),
+                            );
+                            ui.label(tr(m.key()));
+                        });
+                    }
+                });
         });
+    ui.horizontal(|ui| {
+        if ui.button(tr("opt.select_all")).clicked() {
+            *modes = crate::snap_points::SnapModes::default();
+        }
+        if ui.button(tr("opt.deselect_all")).clicked() {
+            *modes = crate::snap_points::SnapModes::none();
+        }
     });
 }
 
@@ -1177,82 +1467,145 @@ fn path_field(ui: &mut Ui, dir: &mut Option<std::path::PathBuf>, fallback: Strin
 
 fn save_page(app: &mut App, ui: &mut Ui) {
     let b = &mut app.settings.backup;
-    chrome::section(ui, &tr("options.backup"));
-    ui.indent("bk", |ui| {
-        ui.checkbox(&mut b.before_save, tr("options.backup_before_save"));
-        ui.add_enabled_ui(b.before_save, |ui| {
-            let mut choose = b.before_save_dir.is_some();
-            ui.horizontal(|ui| {
-                ui.label(tr("options.backup_to"));
-                ui.vertical(|ui| {
-                    ui.radio_value(&mut choose, false, tr("options.same_folder"));
-                    ui.radio_value(&mut choose, true, tr("options.choose_location"));
-                });
-            });
-            if choose && b.before_save_dir.is_none() {
-                b.before_save_dir = Some(std::env::temp_dir());
-            } else if !choose {
-                b.before_save_dir = None;
-            }
-            ui.add_enabled_ui(choose, |ui| {
-                path_field(ui, &mut b.before_save_dir, String::new());
+    heading(ui, &tr("opt.backup"));
+    ui.checkbox(&mut b.before_save, tr("opt.backup_before_save"));
+    ui.add_enabled_ui(b.before_save, |ui| {
+        let mut choose = b.before_save_dir.is_some();
+        ui.horizontal_top(|ui| {
+            ui.label(tr("opt.backup_to"));
+            ui.vertical(|ui| {
+                ui.radio_value(&mut choose, false, tr("opt.same_folder"));
+                ui.radio_value(&mut choose, true, tr("opt.choose_location"));
             });
         });
-    });
-    chrome::section(ui, &tr("options.auto_backup"));
-    ui.indent("ab", |ui| {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut b.auto, tr("options.backup_every"));
-            ui.add_enabled(b.auto, egui::DragValue::new(&mut b.minutes).range(1..=999));
-            ui.label(tr("options.minutes"));
-        });
-        ui.add_enabled_ui(b.auto, |ui| {
+        if choose && b.before_save_dir.is_none() {
+            b.before_save_dir = Some(std::env::temp_dir());
+        } else if !choose {
+            b.before_save_dir = None;
+        }
+        ui.add_enabled_ui(choose, |ui| {
             path_field(
                 ui,
-                &mut b.auto_dir,
-                crate::app::App::auto_backup_dir_default()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
+                &mut b.before_save_dir,
+                std::env::temp_dir().display().to_string(),
             );
         });
     });
+    sep(ui);
+    heading(ui, &tr("opt.auto_backup"));
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut b.auto, tr("opt.backup_every"));
+        ui.add_enabled_ui(b.auto, |ui| {
+            combo(
+                ui,
+                "backup_minutes",
+                &mut b.minutes,
+                &[1, 2, 5, 10, 15, 20, 30, 45, 60],
+                |m| m.to_string(),
+                60.0,
+            );
+        });
+        ui.label(tr("options.minutes"));
+    });
+    ui.add_enabled_ui(b.auto, |ui| {
+        let mut choose = b.auto_dir.is_some();
+        ui.horizontal_top(|ui| {
+            ui.label(tr("opt.backup_to"));
+            ui.vertical(|ui| {
+                ui.radio_value(&mut choose, false, tr("opt.user_temp_folder"));
+                ui.radio_value(&mut choose, true, tr("opt.choose_location"));
+            });
+        });
+        let fallback = crate::app::App::auto_backup_dir_default()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        if choose && b.auto_dir.is_none() {
+            b.auto_dir = crate::app::App::auto_backup_dir_default();
+        } else if !choose {
+            b.auto_dir = None;
+        }
+        ui.add_enabled_ui(choose, |ui| path_field(ui, &mut b.auto_dir, fallback));
+    });
+    sep(ui);
+    heading(ui, &tr("opt.save_older_versions"));
+    off_check(ui, true, &tr("opt.ask_when_saving"));
+    off_radio(ui, true, &tr("opt.keep_appearance"));
+    off_radio(ui, false, &tr("opt.keep_editable"));
 }
 
 fn text_page(app: &mut App, ui: &mut Ui) {
-    grid("text_display").show(ui, |ui| {
-        row_label(ui, &tr("options.keyboard_text_increment"));
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [70.0, 22.0],
-                egui::DragValue::new(&mut app.settings.text_increment_pt)
-                    .range(0.1..=100.0)
-                    .max_decimals(1),
+    let labels = [
+        tr("options.display"),
+        tr("opt.paragraph_text"),
+        tr("opt.fonts"),
+        tr("opt.spelling"),
+        tr("opt.quick_correct"),
+    ];
+    tabbed(ui, "text", &labels, |ui, tab| match tab {
+        0 => {
+            off_check(ui, true, &tr("opt.show_handles_editing"));
+            off_check(ui, false, &tr("opt.auto_keyboard"));
+            off_check(ui, false, &tr("opt.find_font_language"));
+            ui.add_space(8.0);
+            grid("text_display").show(ui, |ui| {
+                row_label(ui, &tr("opt.keyboard_text_increment"));
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [64.0, 22.0],
+                        egui::DragValue::new(&mut app.settings.text_increment_pt)
+                            .range(0.1..=100.0)
+                            .max_decimals(1),
+                    );
+                    ui.label(tr("options.points"));
+                });
+                ui.end_row();
+                row_label(ui, &tr("opt.default_text_units"));
+                off_combo(ui, "text_units", &tr("options.points"), 100.0);
+                ui.end_row();
+            });
+        }
+        1 => {
+            ui.checkbox(
+                &mut app.settings.show_text_frames,
+                tr("menu.text.show_text_frames"),
             );
-            ui.label(tr("options.points"));
-        });
-        ui.end_row();
-        row_label(ui, &tr("options.default_font"));
-        crate::ui::font_list::text_font_list(app, ui, "options_default_font", 220.0);
-        ui.end_row();
-        row_label(ui, &tr("options.default_size"));
-        ui.add(
-            egui::DragValue::new(&mut app.text_size_pt)
-                .range(1.0..=999.0)
-                .suffix(" pt"),
-        );
-        ui.end_row();
+            ui.checkbox(&mut app.text_hyphenation, tr("menu.text.use_hyphenation"));
+            ui.checkbox(
+                &mut app.show_non_printing,
+                tr("menu.text.show_non_printing"),
+            );
+        }
+        2 => {
+            grid("text_fonts").show(ui, |ui| {
+                row_label(ui, &tr("options.default_font"));
+                crate::ui::font_list::text_font_list(app, ui, "options_default_font", 220.0);
+                ui.end_row();
+                row_label(ui, &tr("options.default_size"));
+                ui.add(
+                    egui::DragValue::new(&mut app.text_size_pt)
+                        .range(1.0..=999.0)
+                        .suffix(" pt"),
+                );
+                ui.end_row();
+            });
+        }
+        3 => {
+            off_check(ui, true, &tr("opt.spell_as_you_type"));
+            off_check(ui, false, &tr("opt.spell_uppercase"));
+        }
+        _ => {
+            let a = &mut app.settings.autocorrect;
+            ui.checkbox(&mut a.enabled, tr("autocorrect.enabled"));
+            ui.add_enabled_ui(a.enabled, |ui| {
+                ui.checkbox(&mut a.capitalize_sentences, tr("autocorrect.capitalize"));
+                ui.checkbox(
+                    &mut a.fix_two_initial_capitals,
+                    tr("autocorrect.two_capitals"),
+                );
+                ui.checkbox(&mut a.typographic_quotes, tr("autocorrect.quotes"));
+            });
+        }
     });
-    ui.checkbox(&mut app.text_hyphenation, tr("menu.text.use_hyphenation"));
-    ui.checkbox(
-        &mut app.show_non_printing,
-        tr("menu.text.show_non_printing"),
-    );
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(tr("menu.text.paragraph_text_frame")).strong());
-    ui.checkbox(
-        &mut app.settings.show_text_frames,
-        tr("menu.text.show_text_frames"),
-    );
 }
 
 // ----- Customization -----------------------------------------------------
@@ -1260,18 +1613,9 @@ fn text_page(app: &mut App, ui: &mut Ui) {
 /// The interface sizes the Appearance slider offers, in percent.
 const UI_SIZE_RANGE: std::ops::RangeInclusive<f32> = 75.0..=250.0;
 
-/// Customization > Appearance: where dialogs open, the interface size
-/// and the desktop colour.
 fn appearance_page(app: &mut App, ui: &mut Ui) {
-    ui.checkbox(
-        &mut app.settings.center_dialogs,
-        tr("options.center_dialogs"),
-    );
-    ui.checkbox(&mut app.settings.ui_shadows, tr("options.ui_shadows"))
-        .on_hover_text(tr("options.ui_shadows_tip"));
-    ui.checkbox(&mut app.settings.colored_icons, tr("options.colored_icons"))
-        .on_hover_text(tr("options.colored_icons_tip"));
-    crate::ui::chrome::section(ui, &tr("options.ui_size"));
+    ui.checkbox(&mut app.settings.center_dialogs, tr("opt.center_dialogs"));
+    heading(ui, &tr("opt.size"));
     // The size takes effect when the slider is let go or the field is
     // left, so the page does not grow under the pointer.
     let pending = ui.id().with("ui_size_pending");
@@ -1282,9 +1626,7 @@ fn appearance_page(app: &mut App, ui: &mut Ui) {
         .horizontal(|ui| {
             let slider = ui
                 .scope(|ui| {
-                    // The form style draws inputs white; the rail needs
-                    // to show on the page.
-                    ui.spacing_mut().slider_width = 220.0;
+                    ui.spacing_mut().slider_width = 140.0;
                     let w = &mut ui.visuals_mut().widgets;
                     w.inactive.bg_fill = crate::theme::Tokens::slider_rail();
                     w.inactive.fg_stroke = egui::Stroke::new(1.0, Tokens::control_border());
@@ -1297,14 +1639,15 @@ fn appearance_page(app: &mut App, ui: &mut Ui) {
                     )
                 })
                 .inner;
-            let field = ui.add(
+            let field = ui.add_sized(
+                [52.0, 22.0],
                 egui::DragValue::new(&mut pct)
                     .range(UI_SIZE_RANGE)
                     .speed(1.0)
                     .max_decimals(0)
                     .suffix(" %"),
             );
-            reset = ui.button(tr("options.reset_to_default")).clicked();
+            reset = ui.button(tr("opt.reset_to_default")).clicked();
             slider.dragged() || field.dragged() || field.has_focus()
         })
         .inner;
@@ -1319,7 +1662,7 @@ fn appearance_page(app: &mut App, ui: &mut Ui) {
             app.settings.ui_size = pct.round() / 100.0;
         }
     }
-    ui.label(egui::RichText::new(tr("options.ui_scale_hint")).color(Tokens::text_dim()));
+    note(ui, &tr("opt.ui_scale_hint"));
     let sys = crate::system_prefs::get();
     ui.checkbox(
         &mut app.settings.follow_text_size,
@@ -1328,13 +1671,14 @@ fn appearance_page(app: &mut App, ui: &mut Ui) {
             &[("n", &format!("{:.0}", sys.text_scale * 100.0))],
         ),
     );
-    crate::ui::chrome::section(ui, &tr("options.color_section"));
+    sep(ui);
+    heading(ui, &tr("opt.color"));
     grid("appearance_color").show(ui, |ui| {
         row_label(ui, &tr("options.theme"));
         let current = crate::theme::Theme::from_id(&app.settings.theme);
         egui::ComboBox::from_id_salt("ui_theme")
             .selected_text(tr(current.key()))
-            .width(170.0)
+            .width(130.0)
             .show_ui(ui, |ui| {
                 for t in crate::theme::Theme::ALL {
                     if ui.selectable_label(t == current, tr(t.key())).clicked() {
@@ -1343,18 +1687,13 @@ fn appearance_page(app: &mut App, ui: &mut Ui) {
                 }
             });
         ui.end_row();
-        row_label(ui, "");
-        let on = sys.high_contrast.is_some();
-        ui.checkbox(
-            &mut app.settings.follow_high_contrast,
-            tr(if on {
-                "options.follow_high_contrast_on"
-            } else {
-                "options.follow_high_contrast"
-            }),
-        );
+        row_label(ui, &tr("opt.window_border"));
+        ui.add_enabled_ui(false, |ui| {
+            let mut c = [0u8, 0, 0];
+            rgb_button(ui, &mut c);
+        });
         ui.end_row();
-        row_label(ui, &tr("options.desktop_color"));
+        row_label(ui, &tr("opt.desktop"));
         ui.horizontal(|ui| {
             rgb_button(ui, &mut app.settings.desktop_rgb);
             if ui.button(tr("options.reset")).clicked() {
@@ -1363,38 +1702,50 @@ fn appearance_page(app: &mut App, ui: &mut Ui) {
         });
         ui.end_row();
     });
+    let on = sys.high_contrast.is_some();
+    ui.checkbox(
+        &mut app.settings.follow_high_contrast,
+        tr(if on {
+            "options.follow_high_contrast_on"
+        } else {
+            "options.follow_high_contrast"
+        }),
+    );
+    ui.checkbox(&mut app.settings.ui_shadows, tr("options.ui_shadows"))
+        .on_hover_text(tr("options.ui_shadows_tip"));
+    ui.checkbox(&mut app.settings.colored_icons, tr("options.colored_icons"))
+        .on_hover_text(tr("options.colored_icons_tip"));
 }
 
-/// Customization > Color Palette: the document palette, the swatches and
-/// what the right mouse button does on them.
 fn color_palette_page(app: &mut App, ui: &mut Ui) {
     let p = &mut app.settings.palette;
-    ui.checkbox(
-        &mut p.auto_update_document,
-        tr("options.palette_auto_update"),
-    );
+    ui.checkbox(&mut p.auto_update_document, tr("opt.palette_auto_update"));
     ui.checkbox(&mut p.show_document, tr("options.palette_show_document"));
-    crate::ui::chrome::section(ui, &tr("options.palette_swatches"));
-    ui.checkbox(&mut p.show_no_color, tr("options.palette_no_color"));
-    crate::ui::chrome::section(ui, &tr("options.palette_right_button"));
+    heading(ui, &tr("opt.palette_options"));
+    ui.horizontal(|ui| {
+        ui.label(tr("opt.palette_max_rows"));
+        ui.add_enabled_ui(false, |ui| {
+            let mut rows = 1u32;
+            ui.add_sized([50.0, 22.0], egui::DragValue::new(&mut rows));
+        });
+    });
+    heading(ui, &tr("opt.color_swatches"));
+    off_check(ui, false, &tr("opt.wide_borders"));
+    off_check(ui, false, &tr("opt.large_swatches"));
+    ui.checkbox(&mut p.show_no_color, tr("opt.palette_no_color"));
+    heading(ui, &tr("opt.right_button"));
     ui.radio_value(
         &mut p.right_click_outline,
         false,
-        tr("options.palette_context_menu"),
+        tr("opt.palette_context_menu"),
     );
     ui.radio_value(
         &mut p.right_click_outline,
         true,
-        tr("options.palette_set_outline"),
+        tr("opt.palette_set_outline"),
     );
-    if p.right_click_outline {
-        ui.horizontal(|ui| {
-            ui.add_space(22.0);
-            ui.label(
-                egui::RichText::new(tr("options.palette_hold_hint")).color(Tokens::text_dim()),
-            );
-        });
-    }
+    ui.add_space(6.0);
+    note(ui, &tr("opt.palette_hold_hint"));
 }
 
 /// Options > Customization > Commands: the menu commands found, the
@@ -1834,20 +2185,33 @@ fn reset_category_shortcuts(app: &mut App, category: &str) {
     app.shortcut_editor.capture = None;
 }
 
-/// Customization > Command Bars: the bars shown, in a list, with Reset;
-/// beside it the options that hold for every bar.
 fn command_bars_page(app: &mut App, ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        ui.label(tr("opt.global_button_size"));
+        let mut size = app.settings.button_size;
+        if combo(
+            ui,
+            "global_button_size",
+            &mut size,
+            &crate::settings::ButtonSize::ALL,
+            |v| tr(v.key()),
+            90.0,
+        ) {
+            app.settings.button_size = size;
+        }
+    });
+    ui.add_space(6.0);
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
-            ui.set_width(230.0);
-            ui.label(tr("options.command_bars_hint"));
+            ui.set_width(185.0);
             egui::Frame::new()
-                .stroke(egui::Stroke::new(1.0, Tokens::border()))
+                .stroke(egui::Stroke::new(1.0, Tokens::control_border()))
                 .fill(crate::theme::Tokens::field())
-                .inner_margin(6)
+                .inner_margin(4)
                 .show(ui, |ui| {
-                    ui.set_width(216.0);
-                    ui.set_min_height(230.0);
+                    ui.set_width(175.0);
+                    ui.set_min_height(300.0);
+                    ui.spacing_mut().item_spacing.y = 3.0;
                     // The menu bar is always there.
                     ui.add_enabled(
                         false,
@@ -1855,39 +2219,71 @@ fn command_bars_page(app: &mut App, ui: &mut Ui) {
                     );
                     let palette = &mut app.settings.palette.show_palette;
                     for (flag, key) in [
+                        (&mut app.show_status_bar, "menu.window.toolbar_status_bar"),
                         (
                             &mut app.show_standard_toolbar,
                             "menu.window.toolbar_standard",
                         ),
+                        (&mut app.show_zoom_toolbar, "menu.window.toolbar_zoom"),
                         (
                             &mut app.show_property_bar,
                             "menu.window.toolbar_property_bar",
                         ),
                         (&mut app.show_toolbox, "menu.window.toolbar_toolbox"),
-                        (&mut app.show_status_bar, "menu.window.toolbar_status_bar"),
-                        (palette, "bars.palette"),
                         (&mut app.show_text_toolbar, "menu.window.toolbar_text"),
-                        (&mut app.show_zoom_toolbar, "menu.window.toolbar_zoom"),
                         (
                             &mut app.show_transform_toolbar,
                             "menu.window.toolbar_transform",
                         ),
+                        (palette, "bars.palette"),
                     ] {
                         ui.checkbox(flag, tr(key));
                     }
                 });
-            if ui.button(tr("options.reset")).clicked() {
-                app.reset_command_bars();
-            }
+            ui.horizontal(|ui| {
+                off_button(ui, &tr("opt.new"));
+                if ui
+                    .add(egui::Button::new(tr("options.reset")).min_size(egui::vec2(96.0, 22.0)))
+                    .clicked()
+                {
+                    app.reset_command_bars();
+                }
+            });
         });
-        ui.add_space(16.0);
+        ui.add_space(14.0);
         ui.vertical(|ui| {
-            crate::ui::chrome::section(ui, &tr("options.other"));
-            ui.checkbox(&mut app.settings.bars.locked, tr("bars.lock"));
+            heading(ui, &tr("opt.button_properties"));
+            grid("button_props").show(ui, |ui| {
+                row_label(ui, &tr("opt.button_size"));
+                let mut size = app
+                    .settings
+                    .toolbox_button_size
+                    .unwrap_or(app.settings.button_size);
+                if combo(
+                    ui,
+                    "toolbox_button_size",
+                    &mut size,
+                    &crate::settings::ButtonSize::ALL,
+                    |v| tr(v.key()),
+                    100.0,
+                ) {
+                    app.settings.toolbox_button_size = Some(size);
+                }
+                ui.end_row();
+                row_label(ui, &tr("opt.button_style"));
+                off_combo(ui, "button_style", &tr("opt.style_default"), 130.0);
+                ui.end_row();
+            });
+            heading(ui, &tr("opt.toolbar_properties"));
+            off_check(ui, true, &tr("opt.title_when_floating"));
+            ui.checkbox(&mut app.settings.bars.locked, tr("opt.lock_toolbars"));
             ui.checkbox(
                 &mut app.settings.show_outline_flyout,
                 tr("options.show_outline_flyout"),
             );
+            heading(ui, &tr("opt.menu_bar_mode"));
+            off_radio(ui, true, &tr("opt.menu_mode_normal"));
+            off_radio(ui, false, &tr("opt.menu_mode_file"));
         });
     });
 }
@@ -1897,115 +2293,185 @@ fn command_bars_page(app: &mut App, ui: &mut Ui) {
 fn pick_page(app: &mut App, ui: &mut Ui) {
     ui.checkbox(
         &mut app.settings.crosshair_cursor,
-        tr("options.crosshair_cursor"),
+        tr("opt.crosshair_cursor"),
     );
     ui.checkbox(
         &mut app.settings.treat_all_filled,
-        tr("options.treat_all_filled"),
+        tr("opt.treat_all_filled"),
     );
     ui.checkbox(
         &mut app.settings.marquee_touching,
         tr("options.marquee_touching"),
     )
     .on_hover_text(tr("options.marquee_touching_tip"));
+    ui.add_space(8.0);
+    ui.label(tr("opt.ctrl_shift_keys"));
+    off_radio(ui, true, &tr("opt.keys_traditional"));
+    ui.indent("keys_trad", |ui| note(ui, &tr("opt.keys_traditional_hint")));
+    off_radio(ui, false, &tr("opt.keys_windows"));
+    ui.indent("keys_win", |ui| note(ui, &tr("opt.keys_windows_hint")));
 }
 
 fn zoom_pan_page(app: &mut App, ui: &mut Ui) {
-    ui.label(tr("options.zoom_right_button"));
-    ui.indent("zr", |ui| {
-        ui.radio_value(
-            &mut app.settings.zoom_right_click_out,
-            true,
-            tr("options.zoom_out"),
-        );
-        ui.radio_value(
-            &mut app.settings.zoom_right_click_out,
-            false,
-            tr("options.context_menu"),
-        );
-    });
-    ui.separator();
-    ui.label(tr("options.wheel_action"));
-    ui.indent("wa", |ui| {
-        ui.radio_value(
-            &mut app.settings.wheel_zooms,
-            true,
-            tr("options.wheel_zoom"),
-        );
-        ui.radio_value(
-            &mut app.settings.wheel_zooms,
-            false,
-            tr("options.wheel_scroll"),
-        );
-    });
+    heading(ui, &tr("opt.zoom_tool"));
+    ui.label(tr("opt.right_button_action"));
+    ui.radio_value(
+        &mut app.settings.zoom_right_click_out,
+        true,
+        tr("opt.zoom_out"),
+    );
+    ui.radio_value(
+        &mut app.settings.zoom_right_click_out,
+        false,
+        tr("opt.context_menu"),
+    );
+    ui.add_space(4.0);
+    off_check(ui, false, &tr("opt.zoom_relative_1_1"));
+    off_check(ui, true, &tr("opt.center_mouse_wheel_zoom"));
+    sep(ui);
+    heading(ui, &tr("opt.pan_tool"));
+    ui.label(tr("opt.right_button_action"));
+    off_radio(ui, true, &tr("opt.pan_reduce"));
+    off_radio(ui, false, &tr("opt.context_menu"));
+    sep(ui);
+    let open_id = ui.id().with("calibrate_open");
+    let mut open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(false);
+    if ui.button(tr("opt.calibrate_zoom")).clicked() {
+        open = !open;
+    }
+    ui.data_mut(|d| d.insert_temp(open_id, open));
+    note(ui, &tr("opt.calibrate_zoom_hint"));
+    if open {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label(tr("options.screen_resolution"));
+            let mut ppi = crate::settings::screen_ppi(&app.settings);
+            if ui
+                .add_sized(
+                    [70.0, 22.0],
+                    egui::DragValue::new(&mut ppi)
+                        .range(48.0..=400.0)
+                        .speed(0.1)
+                        .max_decimals(1),
+                )
+                .changed()
+            {
+                app.settings.screen_ppi = ppi;
+            }
+            ui.label(tr("options.points_per_inch"));
+            if ui.button(tr("options.reset")).clicked() {
+                app.settings.screen_ppi = 96.0;
+            }
+        });
+        note(ui, &tr("options.calibrate_help"));
+        calibration_rulers(ui, crate::settings::screen_points_per_inch(&app.settings));
+    }
 }
 
 fn rectangle_page(app: &mut App, ui: &mut Ui) {
     use tracedraw_core::{CornerKind, Corners};
     let mut c = app.rect_corners;
     let u = app.units;
-    let together = app.corners_together;
-    chrome::section(ui, &tr("options.rectangle_corners"));
-    ui.indent("rect_corners", |ui| {
-        ui.horizontal(|ui| {
-            for (kind, key) in [
-                (CornerKind::Round, "toolbar.corner_round"),
-                (CornerKind::Scallop, "toolbar.corner_scallop"),
-                (CornerKind::Chamfer, "toolbar.corner_chamfer"),
-            ] {
-                ui.radio_value(&mut c.kind, kind, tr(key));
+    ui.horizontal(|ui| {
+        for (kind, key) in [
+            (CornerKind::Round, "toolbar.corner_round"),
+            (CornerKind::Scallop, "toolbar.corner_scallop"),
+            (CornerKind::Chamfer, "toolbar.corner_chamfer"),
+        ] {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+            if c.kind == kind {
+                ui.painter().rect_filled(r, 2.0, Tokens::ACCENT);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(r, 2.0, Tokens::hovered_row());
             }
-        });
-        egui::Grid::new("rect_corners_grid")
-            .num_columns(4)
-            .spacing([8.0, 8.0])
-            .show(ui, |ui| {
-                for pair in [
-                    [
-                        (Corners::TOP_LEFT, "toolbar.corner_top_left"),
-                        (Corners::TOP_RIGHT, "toolbar.corner_top_right"),
-                    ],
-                    [
-                        (Corners::BOTTOM_LEFT, "toolbar.corner_bottom_left"),
-                        (Corners::BOTTOM_RIGHT, "toolbar.corner_bottom_right"),
-                    ],
-                ] {
-                    for (i, key) in pair {
-                        row_label(ui, &tr(key));
-                        let mut v = u.world_from_mm(c.radii[i]);
-                        if ui
-                            .add_sized(
-                                [80.0, 22.0],
-                                egui::DragValue::new(&mut v)
-                                    .range(0.0..=10_000.0)
-                                    .speed(0.1)
-                                    .suffix(format!(" {}", u.short())),
-                            )
-                            .changed()
-                        {
-                            let v = u.world_to_mm(v).max(0.0);
-                            if together {
-                                c.radii = [v; 4];
-                            } else {
-                                c.radii[i] = v;
-                            }
-                        }
-                    }
-                    ui.end_row();
-                }
-            });
-        ui.checkbox(&mut app.corners_together, tr("toolbar.corners_together"));
-    });
-    chrome::section(ui, &tr("options.scale_corners"));
-    ui.indent("scale_corners", |ui| {
-        let mut relative = !c.fixed;
-        if ui
-            .checkbox(&mut relative, tr("toolbar.relative_corners"))
-            .changed()
-        {
-            c.fixed = !relative;
+            corner_glyph(
+                ui.painter(),
+                r.shrink(5.0),
+                kind,
+                if c.kind == kind {
+                    egui::Color32::WHITE
+                } else {
+                    Tokens::icon()
+                },
+            );
+            if resp.on_hover_text(tr(key)).clicked() {
+                c.kind = kind;
+            }
         }
     });
+    ui.add_space(4.0);
+    ui.label(tr("opt.corners"));
+    let together = app.corners_together;
+    let mut lock = together;
+    egui::Grid::new("rect_corners_grid")
+        .num_columns(5)
+        .spacing([6.0, 6.0])
+        .show(ui, |ui| {
+            for (row, pair) in [
+                [Corners::TOP_LEFT, Corners::TOP_RIGHT],
+                [Corners::BOTTOM_LEFT, Corners::BOTTOM_RIGHT],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for (col, i) in pair.into_iter().enumerate() {
+                    if col == 1 {
+                        if row == 0 {
+                            let (r, resp) = ui
+                                .allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+                            if lock {
+                                ui.painter().rect_filled(r, 2.0, Tokens::ACCENT);
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(r, 2.0, Tokens::hovered_row());
+                            }
+                            lock_glyph(
+                                ui.painter(),
+                                r.center(),
+                                lock,
+                                if lock {
+                                    egui::Color32::WHITE
+                                } else {
+                                    Tokens::icon()
+                                },
+                            );
+                            if resp.on_hover_text(tr("toolbar.corners_together")).clicked() {
+                                lock = !lock;
+                            }
+                        } else {
+                            ui.label("");
+                        }
+                    }
+                    let mut v = u.world_from_mm(c.radii[i]);
+                    if ui
+                        .add_sized(
+                            [76.0, 22.0],
+                            egui::DragValue::new(&mut v)
+                                .range(0.0..=10_000.0)
+                                .speed(0.1)
+                                .max_decimals(1)
+                                .suffix(format!(" {}", u.short())),
+                        )
+                        .changed()
+                    {
+                        let v = u.world_to_mm(v).max(0.0);
+                        if together {
+                            c.radii = [v; 4];
+                        } else {
+                            c.radii[i] = v;
+                        }
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    app.corners_together = lock;
+    let mut relative = !c.fixed;
+    if ui
+        .checkbox(&mut relative, tr("opt.scale_corners"))
+        .changed()
+    {
+        c.fixed = !relative;
+    }
     app.rect_corners = c;
 }
 
@@ -2016,12 +2482,17 @@ fn ellipse_page(app: &mut App, ui: &mut Ui) {
         Some(_) => 2,
     };
     let before = kind;
-    ui.radio_value(&mut kind, 0, tr("options.ellipse"));
-    ui.radio_value(&mut kind, 1, tr("options.pie"));
-    ui.radio_value(&mut kind, 2, tr("options.arc"));
+    ui.horizontal_top(|ui| {
+        ui.label(tr("opt.type"));
+        ui.vertical(|ui| {
+            ui.radio_value(&mut kind, 0, tr("options.ellipse"));
+            ui.radio_value(&mut kind, 1, tr("options.pie"));
+            ui.radio_value(&mut kind, 2, tr("options.arc"));
+        });
+    });
     let mut arc = app.ellipse_arc.unwrap_or(tracedraw_core::EllipseArc {
-        start_deg: 0.0,
-        end_deg: 270.0,
+        start_deg: 90.0,
+        end_deg: 90.0,
         pie: true,
     });
     if kind != before {
@@ -2033,158 +2504,196 @@ fn ellipse_page(app: &mut App, ui: &mut Ui) {
             }
         };
     }
-    if let Some(a) = &mut app.ellipse_arc {
+    ui.add_space(6.0);
+    let on = app.ellipse_arc.is_some();
+    let mut a = app.ellipse_arc.unwrap_or(arc);
+    ui.add_enabled_ui(on, |ui| {
         grid("arc").show(ui, |ui| {
-            row_label(ui, &tr("options.starting_angle"));
-            ui.add(
-                egui::DragValue::new(&mut a.start_deg)
-                    .range(-360.0..=360.0)
-                    .suffix("°"),
-            );
+            row_label(ui, &tr("opt.starting_angle"));
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [64.0, 22.0],
+                    egui::DragValue::new(&mut a.start_deg)
+                        .range(-360.0..=360.0)
+                        .max_decimals(1),
+                );
+                ui.label(tr("options.degrees"));
+            });
             ui.end_row();
-            row_label(ui, &tr("options.ending_angle"));
-            ui.add(
-                egui::DragValue::new(&mut a.end_deg)
-                    .range(-360.0..=360.0)
-                    .suffix("°"),
-            );
+            row_label(ui, &tr("opt.ending_angle"));
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [64.0, 22.0],
+                    egui::DragValue::new(&mut a.end_deg)
+                        .range(-360.0..=360.0)
+                        .max_decimals(1),
+                );
+                ui.label(tr("options.degrees"));
+            });
             ui.end_row();
         });
+    });
+    if on {
+        app.ellipse_arc = Some(a);
     }
-}
-
-fn polygon_page(app: &mut App, ui: &mut Ui) {
-    grid("polygon").show(ui, |ui| {
-        row_label(ui, &tr("options.number_of_points"));
-        ui.add(egui::DragValue::new(&mut app.polygon_points).range(3..=500));
-        ui.end_row();
-        row_label(ui, &tr("options.sharpness"));
-        // Stored as a fraction, shown in percent like the property bar.
-        let mut pct = (app.star_sharpness * 100.0).round();
-        if ui
-            .add(egui::DragValue::new(&mut pct).range(1.0..=99.0).suffix("%"))
-            .changed()
-        {
-            app.star_sharpness = (pct / 100.0).clamp(0.01, 0.99);
-        }
-        ui.end_row();
+    ui.add_space(6.0);
+    ui.horizontal_top(|ui| {
+        ui.label(tr("opt.direction"));
+        ui.vertical(|ui| {
+            off_radio(ui, false, &tr("opt.clockwise"));
+            off_radio(ui, true, &tr("opt.counterclockwise"));
+        });
     });
 }
 
 fn spiral_page(app: &mut App, ui: &mut Ui) {
+    ui.horizontal_top(|ui| {
+        ui.label(tr("opt.type"));
+        ui.vertical(|ui| {
+            ui.radio_value(&mut app.spiral_logarithmic, false, tr("opt.symmetrical"));
+            ui.radio_value(&mut app.spiral_logarithmic, true, tr("opt.logarithmic"));
+            spiral_preview(ui, app.spiral_revolutions, app.spiral_logarithmic);
+        });
+    });
     grid("spiral").show(ui, |ui| {
-        row_label(ui, &tr("options.revolutions"));
-        ui.add(egui::DragValue::new(&mut app.spiral_revolutions).range(1..=100));
+        row_label(ui, &tr("opt.revolutions"));
+        ui.add_sized(
+            [64.0, 22.0],
+            egui::DragValue::new(&mut app.spiral_revolutions).range(1..=100),
+        );
+        ui.end_row();
+        row_label(ui, &tr("opt.expansion"));
+        ui.add_enabled_ui(false, |ui| {
+            let mut v = 100.0f32;
+            slider(ui, egui::Slider::new(&mut v, 1.0..=100.0).integer());
+        });
         ui.end_row();
     });
-    ui.radio_value(
-        &mut app.spiral_logarithmic,
-        false,
-        tr("options.symmetrical_spiral"),
-    );
-    ui.radio_value(
-        &mut app.spiral_logarithmic,
-        true,
-        tr("options.logarithmic_spiral"),
-    );
 }
 
 fn graph_paper_page(app: &mut App, ui: &mut Ui) {
     grid("graph").show(ui, |ui| {
-        row_label(ui, &tr("options.rows"));
-        ui.add(egui::DragValue::new(&mut app.graph_rows).range(1..=99));
+        row_label(ui, &tr("opt.columns_count"));
+        ui.add_sized(
+            [64.0, 22.0],
+            egui::DragValue::new(&mut app.graph_cols).range(1..=99),
+        );
         ui.end_row();
-        row_label(ui, &tr("options.columns"));
-        ui.add(egui::DragValue::new(&mut app.graph_cols).range(1..=99));
+        row_label(ui, &tr("opt.rows_count"));
+        ui.add_sized(
+            [64.0, 22.0],
+            egui::DragValue::new(&mut app.graph_rows).range(1..=99),
+        );
         ui.end_row();
     });
 }
 
 fn table_page(app: &mut App, ui: &mut Ui) {
     grid("table").show(ui, |ui| {
-        row_label(ui, &tr("options.rows"));
-        ui.add(egui::DragValue::new(&mut app.table_rows).range(1..=99));
-        ui.end_row();
-        row_label(ui, &tr("options.columns"));
-        ui.add(egui::DragValue::new(&mut app.table_cols).range(1..=99));
-        ui.end_row();
-        row_label(ui, &tr("options.table_tab_key"));
-        ui.vertical(|ui| {
-            let p = &mut app.settings.table;
-            ui.radio_value(&mut p.tab_inserts_tab, false, tr("options.table_tab_moves"));
-            ui.radio_value(
-                &mut p.tab_inserts_tab,
-                true,
-                tr("options.table_tab_inserts"),
-            );
-        });
-        ui.end_row();
-        row_label(ui, &tr("options.table_tab_order"));
-        ui.vertical(|ui| {
-            let p = &mut app.settings.table;
-            ui.radio_value(&mut p.tab_by_columns, false, tr("options.table_tab_rows"));
-            ui.radio_value(&mut p.tab_by_columns, true, tr("options.table_tab_columns"));
-        });
-        ui.end_row();
-    });
-}
-
-/// Options > Tools > Curve tools: the Freehand smoothing, how near an
-/// end node a new line joins the selected curve (and a curve closes on
-/// its first node), and the Pen's preview mode and automatic adding and
-/// deleting of nodes. See `prefs::CurvePrefs`.
-fn curves_page(app: &mut App, ui: &mut Ui) {
-    let c = &mut app.settings.curves;
-    grid("curves").show(ui, |ui| {
-        row_label(ui, &tr("options.freehand_smoothing"));
-        let mut v = c.smoothing.min(100);
-        ui.add(egui::Slider::new(&mut v, 0..=100));
-        c.smoothing = v;
-        ui.end_row();
-        row_label(ui, &tr("options.join_within"));
-        let mut px = if c.join_px.is_finite() {
-            c.join_px
-        } else {
-            5.0
-        };
-        ui.add(
-            egui::DragValue::new(&mut px)
-                .range(1.0..=50.0)
-                .speed(0.2)
-                .suffix(" px"),
-        );
-        c.join_px = px;
-        ui.end_row();
-        row_label(ui, &tr("options.pen"));
-        ui.checkbox(&mut c.pen_preview, tr("options.pen_preview"));
-        ui.end_row();
-        ui.label("");
-        ui.checkbox(
-            &mut c.pen_auto_add_delete,
-            tr("options.pen_auto_add_delete"),
+        row_label(ui, &tr("opt.rows"));
+        ui.add_sized(
+            [64.0, 22.0],
+            egui::DragValue::new(&mut app.table_rows).range(1..=99),
         );
         ui.end_row();
-        row_label(ui, &tr("options.constrain_key"));
-        ui.horizontal(|ui| {
-            for k in crate::prefs::ConstrainKey::ALL {
-                ui.radio_value(&mut c.constrain_key, k, tr(k.i18n_key()));
-            }
-        });
+        row_label(ui, &tr("opt.columns"));
+        ui.add_sized(
+            [64.0, 22.0],
+            egui::DragValue::new(&mut app.table_cols).range(1..=99),
+        );
         ui.end_row();
     });
     ui.add_space(4.0);
-    ui.label(egui::RichText::new(tr("options.join_hint")).color(crate::theme::Tokens::text_dim()));
+    let p = &mut app.settings.table;
+    ui.label(tr("opt.table_tab_key"));
+    ui.radio_value(&mut p.tab_inserts_tab, true, tr("opt.table_tab_inserts"));
+    ui.radio_value(&mut p.tab_inserts_tab, false, tr("opt.table_tab_moves"));
+    ui.horizontal(|ui| {
+        ui.label(tr("opt.table_tab_order"));
+        combo(
+            ui,
+            "table_tab_order",
+            &mut p.tab_by_columns,
+            &[false, true],
+            |c| {
+                tr(if c {
+                    "opt.table_order_columns"
+                } else {
+                    "opt.table_order_rows"
+                })
+            },
+            250.0,
+        );
+    });
+}
+
+fn curves_page(app: &mut App, ui: &mut Ui) {
+    let c = &mut app.settings.curves;
+    grid("curves").show(ui, |ui| {
+        row_label(ui, &tr("opt.freehand_smoothing"));
+        ui.horizontal(|ui| {
+            let mut v = c.smoothing.min(100);
+            slider(ui, egui::Slider::new(&mut v, 0..=100).show_value(false));
+            ui.add_sized([52.0, 22.0], egui::DragValue::new(&mut v).range(0..=100));
+            c.smoothing = v;
+        });
+        ui.end_row();
+        for key in ["opt.corner_threshold", "opt.straight_line_threshold"] {
+            row_label(ui, &tr(key));
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(false, |ui| {
+                    let mut v = 5u32;
+                    ui.add_sized([52.0, 22.0], egui::DragValue::new(&mut v));
+                });
+                ui.label(tr("options.pixels"));
+            });
+            ui.end_row();
+        }
+        row_label(ui, &tr("opt.auto_join"));
+        ui.horizontal(|ui| {
+            let mut px = if c.join_px.is_finite() {
+                c.join_px
+            } else {
+                5.0
+            };
+            ui.add_sized(
+                [52.0, 22.0],
+                egui::DragValue::new(&mut px)
+                    .range(1.0..=50.0)
+                    .speed(0.2)
+                    .max_decimals(0),
+            );
+            c.join_px = px;
+            ui.label(tr("options.pixels"));
+        });
+        ui.end_row();
+    });
+    sep(ui);
+    heading(ui, &tr("options.pen"));
+    ui.checkbox(&mut c.pen_preview, tr("options.pen_preview"));
+    ui.checkbox(
+        &mut c.pen_auto_add_delete,
+        tr("options.pen_auto_add_delete"),
+    );
+    ui.horizontal(|ui| {
+        ui.label(tr("options.constrain_key"));
+        for k in crate::prefs::ConstrainKey::ALL {
+            ui.radio_value(&mut c.constrain_key, k, tr(k.i18n_key()));
+        }
+    });
 }
 
 fn eraser_page(app: &mut App, ui: &mut Ui) {
     grid("eraser").show(ui, |ui| {
-        row_label(ui, &tr("options.eraser_width"));
+        row_label(ui, &tr("opt.thickness"));
         let u = app.units;
         let mut v = u.from_mm(app.eraser_width);
         if ui
-            .add(
+            .add_sized(
+                [76.0, 22.0],
                 egui::DragValue::new(&mut v)
                     .speed(0.1)
+                    .max_decimals(1)
                     .suffix(format!(" {}", u.short())),
             )
             .changed()
@@ -2193,6 +2702,8 @@ fn eraser_page(app: &mut App, ui: &mut Ui) {
         }
         ui.end_row();
     });
+    off_check(ui, true, &tr("opt.eraser_reduce_nodes"));
+    ui.add_space(6.0);
     ui.radio_value(&mut app.eraser_square, false, tr("options.eraser_round"));
     ui.radio_value(&mut app.eraser_square, true, tr("options.eraser_square"));
 }
@@ -2200,8 +2711,9 @@ fn eraser_page(app: &mut App, ui: &mut Ui) {
 // ----- Global ------------------------------------------------------------
 
 fn global_general_page(app: &mut App, ui: &mut Ui) {
+    off_check(ui, false, &tr("opt.background_tasks"));
     grid("global").show(ui, |ui| {
-        row_label(ui, &tr("options.language"));
+        row_label(ui, &tr("opt.ui_language"));
         let current = crate::i18n::language();
         let name = crate::i18n::LANGUAGES
             .iter()
@@ -2210,7 +2722,7 @@ fn global_general_page(app: &mut App, ui: &mut Ui) {
             .unwrap_or("English");
         egui::ComboBox::from_id_salt("opt_lang")
             .selected_text(name)
-            .width(200.0)
+            .width(140.0)
             .show_ui(ui, |ui| {
                 for (code, n) in crate::i18n::LANGUAGES {
                     if ui.selectable_label(current == code, n).clicked() {
@@ -2221,8 +2733,17 @@ fn global_general_page(app: &mut App, ui: &mut Ui) {
             });
         ui.end_row();
     });
-    ui.add_space(10.0);
-    ui.label(egui::RichText::new(tr("options.reset_all_hint")).color(Tokens::text_dim()));
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        off_check(ui, true, &tr("opt.hardware_acceleration"));
+        off_combo(ui, "gpu", &tr("opt.gpu_default"), 200.0);
+    });
+    ui.indent("gpu_uses", |ui| {
+        off_check(ui, true, &tr("opt.gpu_display"));
+        off_check(ui, true, &tr("opt.gpu_effects"));
+    });
+    ui.add_space(8.0);
+    note(ui, &tr("options.reset_all_hint"));
     if ui.button(tr("options.reset_all")).clicked() {
         // The question replaces the options; nothing changes unless it is
         // answered Reset.
@@ -2233,69 +2754,145 @@ fn global_general_page(app: &mut App, ui: &mut Ui) {
     }
 }
 
-fn file_locations_page(_app: &mut App, ui: &mut Ui) {
-    ui.label(tr("options.save_hint"));
-    if let Some(p) = crate::settings::Settings::path() {
-        ui.label(
-            egui::RichText::new(p.display().to_string())
-                .color(Tokens::text_dim())
-                .size(12.0),
+fn file_locations_page(app: &mut App, ui: &mut Ui) {
+    let auto = app
+        .settings
+        .backup
+        .auto_dir
+        .clone()
+        .or_else(crate::app::App::auto_backup_dir_default)
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let before = app
+        .settings
+        .backup
+        .before_save_dir
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| tr("opt.same_folder"));
+    let settings = crate::settings::Settings::path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let rows = [
+        (tr("opt.loc_auto_backup"), auto),
+        (tr("opt.loc_backup"), before),
+        (tr("opt.loc_settings"), settings),
+    ];
+    let pick_id = ui.id().with("loc_pick");
+    let mut pick: usize = ui.data(|d| d.get_temp(pick_id)).unwrap_or(0);
+    let (frame, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 240.0),
+        egui::Sense::hover(),
+    );
+    ui.painter().rect(
+        frame,
+        0.0,
+        Tokens::field(),
+        egui::Stroke::new(1.0, Tokens::control_border()),
+        egui::StrokeKind::Inside,
+    );
+    let col = frame.left() + 210.0;
+    let font = egui::FontId::proportional(12.5);
+    let header = egui::Rect::from_min_size(
+        frame.min + egui::vec2(1.0, 1.0),
+        egui::vec2(frame.width() - 2.0, 22.0),
+    );
+    ui.painter()
+        .rect_filled(header, 0.0, Tokens::control_fill());
+    ui.painter().text(
+        egui::pos2(frame.left() + 8.0, header.center().y),
+        egui::Align2::LEFT_CENTER,
+        tr("opt.content_type"),
+        font.clone(),
+        Tokens::text(),
+    );
+    ui.painter().text(
+        egui::pos2(col + 8.0, header.center().y),
+        egui::Align2::LEFT_CENTER,
+        tr("opt.location"),
+        font.clone(),
+        Tokens::text(),
+    );
+    for (i, (kind, path)) in rows.iter().enumerate() {
+        let row = egui::Rect::from_min_size(
+            egui::pos2(frame.left() + 1.0, header.bottom() + 2.0 + i as f32 * 22.0),
+            egui::vec2(frame.width() - 2.0, 21.0),
         );
-    }
-    if let Some(p) = crate::app::App::auto_backup_dir_default() {
-        ui.add_space(6.0);
-        ui.label(tr("options.auto_backup"));
-        ui.label(
-            egui::RichText::new(p.display().to_string())
-                .color(Tokens::text_dim())
-                .size(12.0),
+        let resp = ui.interact(row, ui.id().with(("loc_row", i)), egui::Sense::click());
+        if pick == i {
+            ui.painter().rect_filled(row, 0.0, Tokens::selected_row());
+        } else if resp.hovered() {
+            ui.painter().rect_filled(row, 0.0, Tokens::hovered_row());
+        }
+        let clip = ui.painter().with_clip_rect(row);
+        clip.with_clip_rect(egui::Rect::from_x_y_ranges(
+            row.left()..=col - 4.0,
+            row.y_range(),
+        ))
+        .text(
+            egui::pos2(row.left() + 7.0, row.center().y),
+            egui::Align2::LEFT_CENTER,
+            kind,
+            font.clone(),
+            Tokens::text(),
         );
+        clip.with_clip_rect(egui::Rect::from_x_y_ranges(
+            col..=row.right() - 4.0,
+            row.y_range(),
+        ))
+        .text(
+            egui::pos2(col + 8.0, row.center().y),
+            egui::Align2::LEFT_CENTER,
+            path,
+            font.clone(),
+            Tokens::text(),
+        );
+        if resp.on_hover_text(path).clicked() {
+            pick = i;
+        }
     }
+    ui.data_mut(|d| d.insert_temp(pick_id, pick));
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let editable = pick < 2;
+            if ui
+                .add_enabled(editable, egui::Button::new(tr("opt.edit")))
+                .clicked()
+            {
+                if let Some(p) = crate::files::pick_folder() {
+                    if pick == 0 {
+                        app.settings.backup.auto_dir = Some(p);
+                    } else {
+                        app.settings.backup.before_save_dir = Some(p);
+                    }
+                }
+            }
+            if ui
+                .add_enabled(editable, egui::Button::new(tr("options.reset")))
+                .clicked()
+            {
+                if pick == 0 {
+                    app.settings.backup.auto_dir = None;
+                } else {
+                    app.settings.backup.before_save_dir = None;
+                }
+            }
+        });
+    });
 }
 
 // ----- Workspaces --------------------------------------------------------
 
 fn workspace_page(app: &mut App, ui: &mut Ui) {
-    ui.label(tr("options.workspace_choose"));
-    let frame = chrome::panel();
-    frame.show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        for ws in crate::app::Workspace::ALL {
-            if ui
-                .selectable_label(
-                    app.workspace == ws,
-                    tr(&format!("menu.window.workspace_{}", ws.id())),
-                )
-                .clicked()
-            {
-                app.set_workspace(ws);
-            }
-        }
-    });
-    ui.add_space(10.0);
-    ui.strong(tr("options.workspace_transfer"));
-    ui.label(egui::RichText::new(tr("options.workspace_transfer_hint")).color(Tokens::text_dim()));
+    crate::ui::options_pages::workspace_buttons(app, ui);
+    sep(ui);
+    heading(ui, &tr("options.workspace_transfer"));
+    note(ui, &tr("options.workspace_transfer_hint"));
     let mut parts = app.settings.workspace_parts;
     for (on, key) in parts.flags_mut() {
         ui.checkbox(on, tr(key));
     }
     app.settings.workspace_parts = parts;
-    ui.horizontal(|ui| {
-        let any = parts.any();
-        if ui
-            .add_enabled(any, egui::Button::new(tr("options.workspace_export")))
-            .clicked()
-        {
-            app.export_workspace_dialog(parts);
-        }
-        // Imported parts stay until OK; Cancel puts the old ones back.
-        if ui
-            .add_enabled(any, egui::Button::new(tr("options.workspace_import")))
-            .clicked()
-        {
-            app.import_workspace_dialog(parts, false);
-        }
-    });
 }
 
 // ----- Document Options --------------------------------------------------
@@ -2305,27 +2902,11 @@ fn document_general_page(app: &mut App, ui: &mut Ui) {
         return;
     }
     let mut meta = app.doc().metadata.clone();
-    grid("doc_general").show(ui, |ui| {
-        row_label(ui, &tr("options.rendering_resolution"));
-        ui.horizontal(|ui| {
-            let mut dpi = app.document_dpi();
-            if ui
-                .add_sized(
-                    [80.0, 22.0],
-                    egui::DragValue::new(&mut dpi).range(36.0..=2400.0),
-                )
-                .changed()
-            {
-                meta.resolution_dpi = dpi;
-            }
-            ui.label("dpi");
-        });
-        ui.end_row();
-    });
-    ui.checkbox(&mut meta.fill_open_curves, tr("options.fill_open_curves"));
+    heading(ui, &tr("opt.preferences"));
+    ui.checkbox(&mut meta.fill_open_curves, tr("opt.fill_open_curves"));
     let mut inflate = !meta.no_auto_inflate;
     if ui
-        .checkbox(&mut inflate, tr("options.auto_inflate_bitmaps"))
+        .checkbox(&mut inflate, tr("opt.auto_inflate_bitmaps"))
         .changed()
     {
         meta.no_auto_inflate = !inflate;
@@ -2333,50 +2914,161 @@ fn document_general_page(app: &mut App, ui: &mut Ui) {
     if meta != app.doc().metadata {
         app.run(Command::SetMetadata { metadata: meta });
     }
-    ui.separator();
-    // Ctrl+D places duplicates this far from the original.
-    grid("dup").show(ui, |ui| {
-        row_label(ui, &tr("options.duplicate_offset"));
-        let u = app.units;
-        let (mut dx, mut dy) = (
-            u.world_from_mm(app.duplicate_offset.x),
-            u.world_from_mm(app.duplicate_offset.y),
-        );
+    grid("doc_view").show(ui, |ui| {
+        row_label(ui, &tr("opt.view_mode"));
+        use crate::app::ViewMode as V;
+        let mut mode = app.view_mode;
+        let name = |m: V| {
+            tr(match m {
+                V::Wireframe => "menu.view.wireframe",
+                V::Normal => "menu.view.normal",
+                V::Enhanced => "menu.view.enhanced",
+                V::Pixels => "menu.view.pixels",
+            })
+        };
+        if combo(
+            ui,
+            "doc_view_mode",
+            &mut mode,
+            &[V::Wireframe, V::Normal, V::Enhanced, V::Pixels],
+            name,
+            130.0,
+        ) {
+            app.view_mode = mode;
+            app.wireframe = mode == V::Wireframe;
+        }
+        ui.end_row();
+        row_label(ui, &tr("opt.page_view"));
         ui.horizontal(|ui| {
-            let a = ui.add(
-                egui::DragValue::new(&mut dx)
-                    .speed(0.1)
-                    .suffix(format!(" {}", u.short())),
-            );
-            let b = ui.add(
-                egui::DragValue::new(&mut dy)
-                    .speed(0.1)
-                    .suffix(format!(" {}", u.short())),
-            );
-            if a.changed() || b.changed() {
-                app.duplicate_offset =
-                    tracedraw_core::geometry::Vec2::new(u.world_to_mm(dx), u.world_to_mm(dy));
+            for (multi, key) in [(false, "opt.single_page"), (true, "opt.multipage")] {
+                let on = app.multipage == multi;
+                let (r, resp) =
+                    ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+                if on {
+                    ui.painter().rect_filled(r, 2.0, Tokens::ACCENT);
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(r, 2.0, Tokens::hovered_row());
+                }
+                let color = if on {
+                    egui::Color32::WHITE
+                } else {
+                    Tokens::icon()
+                };
+                let st = egui::Stroke::new(1.2, color);
+                let page = egui::Rect::from_center_size(r.center(), egui::vec2(9.0, 12.0));
+                if multi {
+                    ui.painter().rect_stroke(
+                        page.translate(egui::vec2(-2.0, -2.0)),
+                        1.0,
+                        st,
+                        egui::StrokeKind::Inside,
+                    );
+                    ui.painter().rect_stroke(
+                        page.translate(egui::vec2(2.0, 2.0)),
+                        1.0,
+                        st,
+                        egui::StrokeKind::Inside,
+                    );
+                } else {
+                    ui.painter()
+                        .rect_stroke(page, 1.0, st, egui::StrokeKind::Inside);
+                }
+                if resp.on_hover_text(tr(key)).clicked() && !on {
+                    app.multipage = multi;
+                    if multi {
+                        app.page_sorter = false;
+                    }
+                    app.fit_pending = true;
+                }
             }
         });
         ui.end_row();
     });
+    sep(ui);
+    // Ctrl+D places duplicates this far from the original.
+    heading(ui, &tr("opt.duplicate_offset"));
+    let u = app.units;
+    let (mut dx, mut dy) = (
+        u.world_from_mm(app.duplicate_offset.x),
+        u.world_from_mm(app.duplicate_offset.y),
+    );
+    let mut changed = false;
+    grid("dup").show(ui, |ui| {
+        for (key, v) in [("opt.horizontal", &mut dx), ("opt.vertical", &mut dy)] {
+            row_label(ui, &tr(key));
+            changed |= ui
+                .add_sized(
+                    [80.0, 22.0],
+                    egui::DragValue::new(v)
+                        .speed(0.1)
+                        .max_decimals(1)
+                        .suffix(format!(" {}", u.short())),
+                )
+                .changed();
+            ui.end_row();
+        }
+    });
+    if changed {
+        app.duplicate_offset =
+            tracedraw_core::geometry::Vec2::new(u.world_to_mm(dx), u.world_to_mm(dy));
+    }
 }
 
 fn layout_page(app: &mut App, ui: &mut Ui) {
+    let s = app.page_size();
+    let u = app.units;
+    ui.horizontal_top(|ui| {
+        grid("doc_layout").show(ui, |ui| {
+            row_label(ui, &tr("options.layout"));
+            off_combo(ui, "doc_layout_kind", &tr("opt.full_page"), 120.0);
+            ui.end_row();
+            row_label(ui, &tr("opt.width"));
+            ui.label(format!("{:.0} {}", u.world_from_mm(s.width), u.short()));
+            ui.end_row();
+            row_label(ui, &tr("opt.height"));
+            ui.label(format!("{:.0} {}", u.world_from_mm(s.height), u.short()));
+            ui.end_row();
+            row_label(ui, &tr("opt.description"));
+            ui.label(tr("opt.one_page_per_sheet"));
+            ui.end_row();
+        });
+        ui.add_space(16.0);
+        let (r, _) = ui.allocate_exact_size(egui::vec2(160.0, 78.0), egui::Sense::hover());
+        ui.painter().rect_filled(r, 0.0, egui::Color32::WHITE);
+        let ink = egui::Color32::from_gray(60);
+        for i in 0..3 {
+            let p = egui::Rect::from_min_size(
+                r.min + egui::vec2(30.0 + i as f32 * 36.0, 24.0),
+                egui::vec2(22.0, 30.0),
+            );
+            ui.painter().rect_stroke(
+                p,
+                0.0,
+                egui::Stroke::new(1.0, ink),
+                egui::StrokeKind::Inside,
+            );
+            for k in 0..4 {
+                let y = p.top() + 7.0 + k as f32 * 6.0;
+                ui.painter().hline(
+                    p.left() + 4.0..=p.right() - 4.0,
+                    y,
+                    egui::Stroke::new(1.0, ink),
+                );
+            }
+        }
+    });
+    sep(ui);
+    off_check(ui, false, &tr("opt.facing_pages"));
+    note(ui, &tr("opt.facing_pages_hint"));
+    ui.horizontal(|ui| {
+        ui.add_enabled(false, egui::Label::new(tr("opt.start_on")));
+        off_combo(ui, "facing_start", &tr("opt.right_side"), 90.0);
+    });
+    sep(ui);
     let n = app.doc().pages.len();
     ui.label(trf("options.pages_count", &[("n", &n.to_string())]));
     ui.checkbox(&mut app.page_sorter, tr("menu.view.page_sorter"));
-    if ui.button(tr("menu.layout.switch_orientation")).clicked() {
-        let s = app.page_size();
-        let page = app.page;
-        app.run(Command::ResizePage {
-            page,
-            size: Size::new(s.height, s.width),
-        });
-        app.fit_pending = true;
-    }
-    ui.separator();
-    ui.strong(tr("options.master_layers"));
+    heading(ui, &tr("options.master_layers"));
     let masters: Vec<(tracedraw_core::LayerId, String, tracedraw_core::MasterScope)> = app
         .doc()
         .master
@@ -2416,16 +3108,46 @@ fn layout_page(app: &mut App, ui: &mut Ui) {
 fn background_page(app: &mut App, ui: &mut Ui) {
     let page = app.page;
     let current = app.doc().page(page).ok().and_then(|p| p.background.clone());
-    let mut kind = match &current {
+    let was = match &current {
         None => 0,
         Some(Fill::Solid(_)) => 1,
         Some(_) => 2,
     };
+    let mut kind = was;
+    ui.radio_value(&mut kind, 0, tr("opt.no_background"));
+    let mut rgb = match &current {
+        Some(Fill::Solid(c)) => {
+            let [r, g, b] = c.to_rgb8();
+            [r, g, b]
+        }
+        _ => [255, 255, 255],
+    };
+    let mut color_changed = false;
     ui.horizontal(|ui| {
-        ui.radio_value(&mut kind, 0, tr("options.no_background"));
-        ui.radio_value(&mut kind, 1, tr("options.solid"));
-        ui.radio_value(&mut kind, 2, tr("options.bitmap"));
+        ui.radio_value(&mut kind, 1, tr("opt.solid"));
+        ui.add_space(20.0);
+        color_changed = rgb_button(ui, &mut rgb);
     });
+    let mut browse = false;
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut kind, 2, tr("opt.bitmap"));
+        ui.add_space(ui.available_width() - 100.0);
+        browse = ui.button(tr("opt.browse")).clicked();
+    });
+    ui.horizontal(|ui| {
+        ui.add_enabled(false, egui::Label::new(tr("opt.bitmap_source")));
+        off_radio(ui, false, &tr("opt.linked"));
+        off_radio(ui, true, &tr("opt.embedded"));
+    });
+    sep(ui);
+    heading(ui, &tr("opt.bitmap_size"));
+    off_radio(ui, true, &tr("opt.default_size"));
+    off_radio(ui, false, &tr("opt.custom_size"));
+    sep(ui);
+    off_check(ui, true, &tr("opt.print_export_background"));
+    if color_changed && kind != 1 {
+        kind = 1;
+    }
     match kind {
         0 => {
             if current.is_some() {
@@ -2436,55 +3158,106 @@ fn background_page(app: &mut App, ui: &mut Ui) {
             }
         }
         1 => {
-            let mut c = match &current {
-                Some(Fill::Solid(c)) => *c,
-                _ => Color::WHITE,
-            };
-            let [r, g, b] = c.to_rgb8();
-            let mut rgb = [r, g, b];
-            let changed = ui.color_edit_button_srgb(&mut rgb).changed();
-            if changed || !matches!(current, Some(Fill::Solid(_))) {
-                c = Color::rgb8(rgb[0], rgb[1], rgb[2]);
+            if color_changed || !matches!(current, Some(Fill::Solid(_))) {
+                let c = Color::rgb8(rgb[0], rgb[1], rgb[2]);
                 app.run(Command::SetPageBackground {
                     page,
                     background: Some(Fill::Solid(c)),
                 });
             }
         }
-        _ => {
-            if ui.button(tr("options.choose_bitmap")).clicked() {
-                crate::files::Dialog::new()
-                    .add_filter(
-                        "Images",
-                        &["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff"],
-                    )
-                    .pick_file(app, move |app, p| app.set_page_background_image(page, &p));
-            }
-        }
+        _ => browse |= was != 2,
+    }
+    if browse {
+        crate::files::Dialog::new()
+            .add_filter(
+                "Images",
+                &["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff"],
+            )
+            .pick_file(app, move |app, p| app.set_page_background_image(page, &p));
     }
 }
 
-fn bleed_page(app: &mut App, ui: &mut Ui) {
-    let mut md = app.doc().metadata.clone();
-    grid("bleed").show(ui, |ui| {
-        row_label(ui, &tr("options.bleed"));
-        let mut b = app.units.from_mm(md.bleed);
-        if ui
-            .add_sized(
-                [100.0, 22.0],
-                egui::DragValue::new(&mut b)
-                    .speed(0.1)
-                    .max_decimals(3)
-                    .suffix(format!(" {}", app.units.short())),
-            )
-            .changed()
-        {
-            md.bleed = app.units.to_mm(b).max(0.0);
-            app.run(Command::SetMetadata { metadata: md });
-        }
-        ui.end_row();
-    });
-    ui.checkbox(&mut app.show_bleed, tr("options.show_bleed"));
+/// The picture of a rectangle corner: rounded, scalloped or chamfered.
+fn corner_glyph(
+    p: &egui::Painter,
+    r: egui::Rect,
+    kind: tracedraw_core::CornerKind,
+    color: egui::Color32,
+) {
+    use tracedraw_core::CornerKind;
+    let st = egui::Stroke::new(1.3, color);
+    let (a, b) = (r.left_bottom(), r.right_top());
+    let k = r.width() * 0.5;
+    let pts: Vec<egui::Pos2> = match kind {
+        CornerKind::Round => (0..=8)
+            .map(|i| {
+                let t = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+                egui::pos2(a.x + k - k * t.cos(), b.y + k - k * t.sin())
+            })
+            .collect(),
+        CornerKind::Scallop => (0..=8)
+            .map(|i| {
+                let t = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+                egui::pos2(a.x + k * t.sin(), b.y + k * t.cos())
+            })
+            .rev()
+            .collect(),
+        CornerKind::Chamfer => vec![egui::pos2(a.x, b.y + k), egui::pos2(a.x + k, b.y)],
+    };
+    p.line_segment([a, *pts.first().unwrap_or(&a)], st);
+    p.line(pts.clone(), st);
+    p.line_segment([*pts.last().unwrap_or(&b), b], st);
+}
+
+/// A padlock, shut or open.
+fn lock_glyph(p: &egui::Painter, c: egui::Pos2, shut: bool, color: egui::Color32) {
+    let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.5), egui::vec2(10.0, 7.0));
+    p.rect_filled(body, 1.0, color);
+    let st = egui::Stroke::new(1.5, color);
+    let lift = if shut { 0.0 } else { 3.0 };
+    let (l, r) = (body.left() + 2.5, body.right() - 2.5);
+    let top = body.top() - 4.5 - lift;
+    let pts: Vec<egui::Pos2> = (0..=10)
+        .map(|i| {
+            let t = std::f32::consts::PI * i as f32 / 10.0;
+            egui::pos2(c.x - (r - l) / 2.0 * t.cos(), top + 2.5 - 2.5 * t.sin())
+        })
+        .collect();
+    p.line(pts, st);
+    p.line_segment(
+        [
+            egui::pos2(l, top + 2.5),
+            egui::pos2(l, body.top() - if shut { 0.0 } else { lift }),
+        ],
+        st,
+    );
+    p.line_segment([egui::pos2(r, top + 2.5), egui::pos2(r, body.top())], st);
+}
+
+/// A small picture of the spiral the tool draws.
+fn spiral_preview(ui: &mut Ui, revolutions: u32, logarithmic: bool) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(58.0, 58.0), egui::Sense::hover());
+    ui.painter().rect(
+        r,
+        0.0,
+        egui::Color32::WHITE,
+        egui::Stroke::new(1.0, Tokens::control_border()),
+        egui::StrokeKind::Inside,
+    );
+    let turns = revolutions.clamp(1, 12) as f32;
+    let max = r.width() * 0.42;
+    let steps = (turns * 48.0) as usize;
+    let pts: Vec<egui::Pos2> = (0..=steps)
+        .map(|i| {
+            let t = i as f32 / steps as f32;
+            let a = t * turns * std::f32::consts::TAU;
+            let rad = if logarithmic { max * t * t } else { max * t };
+            r.center() + egui::vec2(a.cos(), a.sin()) * rad
+        })
+        .collect();
+    ui.painter()
+        .line(pts, egui::Stroke::new(1.0, egui::Color32::from_gray(40)));
 }
 
 #[cfg(test)]
@@ -2601,6 +3374,22 @@ mod tests {
         app.reset_command_bars();
         assert!(app.show_toolbox && !app.show_zoom_toolbar);
         assert!(app.settings.palette.show_palette && !app.settings.bars.locked);
+    }
+
+    /// The six categories and their pages as the reference shows them;
+    /// every Tools page has its tool's picture.
+    #[test]
+    fn categories_follow_the_reference() {
+        use OptionsPage::*;
+        assert_eq!(OptionsSet::ALL[0], OptionsSet::Document);
+        assert_eq!(OptionsSet::ALL[5], OptionsSet::Workspaces);
+        assert_eq!(OptionsSet::App.pages().len(), 14);
+        assert_eq!(OptionsSet::Tools.pages().len(), 14);
+        assert_eq!(OptionsSet::Document.pages().len(), 8);
+        assert_eq!(BitmapTracing.set(), OptionsSet::App);
+        assert_eq!(Warnings.set(), OptionsSet::App);
+        assert!(OptionsSet::Tools.pages().iter().all(|p| p.tool().is_some()));
+        assert!(OptionsSet::App.pages().iter().all(|p| p.tool().is_none()));
     }
 
     #[test]

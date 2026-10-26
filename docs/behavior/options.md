@@ -1,22 +1,32 @@
 # Options dialogs
 
-Tools > Options is a submenu: CD Draw
-(Ctrl+J), Customization, Tools, Global and Workspaces each open their own
-dialog. Layout > Document Options opens the document's dialog (also a
-double-click on a ruler, the page border or its shadow).
+Tools > Options (Ctrl+J) is one dialog, "Options", with six categories:
+Document, CD Draw, Customization, Tools, Global and Workspaces. The
+Tools > Options submenu opens it at a category; Layout > Document
+Options (also a double-click on a ruler, the page border or its shadow)
+opens it at Document. The layout follows the owner's third reference
+video (`docs/reference/ui-reference.md`, "Options").
 
 ## Layout
 
-- 887 x 663 px, centred, framed like every dialog: a 1 px `#B2B2B2` border, a white 31 px title bar with the title
-  (13 px) at the left and a close button at the right (red under the
-  pointer), and a white 5 px frame round the `#F4F4F4` body.
-- A white page list on the left (225 px; rows 23 px apart; the current
-  page `#CCE8FF` with a `#99D1FF` frame) and the white page frame on the
-  right (622 px), both 566 px high with a 1 px `#D9D9D9` border.
-- Section headings are a label followed by a light line to the right
-  edge. Indented groups have no guide line.
-- Bottom row: the help button (27 x 27) at the left (and Save as Default
-  in Document Options), OK and Cancel (100 x 27) at the right.
+- 802 x 676 px at 100 % interface size, centred, framed like every
+  dialog (title bar with the title and the close button).
+- Header row: the category's name in bold at the left; at the right the
+  six category buttons (26 px, 6 px apart: a page, the program's mark,
+  sliders, the pointer, a bulb, a screen), the current one filled with
+  the accent colour, each with its name as tip. A click shows that
+  category at its first page.
+- The page list on the left (180 px; rows 25 px; the current page a grey
+  bar, a lighter one under the pointer). The Tools list shows each
+  tool's picture before its name. Document has Save as Default... under
+  the list; Workspaces lists the workspaces instead of pages (a green
+  check at the one in use) with Import... under the list.
+- The page at the right in a framed panel; a page longer (or wider)
+  than the panel scrolls, the dialog never grows.
+- Sections: a bold title, a thin line between sections. Controls the
+  reference shows that CD Draw has no feature for are greyed.
+- Bottom row: the help button (24 x 24) at the left, OK (accent colour)
+  and Cancel (80 x 24) at the right.
 - Changes show at once. OK keeps them and writes the preferences; Cancel,
   the close button and Esc put back everything the dialog changed,
   including document settings (their commands are undone).
@@ -25,16 +35,21 @@ double-click on a ruler, the page border or its shadow).
 
 | Page | Settings (defaults) |
 |---|---|
-| General | On start-up: Welcome Screen, Start a new document, Open last edited document; Show New Document dialog box (on); Show the splash screen at start-up (on); Undo levels, Regular (150) |
-| Display | Proof colors; Show tooltips (on); Hide bounding box for curve tools (off); Enable node tracking (off, see `pick-tool.md`); Full-screen preview: Show page border (on); Default action for mouse wheel: Zoom or Scroll; Ruler calibration (below) |
-| Edit | Constrain angle (15 degrees: Ctrl while rotating); Drawing precision (3 decimal places in the property bar and the status bar) |
-| Nodes and Handles | Node size Small, Medium, Large (7, 9, 11 px); node shape per type (cusp square, smooth circle, symmetrical diamond); Show curve direction (an arrow after the first node, secondary colour); main colour (selected nodes and handles, blue) and secondary colour (red); Show unselected nodes with fill (on, Ctrl+Shift+G) |
-| clip frame | Auto-center new content: when it lies completely outside the frame (default), always, never; Show lines in empty clip frame frames (on, on screen) |
-| Snapping | Snap to objects, page, guidelines, grid, baseline grid, pixels; snapping radius (10 px); show snap location marks and the screen tip (on); the modes, each with its mark (all on), Select All, Deselect All |
-| Alignment Guides | On or off; guides for the selection as one or each object; edges, centres, the page, equal spacing, equal sizes; margins with offset and inset; colour and line style; Reset (see `live-guides.md`) |
-| Dynamic Guides | On or off; angles (check boxes every 15 degrees, others added by value); distance and angle tip; tick marks, their spacing, snap to ticks; colour and line style; Reset (see `live-guides.md`) |
-| Save | Back up original file before saving (on): `backup_of_<name>` next to the file or in a chosen folder; Auto-backup every 20 minutes (on): each open drawing with unsaved changes as `AutoBackup_of_<name>.tdraw` in `CD Draw` under the temporary folder or a chosen folder; a session that ended without closing offers them at the next start (see `recovery.md`) |
-| Text | Keyboard text increment (1 pt: Ctrl+8 and Ctrl+2 grow and shrink the selected text); default font and size; hyphenation; non-printing characters |
+| General | Getting started: On start-up (Welcome Screen, Start a new document, Open last edited document); Show New Document dialog box (on); Show the splash screen (on); Undo levels, Regular (150) |
+| Tablet Mode | greyed (CD Draw has no tablet mode) |
+| Display | Proof colors; Other controls in two columns: Show tooltips (on), Hide bounding box for curve tools (off), the rest greyed; Full-screen preview: Show page border (on); Navigation: default action for the mouse wheel (Zoom or Scroll), zoom rates greyed |
+| Edit | Constrain angle (15 degrees); Drawing precision (3 decimal places); Visibility of inactive objects (20 %, Reset) and double-click for Focus mode |
+| Nodes and Handles | Node size; node shape per type with Reset; Show curve direction; Enable node tracking (see `pick-tool.md`); pick distance; Colors: scheme Default or Custom (Default puts both colours back; the colours can be changed under Custom), main and secondary colour; Show highlight (unselected nodes filled, Ctrl+Shift+G) |
+| Clip frames | Drag into a frame (greyed); Auto-center new content: when completely outside (default), always, never; Show lines in empty clip frames (on) |
+| Bitmap Tracing | Quick trace method (one of the eight presets, Clipart); merging colours (greyed); what every trace starts with (below) |
+| Snapping | Snap to objects, Snap to page, snapping radius (10 px), snap location marks and the screen tip; Modes: a framed list, each mode with its mark, Select All, Deselect All. Snapping to guidelines, the grids and pixels is on the Document pages |
+| Save | Backup: make a backup on save, in the same folder or a chosen one; Auto-backup every 1 to 60 minutes (20), in the user's temporary folder or a chosen one (see `recovery.md`); saving older versions (greyed) |
+| Text | Tabs Display (keyboard text increment, 1 pt), Paragraph Text (text frames, hyphenation, non-printing characters), Fonts (default font and size), Spelling (greyed), Quick Correct (correct while typing, capitals, typographic quotes) |
+| Pen Settings, Macros, Plug-ins | greyed: CD Draw reads the pen as the system reports it, runs its own scripts and hosts no plug-ins |
+| Warnings | the messages that show (below) |
+
+Alignment and dynamic guides are set in their dockers (Window >
+Dockers).
 
 ## Customization
 
@@ -48,28 +63,32 @@ mouse button; see `color-palettes.md`).
 
 ## Tools
 
-Pick (cross hair cursor; treat all objects as filled, on by default:
-unfilled objects are picked inside too; marquee selects touched objects,
-off by default: a marquee or freehand selection takes what it touches and
-Alt only what lies wholly inside), Zoom/Pan (right mouse button of the Zoom tool:
-zoom out or context menu; mouse wheel action), Curve tools (Freehand
-smoothing, 0 to 100, 50 by default; Join and close within, 1 to 50
-screen pixels, 5 by default; see `curve-tools.md`), Rectangle (Rectangle
-corners: style, the four sizes, Edit corners together; Scale corners:
-Relative corner scaling, off by default so that new rectangles keep
-their corner size when resized; see `shape-tools.md`),
-Ellipse (ellipse, pie or arc and its angles), Polygon (points, sharpness),
-Spiral (revolutions, symmetrical or logarithmic), Graph Paper and Table
-(rows, columns), Eraser (thickness, round or square nib).
+Selection (cross hair cursor; treat all objects as filled, on; marquee
+selects touched objects, off; the Ctrl and Shift choice greyed), Eraser
+(thickness, round or square nib), Zoom, Pan (Zoom tool's secondary
+button: zoom out or context menu; Calibrate Zoom... shows the ruler
+calibration below), Freehand/Bézier (smoothing 0 to 100 with a slider,
+auto-join 1 to 50 px; the Pen's preview, automatic add and delete, the
+constrain key; see `curve-tools.md`), Smart Drawing (greyed),
+Rectangle (corner style buttons, the four sizes with the lock between
+them, Scale corners; see `shape-tools.md`), Ellipse (type, angles),
+Graph Paper (columns, rows), Spiral (type with a picture, revolutions),
+Table (rows, columns, what Tab does, tab order), Dimension and Angular
+Dimension (precision, units, prefix, suffix of new dimensions), Connector
+(rounded corner radius), Mesh Fill (columns, rows of new mesh fills).
 
 ## Global and Workspaces
 
 Global > General: user interface language; Reset all settings... (asks
 first, then puts every preference back to how CD Draw comes, keeping
 the recent drawings, the last folder and the window's size; drawings are
-not touched). Global > File Locations: where the preferences and
-auto-backups are kept. Workspaces: the workspace in use, and exporting
-and importing the user's setup to a `.tdws` file (see `workspaces.md`).
+not touched). Global > File Locations: a table of the auto-backup and
+backup folders (Edit picks another, Reset the default) and where the
+preferences are kept. Global > Color: greyed. Workspaces: pick one in the
+list and Set as Current (a double-click does the same); Export... and
+the parts exported and imported (see `workspaces.md`); Import... under
+the list. Account and online pages (user ID, privacy) are left out: CD
+Draw is offline.
 
 ### Printing
 
@@ -130,13 +149,6 @@ this message again" (the Shelf's: "Do not ask again"), which turns off
 the matching choice here; ticking it again brings the message back. A
 message never replaces another dialog that is open.
 
-### Pages with no equivalent
-
-Pen settings (pressure curves for tablets), Tablet Mode, VBA and
-plug-ins have no page: CD Draw reads no pen pressure, has its own
-workspaces instead of a tablet mode, scripts in JavaScript (Scripts
-panel) and hosts no plug-ins.
-
 ## Interface size
 
 Customization > Appearance > Interface size sets how large the menus,
@@ -166,7 +178,7 @@ it), applied when the slider is let go.
 
 ## Ruler calibration
 
-Options > Display > Ruler calibration sets the screen resolution in
+Options > Tools > Zoom, Pan > Calibrate Zoom... sets the screen resolution in
 pixels per inch at the system's scaling (96 by default, 48 to 400,
 `screen_ppi` in the preferences) and draws a 100 mm ruler and a 4 inch
 ruler at that resolution: hold a real ruler against the screen and
@@ -179,14 +191,18 @@ on Windows, 96 on Linux, 120 elsewhere), so the interface size never changes rea
 
 ## Document Options
 
-General (rendering resolution; Fill open curves, off: an open curve's
-fill shows only in its closed subpaths, on screen, in hit testing and in
-vector exports; duplicate distance), Page Size, Layout, Background, Bleed,
-Rulers, Grid, Guidelines (see `rulers-grid-guidelines.md`). Save as
-Default keeps the grid, ruler and guideline settings for new drawings.
+General (Preferences: Fill open curves, off: an open curve's fill shows
+only in its closed subpaths, on screen, in hit testing and in vector
+exports; Auto-inflate bitmaps; view mode; page view single or multipage;
+duplicate offset), Page Size (with the rendering resolution and the
+bleed), Layout, Background, Guidelines (tabs Display, Horizontal,
+Vertical, Guidelines, Presets), Grid, Rulers (see
+`rulers-grid-guidelines.md`), Save (greyed). Save as Default keeps the
+grid, ruler and guideline settings for new drawings.
 
 ## Checks
 
+- `ui::options::tests::categories_follow_the_reference`
 - `ui::options::tests::every_page_belongs_to_one_dialog`
 - `ui::options::tests::cancel_puts_settings_and_document_back`
 - `ui::options::tests::every_page_draws`

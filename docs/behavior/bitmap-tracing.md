@@ -2,7 +2,7 @@
 
 | Mode | Use | Defaults |
 |---|---|---|
-| Quick trace | one click | the preset of Options > Global > Bitmap Tracing (Clipart by default) |
+| Quick trace | one click | the preset of Options > CD Draw > Bitmap Tracing (Clipart by default) |
 | Centreline: technical illustration, line drawing | strokes | |
 | Outline: line art, logo, detailed logo, clipart, low/high quality image | filled regions | smoothing 25, detail per preset, colours per preset |
 
@@ -13,8 +13,8 @@
 | Corner smoothness | 0 | 0..100 |
 | Colour mode | RGB | RGB, CMYK, Grayscale, Black and white |
 | Number of colours | per preset | 1..256 |
-| Delete original | off (Options > Global > Bitmap Tracing) | |
-| Remove background | on (Options > Global > Bitmap Tracing) | auto or colour |
+| Delete original | off (Options > CD Draw > Bitmap Tracing) | |
+| Remove background | on (Options > CD Draw > Bitmap Tracing) | auto or colour |
 
 ## Dialog preview
 

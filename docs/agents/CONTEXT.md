@@ -92,11 +92,21 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Claude | Options dialog after the third video: `ui/options.rs`, `ui/options_global.rs`, `lang/*.toml` (append), `docs/reference/ui-reference.md` | 2026-10-26 | category icons header, page lists |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
+
+- Options dialog (Claude, 2026-10-26): one dialog with six category
+  buttons (`OptionsSet::ALL`: Document, App, Customization, Tools,
+  Global, Workspaces) after the owner's third video. Page enum changed:
+  `AlignmentGuides`, `DynamicGuides`, `Bleed` and `Polygon` are gone
+  (alignment and dynamic guides live in their dockers, bleed is on Page
+  Size); new pages are in `ui/options_pages.rs`, which also has the
+  shared `heading`, `sep`, `note`, `tabbed`, `slider` and greyed
+  `off_*` helpers. Bitmap Tracing and Warnings moved to the App set.
+  Guidelines, Grid and Rulers (`ui/layout_options.rs`) were relaid. New
+  strings use the `opt.*` keys (appended to the 18 language files).
 
 - Menus and flyouts (Claude, 2026-10-26): follow
   `docs/reference/ui-reference.md` (the owner's second video, item by
@@ -165,6 +175,8 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-26, Claude: Options dialog after the third video.
 
 - 2026-10-26, Claude: menus and toolbox flyouts after the second video.
 - 2026-10-26, Claude: Properties docker redone after the owner's video.

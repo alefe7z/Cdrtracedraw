@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `a97825d Claim the Options dialog after the third reference`
-- Commits on the branch: 52
+- Last commit before this one: `fed1a27 Update the agents' status file`
+- Commits on the branch: 53
 
 ## Last 20 commits
 
@@ -23,7 +23,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `b8f5f93` 2026-10-23 16:00 alefe7z: Record the diagnosed validation setup delay and current run
 - `1fc276d` 2026-10-23 15:59 alefe7z: Keep UI validation setup focused on required dependencies
 - `f0d9a30` 2026-10-23 15:58 alefe7z: Record reference fidelity implementation and native validation blocker
-- `6188313` 2026-10-23 15:56 alefe7z: Bound dependency setup and polish reference panel compatibility
 
 ## Files changed in the last 10 commits
 
@@ -60,10 +59,39 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-| Agent | Area / files | Since | Note |
-| --- | --- | --- | --- |
-| Claude | Options dialog after the third video: `ui/options.rs`, `ui/options_global.rs`, `lang/*.toml` (append), `docs/reference/ui-reference.md` | 2026-10-26 | category icons header, page lists |
+None.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/lang/ar.toml
+    M  apps/tracedraw/lang/bn.toml
+    M  apps/tracedraw/lang/cs.toml
+    M  apps/tracedraw/lang/de.toml
+    M  apps/tracedraw/lang/en.toml
+    M  apps/tracedraw/lang/es.toml
+    M  apps/tracedraw/lang/fr.toml
+    M  apps/tracedraw/lang/hi.toml
+    M  apps/tracedraw/lang/id.toml
+    M  apps/tracedraw/lang/it.toml
+    M  apps/tracedraw/lang/ja.toml
+    M  apps/tracedraw/lang/nl.toml
+    M  apps/tracedraw/lang/pl.toml
+    M  apps/tracedraw/lang/pt-BR.toml
+    M  apps/tracedraw/lang/ru.toml
+    M  apps/tracedraw/lang/tr.toml
+    M  apps/tracedraw/lang/zh-CN.toml
+    M  apps/tracedraw/lang/zh-TW.toml
+    M  apps/tracedraw/src/help.rs
+    M  apps/tracedraw/src/ui/chrome.rs
+    M  apps/tracedraw/src/ui/layout_options.rs
+    M  apps/tracedraw/src/ui/mod.rs
+    M  apps/tracedraw/src/ui/options.rs
+    M  apps/tracedraw/src/ui/options_global.rs
+    A  apps/tracedraw/src/ui/options_pages.rs
+    M  docs/agents/CONTEXT.md
+    M  docs/behavior/bitmap-tracing.md
+    M  docs/behavior/options.md
+    M  docs/behavior/pick-tool.md
+    M  docs/behavior/shelf.md
+    M  docs/reference/ui-reference.md
     ?? docs/agents/STATUS.md.tmp

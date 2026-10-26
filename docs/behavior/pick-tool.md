@@ -79,7 +79,7 @@ Ctrl+2 keep changing the text size.
 
 ## Node tracking
 
-Options > Display > Enable node tracking (off by default): with the Pick
+Options > Nodes and Handles > Enable node tracking (off by default): with the Pick
 tool, the pointer over a node of a selected curve takes the Shape tool's
 arrow with the node mark, and a drag there moves that node (snapping
 like the Shape tool's node drags; Ctrl keeps it horizontal or vertical;

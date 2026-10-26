@@ -144,3 +144,34 @@ docker): the outline colour list shows the object's colour.
 The "+" under the docker tabs lists every docker in groups divided by
 blue lines, each row a check box, the docker's picture and its name
 (`docs/behavior/docker-catalog.md`).
+
+## Options (third video)
+
+The third video (116 s) goes through Tools > Options page by page. One
+dialog, titled "Options", about 802 x 676 px at 100 %.
+
+- Header: the category's name in bold at the left; six square buttons
+  at the right (Document, the program, Customization, Tools, Global,
+  Workspaces), the current one filled blue. A click shows that category
+  at its first page.
+- Left: the page list, about 180 px wide, rows 25 px, the picked row a
+  grey bar (not blue). Tools rows carry the tool's picture. Document has
+  "Save as Default..." under the list; Workspaces lists the workspaces
+  (a green check at the one in use) with "Import..." under it.
+- Right: the page in a framed panel with its own scroll bar. Sections
+  are a bold title with a thin line between sections; labels are
+  right-aligned before their fields; tabs (Text, Printing, Guidelines)
+  have the picked tab filled blue over a framed panel.
+- Bottom: "?" at the left, OK (blue) and Cancel at the right.
+- Pages. Document: General, Page Size, Layout, Background, Guidelines,
+  Grid, Rulers, Save. The program: General, Tablet Mode, Display, Edit,
+  Nodes and Handles, the clip frame page, the tracing page, Snapping,
+  Save, Text, Pen Settings, Warnings, macros, Plug-ins. Customization:
+  Appearance, Command Bars, Commands, Color Palette. Tools: Selection,
+  Eraser, Zoom/Pan, Freehand/Bézier, Smart Drawing, Rectangle, Ellipse,
+  Graph Paper, Spiral, Table, Dimension, Angular Dimension, Connector,
+  Mesh Fill. Global: General, Printing, File Locations, File Formats,
+  Color (user ID and privacy are left out: online).
+- What each page holds, and what CD Draw does with it, is in
+  `docs/behavior/options.md`. Controls without a CD Draw feature are
+  shown greyed.

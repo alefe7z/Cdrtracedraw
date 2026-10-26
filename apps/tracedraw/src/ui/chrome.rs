@@ -583,14 +583,6 @@ pub fn form_style(ui: &mut Ui) {
     ui.spacing_mut().icon_width_inner = 12.0;
 }
 
-/// A white panel with a light border, for lists and page frames.
-pub fn panel() -> Frame {
-    Frame::new()
-        .fill(crate::theme::Tokens::field())
-        .stroke(Stroke::new(1.0, crate::theme::Tokens::border()))
-        .inner_margin(Margin::same(6))
-}
-
 /// A section heading: its text, then a light line to the right edge.
 pub fn section(ui: &mut Ui, text: &str) {
     ui.add_space(4.0);
@@ -613,11 +605,6 @@ pub fn section(ui: &mut Ui, text: &str) {
         Stroke::new(1.0, crate::theme::Tokens::border()),
     );
     ui.add_space(4.0);
-}
-
-/// A push button of the standard dialog size (100 x 27).
-pub fn button(ui: &mut Ui, text: &str) -> egui::Response {
-    ui.add_sized([100.0, 27.0], egui::Button::new(text))
 }
 
 // ----- absolute form layout ---------------------------------------------------

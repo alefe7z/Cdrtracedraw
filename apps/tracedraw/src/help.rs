@@ -158,7 +158,11 @@ pub fn options_topic(p: OptionsPage) -> &'static str {
         Edit => "customize/options-app#edit",
         NodesAndHandles => "customize/options-app#nodes-and-handles",
         ClipFrame => "customize/options-app#clip-frame",
-        Snapping | AlignmentGuides | DynamicGuides => "customize/options-app#snapping",
+        Snapping => "customize/options-app#snapping",
+        TabletMode | PenSettings => "customize/options-app#general",
+        BitmapTracing => "customize/global-options#bitmap-tracing",
+        Warnings => "customize/global-options#warnings",
+        Macros | Plugins => "customize/options-app#general",
         Save => "customize/options-app#save",
         Text => "customize/options-app#text",
         Appearance => "customize/customization#appearance",
@@ -170,7 +174,9 @@ pub fn options_topic(p: OptionsPage) -> &'static str {
         Curves => "customize/tool-options#curves",
         Rectangle => "customize/tool-options#rectangle",
         Ellipse => "customize/tool-options#ellipse",
-        Polygon => "customize/tool-options#polygon",
+        SmartDrawing | Dimension | AngularDimension | Connector | MeshFill => {
+            "customize/tool-options"
+        }
         Spiral => "customize/tool-options#spiral",
         GraphPaper => "customize/tool-options#graph-paper",
         Table => "customize/tool-options#table",
@@ -178,15 +184,14 @@ pub fn options_topic(p: OptionsPage) -> &'static str {
         GlobalGeneral => "customize/global-options#general",
         Printing => "customize/global-options#printing",
         FileFormats => "customize/global-options#file-formats",
-        BitmapTracing => "customize/global-options#bitmap-tracing",
-        Warnings => "customize/global-options#warnings",
+        GlobalColor => "customize/global-options",
         FileLocations => "customize/global-options#file-locations",
         Workspace => "customize/workspaces",
         DocumentGeneral => "pages-layout/document-options#general",
         PageSize => "pages-layout/document-options#page-size",
         Layout => "pages-layout/document-options#layout",
         Background => "pages-layout/document-options#background",
-        Bleed => "pages-layout/document-options#bleed",
+        DocumentSave => "pages-layout/document-options",
         Rulers => "pages-layout/document-options#rulers",
         Grid => "pages-layout/document-options#grid",
         Guidelines => "pages-layout/document-options#guidelines",
@@ -576,8 +581,11 @@ mod tests {
         app.dialog = Dialog::TextTabs;
         assert_eq!(context_topic(&app), "text/paragraphs#tabs");
         app.dialog = Dialog::Options;
-        app.options_page = OptionsPage::Bleed;
-        assert_eq!(context_topic(&app), "pages-layout/document-options#bleed");
+        app.options_page = OptionsPage::PageSize;
+        assert_eq!(
+            context_topic(&app),
+            "pages-layout/document-options#page-size"
+        );
     }
 
     #[test]
