@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `8be2fc4 Update the agents' status file`
-- Commits on the branch: 51
+- Last commit before this one: `a97825d Claim the Options dialog after the third reference`
+- Commits on the branch: 52
 
 ## Last 20 commits
 
+- `a97825d` 2026-10-26 19:40 Claude: Claim the Options dialog after the third reference
 - `7232ea0` 2026-10-26 19:15 Claude: Lay out the menus and toolbox flyouts after the second reference
 - `f969640` 2026-10-26 18:56 Claude: Claim the menus and flyouts after the second reference
 - `8c90865` 2026-10-26 18:34 Claude: Redo the Properties docker after the owner's reference
@@ -23,11 +24,10 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `1fc276d` 2026-10-23 15:59 alefe7z: Keep UI validation setup focused on required dependencies
 - `f0d9a30` 2026-10-23 15:58 alefe7z: Record reference fidelity implementation and native validation blocker
 - `6188313` 2026-10-23 15:56 alefe7z: Bound dependency setup and polish reference panel compatibility
-- `71cf241` 2026-10-23 15:50 alefe7z: Complete reference catalog panels and dedicated vector pictograms
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (4)
+- `docs/agents/CONTEXT.md` (5)
 - `docs/features.md` (2)
 - `apps/tracedraw/lang/zh-TW.toml` (2)
 - `apps/tracedraw/lang/zh-CN.toml` (2)
@@ -66,5 +66,4 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Uncommitted when generated
 
-    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
