@@ -75,7 +75,18 @@ pub fn show(app: &mut App, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.y = 4.0;
             for s in &sections {
                 if header(app, ui, s) {
-                    ui.indent(s.id, |ui| body(app, ui, s.id));
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: 6,
+                            right: 2,
+                            top: 0,
+                            bottom: 0,
+                        })
+                        .show(ui, |ui| {
+                            // Rows as far apart as the reference's.
+                            ui.spacing_mut().item_spacing.y = 8.0;
+                            body(app, ui, s.id)
+                        });
                     ui.add_space(6.0);
                 }
             }
@@ -498,7 +509,7 @@ fn divider(ui: &mut Ui) {
     ui.painter().hline(
         line.x_range(),
         line.center().y,
-        EStroke::new(1.0, Tokens::border()),
+        EStroke::new(1.0, Tokens::control_border().gamma_multiply(0.7)),
     );
     ui.add_space(4.0);
 }
@@ -547,7 +558,14 @@ fn outline_section(app: &mut App, ui: &mut Ui) {
     if app.selection.is_empty() {
         let mut stroke = app.default_stroke();
         let mut touched = Vec::new();
-        if outline_editor(ui, &mut stroke, &lib, &StrokeMix::default(), &mut touched) {
+        if outline_editor(
+            ui,
+            &mut stroke,
+            &lib,
+            &StrokeMix::default(),
+            &mut touched,
+            false,
+        ) {
             app.set_default_properties(tracedraw_core::DefaultKind::Graphic, |p| p.stroke = stroke);
         }
         return;
@@ -560,6 +578,7 @@ fn outline_section(app: &mut App, ui: &mut Ui) {
             &lib,
             &StrokeMix::default(),
             &mut Vec::new(),
+            true,
         ) {
             app.text_apply_outline(stroke);
         }
@@ -576,7 +595,7 @@ fn outline_section(app: &mut App, ui: &mut Ui) {
     let mix = app.selection_stroke_mix();
     let mut stroke = old.clone();
     let mut touched = Vec::new();
-    if outline_editor(ui, &mut stroke, &lib, &mix, &mut touched) {
+    if outline_editor(ui, &mut stroke, &lib, &mix, &mut touched, true) {
         let live = app.live_stroke.is_some() || ui.input(|i| i.pointer.any_down());
         if live {
             app.patch_selection_stroke_live(&old, &stroke, &touched);
@@ -602,13 +621,16 @@ const WIDTHS: [f64; 12] = [
 ];
 
 /// The outline's controls; true when something changed (`touched` says
-/// what).
+/// what). Without `details` (nothing selected: the outline of new
+/// objects) it stops after the line style and the arrow, as the reference
+/// does; arrowheads, variable outline and calligraphy belong to objects.
 fn outline_editor(
     ui: &mut Ui,
     stroke: &mut Option<Stroke>,
     lib: &crate::ui::line_style::OutlineLib,
     mix: &StrokeMix,
     touched: &mut Vec<StrokeField>,
+    details: bool,
 ) -> bool {
     let mut changed = false;
     let mark = |f: StrokeField, touched: &mut Vec<StrokeField>| {
@@ -665,13 +687,23 @@ fn outline_editor(
             crate::ui::field::NumField::new(&mut v)
                 .range(u.from_mm(0.001)..=u.from_mm(1000.0))
                 .unit_mm(u.mm())
-                .max_decimals(4)
-                .width(66.0)
+                .max_decimals(3)
+                .suffix(format!(" {}", u.short()))
+                .no_spin()
+                .local_decimals()
+                .width(70.0)
                 .mixed(width_mixed || stroke.is_none()),
         );
         let (arrow, _) =
             ui.allocate_exact_size(Vec2::new(18.0, resp.rect.height()), Sense::hover());
         let frame = resp.rect.union(arrow);
+        // One box round the number and its arrow, as a list.
+        ui.painter().rect_stroke(
+            frame,
+            0.0,
+            EStroke::new(1.0, Tokens::control_border()),
+            egui::StrokeKind::Inside,
+        );
         ui.add_space(8.0);
         if resp.changed() {
             let w = u.to_mm(v).clamp(0.001, 1000.0);
@@ -710,7 +742,13 @@ fn outline_editor(
                 }
                 for w in WIDTHS {
                     let on = stroke.as_ref().is_some_and(|s| (s.width - w).abs() < 1e-6);
-                    let text = format!("{} {}", fmt(u.from_mm(w), 3), u.short());
+                    let n = fmt(u.from_mm(w), 3);
+                    let n = if crate::i18n::decimal_comma() {
+                        n.replace('.', ",")
+                    } else {
+                        n
+                    };
+                    let text = format!("{n} {}", u.short());
                     if ui.selectable_label(on, text).clicked() {
                         set_width(stroke, lib, w);
                         changed = true;
@@ -721,6 +759,7 @@ fn outline_editor(
         // The unit, by its full name.
         let mut picked = None;
         egui::ComboBox::from_id_salt("outline_units_props")
+            .icon(combo_chevron)
             .selected_text(u.label())
             .width(96.0)
             .show_ui(ui, |ui| {
@@ -777,8 +816,8 @@ fn outline_editor(
         }
     });
     // The arrow that hides the lower rows.
-    let more = !ui
-        .data(|d| d.get_temp::<bool>(egui::Id::new("props_outline_less")))
+    let more = ui
+        .data(|d| d.get_temp::<bool>(egui::Id::new("props_outline_more")))
         .unwrap_or(false);
     let (r, resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width() - 6.0, 14.0), Sense::click());
@@ -796,7 +835,7 @@ fn outline_editor(
         .on_hover_text(tr(if more { "prp.less" } else { "prp.more" }))
         .clicked()
     {
-        ui.data_mut(|d| d.insert_temp(egui::Id::new("props_outline_less"), more));
+        ui.data_mut(|d| d.insert_temp(egui::Id::new("props_outline_more"), !more));
     }
     if more {
         labelled(ui, &tr("prp.miter_limit"), |ui| {
@@ -871,6 +910,9 @@ fn outline_editor(
         });
     }
 
+    if !details {
+        return changed;
+    }
     // Arrowheads.
     divider(ui);
     group_title(ui, &tr("prp.arrowheads"), None);
@@ -1090,6 +1132,15 @@ fn icon_toggle(
     resp.on_hover_text(tip).clicked()
 }
 
+/// The thin "v" at the right of the docker's lists.
+fn combo_chevron(ui: &Ui, rect: Rect, visuals: &egui::style::WidgetVisuals, _open: bool) {
+    let c = rect.center();
+    let s = EStroke::new(1.2, visuals.fg_stroke.color);
+    let p = ui.painter();
+    p.line_segment([c + Vec2::new(-4.0, -2.0), c + Vec2::new(0.0, 2.0)], s);
+    p.line_segment([c + Vec2::new(0.0, 2.0), c + Vec2::new(4.0, -2.0)], s);
+}
+
 fn down_arrow(p: &egui::Painter, c: Pos2, hovered: bool) {
     let ink = if hovered {
         Tokens::text()
@@ -1213,6 +1264,7 @@ fn arrow_list(
         a.name().to_string()
     };
     egui::ComboBox::from_id_salt(("props_arrow", id))
+        .icon(combo_chevron)
         .selected_text(text)
         .width(60.0)
         .show_ui(ui, |ui| {
@@ -1447,6 +1499,7 @@ fn transparency_section(app: &mut App, ui: &mut Ui) {
     let merge_shown = !mixed.contains(&F::Merge);
     let w = ui.available_width() - 8.0;
     egui::ComboBox::from_id_salt("props_transparency_merge")
+        .icon(combo_chevron)
         .selected_text(if merge_shown {
             set.merge.name().to_string()
         } else {
@@ -1530,6 +1583,7 @@ fn transparency_section(app: &mut App, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.label(tr("prp.applies_to"));
             egui::ComboBox::from_id_salt("props_transparency_target")
+                .icon(combo_chevron)
                 .selected_text(if target_shown {
                     targets[(set.target as usize).min(2)].clone()
                 } else {

@@ -975,20 +975,23 @@ fn fill_kind_picture(painter: &egui::Painter, r: egui::Rect, kind: usize) {
     let edge = egui::Stroke::new(1.0, Tokens::icon());
     let sq = r.shrink(1.0);
     match kind {
+        // A box crossed both ways: no fill.
         0 => {
             painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
-            painter.line_segment(
-                [sq.left_bottom(), sq.right_top()],
-                egui::Stroke::new(1.3, egui::Color32::from_rgb(0xD0, 0x30, 0x30)),
-            );
+            let x = sq.shrink(1.5);
+            painter.line_segment([x.left_top(), x.right_bottom()], edge);
+            painter.line_segment([x.left_bottom(), x.right_top()], edge);
         }
+        // A frame round a solid square.
         1 => {
-            painter.rect_filled(sq, 0.0, Tokens::icon());
+            painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
+            painter.rect_filled(sq.shrink(3.0), 0.0, Tokens::icon());
         }
         2 => {
             let mut mesh = egui::Mesh::default();
-            let dark = Tokens::icon();
-            let light = egui::Color32::WHITE;
+            // Dark to light across the square.
+            let dark = egui::Color32::from_gray(55);
+            let light = Tokens::icon();
             mesh.colored_vertex(sq.left_top(), dark);
             mesh.colored_vertex(sq.right_top(), light);
             mesh.colored_vertex(sq.right_bottom(), light);
@@ -998,35 +1001,33 @@ fn fill_kind_picture(painter: &egui::Painter, r: egui::Rect, kind: usize) {
             painter.add(mesh);
             painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
         }
+        // A grid: a vector pattern.
         3 => {
-            let n = 4;
-            let w = sq.width() / n as f32;
-            for y in 0..n {
-                for x in 0..n {
-                    if (x + y) % 2 == 0 {
-                        let cell = egui::Rect::from_min_size(
-                            sq.min + egui::vec2(x as f32 * w, y as f32 * w),
-                            egui::vec2(w, w),
-                        );
-                        painter.rect_filled(cell, 0.0, Tokens::icon());
-                    }
+            painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
+            for t in [1.0 / 3.0, 2.0 / 3.0] {
+                let x = (sq.left() + sq.width() * t).round() + 0.5;
+                let y = (sq.top() + sq.height() * t).round() + 0.5;
+                painter.vline(x, sq.y_range(), edge);
+                painter.hline(sq.x_range(), y, edge);
+            }
+        }
+        // Rings like a fingerprint: a texture.
+        4 => {
+            painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
+            let c = sq.center() + egui::vec2(-1.0, 1.5);
+            let thin = egui::Stroke::new(0.9, Tokens::icon());
+            for rad in [2.0f32, 4.0, 6.0] {
+                let pts: Vec<egui::Pos2> = (0..=12)
+                    .map(|i| {
+                        let t = std::f32::consts::PI * (1.1 + 0.9 * i as f32 / 12.0);
+                        c + egui::vec2(t.cos(), t.sin()) * rad
+                    })
+                    .filter(|p| sq.shrink(1.0).contains(*p))
+                    .collect();
+                if pts.len() > 1 {
+                    painter.line(pts, thin);
                 }
             }
-            painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
-        }
-        4 => {
-            // Speckles of a texture.
-            for (x, y, rad) in [
-                (3.0, 4.0, 1.6),
-                (9.0, 3.0, 1.2),
-                (12.0, 9.0, 1.8),
-                (5.0, 11.0, 1.4),
-                (8.5, 7.5, 1.0),
-                (12.5, 13.0, 1.0),
-            ] {
-                painter.circle_filled(sq.min + egui::vec2(x, y), rad, Tokens::icon());
-            }
-            painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
         }
         _ => {
             painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
@@ -2473,7 +2474,7 @@ mod tests {
         draw(&ctx, &mut app);
         let texts = painted_texts(&ctx, &mut app);
         assert!(!texts.iter().any(|t| *t == mixed));
-        assert!(texts.iter().any(|t| t == "1.234"), "the width shows");
+        assert!(texts.iter().any(|t| t == "1.234 mm"), "the width shows");
         app.select(ids.clone());
         draw(&ctx, &mut app);
         let texts = painted_texts(&ctx, &mut app);

@@ -275,3 +275,14 @@ mod tests {
         assert_eq!(tr("no.such.key"), "key");
     }
 }
+
+/// True when the interface language writes the decimal point as a comma
+/// (0,2 mm).
+pub fn decimal_comma() -> bool {
+    let lang = language();
+    let base = lang.split('-').next().unwrap_or("");
+    matches!(
+        base,
+        "pt" | "es" | "fr" | "de" | "it" | "nl" | "pl" | "ru" | "tr" | "cs" | "id"
+    )
+}

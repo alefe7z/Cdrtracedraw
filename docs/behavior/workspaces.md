@@ -82,12 +82,15 @@ Laid out after the owner's reference video (`ui/properties_docker.rs`).
   ("v") or opens it. Closed sections are kept in the preferences
   (`properties_closed`). F11 and the status bar's fill and outline go to
   their section.
+- Section bodies start a few points in from the header (no indent), rows
+  8 points apart, thin lines between groups; lists end in a thin "v".
 - Outline: the colour (a list's frame with the swatch; no outline shows
   a crossed white swatch), the width box with its list (None, Hairline,
-  0.1 to 10 mm) and the unit by name, the line style list drawn as lines
+  0.1 to 10 mm), shown as "0,2 mm" (the language's decimal sign, the
+  unit after it, no spin arrows), and the unit by name, the line style list drawn as lines
   with "..." for Edit Line Style, three dash fittings (as they come,
   fitted to corners and ends, set in Edit Line Style; greyed for a solid
-  line). A small arrow hides or shows the lower rows, their labels
+  line). A small arrow (closed at first) hides or shows the lower rows, their labels
   right-aligned: Miter limit, Corners, Line caps and Position as
   pictures. Then Arrowheads (start and end lists, "..." to swap or
   remove, Share attributes sets both), Variable Outline (a ruler with
@@ -95,8 +98,11 @@ Laid out after the owner's reference video (`ui/properties_docker.rs`).
   without nodes; the flame picks the Variable Outline tool) and
   Calligraphy (stretch in percent, angle, the nib drawn, reset; Behind
   fill, Scale with object; Overprint outline greyed, it is set when
-  printing). Further outlines follow.
-- Fill: the kinds as pictures and their settings; with no fill, "The
+  printing). Further outlines follow. With nothing selected the section
+  stops after the arrow: arrowheads, variable outline and calligraphy
+  belong to objects.
+- Fill: the kinds as pictures (a crossed box, a framed square, a
+  gradient, a grid, rings, a mesh) and their settings; with no fill, "The
   default has no fill." (nothing selected) or "The object has no fill.".
   Further fills follow.
 - Transparency: the merge mode across the section, the kinds as

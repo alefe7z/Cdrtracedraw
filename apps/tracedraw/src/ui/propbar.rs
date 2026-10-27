@@ -3257,8 +3257,10 @@ mod tests {
     fn outline_widths_read_in_the_outline_unit() {
         let mut app = App::headless();
         app.units = Units::Millimeters;
-        // Points by default, whatever the ruler unit.
-        assert_eq!(app.outline_units(), Units::Points);
+        // Millimetres by default, whatever the ruler unit.
+        assert_eq!(app.outline_units(), Units::Millimeters);
+        assert_eq!(outline_text(&app, Some(0.2)), "0.2 mm");
+        app.set_outline_units(Units::Points);
         assert_eq!(outline_text(&app, Some(25.4 / 72.0)), "1 pt");
         assert_eq!(outline_text(&app, Some(0.2)), "0.57 pt");
         app.set_outline_units(Units::Millimeters);

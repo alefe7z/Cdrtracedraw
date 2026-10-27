@@ -456,10 +456,10 @@ fn default_desktop() -> [u8; 3] {
 }
 
 /// How many one-time upgrades `Settings::upgrade` knows.
-const UPGRADES: u32 = 3;
+const UPGRADES: u32 = 4;
 
 fn default_outline_units() -> String {
-    "pt".into()
+    "mm".into()
 }
 
 fn default_true() -> bool {
@@ -1389,6 +1389,11 @@ impl Settings {
             self.snap.alignment_guides = false;
             self.snap.dynamic_guides = false;
         }
+        // Outline widths were shown in points by default; they show in
+        // millimetres now, as in the reference (0,2 mm).
+        if self.upgrades < 4 && self.outline_units == "pt" {
+            self.outline_units = "mm".into();
+        }
         self.upgrades = self.upgrades.max(UPGRADES);
         self
     }
@@ -1518,6 +1523,19 @@ mod tests {
         s.ui_size = 3.0;
         assert!(effective_ui_size_with(&s, big) <= 4.0);
         assert_eq!(effective_theme_with(&s, SystemPrefs::default()), s.theme);
+    }
+
+    /// Outline widths saved in points by an older version show in
+    /// millimetres once; chosen again afterwards, points stay.
+    #[test]
+    fn outline_units_move_to_millimetres_once() {
+        let old: Settings = serde_json::from_str(r#"{"outline_units": "pt", "upgrades": 3}"#)
+            .expect("old preferences");
+        let mut s = old.upgrade();
+        assert_eq!(s.outline_units, "mm");
+        s.outline_units = "pt".into();
+        assert_eq!(s.upgrade().outline_units, "pt");
+        assert_eq!(Settings::default().outline_units, "mm");
     }
 
     #[test]

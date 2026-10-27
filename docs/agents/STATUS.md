@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `b285a13 Request a Windows build [exe]`
-- Commits on the branch: 64
+- Last commit before this one: `cedcb22 Update the agents' status file`
+- Commits on the branch: 65
 
 ## Last 20 commits
 
@@ -59,4 +59,12 @@ None.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/src/i18n.rs
+    M  apps/tracedraw/src/settings.rs
+    M  apps/tracedraw/src/ui/dockers.rs
+    M  apps/tracedraw/src/ui/field.rs
+    M  apps/tracedraw/src/ui/propbar.rs
+    M  apps/tracedraw/src/ui/properties_docker.rs
+    M  docs/behavior/outline-pen.md
+    M  docs/behavior/workspaces.md
     ?? docs/agents/STATUS.md.tmp

@@ -27,6 +27,10 @@ pub struct NumField<'a, N: Numeric> {
     /// What the spin arrows and the wheel add or take, in the field's
     /// unit (1 unless given).
     step: f64,
+    /// Show the up and down arrows at the right (the default).
+    spin: bool,
+    /// Show the decimal point as a comma (languages that write it so).
+    comma: bool,
 }
 
 /// The width of the spin arrows at the right of a field, points.
@@ -47,7 +51,24 @@ impl<'a, N: Numeric> NumField<'a, N> {
             width: DEFAULT_WIDTH,
             mixed: false,
             step: 1.0,
+            spin: true,
+            comma: false,
         }
+    }
+
+    /// No up and down arrows: the field takes all its width (the wheel
+    /// still steps it).
+    pub fn no_spin(mut self) -> Self {
+        self.spin = false;
+        self
+    }
+
+    /// Show the value with the decimal comma of the interface language
+    /// when it writes one (`i18n::decimal_comma`); a point or a comma typed
+    /// both work.
+    pub fn local_decimals(mut self) -> Self {
+        self.comma = crate::i18n::decimal_comma();
+        self
     }
 
     /// What the spin arrows and the mouse wheel add or take (1 unless
@@ -111,16 +132,14 @@ impl<'a, N: Numeric> NumField<'a, N> {
         if self.mixed {
             return String::new();
         }
-        format!(
-            "{}{}",
-            format_number(
-                self.value.to_f64(),
-                N::INTEGRAL,
-                self.min_decimals,
-                self.max_decimals
-            ),
-            self.suffix
-        )
+        let n = format_number(
+            self.value.to_f64(),
+            N::INTEGRAL,
+            self.min_decimals,
+            self.max_decimals,
+        );
+        let n = if self.comma { n.replace('.', ",") } else { n };
+        format!("{}{}", n, self.suffix)
     }
 }
 
@@ -158,10 +177,11 @@ impl<N: Numeric> Widget for NumField<'_, N> {
         // field in a row of controls does not take the rest of the row.
         // The spin arrows take their width at the right of the box.
         let justified = ui.layout().horizontal_justify();
+        let spin_w = if self.spin { SPIN_W } else { 0.0 };
         let width = if justified {
-            (ui.available_width() - SPIN_W).max(16.0)
+            (ui.available_width() - spin_w).max(16.0)
         } else {
-            (self.width - SPIN_W).max(16.0)
+            (self.width - spin_w).max(16.0)
         };
         let spacing = ui.spacing().item_spacing;
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -173,12 +193,16 @@ impl<N: Numeric> Widget for NumField<'_, N> {
                 .desired_width(width),
         );
         // The arrows: up over down, each half the box's height.
-        let (spin, spin_resp) =
-            ui.allocate_exact_size(egui::vec2(SPIN_W, resp.rect.height()), egui::Sense::click());
+        let (spin, spin_resp) = if self.spin {
+            ui.allocate_exact_size(egui::vec2(SPIN_W, resp.rect.height()), egui::Sense::click())
+        } else {
+            let r = egui::Rect::from_min_size(resp.rect.right_top(), egui::vec2(0.0, 0.0));
+            (r, ui.interact(r, id.with("no_spin"), egui::Sense::hover()))
+        };
         ui.spacing_mut().item_spacing = spacing;
         // The direction of a step and the modifiers held for it.
         let mut stepped: Option<(f64, egui::Modifiers)> = None;
-        if ui.is_rect_visible(spin) {
+        if self.spin && ui.is_rect_visible(spin) {
             let p = ui.painter();
             p.rect_filled(spin, 0.0, crate::theme::Tokens::field());
             let line = egui::Stroke::new(1.0, crate::theme::Tokens::control_border());

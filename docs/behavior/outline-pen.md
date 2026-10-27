@@ -27,7 +27,8 @@ Colour (Shift+F12) opens the Colour panel. The model is
 
 Widths are kept in millimetres. The Properties docker's outline section
 and the property bar show and take them in the outline unit, picked
-next to the width: points (the default), millimetres, centimetres,
+next to the width: millimetres (the default; preferences saved in
+points by older versions move to millimetres once), points, centimetres,
 inches or pixels. The choice is a preference (`outline_units` in the
 settings) shared by both places and the callout bar. The width list
 offers round values in that unit: points 0.25, 0.5, 0.75, 1, 1.5, 2, 3,
