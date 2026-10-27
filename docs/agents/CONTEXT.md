@@ -190,6 +190,8 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
+- 2026-10-27, Claude: Properties docker measured on the owner's image, owner's SVG icons.
+
 - 2026-10-26, Claude: unlimited zoom (double-precision view, clipping).
 
 - 2026-10-26, Claude: Options dialog after the third video.

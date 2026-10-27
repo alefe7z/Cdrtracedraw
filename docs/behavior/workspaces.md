@@ -82,8 +82,16 @@ Laid out after the owner's reference video (`ui/properties_docker.rs`).
   ("v") or opens it. Closed sections are kept in the preferences
   (`properties_closed`). F11 and the status bar's fill and outline go to
   their section.
-- Section bodies start a few points in from the header (no indent), rows
-  8 points apart, thin lines between groups; lists end in a thin "v".
+- Measured on the owner's reference (dark theme): the docker's
+  background grey 38, its title bold; the section buttons 24 points, 8
+  apart, 3 points from the docker's edge, the outline, fill and
+  transparency ones drawn from the owner's SVG files
+  (`assets/icons/properties/`, `ui/prop_icons.rs`), the one in use on a
+  blue (#1C4670) rounded square. Section titles bold 12 points, text 12
+  points in grey #CACED4. Bodies start 6 points from the edge, rows 23
+  points tall and 9 apart; lists filled grey 60 with round corners and no
+  frame, a box typed in (the width) on the docker's grey with a grey line;
+  lists end in a thin "v"; lines between groups grey.
 - Outline: the colour (a list's frame with the swatch; no outline shows
   a crossed white swatch), the width box with its list (None, Hairline,
   0.1 to 10 mm), shown as "0,2 mm" (the language's decimal sign, the

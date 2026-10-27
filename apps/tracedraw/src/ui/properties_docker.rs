@@ -22,6 +22,10 @@ use tracedraw_core::patch::{FillField, FillMix, StrokeField, StrokeMix};
 use tracedraw_core::{Fill, LineCap, LineJoin, OutlinePosition, ShapeKind, Stroke};
 
 const ROW: f32 = 26.0;
+/// The reference's text grey on the dark theme.
+const TEXT: Color32 = Color32::from_rgb(0xCA, 0xCE, 0xD4);
+/// The thin chevrons' grey.
+const CHEVRON: Color32 = Color32::from_rgb(0xA7, 0xAA, 0xAE);
 /// Where the right-aligned labels of the Outline's lower rows end.
 const LABEL_END: f32 = 150.0;
 
@@ -59,15 +63,18 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         let id = if i == 0 { "fill" } else { "outline" };
         go_to(app, ui.ctx(), id);
     }
+    // The reference sits closer to the docker's edges than the other
+    // dockers' pages: 3 points from the left for the buttons.
+    let r = ui.max_rect();
+    let wide = Rect::from_min_max(r.min - Vec2::new(7.0, 3.0), r.max);
+    let mut page = ui.new_child(egui::UiBuilder::new().max_rect(wide));
+    page.set_clip_rect(wide.intersect(ui.clip_rect().expand2(Vec2::new(7.0, 3.0))));
+    if ui.visuals().dark_mode {
+        page.visuals_mut().override_text_color = Some(TEXT);
+    }
+    let ui = &mut page;
     let sections = sections(app);
     top_bar(app, ui, &sections);
-    let r = ui.available_rect_before_wrap();
-    ui.painter().hline(
-        r.x_range(),
-        r.top() + 0.5,
-        EStroke::new(1.0, Tokens::border()),
-    );
-    ui.add_space(2.0);
     egui::ScrollArea::vertical()
         .id_salt("properties_scroll")
         .auto_shrink([false, false])
@@ -77,20 +84,73 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 if header(app, ui, s) {
                     egui::Frame::new()
                         .inner_margin(egui::Margin {
-                            left: 6,
-                            right: 2,
+                            left: 4,
+                            right: 4,
                             top: 0,
                             bottom: 0,
                         })
                         .show(ui, |ui| {
-                            // Rows as far apart as the reference's.
-                            ui.spacing_mut().item_spacing.y = 8.0;
+                            body_style(ui);
                             body(app, ui, s.id)
                         });
                     ui.add_space(6.0);
                 }
             }
         });
+}
+
+/// The look of the controls under a header, measured on the owner's
+/// reference: rows 23 points tall and 9 apart, lists filled grey with
+/// round corners and no frame.
+fn body_style(ui: &mut Ui) {
+    let fill = list_fill(ui);
+    let hover = list_hover(ui);
+    for (style, size) in [
+        (egui::TextStyle::Body, 12.0),
+        (egui::TextStyle::Button, 12.0),
+    ] {
+        if let Some(f) = ui.style_mut().text_styles.get_mut(&style) {
+            f.size = size;
+        }
+    }
+    let sp = ui.spacing_mut();
+    sp.item_spacing = Vec2::new(9.0, 9.0);
+    sp.interact_size.y = 23.0;
+    sp.button_padding = Vec2::new(6.0, 3.0);
+    let w = &mut ui.visuals_mut().widgets;
+    for (v, f) in [
+        (&mut w.inactive, fill),
+        (&mut w.hovered, hover),
+        (&mut w.active, hover),
+        (&mut w.open, hover),
+    ] {
+        v.weak_bg_fill = f;
+        v.bg_stroke = EStroke::NONE;
+        v.corner_radius = egui::CornerRadius::same(3);
+        v.expansion = 0.0;
+    }
+}
+
+/// A list's grey (60 on the dark theme, as the reference).
+pub(crate) fn list_fill(ui: &Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        Color32::from_gray(60)
+    } else {
+        Tokens::control_fill()
+    }
+}
+
+fn list_hover(ui: &Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        Color32::from_gray(72)
+    } else {
+        Tokens::tool_hover()
+    }
+}
+
+/// The frame of a box typed in (the width): a grey line.
+fn box_line() -> Color32 {
+    Tokens::control_border()
 }
 
 /// The sections, in order: what every object has, then its own.
@@ -186,14 +246,30 @@ fn top_bar(app: &mut App, ui: &mut Ui, sections: &[Section]) {
     let active: String = ui
         .data(|d| d.get_temp(active_id()))
         .unwrap_or_else(|| "outline".to_string());
+    ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        ui.add_space(2.0);
+        ui.spacing_mut().item_spacing.x = 8.0;
         for s in sections {
             let on = active == s.id;
-            let (rect, resp) = ui.allocate_exact_size(Vec2::new(28.0, 28.0), Sense::click());
-            paint_button(ui, rect, on, resp.hovered());
-            paint_icon(ui.painter(), rect.shrink(5.0), s.icon);
+            let (rect, resp) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::click());
+            let glyph = match s.icon {
+                Icon::Pen => Some(crate::ui::prop_icons::Glyph::Outline),
+                Icon::Bucket => Some(crate::ui::prop_icons::Glyph::Fill),
+                Icon::Checker => Some(crate::ui::prop_icons::Glyph::Transparency),
+                Icon::Other(_) => None,
+            };
+            match glyph {
+                Some(g) => {
+                    if resp.hovered() && !on {
+                        ui.painter().rect_filled(rect, 4.0, Tokens::tool_hover());
+                    }
+                    crate::ui::prop_icons::paint(ui, rect, g, on);
+                }
+                None => {
+                    paint_button(ui, rect, on, resp.hovered());
+                    paint_icon(ui.painter(), rect.shrink(4.0), s.icon);
+                }
+            }
             if resp.on_hover_text(tr(s.key)).clicked() {
                 go_to(app, ui.ctx(), s.id);
             }
@@ -203,9 +279,10 @@ fn top_bar(app: &mut App, ui: &mut Ui, sections: &[Section]) {
             // Only the section picked: the others hide until it is
             // changed.
             let single = app.settings.properties_closed.iter().any(|c| c == "single");
-            let (rect, resp) = ui.allocate_exact_size(Vec2::new(28.0, 28.0), Sense::click());
+            ui.add_space(4.0);
+            let (rect, resp) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::click());
             paint_button(ui, rect, single, resp.hovered());
-            single_icon(ui.painter(), rect.shrink(6.0));
+            single_icon(ui.painter(), rect.shrink(4.0));
             if resp.on_hover_text(tr("prp.single_section")).clicked() {
                 set_open(app, "single", single);
             }
@@ -220,9 +297,9 @@ fn top_bar(app: &mut App, ui: &mut Ui, sections: &[Section]) {
             // The selection's outline and fill become what new objects
             // get.
             let has = !app.selection.is_empty();
-            let (rect, resp) = ui.allocate_exact_size(Vec2::new(28.0, 28.0), Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::click());
             paint_button(ui, rect, false, has && resp.hovered());
-            set_default_icon(ui.painter(), rect.shrink(6.0), has);
+            set_default_icon(ui.painter(), rect.shrink(4.0), has);
             if resp.on_hover_text(tr("prp.set_default")).clicked() && has {
                 if let Some(first) = app.selected_shapes().first().cloned() {
                     app.set_default_properties(tracedraw_core::DefaultKind::Graphic, |p| {
@@ -239,7 +316,7 @@ fn top_bar(app: &mut App, ui: &mut Ui, sections: &[Section]) {
 fn paint_button(ui: &Ui, rect: Rect, on: bool, hovered: bool) {
     if on {
         ui.painter()
-            .rect_filled(rect, 3.0, Color32::from_rgb(0x2B, 0x4C, 0x7A));
+            .rect_filled(rect, 3.0, crate::ui::prop_icons::LIT_BLUE);
     } else if hovered {
         ui.painter().rect_filled(rect, 3.0, Tokens::tool_hover());
     }
@@ -403,11 +480,11 @@ fn header(app: &mut App, ui: &mut Ui, s: &Section) -> bool {
         ink,
     );
     ui.painter().text(
-        Pos2::new(rect.left() + 22.0, rect.center().y),
+        Pos2::new(rect.left() + 20.0, rect.center().y),
         Align2::LEFT_CENTER,
         tr(s.key),
-        crate::theme::bold(13.0),
-        Tokens::text(),
+        crate::theme::bold(12.0),
+        header_text(ui),
     );
     let jump: Option<String> = ui.data(|d| d.get_temp(jump_id()));
     if jump.as_deref() == Some(s.id) {
@@ -421,6 +498,14 @@ fn header(app: &mut App, ui: &mut Ui, s: &Section) -> bool {
         return !open;
     }
     open
+}
+
+fn header_text(ui: &Ui) -> Color32 {
+    if ui.visuals().dark_mode {
+        TEXT
+    } else {
+        Tokens::text()
+    }
 }
 
 /// The small "^" (open) or "v" (closed) of a header.
@@ -503,15 +588,13 @@ fn body(app: &mut App, ui: &mut Ui, id: &str) {
 
 /// A thin line across the section between its groups.
 fn divider(ui: &mut Ui) {
-    ui.add_space(4.0);
     let r = ui.available_rect_before_wrap();
-    let (line, _) = ui.allocate_exact_size(Vec2::new(r.width() - 6.0, 1.0), Sense::hover());
+    let (line, _) = ui.allocate_exact_size(Vec2::new(r.width(), 1.0), Sense::hover());
     ui.painter().hline(
         line.x_range(),
         line.center().y,
-        EStroke::new(1.0, Tokens::control_border().gamma_multiply(0.7)),
+        EStroke::new(1.0, box_line()),
     );
-    ui.add_space(4.0);
 }
 
 /// A bold group title with an optional button at the right.
@@ -640,7 +723,7 @@ fn outline_editor(
     // The colour: a list's frame with the swatch; no outline shows a
     // crossed swatch, and a colour picked gives the object one.
     ui.horizontal(|ui| {
-        let size = Vec2::new(84.0, 24.0);
+        let size = Vec2::new(87.0, 23.0);
         match stroke {
             Some(s) => {
                 let mut c = s.color;
@@ -652,7 +735,7 @@ fn outline_editor(
                 if mix.has(StrokeField::Paint) {
                     crate::ui::field::mixed_swatch(
                         ui,
-                        Rect::from_min_size(before + Vec2::new(4.0, 4.0), Vec2::new(58.0, 16.0)),
+                        Rect::from_min_size(before + Vec2::new(4.0, 4.0), Vec2::new(62.0, 15.0)),
                     );
                 }
             }
@@ -667,7 +750,7 @@ fn outline_editor(
                     changed |= mark(StrokeField::Paint, touched);
                     touched.push(StrokeField::Width);
                 }
-                let sw = Rect::from_min_size(before + Vec2::new(4.0, 4.0), Vec2::new(58.0, 16.0));
+                let sw = Rect::from_min_size(before + Vec2::new(4.0, 4.0), Vec2::new(62.0, 15.0));
                 ui.painter().rect_filled(sw, 2.0, Color32::WHITE);
                 ui.painter().line_segment(
                     [sw.left_bottom(), sw.right_top()],
@@ -683,28 +766,41 @@ fn outline_editor(
         let width_mixed = mix.has(StrokeField::Width);
         let mut v = u.from_mm(stroke.as_ref().map_or(0.0, |s| s.width));
         ui.spacing_mut().item_spacing.x = 0.0;
-        let resp = ui.add(
-            crate::ui::field::NumField::new(&mut v)
-                .range(u.from_mm(0.001)..=u.from_mm(1000.0))
-                .unit_mm(u.mm())
-                .max_decimals(3)
-                .suffix(format!(" {}", u.short()))
-                .no_spin()
-                .local_decimals()
-                .width(70.0)
-                .mixed(width_mixed || stroke.is_none()),
+        // The number on the docker's own colour, no frame of its own: one
+        // grey line goes round it and its arrow.
+        let resp = ui
+            .scope(|ui| {
+                let panel = dk::docker_bg(ui);
+                let v_ = ui.visuals_mut();
+                v_.extreme_bg_color = panel;
+                v_.text_edit_bg_color = Some(panel);
+                v_.widgets.inactive.bg_stroke = EStroke::NONE;
+                v_.widgets.hovered.bg_stroke = EStroke::NONE;
+                ui.add_sized(
+                    [69.0, 23.0],
+                    crate::ui::field::NumField::new(&mut v)
+                        .range(u.from_mm(0.001)..=u.from_mm(1000.0))
+                        .unit_mm(u.mm())
+                        .max_decimals(3)
+                        .suffix(format!(" {}", u.short()))
+                        .no_spin()
+                        .local_decimals()
+                        .mixed(width_mixed || stroke.is_none()),
+                )
+            })
+            .inner;
+        let (arrow, _) = ui.allocate_exact_size(Vec2::new(18.0, 23.0), Sense::hover());
+        let frame = Rect::from_min_max(
+            Pos2::new(resp.rect.left(), arrow.top()),
+            Pos2::new(arrow.right(), arrow.bottom()),
         );
-        let (arrow, _) =
-            ui.allocate_exact_size(Vec2::new(18.0, resp.rect.height()), Sense::hover());
-        let frame = resp.rect.union(arrow);
-        // One box round the number and its arrow, as a list.
         ui.painter().rect_stroke(
             frame,
-            0.0,
-            EStroke::new(1.0, Tokens::control_border()),
+            2.0,
+            EStroke::new(1.0, box_line()),
             egui::StrokeKind::Inside,
         );
-        ui.add_space(8.0);
+        ui.add_space(9.0);
         if resp.changed() {
             let w = u.to_mm(v).clamp(0.001, 1000.0);
             set_width(stroke, lib, w);
@@ -761,7 +857,7 @@ fn outline_editor(
         egui::ComboBox::from_id_salt("outline_units_props")
             .icon(combo_chevron)
             .selected_text(u.label())
-            .width(96.0)
+            .width(99.0)
             .show_ui(ui, |ui| {
                 for o in crate::ui::propbar::OUTLINE_UNITS {
                     if ui.selectable_label(o == u, o.label()).clicked() {
@@ -778,21 +874,26 @@ fn outline_editor(
     };
     // The line style with "...", Edit Line Style.
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 10.0;
+        ui.spacing_mut().item_spacing.x = 14.0;
         if line_style_list(ui, s, lib, mix.has(StrokeField::Dash)) {
             changed |= mark(StrokeField::Dash, touched);
         }
-        let dots = ui
-            .add(egui::Button::new("\u{2022}\u{2022}\u{2022}").frame(false))
-            .on_hover_text(tr("docker.edit_line_style"));
-        if dots.clicked() {
+        let (r, dots) = ui.allocate_exact_size(Vec2::new(16.0, 23.0), Sense::click());
+        for k in 0..3 {
+            ui.painter().circle_filled(
+                Pos2::new(r.left() + 3.0 + k as f32 * 4.5, r.center().y),
+                1.3,
+                if dots.hovered() { Tokens::text() } else { TEXT },
+            );
+        }
+        if dots.on_hover_text(tr("docker.edit_line_style")).clicked() {
             crate::ui::line_style::request(ui);
         }
     });
     // How dashes fit: as they come, fitted to corners and ends, or set in
     // Edit Line Style.
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.spacing_mut().item_spacing.x = 8.0;
         let dashed = !s.dash.is_empty();
         for (i, tip) in ["prp.dash_default", "prp.dash_corners", "prp.dash_custom"]
             .iter()
@@ -801,9 +902,14 @@ fn outline_editor(
             let on = dashed
                 && !mix.has(StrokeField::AlignDashes)
                 && ((i == 0 && !s.align_dashes) || (i == 1 && s.align_dashes));
-            let (r, resp) = ui.allocate_exact_size(Vec2::new(26.0, 22.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(Vec2::new(24.0, 23.0), Sense::click());
             paint_button(ui, r, on, dashed && resp.hovered());
-            dash_fit_icon(ui.painter(), r.shrink(4.0), i, dashed);
+            dash_fit_icon(
+                ui.painter(),
+                Rect::from_center_size(r.center(), Vec2::new(16.0, 17.0)),
+                i,
+                dashed,
+            );
             if dashed && resp.on_hover_text(tr(tip)).clicked() {
                 match i {
                     0 | 1 => {
@@ -819,18 +925,16 @@ fn outline_editor(
     let more = ui
         .data(|d| d.get_temp::<bool>(egui::Id::new("props_outline_more")))
         .unwrap_or(false);
-    let (r, resp) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width() - 6.0, 14.0), Sense::click());
-    chevron(
-        ui.painter(),
-        r.center(),
-        more,
-        if resp.hovered() {
-            Tokens::text()
-        } else {
-            Tokens::text_dim()
-        },
-    );
+    // Its row: 30 points from the row above to its middle, as the
+    // reference has it.
+    ui.add_space(14.0);
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 14.0), Sense::click());
+    let c = Pos2::new(r.center().x, r.center().y);
+    if more {
+        chevron(ui.painter(), c, true, CHEVRON);
+    } else {
+        small_chevron(ui.painter(), c, resp.hovered());
+    }
     if resp
         .on_hover_text(tr(if more { "prp.less" } else { "prp.more" }))
         .clicked()
@@ -1133,23 +1237,21 @@ fn icon_toggle(
 }
 
 /// The thin "v" at the right of the docker's lists.
-fn combo_chevron(ui: &Ui, rect: Rect, visuals: &egui::style::WidgetVisuals, _open: bool) {
-    let c = rect.center();
-    let s = EStroke::new(1.2, visuals.fg_stroke.color);
-    let p = ui.painter();
-    p.line_segment([c + Vec2::new(-4.0, -2.0), c + Vec2::new(0.0, 2.0)], s);
-    p.line_segment([c + Vec2::new(0.0, 2.0), c + Vec2::new(4.0, -2.0)], s);
+fn combo_chevron(ui: &Ui, rect: Rect, _visuals: &egui::style::WidgetVisuals, _open: bool) {
+    small_chevron(ui.painter(), rect.center(), false);
+}
+
+/// The lists' "v": 7 points wide, a thin grey line.
+fn small_chevron(p: &egui::Painter, c: Pos2, hovered: bool) {
+    let ink = if hovered { Tokens::text() } else { CHEVRON };
+    let c = Pos2::new(c.x.round() + 0.5, c.y.round());
+    let s = EStroke::new(1.0, ink);
+    p.line_segment([c + Vec2::new(-3.5, -1.5), c + Vec2::new(0.0, 2.0)], s);
+    p.line_segment([c + Vec2::new(0.0, 2.0), c + Vec2::new(3.5, -1.5)], s);
 }
 
 fn down_arrow(p: &egui::Painter, c: Pos2, hovered: bool) {
-    let ink = if hovered {
-        Tokens::text()
-    } else {
-        Tokens::icon()
-    };
-    let s = EStroke::new(1.3, ink);
-    p.line_segment([c + Vec2::new(-4.0, -2.0), c + Vec2::new(0.0, 2.0)], s);
-    p.line_segment([c + Vec2::new(0.0, 2.0), c + Vec2::new(4.0, -2.0)], s);
+    small_chevron(p, c, hovered);
 }
 
 /// The line style list: the current dash pattern drawn, the solid line,
@@ -1161,31 +1263,28 @@ fn line_style_list(
     mixed: bool,
 ) -> bool {
     let mut changed = false;
-    let (frame, resp) = ui.allocate_exact_size(Vec2::new(190.0, 24.0), Sense::click());
-    ui.painter().rect(
+    let (frame, resp) = ui.allocate_exact_size(Vec2::new(195.0, 23.0), Sense::click());
+    ui.painter().rect_filled(
         frame,
         3.0,
         if resp.hovered() {
-            Tokens::tool_hover()
+            list_hover(ui)
         } else {
-            Tokens::control_fill()
+            list_fill(ui)
         },
-        EStroke::new(1.0, Tokens::control_border()),
-        egui::StrokeKind::Inside,
     );
+    // The line drawn on the docker's colour, the arrow beside it.
+    let preview = Rect::from_min_max(
+        frame.min + Vec2::new(1.0, 1.0),
+        Pos2::new(frame.right() - 19.0, frame.bottom() - 1.0),
+    );
+    ui.painter().rect_filled(preview, 3.0, dk::docker_bg(ui));
     if !mixed {
-        dash_line(
-            ui.painter(),
-            Rect::from_min_max(
-                frame.min + Vec2::new(6.0, 0.0),
-                Pos2::new(frame.right() - 26.0, frame.bottom()),
-            ),
-            &s.dash,
-        );
+        dash_line(ui.painter(), preview.shrink2(Vec2::new(1.0, 0.0)), &s.dash);
     }
     down_arrow(
         ui.painter(),
-        Pos2::new(frame.right() - 12.0, frame.center().y),
+        Pos2::new(frame.right() - 9.5, frame.center().y),
         resp.hovered(),
     );
     let popup = ui.id().with("line_style_popup");
@@ -1228,8 +1327,9 @@ fn line_style_list(
 
 /// A dash pattern drawn across `r`.
 fn dash_line(p: &egui::Painter, r: Rect, dash: &[f64]) {
-    let y = r.center().y;
-    let st = EStroke::new(2.0, Tokens::text());
+    // One pixel, on a pixel row, as the reference draws it.
+    let y = r.center().y.round() + 0.5;
+    let st = EStroke::new(1.0, Tokens::text());
     if dash.is_empty() {
         p.hline(r.x_range(), y, st);
         return;
@@ -1462,7 +1562,7 @@ fn fill_section(app: &mut App, ui: &mut Ui) {
 
 fn note(ui: &mut Ui, text: &str) {
     divider(ui);
-    ui.label(egui::RichText::new(text).size(12.5).color(Tokens::text()));
+    ui.label(egui::RichText::new(text).size(12.0).color(Tokens::text()));
 }
 
 // ----- transparency ---------------------------------------------------------------
@@ -1497,7 +1597,7 @@ fn transparency_section(app: &mut App, ui: &mut Ui) {
     let mut field = None;
     // The merge mode across the section.
     let merge_shown = !mixed.contains(&F::Merge);
-    let w = ui.available_width() - 8.0;
+    let w = ui.available_width();
     egui::ComboBox::from_id_salt("props_transparency_merge")
         .icon(combo_chevron)
         .selected_text(if merge_shown {
@@ -1526,12 +1626,16 @@ fn transparency_section(app: &mut App, ui: &mut Ui) {
         "transparency.texture",
     ];
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.spacing_mut().item_spacing.x = 8.0;
         for (i, key) in kinds.iter().enumerate() {
             let on = current == Some(i);
-            let (r, resp) = ui.allocate_exact_size(Vec2::new(28.0, 28.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::click());
             paint_button(ui, r, on, resp.hovered());
-            transparency_kind_icon(ui.painter(), r.shrink(6.0), i);
+            transparency_kind_icon(
+                ui.painter(),
+                Rect::from_center_size(r.center(), Vec2::splat(16.0)),
+                i,
+            );
             if resp.on_hover_text(tr(key)).clicked() && !on {
                 if i == 0 {
                     if has_selection {
@@ -1544,6 +1648,7 @@ fn transparency_section(app: &mut App, ui: &mut Ui) {
             }
         }
     });
+    divider(ui);
     let shown_kind = current.filter(|k| *k > 0);
     if let Some(k) = shown_kind {
         ui.add_space(4.0);
@@ -1616,73 +1721,37 @@ fn transparency_section(app: &mut App, ui: &mut Ui) {
 /// The transparency kinds: none (a checker with a red dot), uniform,
 /// fountain, pattern and texture over a checker.
 fn transparency_kind_icon(p: &egui::Painter, r: Rect, kind: usize) {
-    // A checker behind, and a card in front showing the kind.
-    let back = Rect::from_min_size(r.min, r.size() * 0.72);
-    checker_icon(p, back);
     if kind == 0 {
-        p.circle_filled(
-            r.right_top() + Vec2::new(-2.0, 2.0),
-            3.2,
-            Color32::from_rgb(0xE5, 0x39, 0x35),
+        // A checker with a red minus over its corner.
+        checker_icon(p, r);
+        let c = r.right_top() + Vec2::new(-3.0, 3.0);
+        p.circle_filled(c, 4.0, Color32::from_rgb(0xE8, 0x50, 0x50));
+        p.hline(
+            (c.x - 2.2)..=(c.x + 2.2),
+            c.y,
+            EStroke::new(1.3, Color32::WHITE),
         );
         return;
     }
-    let card = Rect::from_min_max(r.min + r.size() * 0.32, r.max);
-    p.rect_filled(card, 1.0, Color32::from_gray(30));
-    let inner = card.shrink(1.5);
-    match kind {
-        1 => {
-            p.rect_filled(inner, 0.0, Color32::from_gray(200));
-        }
-        2 => {
-            let n = 6;
-            for k in 0..n {
-                let x0 = inner.left() + inner.width() * k as f32 / n as f32;
-                let g = (60.0 + 180.0 * k as f32 / n as f32) as u8;
-                p.rect_filled(
-                    Rect::from_min_size(
-                        Pos2::new(x0, inner.top()),
-                        Vec2::new(inner.width() / n as f32 + 0.5, inner.height()),
-                    ),
-                    0.0,
-                    Color32::from_gray(g),
-                );
-            }
-        }
-        3 => {
-            p.rect_filled(inner, 0.0, Color32::from_gray(200));
-            for k in 1..3 {
-                let x = inner.left() + inner.width() * k as f32 / 3.0;
-                p.vline(
-                    x,
-                    inner.y_range(),
-                    EStroke::new(1.0, Color32::from_gray(40)),
-                );
-                let y = inner.top() + inner.height() * k as f32 / 3.0;
-                p.hline(
-                    inner.x_range(),
-                    y,
-                    EStroke::new(1.0, Color32::from_gray(40)),
-                );
-            }
-        }
-        _ => {
-            p.rect_filled(inner, 0.0, Color32::from_gray(200));
-            for (dx, dy) in [
-                (0.25, 0.3),
-                (0.7, 0.25),
-                (0.45, 0.65),
-                (0.8, 0.8),
-                (0.15, 0.85),
-            ] {
-                p.circle_filled(
-                    inner.min + Vec2::new(inner.width() * dx, inner.height() * dy),
-                    1.2,
-                    Color32::from_gray(40),
-                );
-            }
-        }
-    }
+    // The kind's fill picture, and a small checker tile over its top
+    // right corner.
+    let pic = Rect::from_min_size(r.min + Vec2::new(0.0, 3.0), Vec2::splat(13.0));
+    let fill_kind = match kind {
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        _ => 4,
+    };
+    dk::fill_kind_picture_pub(p, pic, fill_kind);
+    let tile = Rect::from_min_size(r.right_top() + Vec2::new(-10.0, 0.0), Vec2::splat(10.0));
+    p.rect_filled(tile.expand(1.0), 1.0, Color32::from_gray(38));
+    checker_icon(p, tile);
+    p.rect_stroke(
+        tile,
+        1.0,
+        EStroke::new(1.0, Tokens::icon()),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// The dash fittings: an outline corner drawn as it comes, fitted, set
@@ -1691,24 +1760,29 @@ fn dash_fit_icon(p: &egui::Painter, r: Rect, i: usize, enabled: bool) {
     let ink = if enabled {
         Tokens::icon()
     } else {
-        Tokens::icon_off()
+        Color32::from_gray(93)
     };
-    let s = EStroke::new(3.0, ink);
-    let o = r.left_top() + Vec2::new(2.0, 2.0);
-    let (h, v): (Vec<(f32, f32)>, Vec<(f32, f32)>) = match i {
-        0 => (vec![(0.0, 12.0)], vec![(0.0, 9.0)]),
-        1 => (vec![(0.0, 5.0), (8.0, 13.0)], vec![(0.0, 5.0), (8.0, 10.0)]),
-        _ => (
-            vec![(0.0, 3.0), (6.0, 9.0), (12.0, 14.0)],
-            vec![(0.0, 3.0), (6.0, 9.0)],
-        ),
+    // A corner 4 points thick: across the top, down the left, the top
+    // bar whole, cut once or cut twice.
+    let o = r.min;
+    let t = 4.0;
+    let bars: &[(f32, f32)] = match i {
+        0 => &[(0.0, 16.0)],
+        1 => &[(0.0, 6.0), (8.0, 16.0)],
+        _ => &[(0.0, 4.0), (6.0, 10.0), (12.0, 16.0)],
     };
-    for (a, b) in h {
-        p.hline((o.x + a)..=(o.x + b), o.y, s);
+    for (a, b) in bars {
+        p.rect_filled(
+            Rect::from_min_max(o + Vec2::new(*a, 0.0), o + Vec2::new(*b, t)),
+            0.0,
+            ink,
+        );
     }
-    for (a, b) in v {
-        p.vline(o.x, (o.y + a)..=(o.y + b), s);
-    }
+    p.rect_filled(
+        Rect::from_min_max(o, o + Vec2::new(t, r.height())),
+        0.0,
+        ink,
+    );
 }
 
 /// The corners: mitred, round, bevelled.

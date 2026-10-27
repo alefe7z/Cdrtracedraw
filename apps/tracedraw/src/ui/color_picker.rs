@@ -97,29 +97,27 @@ pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -
     let id = resp.id.with("color_picker");
     let [r, g, b] = c.to_rgb8();
     let swatch = if arrow {
-        ui.painter().rect(
-            frame,
-            3.0,
-            if resp.hovered() {
-                Tokens::tool_hover()
-            } else {
-                Tokens::control_fill()
-            },
-            Stroke::new(1.0, Tokens::control_border()),
-            egui::StrokeKind::Inside,
-        );
-        let a = egui::pos2(frame.right() - 11.0, frame.center().y);
+        // A grey list with the swatch and a thin chevron, no frame.
+        let dark = ui.visuals().dark_mode;
+        let fill = match (dark, resp.hovered()) {
+            (true, false) => Color32::from_gray(60),
+            (true, true) => Color32::from_gray(72),
+            (false, false) => Tokens::control_fill(),
+            (false, true) => Tokens::tool_hover(),
+        };
+        ui.painter().rect_filled(frame, 3.0, fill);
+        let a = egui::pos2(frame.right() - 9.5, frame.center().y);
         ui.painter().line_segment(
             [a + Vec2::new(-4.0, -2.0), a + Vec2::new(0.0, 2.0)],
-            Stroke::new(1.3, Tokens::icon()),
+            Stroke::new(1.2, Tokens::icon()),
         );
         ui.painter().line_segment(
             [a + Vec2::new(0.0, 2.0), a + Vec2::new(4.0, -2.0)],
-            Stroke::new(1.3, Tokens::icon()),
+            Stroke::new(1.2, Tokens::icon()),
         );
         Rect::from_min_max(
             frame.min + Vec2::new(4.0, 4.0),
-            egui::pos2(frame.right() - 22.0, frame.bottom() - 4.0),
+            egui::pos2(frame.right() - 21.0, frame.bottom() - 4.0),
         )
     } else {
         frame

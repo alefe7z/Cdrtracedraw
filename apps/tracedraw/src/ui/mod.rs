@@ -70,6 +70,7 @@ pub mod preflight_dialog;
 pub mod preview;
 pub mod print_dialog;
 pub mod print_preview;
+pub mod prop_icons;
 pub mod propbar;
 pub mod properties_docker;
 pub mod publish_pdf;

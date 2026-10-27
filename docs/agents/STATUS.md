@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `b325d46 Lay out the Properties docker like the owner's latest reference`
-- Commits on the branch: 66
+- Last commit before this one: `69014cd Update the agents' status file`
+- Commits on the branch: 67
 
 ## Last 20 commits
 
@@ -59,4 +59,15 @@ None.
 
 ## Uncommitted when generated
 
+    M  ATTRIBUTION.md
+    M  apps/tracedraw/src/ui/color_picker.rs
+    M  apps/tracedraw/src/ui/dockers.rs
+    M  apps/tracedraw/src/ui/mod.rs
+    A  apps/tracedraw/src/ui/prop_icons.rs
+    M  apps/tracedraw/src/ui/properties_docker.rs
+    A  assets/icons/properties/fill.svg
+    A  assets/icons/properties/outline.svg
+    A  assets/icons/properties/transparency.svg
+    M  docs/agents/CONTEXT.md
+    M  docs/behavior/workspaces.md
     ?? docs/agents/STATUS.md.tmp

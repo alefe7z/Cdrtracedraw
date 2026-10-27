@@ -379,6 +379,16 @@ pub fn floating_dockers(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+/// A docker's background: the dark grey of the reference (38) on the
+/// dark theme, the field colour otherwise.
+pub(crate) fn docker_bg(ui: &Ui) -> egui::Color32 {
+    if ui.visuals().dark_mode {
+        egui::Color32::from_gray(38)
+    } else {
+        crate::theme::Tokens::field()
+    }
+}
+
 /// The docker column at `place`: the title bar of the docker in front,
 /// then its page in the width the column has.
 pub fn dockers(app: &mut App, ui: &mut Ui, place: DockerPlace) {
@@ -386,8 +396,7 @@ pub fn dockers(app: &mut App, ui: &mut Ui, place: DockerPlace) {
     let (_, front, _) = app.docker_column(place);
     docker_title(app, ui, front, place);
     let content = egui::Rect::from_min_max(egui::pos2(full.left(), full.top() + TITLE_H), full.max);
-    ui.painter()
-        .rect_filled(content, 0.0, crate::theme::Tokens::field());
+    ui.painter().rect_filled(content, 0.0, docker_bg(ui));
     // The docker keeps the width it was given (its default or the one the
     // user dragged it to): the page lies in a child that never widens the
     // panel, clipped to the docker, so no section can push it wider.
@@ -421,7 +430,7 @@ fn docker_title(app: &mut App, ui: &mut Ui, tab: DockerTab, place: DockerPlace) 
         egui::pos2(bar.left() + 7.0, bar.center().y),
         egui::Align2::LEFT_CENTER,
         catalog::label(tab),
-        egui::FontId::proportional(12.0),
+        crate::theme::bold(12.0),
         Tokens::text(),
     );
     if resp.drag_started_by(egui::PointerButton::Primary) {
@@ -971,6 +980,12 @@ pub(crate) fn rectangle_section(app: &mut App, ui: &mut Ui, c: tracedraw_core::C
 
 /// The picture of a fill kind (0 none, 1 uniform, 2 gradient, 3 pattern,
 /// 4 texture, 5 mesh) in a 16 x 16 square.
+/// [`fill_kind_picture`] for the other dockers' pictures (transparency
+/// kinds).
+pub(crate) fn fill_kind_picture_pub(painter: &egui::Painter, r: egui::Rect, kind: usize) {
+    fill_kind_picture(painter, r, kind)
+}
+
 fn fill_kind_picture(painter: &egui::Painter, r: egui::Rect, kind: usize) {
     let edge = egui::Stroke::new(1.0, Tokens::icon());
     let sq = r.shrink(1.0);
@@ -985,17 +1000,18 @@ fn fill_kind_picture(painter: &egui::Painter, r: egui::Rect, kind: usize) {
         // A frame round a solid square.
         1 => {
             painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
-            painter.rect_filled(sq.shrink(3.0), 0.0, Tokens::icon());
+            painter.rect_filled(sq.shrink(2.0), 0.0, Tokens::icon());
         }
         2 => {
             let mut mesh = egui::Mesh::default();
-            // Dark to light across the square.
-            let dark = egui::Color32::from_gray(55);
+            // Dark to light across the square, inside its frame.
+            let dark = egui::Color32::from_rgb(0x2A, 0x30, 0x3C);
             let light = Tokens::icon();
-            mesh.colored_vertex(sq.left_top(), dark);
-            mesh.colored_vertex(sq.right_top(), light);
-            mesh.colored_vertex(sq.right_bottom(), light);
-            mesh.colored_vertex(sq.left_bottom(), dark);
+            let g = sq.shrink(2.0);
+            mesh.colored_vertex(g.left_top(), dark);
+            mesh.colored_vertex(g.right_top(), light);
+            mesh.colored_vertex(g.right_bottom(), light);
+            mesh.colored_vertex(g.left_bottom(), dark);
             mesh.add_triangle(0, 1, 2);
             mesh.add_triangle(0, 2, 3);
             painter.add(mesh);
@@ -1004,11 +1020,14 @@ fn fill_kind_picture(painter: &egui::Painter, r: egui::Rect, kind: usize) {
         // A grid: a vector pattern.
         3 => {
             painter.rect_stroke(sq, 0.0, edge, egui::StrokeKind::Inside);
-            for t in [1.0 / 3.0, 2.0 / 3.0] {
-                let x = (sq.left() + sq.width() * t).round() + 0.5;
-                let y = (sq.top() + sq.height() * t).round() + 0.5;
-                painter.vline(x, sq.y_range(), edge);
-                painter.hline(sq.x_range(), y, edge);
+            let g = sq.shrink(2.0);
+            painter.rect_filled(g, 0.0, egui::Color32::from_gray(40));
+            for k in 1..5 {
+                let t = k as f32 / 5.0;
+                let x = (g.left() + g.width() * t).round() + 0.5;
+                let y = (g.top() + g.height() * t).round() + 0.5;
+                painter.vline(x, g.y_range(), edge);
+                painter.hline(g.x_range(), y, edge);
             }
         }
         // Rings like a fingerprint: a texture.
@@ -1068,7 +1087,8 @@ pub(crate) fn fill_editor_mixed(
     // The kinds as pictures: none, uniform, gradient, pattern, texture,
     // mesh.
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.spacing_mut().interact_size.y = 24.0;
         for (i, n) in [
             "docker.fill_none",
             "docker.fill_uniform",
@@ -1080,9 +1100,10 @@ pub(crate) fn fill_editor_mixed(
         .iter()
         .enumerate()
         {
-            let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 26.0), egui::Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
             if shown_kind == Some(i) {
-                ui.painter().rect_filled(rect, 2.0, Tokens::tool_active());
+                ui.painter()
+                    .rect_filled(rect, 3.0, crate::ui::prop_icons::LIT_BLUE);
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, 2.0, Tokens::tool_hover());
             }
