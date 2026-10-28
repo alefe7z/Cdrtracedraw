@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `32e0d2d Match the Properties docker to the owner's image, with the owner's icons`
-- Commits on the branch: 68
+- Last commit before this one: `8df306b Update the agents' status file`
+- Commits on the branch: 69
 
 ## Last 20 commits
 
