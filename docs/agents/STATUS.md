@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `f1f252f Request a Windows build [exe]`
-- Commits on the branch: 70
+- Last commit before this one: `fd06677 Update the agents' status file`
+- Commits on the branch: 71
 
 ## Last 20 commits
 
@@ -55,8 +55,11 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-None.
+| Agent | Area / files | Since | Note |
+| --- | --- | --- | --- |
+| Claude | Interface polish: `raster.rs` (zoom blur), `theme.rs` (fonts, check boxes), `ui/chrome.rs`, `ui/toolbox.rs`, `ui/bars.rs`, `app.rs` setup_context | 2026-10-28 | owner: zoom blur, check boxes, fonts, toolbox |
 
 ## Uncommitted when generated
 
+    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp

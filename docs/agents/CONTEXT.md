@@ -97,6 +97,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Claude | Interface polish: `raster.rs` (zoom blur), `theme.rs` (fonts, check boxes), `ui/chrome.rs`, `ui/toolbox.rs`, `ui/bars.rs`, `app.rs` setup_context | 2026-10-28 | owner: zoom blur, check boxes, fonts, toolbox |
 
 ## Notes for other agents
 
