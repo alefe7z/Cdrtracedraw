@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `8df306b Update the agents' status file`
-- Commits on the branch: 69
+- Last commit before this one: `f1f252f Request a Windows build [exe]`
+- Commits on the branch: 70
 
 ## Last 20 commits
 
+- `f1f252f` 2026-10-28 01:02 Claude: Request a Windows build [exe]
 - `32e0d2d` 2026-10-27 13:21 Claude: Match the Properties docker to the owner's image, with the owner's icons
 - `b325d46` 2026-10-27 13:05 Claude: Lay out the Properties docker like the owner's latest reference
 - `b285a13` 2026-10-26 23:38 Claude: Request a Windows build [exe]
@@ -18,12 +19,11 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `30d1f11` 2026-10-26 21:01 Claude: Let the owner decide on looks, names, logos and assets
 - `113d894` 2026-10-26 20:14 Claude: Lay out Tools > Options after the third reference video
 - `a97825d` 2026-10-26 19:40 Claude: Claim the Options dialog after the third reference
-- `7232ea0` 2026-10-26 19:15 Claude: Lay out the menus and toolbox flyouts after the second reference
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (3)
 - `docs/behavior/workspaces.md` (2)
+- `docs/agents/CONTEXT.md` (2)
 - `apps/tracedraw/src/ui/properties_docker.rs` (2)
 - `apps/tracedraw/src/ui/dockers.rs` (2)
 - `docs/behavior/zoom-and-pan.md` (1)
