@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `c0d34aa Sharpen zoom, refine check boxes, fonts, palette and toolbox`
-- Commits on the branch: 74
+- Last commit before this one: `906c0f7 Update the agents' status file`
+- Commits on the branch: 75
 
 ## Last 20 commits
 
