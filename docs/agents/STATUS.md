@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `fd06677 Update the agents' status file`
-- Commits on the branch: 71
+- Last commit before this one: `0248a52 Claim the interface polish (zoom blur, check boxes, fonts, toolbox)`
+- Commits on the branch: 72
 
 ## Last 20 commits
 
+- `0248a52` 2026-10-28 08:26 Claude: Claim the interface polish (zoom blur, check boxes, fonts, toolbox)
 - `f1f252f` 2026-10-28 01:02 Claude: Request a Windows build [exe]
 - `32e0d2d` 2026-10-27 13:21 Claude: Match the Properties docker to the owner's image, with the owner's icons
 - `b325d46` 2026-10-27 13:05 Claude: Lay out the Properties docker like the owner's latest reference
@@ -18,7 +19,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `ede9ac0` 2026-10-26 21:03 Claude: Record the owner's rule on private, personal use
 - `30d1f11` 2026-10-26 21:01 Claude: Let the owner decide on looks, names, logos and assets
 - `113d894` 2026-10-26 20:14 Claude: Lay out Tools > Options after the third reference video
-- `a97825d` 2026-10-26 19:40 Claude: Claim the Options dialog after the third reference
 
 ## Files changed in the last 10 commits
 
@@ -26,32 +26,18 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `docs/agents/CONTEXT.md` (2)
 - `apps/tracedraw/src/ui/properties_docker.rs` (2)
 - `apps/tracedraw/src/ui/dockers.rs` (2)
-- `docs/behavior/zoom-and-pan.md` (1)
-- `docs/behavior/reference-panels.md` (1)
 - `docs/behavior/outline-pen.md` (1)
-- `crates/render/src/lib.rs` (1)
-- `crates/core/src/lib.rs` (1)
-- `crates/core/src/clip.rs` (1)
 - `assets/icons/properties/transparency.svg` (1)
 - `assets/icons/properties/outline.svg` (1)
 - `assets/icons/properties/fill.svg` (1)
-- `apps/tracedraw/src/view.rs` (1)
-- `apps/tracedraw/src/variable_outline.rs` (1)
-- `apps/tracedraw/src/ui/window_bars.rs` (1)
-- `apps/tracedraw/src/ui/toolbar.rs` (1)
-- `apps/tracedraw/src/ui/rulers.rs` (1)
 - `apps/tracedraw/src/ui/propbar.rs` (1)
 - `apps/tracedraw/src/ui/prop_icons.rs` (1)
 - `apps/tracedraw/src/ui/mod.rs` (1)
 - `apps/tracedraw/src/ui/field.rs` (1)
-- `apps/tracedraw/src/ui/docker_panels.rs` (1)
-- `apps/tracedraw/src/ui/cursors.rs` (1)
 - `apps/tracedraw/src/ui/color_picker.rs` (1)
-- `apps/tracedraw/src/text_nodes.rs` (1)
-- `apps/tracedraw/src/table_tool.rs` (1)
-- `apps/tracedraw/src/snap.rs` (1)
-- `apps/tracedraw/src/shape_tool.rs` (1)
-- `apps/tracedraw/src/shadow_tool.rs` (1)
+- `apps/tracedraw/src/settings.rs` (1)
+- `apps/tracedraw/src/i18n.rs` (1)
+- `ATTRIBUTION.md` (1)
 
 ## Open claims (from CONTEXT.md)
 
@@ -61,5 +47,4 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Uncommitted when generated
 
-    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
