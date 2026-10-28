@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `0248a52 Claim the interface polish (zoom blur, check boxes, fonts, toolbox)`
-- Commits on the branch: 72
+- Last commit before this one: `7bef7cb Update the agents' status file`
+- Commits on the branch: 73
 
 ## Last 20 commits
 
@@ -41,10 +41,17 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-| Agent | Area / files | Since | Note |
-| --- | --- | --- | --- |
-| Claude | Interface polish: `raster.rs` (zoom blur), `theme.rs` (fonts, check boxes), `ui/chrome.rs`, `ui/toolbox.rs`, `ui/bars.rs`, `app.rs` setup_context | 2026-10-28 | owner: zoom blur, check boxes, fonts, toolbox |
+None.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/src/app.rs
+    M  apps/tracedraw/src/raster.rs
+    M  apps/tracedraw/src/theme.rs
+    M  apps/tracedraw/src/ui/chrome.rs
+    M  apps/tracedraw/src/ui/toolbox.rs
+    M  docs/agents/CONTEXT.md
+    M  docs/behavior/toolbars.md
+    M  docs/behavior/toolbox.md
+    M  docs/behavior/zoom-and-pan.md
     ?? docs/agents/STATUS.md.tmp

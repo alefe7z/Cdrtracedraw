@@ -176,25 +176,24 @@ fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let has_flyout = group.tools.len() > 1;
         let arrow_zone = Rect::from_min_max(rect.right_bottom() - Vec2::splat(10.0), rect.max);
-        // The active tool's button is white with a grey frame; hovering
-        // tints a button blue.
-        let bg = if active {
-            crate::theme::Tokens::field()
-        } else if resp.hovered() {
-            Tokens::tool_hover()
+        // As the reference: the active tool on a blue rounded square
+        // 24/30 of the button, the one under the pointer on a grey one.
+        let tile = Rect::from_center_size(
+            egui::pos2(rect.left() + side / 2.0, rect.center().y),
+            Vec2::splat((side * 0.8).round()),
+        );
+        let tile = if captions.caption() {
+            Rect::from_min_max(tile.min, egui::pos2(rect.right() - 3.0, tile.max.y))
         } else {
-            Tokens::panel()
+            tile
         };
-        ui.painter().rect_filled(rect, 0.0, bg);
         if active {
-            ui.painter().rect_stroke(
-                rect,
-                0.0,
-                Stroke::new(1.0, Tokens::control_border()),
-                egui::StrokeKind::Inside,
-            );
+            ui.painter()
+                .rect_filled(tile, 3.0, crate::ui::prop_icons::LIT_BLUE);
+        } else if resp.hovered() {
+            ui.painter().rect_filled(tile, 3.0, Tokens::tool_hover());
         }
-        let icon_side = (side * 22.0 / 32.0).round();
+        let icon_side = (side * 17.0 / 30.0).round();
         if captions.image() {
             let icon_rect = Rect::from_center_size(
                 egui::pos2(rect.left() + side / 2.0, rect.center().y),
@@ -226,10 +225,12 @@ fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
             );
         }
         if has_flyout {
-            // The flyout arrow: a small triangle at the bottom-right.
-            let p = rect.right_bottom() - Vec2::new(2.0, 2.0);
+            // The flyout arrow: a small triangle in the square's
+            // bottom-right corner.
+            let corner = Rect::from_center_size(tile.center(), Vec2::splat(tile.height()));
+            let p = corner.right_bottom() - Vec2::new(1.5, 1.5);
             ui.painter().add(egui::epaint::PathShape::convex_polygon(
-                vec![p, p - Vec2::new(5.0, 0.0), p - Vec2::new(0.0, 5.0)],
+                vec![p, p - Vec2::new(4.0, 0.0), p - Vec2::new(0.0, 4.0)],
                 Tokens::icon(),
                 Stroke::NONE,
             ));
@@ -289,6 +290,8 @@ fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
         if app.flyout_open == Some(gi) {
             flyout(app, ui, gi, rect, dock);
         }
+        // The reference draws no lines between the docked toolbox's
+        // groups; the floating grid keeps its rows apart with one.
         if GROUP_BREAKS.contains(&gi) && floating {
             // A line across the grid, on a row of its own.
             ui.end_row();
@@ -300,25 +303,6 @@ fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
                 Stroke::new(1.0, Tokens::border()),
             );
             ui.end_row();
-        } else if GROUP_BREAKS.contains(&gi) {
-            ui.add_space(2.0);
-            if horizontal {
-                let (r, _) = ui.allocate_exact_size(Vec2::new(1.0, side), Sense::hover());
-                ui.painter().vline(
-                    r.center().x,
-                    r.y_range().shrink(4.0),
-                    Stroke::new(1.0, Tokens::border()),
-                );
-            } else {
-                let (r, _) =
-                    ui.allocate_exact_size(Vec2::new(button_width(app), 1.0), Sense::hover());
-                ui.painter().hline(
-                    r.x_range().shrink(4.0),
-                    r.center().y,
-                    Stroke::new(1.0, Tokens::border()),
-                );
-            }
-            ui.add_space(2.0);
         }
     }
     if floating {
@@ -503,7 +487,23 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
 
 /// The "+" at the end of the toolbox: tick the flyouts to show.
 fn quick_customize(app: &mut App, ui: &mut Ui, horizontal: bool) {
+    // The one line of the docked toolbox, above its "+".
     ui.add_space(4.0);
+    if horizontal {
+        let (r, _) = ui.allocate_exact_size(Vec2::new(1.0, Tokens::tool_button()), Sense::hover());
+        ui.painter().vline(
+            r.center().x,
+            r.y_range().shrink(6.0),
+            Stroke::new(1.0, Tokens::border()),
+        );
+    } else {
+        let (r, _) = ui.allocate_exact_size(Vec2::new(button_width(app), 1.0), Sense::hover());
+        ui.painter().hline(
+            r.x_range().shrink(6.0),
+            r.center().y,
+            Stroke::new(1.0, Tokens::control_border()),
+        );
+    }
     let layout = if horizontal {
         egui::Layout::left_to_right(egui::Align::Center)
     } else {

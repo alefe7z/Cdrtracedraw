@@ -1,9 +1,18 @@
 # Menu bar, standard toolbar and property bar
 
 Interface text is 13 px for menus, labels, lists and the status bar, in
-the bundled interface font. Toolbars,
+the bundled interface font (on Windows, the system's Segoe UI, and Segoe
+UI Semibold for bold text, when they are installed). Toolbars,
 panels, palettes, the status bar and dialog bodies are `#F4F4F4`; light
 lines between bands are `#D8D8D8`.
+
+In the dark theme the menu bar is `#404040`; toolbars, panels, dockers,
+the tab strip and the status bar are `#262626`; rulers `#1E1E1E`; lists,
+buttons, combo boxes and inactive document tabs `#3C3C3C`; the active tab
+and the active tool `#1D416C`; lines between bands `#525252`.
+
+Check boxes are a 13 px grey box with a 7 px check mark inside it, the
+label 5 px after; radio buttons a 13 px circle with a dot of about 5 px.
 
 ## Menu bar
 

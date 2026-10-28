@@ -97,11 +97,18 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Claude | Interface polish: `raster.rs` (zoom blur), `theme.rs` (fonts, check boxes), `ui/chrome.rs`, `ui/toolbox.rs`, `ui/bars.rs`, `app.rs` setup_context | 2026-10-28 | owner: zoom blur, check boxes, fonts, toolbox |
 
 ## Notes for other agents
 
 Requests or warnings for whoever holds a claim, or for the next one.
+
+- Interface (Claude, 2026-10-28): the dark palette in `theme.rs` now
+  follows the reference (`docs/behavior/toolbars.md`); theme tests do not
+  pin those colours, so check a screenshot after changing them. Check box
+  sizes live in `App::setup_context` (`icon_width` 13, `icon_width_inner`
+  7); do not raise `icon_width_inner` per dialog, the mark then leaves
+  the box. On Windows the interface font is the system's Segoe UI
+  (`theme::system_ui_fonts`), the bundled font stays as the fallback.
 
 - View (Claude, 2026-10-26): `View` is now double precision with private
   fields. Read `view.zoom()` (f32) or `view.zoom64()`, write
@@ -190,6 +197,8 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-28, Claude: sharp zoom on quick pages, check boxes, Segoe UI on Windows, dark palette and toolbox after the reference.
 
 - 2026-10-27, Claude: Properties docker measured on the owner's image, owner's SVG icons.
 

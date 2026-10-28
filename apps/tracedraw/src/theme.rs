@@ -369,20 +369,20 @@ const MEDIUM_DARK: Palette = Palette {
 };
 
 const DARK: Palette = Palette {
-    panel: rgb(0x2B2B2B),
-    menu_bar: rgb(0x1F1F1F),
-    panel_dark: rgb(0x252525),
+    panel: rgb(0x262626),
+    menu_bar: rgb(0x404040),
+    panel_dark: rgb(0x222222),
     border: rgb(0x1A1A1A),
     icon_off: rgb(0x5A5A5A),
     text: rgb(0xE0E0E0),
     text_dim: rgb(0x9A9A9A),
     page_shadow: rgb(0x1A1A1A),
     page_border: rgb(0x111111),
-    ruler_bg: rgb(0x2B2B2B),
-    tool_active: rgb(0x2A5C8A),
+    ruler_bg: rgb(0x1E1E1E),
+    tool_active: rgb(0x1D416C),
     tool_hover: rgb(0x3A3A3A),
     icon: rgb(0xD8D8D8),
-    button: rgb(0x3A3A3A),
+    button: rgb(0x3C3C3C),
     control_border: rgb(0x505050),
     slider_rail: rgb(0x4A4A4A),
     field: rgb(0x1E1E1E),
@@ -396,10 +396,10 @@ const DARK: Palette = Palette {
     selected_row: rgb(0x2A5C8A),
     hovered_row: rgb(0x353535),
     selected_row_line: rgb(0x3D7AB8),
-    control_fill: rgb(0x333333),
-    tab_strip: rgb(0x252525),
-    tab: rgb(0x333333),
-    tab_active: rgb(0x2A5C8A),
+    control_fill: rgb(0x3C3C3C),
+    tab_strip: rgb(0x262626),
+    tab: rgb(0x3C3C3C),
+    tab_active: rgb(0x1D416C),
     ruler_tick: rgb(0x8A8A8A),
     ruler_label: rgb(0xA8A8A8),
     ruler_marker: rgb(0xF0F0F0),
@@ -575,6 +575,20 @@ pub fn visuals() -> Visuals {
     v.widgets.open.weak_bg_fill = Tokens::tool_active();
     v.widgets.open.fg_stroke.color = Tokens::text();
     v.selection.bg_fill = Tokens::tool_active();
+    // Check marks and radio dots drawn firmly (egui's 1 px line looks
+    // faint next to the reference's), and on the dark themes the boxes a
+    // grey a shade lighter than the panels, as the reference has them.
+    for w in [
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+    ] {
+        w.fg_stroke.width = 1.6;
+    }
+    if theme().is_dark() {
+        v.widgets.inactive.bg_fill = Color32::from_gray(60);
+        v.widgets.hovered.bg_fill = Color32::from_gray(72);
+    }
     // Text on the picked fill: the accent on light themes, white on dark
     // ones (the accent would not read on the dark blue).
     v.selection.stroke.color = if theme().is_dark() {
@@ -644,6 +658,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// can take a moment: the splash screen builds these on a worker thread.
 pub fn font_definitions() -> egui::FontDefinitions {
     let mut defs = bundled_font_definitions();
+    system_ui_fonts(&mut defs);
     for key in fallback_fonts(&mut defs) {
         for family in [
             egui::FontFamily::Proportional,
@@ -683,6 +698,47 @@ pub fn bundled_font_definitions() -> egui::FontDefinitions {
     defs.families
         .insert(egui::FontFamily::Name(BOLD.into()), bold);
     defs
+}
+
+/// On Windows the interface is set in the system's own Segoe UI, the
+/// font the reference program and the rest of the desktop use, with its
+/// Semibold for headings; Selawik (its metric twin, bundled) stays behind
+/// them for any character they lack, and is all there is elsewhere. The
+/// fonts are read from the system's font folder at start; nothing is
+/// copied or shipped.
+fn system_ui_fonts(defs: &mut egui::FontDefinitions) {
+    let Some(dir) = system_font_dir() else {
+        return;
+    };
+    let load = |names: &[&str]| names.iter().find_map(|n| std::fs::read(dir.join(n)).ok());
+    if let Some(regular) = load(&["segoeui.ttf"]) {
+        defs.font_data.insert(
+            "system-ui".into(),
+            std::sync::Arc::new(egui::FontData::from_owned(regular)),
+        );
+        if let Some(list) = defs.families.get_mut(&egui::FontFamily::Proportional) {
+            list.insert(0, "system-ui".into());
+        }
+    }
+    if let Some(semibold) = load(&["seguisb.ttf", "segoeuib.ttf"]) {
+        defs.font_data.insert(
+            "system-ui-semibold".into(),
+            std::sync::Arc::new(egui::FontData::from_owned(semibold)),
+        );
+        if let Some(list) = defs.families.get_mut(&egui::FontFamily::Name(BOLD.into())) {
+            list.insert(0, "system-ui-semibold".into());
+        }
+    }
+}
+
+/// The system's font folder (Windows only).
+fn system_font_dir() -> Option<std::path::PathBuf> {
+    if !cfg!(target_os = "windows") {
+        return None;
+    }
+    let root = std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot"))?;
+    let dir = std::path::PathBuf::from(root).join("Fonts");
+    dir.is_dir().then_some(dir)
 }
 
 /// True when the interface language `code` needs a system font for its

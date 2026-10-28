@@ -35,6 +35,16 @@
   double precision and filled. Rulers widen the step between numbers so
   long numbers keep apart; the grid thins out as before.
 
+## Sharpness
+
+- A page that renders in under 30 ms (`raster::FAST_RENDER_SECONDS`) is
+  rendered anew on every frame the view moves, so a zoom or a scroll is
+  sharp at once, with no enlarged, blurred picture in between. A slower
+  page (thousands of objects) shows its last render moved or scaled into
+  place while the view moves and is rendered anew once the view has
+  rested for 0.12 s (`raster::SETTLE_SECONDS`), so it still moves
+  smoothly.
+
 ## Mouse wheel
 
 - Default (Options > Tools > Default action for mouse wheel: Zoom): the
@@ -70,3 +80,7 @@
   centre stays under the pointer and the zoom doubles.
 - Given an object far from the page origin, when zooming to fit it, then
   its centre is the window centre (`view::tests::fit_centres_rectangles_anywhere_on_the_page`).
+- A page that renders quickly is rendered anew at each new zoom, with no
+  scaled picture in between (`raster::tests::a_quick_page_zooms_sharp_at_once`);
+  a slow one shows its last render until the view rests
+  (`raster::tests::a_moving_view_shows_the_last_render_until_it_rests`).

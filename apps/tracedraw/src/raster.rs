@@ -1,8 +1,10 @@
 //! Keeps the rasterized page as an egui texture, re-rendering only when the
-//! document, view, canvas size or drag preview changed. While the view
-//! moves (a pan, a scroll, a zoom) the last render is shown shifted or
-//! scaled into place and the page is rendered anew once the view has
-//! rested for a moment, so a page of thousands of objects pans smoothly.
+//! document, view, canvas size or drag preview changed. A page that renders
+//! quickly is rendered anew on every frame the view moves, so a zoom is
+//! sharp at once. A page that takes longer (thousands of objects) shows its
+//! last render shifted or scaled into place while the view moves and is
+//! rendered anew once the view has rested for a moment, so it still pans
+//! smoothly.
 
 use crate::view::View;
 use egui::{ColorImage, Context, Rect, TextureHandle, TextureId, TextureOptions};
@@ -12,6 +14,10 @@ use tracedraw_render::{render_page, Preview, RenderOptions, ViewTransform};
 /// How long the view must rest, seconds, before a moved view is
 /// rendered anew instead of showing the last render moved into place.
 pub const SETTLE_SECONDS: f64 = 0.12;
+
+/// A render faster than this, seconds, is redone on every frame the view
+/// moves (no scaled, blurred texture in between).
+pub const FAST_RENDER_SECONDS: f64 = 0.03;
 
 #[derive(Default)]
 pub struct Raster {
@@ -26,6 +32,8 @@ pub struct Raster {
     /// made when first needed and dropped with the texture (the colour
     /// settings changed).
     proof: Option<ProofLut>,
+    /// How long the last render took, seconds.
+    last_render: f64,
 }
 
 /// Screen colours as they would print, on a `N` x `N` x `N` grid of the
@@ -238,9 +246,10 @@ impl Raster {
                 return Some((t.id(), screen));
             }
         }
-        // The view moved (pan, scroll, zoom) and nothing else changed:
-        // show the last render moved into place until the view rests.
-        if window.is_none() {
+        // The view moved (pan, scroll, zoom) and nothing else changed: a
+        // slow page shows the last render moved into place until the view
+        // rests; a quick one is rendered at once, sharp.
+        if window.is_none() && self.last_render >= FAST_RENDER_SECONDS {
             if let (Some(old), Some(t), Some(page_rect)) =
                 (self.key.as_ref(), self.texture.as_ref(), self.page_rect)
             {
@@ -285,7 +294,9 @@ impl Raster {
             draft: true,
             focus,
         };
+        let started = std::time::Instant::now();
         let pixmap = render_page(doc, page, &opts)?;
+        self.last_render = started.elapsed().as_secs_f64();
         let lut = if proof {
             Some(&*self.proof.get_or_insert_with(ProofLut::new))
         } else {
@@ -424,6 +435,8 @@ mod tests {
         let (first, screen) = pass(&ctx, &mut raster, &doc, &view, rect, 0.0);
         assert_eq!(screen, rect);
         let key = raster.key.clone();
+        // As a page that takes long to render.
+        raster.last_render = 1.0;
         // Panned 10 points right: the same texture, 10 points to the right,
         // nothing rendered.
         let mut moved = view;
@@ -451,6 +464,7 @@ mod tests {
         assert_ne!(raster.key, key);
         assert_eq!(screen, rect);
         assert!(raster.settle.is_none());
+        raster.last_render = 1.0;
         // Moving on at once re-arms the wait from the latest move.
         let mut again = zoomed;
         again.pan(egui::vec2(0.0, 5.0));
@@ -476,6 +490,30 @@ mod tests {
         assert_ne!(raster.key, before);
     }
 
+    /// A page that renders quickly is rendered anew at once when the
+    /// view zooms: never a scaled, blurred texture.
+    #[test]
+    fn a_quick_page_zooms_sharp_at_once() {
+        let ctx = Context::default();
+        let doc = Document::new("t", Size::new(100.0, 50.0));
+        let rect = Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(320.0, 200.0));
+        let mut raster = Raster::default();
+        let view = View::default();
+        pass(&ctx, &mut raster, &doc, &view, rect, 0.0);
+        assert!(
+            raster.last_render < FAST_RENDER_SECONDS,
+            "{}",
+            raster.last_render
+        );
+        let first = raster.key.clone();
+        let mut zoomed = view;
+        zoomed.set_zoom(zoomed.zoom() * 2.0);
+        let (_, screen) = pass(&ctx, &mut raster, &doc, &zoomed, rect, 0.01);
+        assert_ne!(raster.key, first, "rendered at the new zoom");
+        assert_eq!(screen, rect);
+        assert!(raster.settle.is_none());
+    }
+
     #[test]
     fn a_canvas_that_moves_renders_again() {
         let ctx = Context::default();
@@ -485,6 +523,8 @@ mod tests {
         let at = |x: f32, y: f32| Rect::from_min_size(egui::pos2(x, y), egui::vec2(320.0, 200.0));
         pass(&ctx, &mut raster, &doc, &view, at(40.0, 160.0), 0.0);
         let first = raster.key.clone();
+        // As a page that takes long to render.
+        raster.last_render = 1.0;
         // Same canvas, same view: the cached texture.
         pass(&ctx, &mut raster, &doc, &view, at(40.0, 160.0), 0.01);
         assert_eq!(raster.key, first);

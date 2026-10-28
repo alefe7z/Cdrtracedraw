@@ -579,8 +579,6 @@ pub fn form_style(ui: &mut Ui) {
     v.selection.stroke = Stroke::new(1.0, FIELD_FOCUS);
     v.extreme_bg_color = crate::theme::Tokens::field();
     v.text_edit_bg_color = Some(crate::theme::Tokens::field());
-    // A chosen radio button shows a large black dot, as on the desktop.
-    ui.spacing_mut().icon_width_inner = 12.0;
 }
 
 /// A section heading: its text, then a light line to the right edge.

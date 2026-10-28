@@ -1,11 +1,14 @@
 # Toolbox
 
 - One button per flyout, top to bottom (the last one, the Variable
-  Outline tool, after the Fill flyout), with
-  separator lines after the Shape, Zoom, Polygon, Text, Connector,
-  Transparency and Fill groups (before the "+"). A button shows the tool last used from its flyout
-  (kept in the settings); the active tool's button is tinted.
-- Buttons with a flyout have a small arrow at the bottom-right. Clicking
+  Outline tool, after the Fill flyout), about 30 px apart with 17 px
+  icons. A docked toolbox has no separator lines except one before the
+  "+"; the floating grid keeps a line after the Shape, Zoom, Polygon,
+  Text, Connector, Transparency and Fill groups. A button shows the tool
+  last used from its flyout (kept in the settings); the active tool sits
+  on a 24 px blue rounded square (`#1C4670`), a hovered one on a grey one.
+- Buttons with a flyout have a small triangle at the bottom-right of the
+  square. Clicking
   the arrow, right-clicking, dragging, or pressing and holding the button
   for 0.4 s opens the flyout; a click elsewhere picks the tool the button
   shows. While a flyout is open, hovering another flyout button opens that
@@ -39,7 +42,7 @@ Caption to Right (both). See `toolbars.md`, "Moving the bars".
 ## Checks
 
 - `ui::toolbox::tests::flyout_groups_can_be_hidden_and_reset`
-- `ui::toolbox::tests::separators_split_the_reference_subgroups`
+- `ui::toolbox::tests::separators_split_the_toolbox_subgroups`
 - `ops::smoke_tests::toolbox_groups_remember_the_last_tool_used`
 
 ## The pointer over the drawing

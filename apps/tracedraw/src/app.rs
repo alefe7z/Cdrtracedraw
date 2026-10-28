@@ -1781,6 +1781,12 @@ impl App {
             style.animation_time = 0.0;
             style.spacing.item_spacing = egui::vec2(4.0, 3.0);
             style.spacing.button_padding = egui::vec2(5.0, 2.0);
+            // Check boxes and radio buttons as the reference draws them:
+            // a 13 px box or circle, a 7 px check mark well inside it (a
+            // dot of about 5 px), the label 5 px after.
+            style.spacing.icon_width = 13.0;
+            style.spacing.icon_width_inner = 7.0;
+            style.spacing.icon_spacing = 5.0;
             // Interface text at 13 px, the size labels, lists, menus and
             // the status bar use in this font;
             // headings in the bold face.
