@@ -13,7 +13,10 @@
 use crate::app::App;
 use tracedraw_core::{
     document::{Shape, ShapeKind},
-    geometry::{BezPath, Line, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point, Rect},
+    geometry::{
+        BezPath, Line, ParamCurve, ParamCurveArclen, ParamCurveNearest, PathEl, PathSeg, Point,
+        Rect,
+    },
     Command, ShapeId,
 };
 
@@ -189,10 +192,26 @@ fn seg_path(s: &PathSeg) -> BezPath {
     p
 }
 
+/// How near an open end must come to an outline to end on it, mm: past
+/// the flattening error (0.02 mm), so a piece left by an earlier cut,
+/// which ends where it crossed the flattened outline, still meets the
+/// curve itself.
+const TOUCH_REACH: f64 = 0.05;
+
+/// The open ends of `path`'s subpaths.
+fn open_ends(path: &BezPath) -> Vec<Point> {
+    subs_of(path)
+        .iter()
+        .filter(|s| !s.closed)
+        .flat_map(|s| [s.segs[0].start(), s.segs[s.segs.len() - 1].end()])
+        .collect()
+}
+
 /// Where subpath `which` of `subs` crosses `cutters` and the rest of its
-/// own object: parameters `u` = segment index + t, sorted, in `0..n`
-/// (`n` the number of segments).
-pub fn crossings(subs: &[Sub], which: usize, cutters: &[Line]) -> Vec<f64> {
+/// own object, or an open end (`ends`, the other objects'; its own
+/// object's are added) lies on it: parameters `u` = segment index + t,
+/// sorted, in `0..n` (`n` the number of segments).
+pub fn crossings(subs: &[Sub], which: usize, cutters: &[Line], ends: &[Point]) -> Vec<f64> {
     let Some(sub) = subs.get(which) else {
         return Vec::new();
     };
@@ -256,6 +275,71 @@ pub fn crossings(subs: &[Sub], which: usize, cutters: &[Line]) -> Vec<f64> {
         }
     }
     out.retain(|u| u.is_finite());
+    // Open ends lying on the subpath: an earlier cut left a piece ending
+    // where it crossed this outline (flattened), up to the flattening
+    // error away from the curve itself, where the cutter may stop short.
+    // Each counts unless a crossing already lies there. The subpath's own
+    // ends count on its segments other than their own (a curve whose tail
+    // was cut off where it crossed itself).
+    // Segments within reach of an own end along the curve itself are
+    // where that end is, not where it lands.
+    let along = |order: &mut dyn Iterator<Item = usize>| -> Vec<usize> {
+        let mut skip = Vec::new();
+        let mut walked = 0.0;
+        for i in order {
+            skip.push(i);
+            walked += sub.segs[i].arclen(1e-4);
+            if walked > 2.0 * TOUCH_REACH {
+                break;
+            }
+        }
+        skip
+    };
+    let mut touching: Vec<(Point, Vec<usize>)> = ends.iter().map(|p| (*p, Vec::new())).collect();
+    for (k, other) in subs.iter().enumerate() {
+        if other.closed {
+            continue;
+        }
+        let (first, last) = (
+            other.segs[0].start(),
+            other.segs[other.segs.len() - 1].end(),
+        );
+        if k == which {
+            touching.push((first, along(&mut (0..n))));
+            touching.push((last, along(&mut (0..n).rev())));
+        } else {
+            touching.push((first, Vec::new()));
+            touching.push((last, Vec::new()));
+        }
+    }
+    for (end, skip) in touching {
+        let mut best: Option<(f64, f64)> = None;
+        for (i, seg) in sub.segs.iter().enumerate() {
+            if skip.contains(&i) {
+                continue;
+            }
+            let near = seg.nearest(end, 1e-9);
+            let d = near.distance_sq.sqrt();
+            if d <= TOUCH_REACH && best.is_none_or(|b| d < b.1) {
+                best = Some((i as f64 + near.t, d));
+            }
+        }
+        let Some((u, _)) = best else {
+            continue;
+        };
+        let at = point_at(sub, u);
+        // Not at the subpath's own open ends, nor where a crossing is.
+        if !sub.closed && (u < 1e-6 || u > n as f64 - 1e-6) {
+            continue;
+        }
+        if out
+            .iter()
+            .any(|c| (point_at(sub, *c) - at).hypot() <= TOUCH_REACH)
+        {
+            continue;
+        }
+        out.push(u);
+    }
     out.sort_by(f64::total_cmp);
     out.dedup_by(|a, b| (*a - *b).abs() < 1e-7);
     // On a closed subpath the end is the start.
@@ -457,15 +541,18 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// The other objects' outlines, flattened, page space.
-    fn cutters_except(&self, all: &[Shape], id: ShapeId) -> Vec<Line> {
-        let mut out = Vec::new();
+    /// The other objects' outlines, flattened, and their open ends, page
+    /// space.
+    fn cutters_except(&self, all: &[Shape], id: ShapeId) -> (Vec<Line>, Vec<Point>) {
+        let (mut lines, mut ends) = (Vec::new(), Vec::new());
         for s in all {
             if s.id != id {
-                out.extend(lines_of(&s.page_path()));
+                let path = s.page_path();
+                lines.extend(lines_of(&path));
+                ends.extend(open_ends(&path));
             }
         }
-        out
+        (lines, ends)
     }
 
     /// The command that leaves `s` (page path `subs`) with the stretches
@@ -554,8 +641,8 @@ impl App {
         let Some((s, subs, k, u, _)) = found else {
             return false;
         };
-        let cutters = self.cutters_except(&all, s.id);
-        let bounds = crossings(&subs, k, &cutters);
+        let (cutters, ends) = self.cutters_except(&all, s.id);
+        let bounds = crossings(&subs, k, &cutters, &ends);
         let mut cut = vec![Vec::new(); subs.len()];
         cut[k].push(around(&subs[k], &bounds, u));
         if let Some(cmd) = self.segment_delete_command(&s, &subs, &cut) {
@@ -581,10 +668,10 @@ impl App {
                 continue;
             }
             let subs = subs_of(&s.page_path());
-            let cutters = self.cutters_except(&all, s.id);
+            let (cutters, ends) = self.cutters_except(&all, s.id);
             let mut cut = vec![Vec::new(); subs.len()];
             for (k, sub) in subs.iter().enumerate() {
-                let bounds = crossings(&subs, k, &cutters);
+                let bounds = crossings(&subs, k, &cutters, &ends);
                 let n = sub.segs.len() as f64;
                 for (a, b) in pieces(sub, &bounds) {
                     let len = if a <= b { b - a } else { n - a + b };
@@ -685,6 +772,137 @@ mod tests {
         );
     }
 
+    /// A cubic curve as an object, page space.
+    fn cubic(
+        app: &mut App,
+        a: (f64, f64),
+        c1: (f64, f64),
+        c2: (f64, f64),
+        b: (f64, f64),
+    ) -> ShapeId {
+        let mut p = BezPath::new();
+        p.move_to(a);
+        p.curve_to(c1, c2, b);
+        app.new_shape(ShapeKind::Path {
+            path: p,
+            closed: false,
+        })
+        .expect("curve")
+    }
+
+    /// Where `id` crosses or meets the point `at` within `reach`: whether
+    /// any of its outline lies there.
+    fn reaches(app: &App, id: ShapeId, at: Point, reach: f64) -> bool {
+        app.doc().find_shape(id).is_some_and(|s| {
+            subs_of(&s.page_path())
+                .iter()
+                .flat_map(|sub| sub.segs.clone())
+                .any(|seg| seg.nearest(at, 1e-9).distance_sq.sqrt() < reach)
+        })
+    }
+
+    /// The reference's own use (the owner's video): three curves crossing
+    /// like a "#", trimmed one stretch at a time into a closed figure.
+    /// Each cut piece ends on a curve, a hair off it after flattening, and
+    /// the next click on that curve must still stop there (only the whole
+    /// curve past it went).
+    #[test]
+    fn curves_trimmed_into_a_figure_stop_at_each_cut_end() {
+        let mut app = App::headless();
+        let top = cubic(
+            &mut app,
+            (30.0, 120.0),
+            (80.0, 110.0),
+            (100.0, 60.0),
+            (190.0, 70.0),
+        );
+        let side = cubic(
+            &mut app,
+            (90.0, 40.0),
+            (70.0, 100.0),
+            (80.0, 160.0),
+            (40.0, 200.0),
+        );
+        let low = cubic(
+            &mut app,
+            (50.0, 130.0),
+            (80.0, 190.0),
+            (140.0, 170.0),
+            (200.0, 150.0),
+        );
+        // The top curve's left arm, then the side curve's upper arm: it
+        // must stop where the top curve's piece now ends.
+        let left_of_top = Point::new(40.0, 117.6);
+        assert!(reaches(&app, top, left_of_top, 0.5));
+        assert!(app.delete_virtual_segment_at(left_of_top));
+        assert!(!reaches(&app, top, left_of_top, 0.5));
+        let up = app.doc().find_shape(side).expect("side").page_path();
+        let upper = Point::new(
+            up.segments().next().expect("seg").eval(0.05).x,
+            up.segments().next().expect("seg").eval(0.05).y,
+        );
+        assert!(app.delete_virtual_segment_at(upper));
+        // The side curve's stretch between the top and the low curve stays.
+        let mid = app.doc().find_shape(side).expect("side kept").page_path();
+        let b = mid.bounding_box();
+        assert!(
+            b.y0 > 90.0 && b.y0 < 110.0,
+            "the side curve lost its middle: {b:?}"
+        );
+        // Its lower arm, and the low curve's left arm: the figure closes.
+        let lower = Point::new(
+            mid.segments().last().expect("seg").eval(0.98).x,
+            mid.segments().last().expect("seg").eval(0.98).y,
+        );
+        assert!(app.delete_virtual_segment_at(lower));
+        assert!(app.delete_virtual_segment_at(Point::new(52.0, 134.0)));
+        let side_path = app.doc().find_shape(side).expect("side kept").page_path();
+        let sb = side_path.bounding_box();
+        assert!(sb.height() > 20.0, "the side curve shrank too far: {sb:?}");
+        assert!(app.doc().find_shape(low).is_some());
+        assert!(app.doc().find_shape(top).is_some());
+    }
+
+    /// A curve whose tail is cut off where it crosses itself: the loop
+    /// left ends on the curve, and a click on the loop takes the loop
+    /// only, up to that end (the owner's second video).
+    #[test]
+    fn a_loop_ending_on_its_own_curve_goes_alone() {
+        let mut app = App::headless();
+        // In along the bottom, round a loop, out down to the right.
+        let id = cubic(
+            &mut app,
+            (40.0, 250.0),
+            (200.0, 200.0),
+            (20.0, 200.0),
+            (160.0, 270.0),
+        );
+        let subs = subs_of(&path_of(&app, id));
+        let c = crossings(&subs, 0, &[], &[]);
+        assert_eq!(c.len(), 2, "{c:?}");
+        // The tail out to the lower right goes up to the crossing.
+        let tail = subs[0].segs[0].eval(0.97);
+        assert!(app.delete_virtual_segment_at(tail));
+        let after = path_of(&app, id);
+        assert!(
+            after.bounding_box().x1 < 150.0,
+            "{:?}",
+            after.bounding_box()
+        );
+        // The loop: only the start stretch is left.
+        let subs = subs_of(&after);
+        let n = subs[0].segs.len() as f64;
+        let on_loop = point_at(&subs[0], n * 0.7);
+        assert!(app.delete_virtual_segment_at(on_loop));
+        let left = path_of(&app, id);
+        let lb = left.bounding_box();
+        assert!(
+            lb.x0 < 41.0 && lb.width() > 20.0,
+            "the start went too: {lb:?}"
+        );
+        assert!(lb.y1 < 251.0 && lb.y0 > 215.0, "the loop stayed: {lb:?}");
+    }
+
     /// The same with lines drawn by hand (curves, as the Freehand tool
     /// makes them): the crossing lies at the very end of the cut piece.
     #[test]
@@ -732,7 +950,7 @@ mod tests {
         assert_eq!(ts.len(), 2, "{ts:?}");
         let (a, b) = (seg.eval(ts[0]), seg.eval(ts[1]));
         assert!((a - b).hypot() < 1e-6, "one point: {a:?} {b:?}");
-        assert_eq!(crossings(&subs, 0, &[]).len(), 2);
+        assert_eq!(crossings(&subs, 0, &[], &[]).len(), 2);
         let mut app = App::headless();
         let id = app
             .new_shape(ShapeKind::Path {
@@ -765,7 +983,7 @@ mod tests {
         q.line_to((20.0, 0.0));
         q.curve_to((20.0, 15.0), (5.0, 15.0), (10.0, -5.0));
         let subs = subs_of(&q);
-        let c = crossings(&subs, 0, &[]);
+        let c = crossings(&subs, 0, &[], &[]);
         assert_eq!(c.len(), 2, "{c:?}");
         assert!(c[0] > 0.3 && c[0] < 0.7, "on the line's middle: {c:?}");
         assert!(c[1] > 1.5 && c[1] < 2.0, "late in the curve: {c:?}");
@@ -800,10 +1018,25 @@ mod tests {
         p.line_to((30.0, 30.0));
         let subs = subs_of(&p);
         let short = |gap: f64| vec![Line::new((0.0, 30.0), (15.0 - gap, 15.0 + gap))];
-        assert_eq!(crossings(&subs, 0, &short(1e-7)).len(), 1, "a hair short");
-        assert_eq!(crossings(&subs, 0, &short(-1e-7)).len(), 1, "a hair past");
-        assert_eq!(crossings(&subs, 0, &short(0.0)).len(), 1, "exactly on it");
-        assert!(crossings(&subs, 0, &short(0.5)).is_empty(), "well short");
+        assert_eq!(
+            crossings(&subs, 0, &short(1e-7), &[]).len(),
+            1,
+            "a hair short"
+        );
+        assert_eq!(
+            crossings(&subs, 0, &short(-1e-7), &[]).len(),
+            1,
+            "a hair past"
+        );
+        assert_eq!(
+            crossings(&subs, 0, &short(0.0), &[]).len(),
+            1,
+            "exactly on it"
+        );
+        assert!(
+            crossings(&subs, 0, &short(0.5), &[]).is_empty(),
+            "well short"
+        );
     }
 
     #[test]

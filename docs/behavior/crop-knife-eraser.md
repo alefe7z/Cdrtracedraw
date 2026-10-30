@@ -65,6 +65,14 @@
   Each cutter reaches 0.001 mm past its ends, so a piece left by an
   earlier cut, which ends on the outline it crossed, still cuts it
   (`segment_delete::tests::a_cutter_ending_a_hair_short_of_the_outline_still_cuts`).
+  An open end lying on an outline (within 0.05 mm, past the flattening
+  error) is a crossing too, the object's own ends included away from
+  their own stretch of curve: curves crossing like a "#" can be trimmed
+  one stretch at a time into a closed figure, each cut stopping where the
+  last one ended
+  (`segment_delete::tests::curves_trimmed_into_a_figure_stop_at_each_cut_end`),
+  and a loop left after its tail was cut goes alone
+  (`segment_delete::tests::a_loop_ending_on_its_own_curve_goes_alone`).
 - Click (within 5 screen pixels; the nearest outline, the topmost of
   equals): its virtual segment under the pointer is removed. Drag: every
   virtual segment lying wholly inside the rectangle (nine points along
@@ -96,6 +104,8 @@
 - `segment_delete::tests::a_drag_removes_the_stretches_inside`
 - `segment_delete::tests::pieces_and_stretches`
 - `segment_delete::tests::a_curve_crossing_itself_loses_only_the_stretch_clicked`
+- `segment_delete::tests::curves_trimmed_into_a_figure_stop_at_each_cut_end`
+- `segment_delete::tests::a_loop_ending_on_its_own_curve_goes_alone`
 - `crop_tool::tests::the_area_waits_and_moves_until_it_is_applied`
 - `crop_tool::tests::open_curves_groups_bitmaps_and_text`
 - `crop_tool::tests::handles_and_resizing_stay_sane`

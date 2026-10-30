@@ -198,6 +198,8 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
+- 2026-10-30, Claude: Segment Delete stops at open ends lying on an outline (owner's videos).
+
 - 2026-10-28, Claude: sharp zoom on quick pages, check boxes, Segoe UI on Windows, dark palette and toolbox after the reference.
 
 - 2026-10-27, Claude: Properties docker measured on the owner's image, owner's SVG icons.

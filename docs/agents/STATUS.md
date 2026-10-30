@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `04e01db Update the agents' status file`
-- Commits on the branch: 79
+- Last commit before this one: `9857e2a Request a Windows build [exe]`
+- Commits on the branch: 80
 
 ## Last 20 commits
 
+- `9857e2a` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `d988fd9` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `df97db3` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `c0d34aa` 2026-10-28 08:48 Claude: Sharpen zoom, refine check boxes, fonts, palette and toolbox
@@ -18,7 +19,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `b325d46` 2026-10-27 13:05 Claude: Lay out the Properties docker like the owner's latest reference
 - `b285a13` 2026-10-26 23:38 Claude: Request a Windows build [exe]
 - `4fc798f` 2026-10-26 22:10 Claude: Zoom in and out without limit
-- `60f035c` 2026-10-26 21:07 Claude: Claim the unlimited zoom
 
 ## Files changed in the last 10 commits
 
@@ -38,4 +38,7 @@ None.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/src/segment_delete.rs
+    M  docs/agents/CONTEXT.md
+    M  docs/behavior/crop-knife-eraser.md
     ?? docs/agents/STATUS.md.tmp
