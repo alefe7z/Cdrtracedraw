@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `1020fd9 Closable Welcome Screen tab and many more page sizes`
-- Commits on the branch: 83
+- Last commit before this one: `6e50bc2 Update the agents' status file`
+- Commits on the branch: 84
 
 ## Last 20 commits
 
@@ -19,26 +19,18 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `f1f252f` 2026-10-28 01:02 Claude: Request a Windows build [exe]
 - `32e0d2d` 2026-10-27 13:21 Claude: Match the Properties docker to the owner's image, with the owner's icons
 - `b325d46` 2026-10-27 13:05 Claude: Lay out the Properties docker like the owner's latest reference
-- `b285a13` 2026-10-26 23:38 Claude: Request a Windows build [exe]
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (3)
-- `apps/tracedraw/src/app.rs` (2)
-- `docs/behavior/zoom-and-pan.md` (1)
-- `docs/behavior/toolbox.md` (1)
-- `docs/behavior/toolbars.md` (1)
+- `docs/agents/CONTEXT.md` (2)
 - `docs/behavior/crop-knife-eraser.md` (1)
-- `apps/tracedraw/src/ui/toolbox.rs` (1)
 - `apps/tracedraw/src/ui/tabs.rs` (1)
 - `apps/tracedraw/src/ui/propbar.rs` (1)
 - `apps/tracedraw/src/ui/mod.rs` (1)
 - `apps/tracedraw/src/ui/dialogs.rs` (1)
-- `apps/tracedraw/src/ui/chrome.rs` (1)
-- `apps/tracedraw/src/theme.rs` (1)
 - `apps/tracedraw/src/segment_delete.rs` (1)
-- `apps/tracedraw/src/raster.rs` (1)
 - `apps/tracedraw/src/new_document.rs` (1)
+- `apps/tracedraw/src/app.rs` (1)
 - `apps/tracedraw/lang/zh-TW.toml` (1)
 - `apps/tracedraw/lang/zh-CN.toml` (1)
 - `apps/tracedraw/lang/tr.toml` (1)
@@ -53,6 +45,10 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `apps/tracedraw/lang/fr.toml` (1)
 - `apps/tracedraw/lang/es.toml` (1)
 - `apps/tracedraw/lang/en.toml` (1)
+- `apps/tracedraw/lang/de.toml` (1)
+- `apps/tracedraw/lang/cs.toml` (1)
+- `apps/tracedraw/lang/bn.toml` (1)
+- `apps/tracedraw/lang/ar.toml` (1)
 
 ## Open claims (from CONTEXT.md)
 
