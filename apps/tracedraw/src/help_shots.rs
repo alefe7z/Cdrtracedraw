@@ -698,11 +698,23 @@ fn scratch_196_window() {
 #[test]
 #[ignore]
 fn reference_catalog_shot_toolbar() {
-    let Some(dir) = std::env::var_os("REFERENCE_SHOTS") else { return; };
+    let Some(dir) = std::env::var_os("REFERENCE_SHOTS") else {
+        return;
+    };
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).expect("screenshot folder");
     let mut sh = Shooter::new();
     let mut app = demo_app();
+    if let Some(id) = app.new_shape(tracedraw_core::ShapeKind::Text {
+        spans: vec![tracedraw_core::TextSpan::new("Sample", "Arial", 12.0)],
+        origin: tracedraw_core::geometry::Point::new(30.0, 150.0),
+        frame: None,
+        align: Default::default(),
+        para: Default::default(),
+        on_path: None,
+    }) {
+        app.select(vec![id]);
+    }
     app.settings.theme = "dark".into();
     app.settings.language = "pt-BR".into();
     crate::i18n::set_language("pt-BR");
@@ -710,12 +722,18 @@ fn reference_catalog_shot_toolbar() {
     let mut capture = None;
     for _ in 0..6 {
         capture = Some(sh.frame(&mut app, |app, ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                crate::ui::toolbar::standard_toolbar(app, ui);
-                crate::ui::toolbar::property_bar(app, ui);
-                crate::ui::toolbar::text_toolbar(app, ui);
-            });
+            let mut ui = egui::Ui::new(
+                ctx.clone(),
+                egui::Id::new("reference_toolbar_root"),
+                egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(W as f32, H as f32),
+                )),
+            );
+            crate::ui::root(app, &mut ui);
         }));
     }
-    capture.expect("rendered toolbar").save(&dir.join("toolbar-pt-BR-dark.png"), (0, 0, W, 180));
+    capture
+        .expect("rendered toolbar")
+        .save(&dir.join("toolbar-pt-BR-dark.png"), (0, 0, W, 180));
 }

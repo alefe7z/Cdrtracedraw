@@ -1493,7 +1493,11 @@ fn text_properties(app: &mut App, ui: &mut Ui) {
             ui.painter(),
             egui::Rect::from_center_size(response.rect.center(), Vec2::splat(21.0)),
             icon,
-            if ui.is_enabled() { Tokens::icon() } else { Tokens::icon_off() },
+            if ui.is_enabled() {
+                Tokens::icon()
+            } else {
+                Tokens::icon_off()
+            },
         );
         if response.rich_tip(tr(key)).clicked() {
             match key {

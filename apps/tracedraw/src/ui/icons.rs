@@ -369,11 +369,8 @@ fn selection_svg(tool: Tool) -> Option<&'static str> {
 /// importer and renderer. This temporary document never touches the user's work.
 fn selection_image(tool: Tool, side: u32) -> Option<egui::ColorImage> {
     let svg = selection_svg(tool)?;
-    let imported = tracedraw_io::svg_import::parse(
-        svg,
-        &mut tracedraw_core::id::IdSource::default(),
-    )
-    .ok()?;
+    let imported =
+        tracedraw_io::svg_import::parse(svg, &mut tracedraw_core::id::IdSource::default()).ok()?;
     let zoom = f64::from(side) / imported.size.width;
     let mut doc = tracedraw_core::Document::new("Selection icon", imported.size);
     let page = doc.pages.first_mut()?;
@@ -398,7 +395,9 @@ fn selection_image(tool: Tool, side: u32) -> Option<egui::ColorImage> {
 
 fn draw_selection_svg(painter: &Painter, rect: Rect, tool: Tool) {
     let ctx = painter.ctx();
-    let side = (rect.width() * ctx.pixels_per_point()).ceil().clamp(8.0, 512.0) as u32;
+    let side = (rect.width() * ctx.pixels_per_point())
+        .ceil()
+        .clamp(8.0, 512.0) as u32;
     let key = egui::Id::new(("approved_selection_svg", tool == Tool::FreeformPick, side));
     let texture = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key));
     let texture = match texture {
