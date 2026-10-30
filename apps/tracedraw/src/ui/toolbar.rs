@@ -615,33 +615,27 @@ pub fn text_toolbar(app: &mut App, ui: &mut Ui) {
 
 /// Window > Toolbars > Zoom.
 pub fn zoom_toolbar(app: &mut App, ui: &mut Ui) {
+    use crate::ui::propbar::{pic_button, Pic};
     ui.horizontal(|ui| {
-        for (label, pct) in [
-            ("25%", 25.0),
-            ("50%", 50.0),
-            ("100%", 100.0),
-            ("200%", 200.0),
-            ("400%", 400.0),
-        ] {
-            if ui.button(label).clicked() {
-                app.set_zoom_percent(pct);
-            }
-        }
+        ui.spacing_mut().item_spacing.x = 1.0;
+        zoom_box(app, ui, "zoom_toolbar", 86.0);
         vsep(ui);
-        if ui.button(tr("menu.view.zoom_in")).clicked() {
-            app.zoom_step(true);
-        }
-        if ui.button(tr("menu.view.zoom_out")).clicked() {
-            app.zoom_step(false);
-        }
-        if ui.button(tr("toolbar.zoom_to_page")).clicked() {
-            app.zoom_to_page();
-        }
-        if ui.button(tr("toolbar.zoom_to_fit")).clicked() {
-            app.zoom_to_fit();
-        }
-        if ui.button(tr("toolbar.zoom_to_selected")).clicked() {
-            app.zoom_to_selection();
+        for (pic, key) in [
+            (Pic::ZoomIn, "menu.view.zoom_in"),
+            (Pic::ZoomOut, "menu.view.zoom_out"),
+            (Pic::ZoomSelected, "toolbar.zoom_to_selected"),
+            (Pic::ZoomAll, "toolbar.zoom_to_fit"),
+            (Pic::ZoomPage, "toolbar.zoom_to_page"),
+        ] {
+            if pic_button(ui, pic, &tr(key), app.drawing_shown(), false).clicked() {
+                match pic {
+                    Pic::ZoomIn => app.zoom_step(true),
+                    Pic::ZoomOut => app.zoom_step(false),
+                    Pic::ZoomSelected => app.zoom_to_selection(),
+                    Pic::ZoomAll => app.zoom_to_fit(),
+                    _ => app.zoom_to_page(),
+                }
+            }
         }
     });
 }
@@ -1487,30 +1481,21 @@ const TEXT_ALIGNS: [(tracedraw_core::TextAlign, crate::ui::propbar::Pic, &str); 
 /// paragraph text), the Text docker and Edit Text.
 fn text_properties(app: &mut App, ui: &mut Ui) {
     use crate::ui::propbar::{pic_button, Pic};
-    let mut changed = crate::ui::font_list::text_font_list(app, ui, "propbar_font", 180.0);
+    let mut changed = crate::ui::font_list::text_font_list(app, ui, "propbar_font", 169.0);
     changed |= text_size_list(app, ui);
-    for (on, label, key) in [
-        (
-            app.text_bold,
-            egui::RichText::new("B").strong(),
-            "toolbar.bold",
-        ),
-        (
-            app.text_italic,
-            egui::RichText::new("I").italics(),
-            "toolbar.italic",
-        ),
-        (
-            app.text_underline,
-            egui::RichText::new("U").underline(),
-            "toolbar.underline",
-        ),
+    for (on, icon, key) in [
+        (app.text_bold, "negrito", "toolbar.bold"),
+        (app.text_italic, "italico", "toolbar.italic"),
+        (app.text_underline, "sublinhado", "toolbar.underline"),
     ] {
-        if ui
-            .add_sized([22.0, 22.0], egui::Button::selectable(on, label.size(14.0)))
-            .rich_tip(tr(key))
-            .clicked()
-        {
+        let response = ui.add_sized([28.0, 24.0], egui::Button::selectable(on, ""));
+        super::reference_icons::draw(
+            ui.painter(),
+            egui::Rect::from_center_size(response.rect.center(), Vec2::splat(21.0)),
+            icon,
+            if ui.is_enabled() { Tokens::icon() } else { Tokens::icon_off() },
+        );
+        if response.rich_tip(tr(key)).clicked() {
             match key {
                 "toolbar.bold" => app.text_bold = !app.text_bold,
                 "toolbar.italic" => app.text_italic = !app.text_italic,

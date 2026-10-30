@@ -693,3 +693,29 @@ fn scratch_196_window() {
     }
     crate::i18n::set_language("en");
 }
+
+/// Render the live toolbar controls, including the selected-text property bar.
+#[test]
+#[ignore]
+fn reference_catalog_shot_toolbar() {
+    let Some(dir) = std::env::var_os("REFERENCE_SHOTS") else { return; };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("screenshot folder");
+    let mut sh = Shooter::new();
+    let mut app = demo_app();
+    app.settings.theme = "dark".into();
+    app.settings.language = "pt-BR".into();
+    crate::i18n::set_language("pt-BR");
+    app.show_welcome = false;
+    let mut capture = None;
+    for _ in 0..6 {
+        capture = Some(sh.frame(&mut app, |app, ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                crate::ui::toolbar::standard_toolbar(app, ui);
+                crate::ui::toolbar::property_bar(app, ui);
+                crate::ui::toolbar::text_toolbar(app, ui);
+            });
+        }));
+    }
+    capture.expect("rendered toolbar").save(&dir.join("toolbar-pt-BR-dark.png"), (0, 0, W, 180));
+}

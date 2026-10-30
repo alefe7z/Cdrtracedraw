@@ -74,6 +74,7 @@ pub mod prop_icons;
 pub mod propbar;
 pub mod properties_docker;
 pub mod publish_pdf;
+pub mod reference_icons;
 pub mod rulers;
 pub mod save_as;
 pub mod shaping_docker;

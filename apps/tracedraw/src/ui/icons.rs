@@ -1158,6 +1158,30 @@ pub enum Action {
 const NEW_GREEN: Color32 = Color32::from_rgb(0x1E, 0x9E, 0x3C);
 
 pub fn draw_action(painter: &Painter, r: Rect, a: Action, color: Color32) {
+    let reference = match a {
+        Action::New => Some("novo"),
+        Action::Open => Some("abrir"),
+        Action::Save => Some("salvar"),
+        Action::Print => Some("imprimir"),
+        Action::Cut => Some("recortar"),
+        Action::Copy => Some("copiar"),
+        Action::Paste => Some("colar"),
+        Action::Undo => Some("desfazer"),
+        Action::Redo => Some("refazer"),
+        Action::Import => Some("importar"),
+        Action::Export => Some("exportar"),
+        Action::Pdf => Some("pdf"),
+        Action::Options => Some("configuracoes"),
+        Action::Welcome => Some("inicio"),
+        Action::SnapOff => Some("captura"),
+        _ => None,
+    };
+    if let Some(name) = reference {
+        if super::reference_icons::draw(painter, r, name, color) {
+            return;
+        }
+    }
+
     let k = r.width() / 16.0;
     let s = Stroke::new(1.25 * k, color);
     let thin = Stroke::new(0.9 * k, color);

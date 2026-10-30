@@ -178,6 +178,29 @@ fn q(r: Rect, x: f32, y: f32) -> Pos2 {
 }
 
 pub fn draw_pic(painter: &Painter, r: Rect, pic: Pic, color: Color32) {
+    let reference = match pic {
+        Pic::Rotate => Some("girar"),
+        Pic::MirrorH => Some("espelhar-horizontal"),
+        Pic::MirrorV => Some("espelhar-vertical"),
+        Pic::ZoomIn => Some("zoom-mais"),
+        Pic::ZoomOut => Some("zoom-menos"),
+        Pic::ZoomSelected => Some("zoom-selecao"),
+        Pic::ZoomAll => Some("zoom-todos"),
+        Pic::ZoomPage => Some("zoom-pagina"),
+        Pic::ZoomWidth => Some("zoom-largura"),
+        Pic::ZoomHeight => Some("zoom-altura"),
+        Pic::Bullets => Some("lista"),
+        Pic::DropCap => Some("capitular"),
+        Pic::TextProperties => Some("texto"),
+        Pic::Columns => Some("colunas"),
+        _ => None,
+    };
+    if let Some(name) = reference {
+        if super::reference_icons::draw(painter, r, name, color) {
+            return;
+        }
+    }
+
     let k = r.width() / 16.0;
     let s = Stroke::new(1.1 * k, color);
     let thin = Stroke::new(0.85 * k, color);
