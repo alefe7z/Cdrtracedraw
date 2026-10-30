@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `3584c6c Update the agents' status file`
-- Commits on the branch: 82
+- Last commit before this one: `1020fd9 Closable Welcome Screen tab and many more page sizes`
+- Commits on the branch: 83
 
 ## Last 20 commits
 
+- `1020fd9` 2026-10-30 18:10 Claude: Closable Welcome Screen tab and many more page sizes
 - `3c3d92c` 2026-10-30 17:15 Claude: Stop Segment Delete at open ends lying on an outline
 - `9857e2a` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `d988fd9` 2026-10-28 16:09 Claude: Request a Windows build [exe]
@@ -22,17 +23,36 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (2)
+- `docs/agents/CONTEXT.md` (3)
+- `apps/tracedraw/src/app.rs` (2)
 - `docs/behavior/zoom-and-pan.md` (1)
 - `docs/behavior/toolbox.md` (1)
 - `docs/behavior/toolbars.md` (1)
 - `docs/behavior/crop-knife-eraser.md` (1)
 - `apps/tracedraw/src/ui/toolbox.rs` (1)
+- `apps/tracedraw/src/ui/tabs.rs` (1)
+- `apps/tracedraw/src/ui/propbar.rs` (1)
+- `apps/tracedraw/src/ui/mod.rs` (1)
+- `apps/tracedraw/src/ui/dialogs.rs` (1)
 - `apps/tracedraw/src/ui/chrome.rs` (1)
 - `apps/tracedraw/src/theme.rs` (1)
 - `apps/tracedraw/src/segment_delete.rs` (1)
 - `apps/tracedraw/src/raster.rs` (1)
-- `apps/tracedraw/src/app.rs` (1)
+- `apps/tracedraw/src/new_document.rs` (1)
+- `apps/tracedraw/lang/zh-TW.toml` (1)
+- `apps/tracedraw/lang/zh-CN.toml` (1)
+- `apps/tracedraw/lang/tr.toml` (1)
+- `apps/tracedraw/lang/ru.toml` (1)
+- `apps/tracedraw/lang/pt-BR.toml` (1)
+- `apps/tracedraw/lang/pl.toml` (1)
+- `apps/tracedraw/lang/nl.toml` (1)
+- `apps/tracedraw/lang/ja.toml` (1)
+- `apps/tracedraw/lang/it.toml` (1)
+- `apps/tracedraw/lang/id.toml` (1)
+- `apps/tracedraw/lang/hi.toml` (1)
+- `apps/tracedraw/lang/fr.toml` (1)
+- `apps/tracedraw/lang/es.toml` (1)
+- `apps/tracedraw/lang/en.toml` (1)
 
 ## Open claims (from CONTEXT.md)
 
@@ -40,29 +60,4 @@ None.
 
 ## Uncommitted when generated
 
-    M  apps/tracedraw/lang/ar.toml
-    M  apps/tracedraw/lang/bn.toml
-    M  apps/tracedraw/lang/cs.toml
-    M  apps/tracedraw/lang/de.toml
-    M  apps/tracedraw/lang/en.toml
-    M  apps/tracedraw/lang/es.toml
-    M  apps/tracedraw/lang/fr.toml
-    M  apps/tracedraw/lang/hi.toml
-    M  apps/tracedraw/lang/id.toml
-    M  apps/tracedraw/lang/it.toml
-    M  apps/tracedraw/lang/ja.toml
-    M  apps/tracedraw/lang/nl.toml
-    M  apps/tracedraw/lang/pl.toml
-    M  apps/tracedraw/lang/pt-BR.toml
-    M  apps/tracedraw/lang/ru.toml
-    M  apps/tracedraw/lang/tr.toml
-    M  apps/tracedraw/lang/zh-CN.toml
-    M  apps/tracedraw/lang/zh-TW.toml
-    M  apps/tracedraw/src/app.rs
-    M  apps/tracedraw/src/new_document.rs
-    M  apps/tracedraw/src/ui/dialogs.rs
-    M  apps/tracedraw/src/ui/mod.rs
-    M  apps/tracedraw/src/ui/propbar.rs
-    M  apps/tracedraw/src/ui/tabs.rs
-    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
