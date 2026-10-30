@@ -198,6 +198,11 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
+- 2026-10-30, Claude: Welcome Screen tab closes like the others (Help >
+  Welcome Screen reopens it); about 80 page sizes in groups (ISO A/B/C,
+  RA/SRA, envelopes, North American, cards, photos, screens), names
+  translated, one list in the property bar, New Document, Options and
+  Page Size dialog.
 - 2026-10-30, Claude: Segment Delete stops at open ends lying on an outline (owner's videos).
 
 - 2026-10-28, Claude: sharp zoom on quick pages, check boxes, Segoe UI on Windows, dark palette and toolbox after the reference.

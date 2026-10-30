@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `3c3d92c Stop Segment Delete at open ends lying on an outline`
-- Commits on the branch: 81
+- Last commit before this one: `3584c6c Update the agents' status file`
+- Commits on the branch: 82
 
 ## Last 20 commits
 
@@ -19,11 +19,10 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `32e0d2d` 2026-10-27 13:21 Claude: Match the Properties docker to the owner's image, with the owner's icons
 - `b325d46` 2026-10-27 13:05 Claude: Lay out the Properties docker like the owner's latest reference
 - `b285a13` 2026-10-26 23:38 Claude: Request a Windows build [exe]
-- `4fc798f` 2026-10-26 22:10 Claude: Zoom in and out without limit
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (3)
+- `docs/agents/CONTEXT.md` (2)
 - `docs/behavior/zoom-and-pan.md` (1)
 - `docs/behavior/toolbox.md` (1)
 - `docs/behavior/toolbars.md` (1)
@@ -41,4 +40,29 @@ None.
 
 ## Uncommitted when generated
 
+    M  apps/tracedraw/lang/ar.toml
+    M  apps/tracedraw/lang/bn.toml
+    M  apps/tracedraw/lang/cs.toml
+    M  apps/tracedraw/lang/de.toml
+    M  apps/tracedraw/lang/en.toml
+    M  apps/tracedraw/lang/es.toml
+    M  apps/tracedraw/lang/fr.toml
+    M  apps/tracedraw/lang/hi.toml
+    M  apps/tracedraw/lang/id.toml
+    M  apps/tracedraw/lang/it.toml
+    M  apps/tracedraw/lang/ja.toml
+    M  apps/tracedraw/lang/nl.toml
+    M  apps/tracedraw/lang/pl.toml
+    M  apps/tracedraw/lang/pt-BR.toml
+    M  apps/tracedraw/lang/ru.toml
+    M  apps/tracedraw/lang/tr.toml
+    M  apps/tracedraw/lang/zh-CN.toml
+    M  apps/tracedraw/lang/zh-TW.toml
+    M  apps/tracedraw/src/app.rs
+    M  apps/tracedraw/src/new_document.rs
+    M  apps/tracedraw/src/ui/dialogs.rs
+    M  apps/tracedraw/src/ui/mod.rs
+    M  apps/tracedraw/src/ui/propbar.rs
+    M  apps/tracedraw/src/ui/tabs.rs
+    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp

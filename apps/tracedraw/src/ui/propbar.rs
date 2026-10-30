@@ -1516,35 +1516,22 @@ pub fn guide_bar(app: &mut App, ui: &mut Ui) {
 
 pub fn page_bar(app: &mut App, ui: &mut Ui) {
     let size = app.page_size();
-    let presets = crate::ui::dialogs::paper_presets();
-    let current = presets
-        .iter()
-        .find(|(_, s)| {
-            ((s.width - size.width).abs() < 0.05 && (s.height - size.height).abs() < 0.05)
-                || ((s.height - size.width).abs() < 0.05 && (s.width - size.height).abs() < 0.05)
-        })
-        .map(|(n, _)| n.to_string())
+    let name = crate::ui::dialogs::paper_name_of(size);
+    let current = name
+        .map(crate::ui::dialogs::paper_label)
         .unwrap_or_else(|| tr("toolbar.custom"));
     ui.allocate_ui_with_layout(
         Vec2::new(200.0, BAR_H),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             egui::ComboBox::from_id_salt("page_size_bar")
-                .selected_text(current.clone())
+                .selected_text(current)
                 .width(192.0)
                 .height(400.0)
                 .show_ui(ui, |ui| {
-                    for (n, s) in &presets {
-                        if ui.selectable_label(current == *n, *n).clicked() {
-                            let landscape = size.width > size.height;
-                            let s = if landscape {
-                                Size::new(s.height.max(s.width), s.height.min(s.width))
-                            } else {
-                                Size::new(s.width.min(s.height), s.width.max(s.height))
-                            };
-                            resize_pages(app, s);
-                            app.fit_pending = true;
-                        }
+                    if let Some((_, s)) = crate::ui::dialogs::paper_list(ui, name.unwrap_or("")) {
+                        resize_pages(app, crate::ui::dialogs::paper_turned(s, size));
+                        app.fit_pending = true;
                     }
                 });
         },

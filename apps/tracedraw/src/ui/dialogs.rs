@@ -1129,13 +1129,22 @@ pub fn show(app: &mut App, ctx: &Context) {
                 let u = app.units;
                 unit_value(ui, &tr("dialog.width"), width, u);
                 unit_value(ui, &tr("dialog.height"), height, u);
-                ui.horizontal_wrapped(|ui| {
-                    for (n, s) in paper_presets() {
-                        if ui.button(n).clicked() {
-                            *width = s.width;
-                            *height = s.height;
-                        }
-                    }
+                ui.horizontal(|ui| {
+                    let size = Size::new(*width, *height);
+                    let name = paper_name_of(size);
+                    egui::ComboBox::from_id_salt("page_size_dialog_preset")
+                        .selected_text(
+                            name.map(paper_label)
+                                .unwrap_or_else(|| tr("toolbar.custom")),
+                        )
+                        .width(200.0)
+                        .height(400.0)
+                        .show_ui(ui, |ui| {
+                            if let Some((_, s)) = paper_list(ui, name.unwrap_or("")) {
+                                let t = paper_turned(s, size);
+                                (*width, *height) = (t.width, t.height);
+                            }
+                        });
                     if ui.button(tr("dialog.swap")).clicked() {
                         std::mem::swap(width, height);
                     }
@@ -1804,28 +1813,189 @@ pub fn show(app: &mut App, ctx: &Context) {
     }
 }
 
+/// One paper size: its name (kept in saved presets, so never renamed),
+/// its portrait width and height in millimetres.
+type Paper = (&'static str, f64, f64);
+
+/// Inches to millimetres.
+const IN: f64 = 25.4;
+
+/// The page sizes, in groups a separator divides in the lists: ISO A,
+/// the press sizes, ISO B and C with the envelopes, North American
+/// sheets and envelopes, cards and photos, and screens (96 pixels to the
+/// inch).
+const PAPER_GROUPS: &[&[Paper]] = &[
+    &[
+        ("A4", 210.0, 297.0),
+        ("A3", 297.0, 420.0),
+        ("A5", 148.0, 210.0),
+        ("A6", 105.0, 148.0),
+        ("A7", 74.0, 105.0),
+        ("A8", 52.0, 74.0),
+        ("A2", 420.0, 594.0),
+        ("A1", 594.0, 841.0),
+        ("A0", 841.0, 1189.0),
+        ("2A0", 1189.0, 1682.0),
+        ("A3 Extra", 322.0, 445.0),
+    ],
+    &[
+        ("RA0", 860.0, 1220.0),
+        ("RA1", 610.0, 860.0),
+        ("RA2", 430.0, 610.0),
+        ("RA3", 305.0, 430.0),
+        ("RA4", 215.0, 305.0),
+        ("SRA0", 900.0, 1280.0),
+        ("SRA1", 640.0, 900.0),
+        ("SRA2", 450.0, 640.0),
+        ("SRA3", 320.0, 450.0),
+        ("SRA4", 225.0, 320.0),
+    ],
+    &[
+        ("B0 (ISO)", 1000.0, 1414.0),
+        ("B1 (ISO)", 707.0, 1000.0),
+        ("B2 (ISO)", 500.0, 707.0),
+        ("B3 (ISO)", 353.0, 500.0),
+        ("B4 (ISO)", 250.0, 353.0),
+        ("B5 (ISO)", 176.0, 250.0),
+        ("B6 (ISO)", 125.0, 176.0),
+        ("B4 (JIS)", 257.0, 364.0),
+        ("B5 (JIS)", 182.0, 257.0),
+        ("C3", 324.0, 458.0),
+        ("C4", 229.0, 324.0),
+        ("C5", 162.0, 229.0),
+        ("C6", 114.0, 162.0),
+        ("C6/C5", 114.0, 229.0),
+        ("C7", 81.0, 114.0),
+        ("DL", 110.0, 220.0),
+        ("F4", 210.0, 330.0),
+        ("Oficio", 216.0, 330.0),
+    ],
+    &[
+        ("Letter", 8.5 * IN, 11.0 * IN),
+        ("Legal", 8.5 * IN, 14.0 * IN),
+        ("Tabloid", 11.0 * IN, 17.0 * IN),
+        ("Executive", 7.25 * IN, 10.5 * IN),
+        ("Statement", 5.5 * IN, 8.5 * IN),
+        ("Folio", 8.5 * IN, 13.0 * IN),
+        ("Government Letter", 8.0 * IN, 10.5 * IN),
+        ("Fanfold", 11.0 * IN, 14.875 * IN),
+        ("ANSI C", 17.0 * IN, 22.0 * IN),
+        ("ANSI D", 22.0 * IN, 34.0 * IN),
+        ("ANSI E", 34.0 * IN, 44.0 * IN),
+        ("Envelope #9", 3.875 * IN, 8.875 * IN),
+        ("Envelope #10", 4.125 * IN, 9.5 * IN),
+        ("Envelope #11", 4.5 * IN, 10.375 * IN),
+        ("Envelope #12", 4.75 * IN, 11.0 * IN),
+        ("Envelope #14", 5.0 * IN, 11.5 * IN),
+        ("Envelope 6 3/4", 3.625 * IN, 6.5 * IN),
+        ("Envelope Monarch", 3.875 * IN, 7.5 * IN),
+    ],
+    &[
+        ("Business card", 90.0, 50.0),
+        ("Business card (US)", 3.5 * IN, 2.0 * IN),
+        ("Postcard", 100.0, 148.0),
+        ("Index card 3x5", 3.0 * IN, 5.0 * IN),
+        ("Photo 10x15", 4.0 * IN, 6.0 * IN),
+        ("Photo 13x18", 5.0 * IN, 7.0 * IN),
+        ("Photo 20x25", 8.0 * IN, 10.0 * IN),
+        ("CD cover", 120.0, 120.0),
+    ],
+    &[
+        ("Web 1920x1080", 1920.0 * IN / 96.0, 1080.0 * IN / 96.0),
+        ("Web 1280x720", 1280.0 * IN / 96.0, 720.0 * IN / 96.0),
+        ("Web 3840x2160", 3840.0 * IN / 96.0, 2160.0 * IN / 96.0),
+        ("Web 1080x1350", 1080.0 * IN / 96.0, 1350.0 * IN / 96.0),
+        ("Web 820x312", 820.0 * IN / 96.0, 312.0 * IN / 96.0),
+        ("Web 728x90", 728.0 * IN / 96.0, 90.0 * IN / 96.0),
+        ("Square 1080", 1080.0 * IN / 96.0, 1080.0 * IN / 96.0),
+    ],
+];
+
+/// Every page size, in list order.
 pub fn paper_presets() -> Vec<(&'static str, Size)> {
-    vec![
-        ("A4", tracedraw_core::document::paper::A4),
-        ("A3", tracedraw_core::document::paper::A3),
-        ("A5", Size::new(148.0, 210.0)),
-        ("Letter", tracedraw_core::document::paper::LETTER),
-        ("Legal", Size::new(215.9, 355.6)),
-        ("Tabloid", Size::new(279.4, 431.8)),
-        ("Business card", Size::new(90.0, 50.0)),
-        (
-            "Web 1920x1080",
-            Size::new(1920.0 * 25.4 / 96.0, 1080.0 * 25.4 / 96.0),
-        ),
-        (
-            "Web 1280x720",
-            Size::new(1280.0 * 25.4 / 96.0, 720.0 * 25.4 / 96.0),
-        ),
-        (
-            "Square 1080",
-            Size::new(1080.0 * 25.4 / 96.0, 1080.0 * 25.4 / 96.0),
-        ),
-    ]
+    paper_preset_groups().into_iter().flatten().collect()
+}
+
+/// The page sizes in their groups, for lists with separators.
+pub fn paper_preset_groups() -> Vec<Vec<(&'static str, Size)>> {
+    PAPER_GROUPS
+        .iter()
+        .map(|g| g.iter().map(|&(n, w, h)| (n, Size::new(w, h))).collect())
+        .collect()
+}
+
+/// A page size's name in the interface language.
+pub fn paper_label(name: &str) -> String {
+    let key = match name {
+        "A3 Extra" => "paper.a3_extra",
+        "Oficio" => "paper.oficio",
+        "Letter" => "paper.letter",
+        "Legal" => "paper.legal",
+        "Tabloid" => "paper.tabloid",
+        "Executive" => "paper.executive",
+        "Statement" => "paper.statement",
+        "Folio" => "paper.folio",
+        "Government Letter" => "paper.government_letter",
+        "Fanfold" => "paper.fanfold",
+        "Business card" => "paper.business_card",
+        "Business card (US)" => "paper.business_card_us",
+        "Postcard" => "paper.postcard",
+        "CD cover" => "paper.cd_cover",
+        _ => {
+            for (prefix, key) in [
+                ("Envelope ", "paper.envelope"),
+                ("Index card ", "paper.index_card"),
+                ("Photo ", "paper.photo"),
+                ("Square ", "paper.square"),
+            ] {
+                if let Some(rest) = name.strip_prefix(prefix) {
+                    return trf(key, &[("size", rest)]);
+                }
+            }
+            return name.to_string();
+        }
+    };
+    tr(key)
+}
+
+/// The name of the page size `size` is, in either orientation.
+pub fn paper_name_of(size: Size) -> Option<&'static str> {
+    let close = |a: f64, b: f64| (a - b).abs() < 0.05;
+    paper_presets()
+        .into_iter()
+        .find(|(_, s)| {
+            (close(s.width, size.width) && close(s.height, size.height))
+                || (close(s.width, size.height) && close(s.height, size.width))
+        })
+        .map(|(n, _)| n)
+}
+
+/// `paper` turned like a page `like`: landscape when it is wider than
+/// tall.
+pub fn paper_turned(paper: Size, like: Size) -> Size {
+    let (short, long) = (paper.width.min(paper.height), paper.width.max(paper.height));
+    if like.width > like.height {
+        Size::new(long, short)
+    } else {
+        Size::new(short, long)
+    }
+}
+
+/// A list of the page sizes, a separator between groups, `current`
+/// marked; the clicked size.
+pub fn paper_list(ui: &mut Ui, current: &str) -> Option<(&'static str, Size)> {
+    let mut picked = None;
+    for (i, group) in paper_preset_groups().into_iter().enumerate() {
+        if i > 0 {
+            ui.separator();
+        }
+        for (n, s) in group {
+            if ui.selectable_label(current == n, paper_label(n)).clicked() {
+                picked = Some((n, s));
+            }
+        }
+    }
+    picked
 }
 
 /// A QR code as one even-odd path of module squares.
@@ -1960,14 +2130,8 @@ pub(crate) fn page_size_page(app: &mut App, ui: &mut Ui) {
     let s = app.page_size();
     let (mut w, mut h) = (s.width, s.height);
     let mut changed = false;
-    let presets = paper_presets();
-    let current = presets
-        .iter()
-        .find(|(_, ps)| {
-            ((ps.width - w).abs() < 0.05 && (ps.height - h).abs() < 0.05)
-                || ((ps.width - h).abs() < 0.05 && (ps.height - w).abs() < 0.05)
-        })
-        .map(|(n, _)| n.to_string())
+    let current = paper_name_of(s)
+        .map(paper_label)
         .unwrap_or_else(|| tr("options.custom_size"));
     egui::Grid::new("page_size_grid")
         .num_columns(3)
@@ -1979,19 +2143,12 @@ pub(crate) fn page_size_page(app: &mut App, ui: &mut Ui) {
             egui::ComboBox::from_id_salt("page_size_preset")
                 .selected_text(current)
                 .width(230.0)
+                .height(400.0)
                 .show_ui(ui, |ui| {
-                    for (n, ps) in &presets {
-                        if ui.selectable_label(false, *n).clicked() {
-                            let landscape = w > h;
-                            if landscape {
-                                w = ps.width.max(ps.height);
-                                h = ps.width.min(ps.height);
-                            } else {
-                                w = ps.width;
-                                h = ps.height;
-                            }
-                            changed = true;
-                        }
+                    if let Some((_, ps)) = paper_list(ui, paper_name_of(s).unwrap_or("")) {
+                        let t = paper_turned(ps, Size::new(w, h));
+                        (w, h) = (t.width, t.height);
+                        changed = true;
                     }
                 });
             ui.label("");
@@ -3716,6 +3873,44 @@ fn palette_editor_dialog(
 
 #[cfg(test)]
 mod tests {
+
+    /// Every page size has its own name and its own size, so a page
+    /// finds one name, and the names other code keeps are still there.
+    #[test]
+    fn page_sizes_are_distinct_and_keep_their_names() {
+        let all = paper_presets();
+        assert!(all.len() >= 70, "{}", all.len());
+        for (i, (n, s)) in all.iter().enumerate() {
+            assert_eq!(paper_name_of(*s), Some(*n), "{n}");
+            assert!(all[..i].iter().all(|(m, _)| m != n), "{n}");
+        }
+        for n in [
+            "A4",
+            "A3",
+            "A5",
+            "Letter",
+            "Legal",
+            "Tabloid",
+            "Business card",
+        ] {
+            assert!(all.iter().any(|(m, _)| *m == n), "{n}");
+        }
+        let a6 = Size::new(148.0, 105.0);
+        assert_eq!(paper_name_of(a6), Some("A6"));
+        let t = paper_turned(Size::new(105.0, 148.0), Size::new(300.0, 200.0));
+        assert_eq!((t.width, t.height), (148.0, 105.0));
+    }
+
+    #[test]
+    fn page_size_names_read_in_the_interface_language() {
+        crate::i18n::with_thread_language("pt-BR", || {
+            assert_eq!(paper_label("Letter"), "Carta");
+            assert_eq!(paper_label("A3 Extra"), "Extensão A3");
+            assert_eq!(paper_label("Envelope #10"), "Envelope #10");
+            assert_eq!(paper_label("Photo 10x15"), "Foto 10x15");
+            assert_eq!(paper_label("B1 (ISO)"), "B1 (ISO)");
+        });
+    }
 
     #[test]
     fn a_pixel_size_sets_the_resolution_that_gives_it() {

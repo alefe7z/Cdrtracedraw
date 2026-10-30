@@ -268,14 +268,8 @@ impl NewDocState {
     fn match_page_size(&mut self) {
         let v = &mut self.settings.values;
         let (w, h) = (v.width_mm, v.height_mm);
-        v.page_size = crate::ui::dialogs::paper_presets()
-            .iter()
-            .find(|(_, s)| {
-                let close = |a: f64, b: f64| (a - b).abs() < 0.05;
-                (close(s.width, w) && close(s.height, h))
-                    || (close(s.width, h) && close(s.height, w))
-            })
-            .map(|(n, _)| n.to_string())
+        v.page_size = crate::ui::dialogs::paper_name_of(Size::new(w, h))
+            .map(str::to_string)
             .unwrap_or_else(|| CUSTOM.into());
         self.settings.refresh_preset();
     }
@@ -605,7 +599,7 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
     let shown = if st.settings.values.page_size == CUSTOM {
         tr("newdoc.preset_custom")
     } else {
-        st.settings.values.page_size.clone()
+        crate::ui::dialogs::paper_label(&st.settings.values.page_size)
     };
     chrome::combo(
         ui,
@@ -613,14 +607,7 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
         field(FIELD_X, y, WIDE),
         shown,
         |ui| {
-            for (n, s) in crate::ui::dialogs::paper_presets() {
-                if ui
-                    .selectable_label(st.settings.values.page_size == n, n)
-                    .clicked()
-                {
-                    pick = Some((n, s));
-                }
-            }
+            pick = crate::ui::dialogs::paper_list(ui, &st.settings.values.page_size);
         },
     );
     if let Some((n, s)) = pick {

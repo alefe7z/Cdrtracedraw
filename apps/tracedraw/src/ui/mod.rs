@@ -268,8 +268,12 @@ fn root_frame(app: &mut App, ui: &mut Ui) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
-    if !app.has_document() {
+    if !app.has_document() && !app.welcome_closed {
         app.show_welcome = true;
+    }
+    // Asking for the Welcome Screen brings its closed tab back.
+    if app.show_welcome {
+        app.welcome_closed = false;
     }
     // Files dropped on the window, and what a drop would do while they
     // are dragged over it.
@@ -580,6 +584,14 @@ fn root_frame(app: &mut App, ui: &mut Ui) {
         egui::CentralPanel::default()
             .frame(Frame::new().fill(Tokens::panel()))
             .show(ui, |ui| welcome::welcome_screen(app, ui));
+        dialogs::show(app, &ctx);
+        return;
+    }
+    // No drawing and the Welcome Screen closed: an empty workspace.
+    if !app.has_document() {
+        egui::CentralPanel::default()
+            .frame(Frame::new().fill(Tokens::panel()))
+            .show(ui, |_| {});
         dialogs::show(app, &ctx);
         return;
     }
@@ -1250,6 +1262,28 @@ mod tests {
         crate::ui::toolbox::reset_toolbox(&mut app);
         frame(&ctx, &mut app);
         assert_eq!(crate::ui::toolbox::column_width(&app), plain);
+    }
+
+    /// The Welcome Screen tab closes like a drawing's and Help > Welcome
+    /// Screen brings it back; with no drawing open the workspace stays
+    /// empty until then.
+    #[test]
+    fn the_welcome_tab_closes_and_comes_back() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.close_document();
+        assert!(!app.has_document());
+        frame(&ctx, &mut app);
+        assert!(app.show_welcome);
+        app.welcome_closed = true;
+        app.show_welcome = false;
+        frame(&ctx, &mut app);
+        frame(&ctx, &mut app);
+        assert!(!app.show_welcome);
+        app.show_welcome = true;
+        frame(&ctx, &mut app);
+        assert!(!app.welcome_closed);
+        assert!(app.show_welcome);
     }
 
     /// The whole window draws with every docker tab, every tool and every

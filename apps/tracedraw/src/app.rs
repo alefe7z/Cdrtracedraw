@@ -1023,6 +1023,9 @@ pub struct App {
     /// Last loaded print-merge data, for Edit / Perform without reloading.
     pub merge_state: Option<crate::ui::dialogs::PrintMergeState>,
     pub show_welcome: bool,
+    /// The Welcome Screen tab was closed; Help > Welcome Screen opens it
+    /// again.
+    pub welcome_closed: bool,
     /// Object > Clip to Frame > Place Inside Frame is waiting for a click on the frame.
     pub pending_clip_frame: bool,
     /// Clip frame being edited in place: (frame id, content ids).
@@ -1967,6 +1970,7 @@ impl App {
             merge_state: None,
             page_numbers: PageNumberSettings::default(),
             show_welcome: false,
+            welcome_closed: false,
             pending_clip_frame: false,
             clip_frame_edit: None,
             symmetry_edit: None,
