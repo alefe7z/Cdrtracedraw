@@ -1,4 +1,4 @@
-//! Toolbox icons drawn with the painter, 16x16 design grid, no bitmaps.
+//! Toolbox icons on a 16x16 design grid; selection uses the approved SVG assets.
 
 use crate::theme::Tokens;
 use crate::tools::Tool;
@@ -353,6 +353,77 @@ fn knife(ic: &Ic, s: Stroke, color: Color32) {
     );
 }
 
+fn selection_svg(tool: Tool) -> Option<&'static str> {
+    match tool {
+        Tool::Pick => Some(include_str!(
+            "../../../../assets/icons/selection/selection.svg"
+        )),
+        Tool::FreeformPick => Some(include_str!(
+            "../../../../assets/icons/selection/freehand-selection.svg"
+        )),
+        _ => None,
+    }
+}
+
+/// Parse the actual SVG, including its dash pattern, using the existing offline
+/// importer and renderer. This temporary document never touches the user's work.
+fn selection_image(tool: Tool, side: u32) -> Option<egui::ColorImage> {
+    let svg = selection_svg(tool)?;
+    let imported = tracedraw_io::svg_import::parse(
+        svg,
+        &mut tracedraw_core::id::IdSource::default(),
+    )
+    .ok()?;
+    let zoom = f64::from(side) / imported.size.width;
+    let mut doc = tracedraw_core::Document::new("Selection icon", imported.size);
+    let page = doc.pages.first_mut()?;
+    let page_id = page.id;
+    page.layers.first_mut()?.shapes = imported.shapes;
+    let opts = tracedraw_render::RenderOptions {
+        width: side,
+        height: side,
+        view: tracedraw_render::ViewTransform {
+            zoom,
+            origin_x: 0.0,
+            origin_y: f64::from(side),
+        },
+        ..Default::default()
+    };
+    let pixels = tracedraw_render::render_page(&doc, page_id, &opts)?;
+    Some(egui::ColorImage::from_rgba_premultiplied(
+        [side as usize, side as usize],
+        pixels.data(),
+    ))
+}
+
+fn draw_selection_svg(painter: &Painter, rect: Rect, tool: Tool) {
+    let ctx = painter.ctx();
+    let side = (rect.width() * ctx.pixels_per_point()).ceil().clamp(8.0, 512.0) as u32;
+    let key = egui::Id::new(("approved_selection_svg", tool == Tool::FreeformPick, side));
+    let texture = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key));
+    let texture = match texture {
+        Some(texture) => texture,
+        None => {
+            let Some(image) = selection_image(tool, side) else {
+                return;
+            };
+            let texture = ctx.load_texture(
+                format!("approved_selection_svg_{tool:?}_{side}"),
+                image,
+                egui::TextureOptions::LINEAR,
+            );
+            ctx.data_mut(|d| d.insert_temp(key, texture.clone()));
+            texture
+        }
+    };
+    painter.image(
+        texture.id(),
+        rect,
+        Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+}
+
 pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
     // Stroke weights follow the icon size (1.25 and 0.9 px at 16 px).
     let k = r.width() / 16.0;
@@ -381,23 +452,8 @@ pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
     };
     use std::f32::consts::{FRAC_PI_2, PI, TAU};
     match tool {
-        // Pick group: arrow, arrow with lasso, arrow with rotate arc.
-        Tool::Pick => ic.cursor(4.0, 2.0, 1.0, true),
-        Tool::FreeformPick => {
-            // An open lasso with a loose tail, drawn on the design grid.
-            let loop_pts = ic.arc(8.0, 6.3, 5.5, 4.7, 0.35, TAU + 0.05, 28);
-            ic.open(&loop_pts, thin);
-            ic.open(
-                &[
-                    (12.5, 8.7),
-                    (10.8, 10.9),
-                    (7.0, 12.3),
-                    (5.3, 14.1),
-                    (7.8, 15.0),
-                ],
-                thin,
-            );
-        }
+        // Both selection tools use the approved SVG files in every caller.
+        Tool::Pick | Tool::FreeformPick => draw_selection_svg(painter, r, tool),
         Tool::FreeTransform => {
             ic.cursor(2.5, 3.5, 0.8, true);
             let a = ic.arc(10.0, 6.0, 4.5, 4.5, PI * 1.05, PI * 1.95, 12);
@@ -1483,6 +1539,21 @@ pub fn draw_action(painter: &Painter, r: Rect, a: Action, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approved_selection_svgs_render_at_each_interface_scale() {
+        for side in [16, 18, 24, 48] {
+            let pick = selection_image(Tool::Pick, side).expect("selection SVG renders");
+            let free = selection_image(Tool::FreeformPick, side).expect("freehand SVG renders");
+            assert_eq!(pick.size, [side as usize; 2]);
+            assert_eq!(free.size, pick.size);
+            assert!(pick.pixels.iter().any(|pixel| pixel.a() > 0));
+            assert!(free.pixels.iter().any(|pixel| pixel.a() > 0));
+            assert_eq!(pick.pixels.first().map(|pixel| pixel.a()), Some(0));
+            assert_ne!(pick.pixels, free.pixels);
+        }
+        assert!(selection_svg(Tool::Shape).is_none());
+    }
 
     #[test]
     fn coloured_icons_follow_the_toolbox_groups_and_can_be_off() {
