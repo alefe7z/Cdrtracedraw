@@ -97,6 +97,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Codex | assets/icons/reference-bar; ui/reference_icons.rs, icons.rs, propbar.rs, toolbar.rs | 2026-10-30 | Integrate approved toolbar SVG artwork into live controls; validate in CI. |
 
 ## Notes for other agents
 
