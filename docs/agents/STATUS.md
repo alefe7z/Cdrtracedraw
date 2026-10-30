@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `9857e2a Request a Windows build [exe]`
-- Commits on the branch: 80
+- Last commit before this one: `3c3d92c Stop Segment Delete at open ends lying on an outline`
+- Commits on the branch: 81
 
 ## Last 20 commits
 
+- `3c3d92c` 2026-10-30 17:15 Claude: Stop Segment Delete at open ends lying on an outline
 - `9857e2a` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `d988fd9` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `df97db3` 2026-10-28 16:09 Claude: Request a Windows build [exe]
@@ -22,13 +23,15 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (2)
+- `docs/agents/CONTEXT.md` (3)
 - `docs/behavior/zoom-and-pan.md` (1)
 - `docs/behavior/toolbox.md` (1)
 - `docs/behavior/toolbars.md` (1)
+- `docs/behavior/crop-knife-eraser.md` (1)
 - `apps/tracedraw/src/ui/toolbox.rs` (1)
 - `apps/tracedraw/src/ui/chrome.rs` (1)
 - `apps/tracedraw/src/theme.rs` (1)
+- `apps/tracedraw/src/segment_delete.rs` (1)
 - `apps/tracedraw/src/raster.rs` (1)
 - `apps/tracedraw/src/app.rs` (1)
 
@@ -38,7 +41,4 @@ None.
 
 ## Uncommitted when generated
 
-    M  apps/tracedraw/src/segment_delete.rs
-    M  docs/agents/CONTEXT.md
-    M  docs/behavior/crop-knife-eraser.md
     ?? docs/agents/STATUS.md.tmp
