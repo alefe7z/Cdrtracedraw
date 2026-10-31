@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `b6f1017 docs: record validated toolbar SVG integration and handoff`
-- Commits on the branch: 91
+- Last commit before this one: `5d42820 Add icon and toolbar rules for agents; ask Codex to fix the SVG icons`
+- Commits on the branch: 92
 
 ## Last 20 commits
 
+- `5d42820` 2026-10-31 09:13 Claude: Add icon and toolbar rules for agents; ask Codex to fix the SVG icons
 - `b6f1017` 2026-10-31 06:10 alefe7z: docs: record validated toolbar SVG integration and handoff
 - `3852d84` 2026-10-30 16:40 alefe7z: test: fix toolbar capture for egui 0.36 and apply rustfmt
 - `bf6c5e4` 2026-10-30 16:35 alefe7z: ui: integrate reference SVG artwork into live toolbar controls
@@ -22,11 +23,10 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `d988fd9` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `df97db3` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `c0d34aa` 2026-10-28 08:48 Claude: Sharpen zoom, refine check boxes, fonts, palette and toolbox
-- `0248a52` 2026-10-28 08:26 Claude: Claim the interface polish (zoom blur, check boxes, fonts, toolbox)
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (3)
+- `docs/agents/CONTEXT.md` (4)
 - `apps/tracedraw/src/ui/icons.rs` (3)
 - `apps/tracedraw/src/ui/toolbar.rs` (2)
 - `apps/tracedraw/src/ui/reference_icons.rs` (2)
@@ -63,6 +63,4 @@ None.
 
 ## Uncommitted when generated
 
-    M  AGENTS.md
-    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
