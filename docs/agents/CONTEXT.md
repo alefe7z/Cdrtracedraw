@@ -97,6 +97,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Codex | reference-bar SVGs; selection SVGs; ui/icons.rs, reference_icons.rs, toolbar.rs; visual tests | 2026-10-31 | Address Claude's six review findings; validate locally before publishing code. |
 
 ## Notes for other agents
 
