@@ -97,7 +97,6 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Codex | assets/icons/reference-bar; ui/reference_icons.rs, icons.rs, propbar.rs, toolbar.rs | 2026-10-30 | Integrate approved toolbar SVG artwork into live controls; validate in CI. |
 
 ## Notes for other agents
 
@@ -198,6 +197,16 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-31, Codex: integrated 32 reference SVG icons into live standard,
+  property, text and zoom controls (bf6c5e4, 3852d84). Existing commands and
+  editable document values remain live. Corrected the new egui 0.36 screenshot
+  harness. Workspace tests, library clippy, native build, screenshot renders,
+  smoke editing and seeded interaction checks all pass in
+  https://github.com/alefe7z/Cdrtracedraw/actions/runs/41117228162 .
+  Rustfmt patch is empty. Inspected toolbar-pt-BR-dark.png; this integrates
+  the artwork but does not make the entire layout pixel-identical to the
+  owner's reference. Details: docs/behavior/toolbars.md, Reference SVG artwork.
 
 - 2026-10-30, Claude: Welcome Screen tab closes like the others (Help >
   Welcome Screen reopens it); about 80 page sizes in groups (ISO A/B/C,

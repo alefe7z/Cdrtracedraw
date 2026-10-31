@@ -269,3 +269,26 @@ and the status bar move (`ui/bars.rs`).
 - `ui::bars::tests::the_layout_survives_the_preferences`
 - `raster::tests::a_canvas_that_moves_renders_again`: moving a bar moves
   the drawing window; the drawing is rendered again for its new place.
+
+## Reference SVG artwork (2026-10-30)
+
+The standard, property, text and zoom controls use 32 isolated SVGs in
+`assets/icons/reference-bar/`. Their geometry comes from the owner's
+approved rounded-contour reconstruction of the 1920 x 112 screenshot.
+The capture background and fixed field values are not part of the icons.
+The current theme supplies the foreground and disabled colours; textures
+are cached at physical display resolution. Existing artwork remains as a
+fallback for unmapped icons and parsing failures.
+
+Bold, italic and underline use the reference glyphs with their existing
+text commands. The font selector is 169 points wide. The standalone Zoom
+bar uses an editable percentage list and icon buttons for the existing
+zoom commands. The zoom presets remain in that list. Document values,
+shortcuts, docking and the standard toolbar's action order are unchanged.
+
+These contours preserve the limited detail in the supplied raster; they
+are not the original application's vector artwork. The full toolbar is
+not claimed pixel-identical: unmapped commands and the existing control
+layout still differ from the reference. The regression test renders all
+32 SVGs at three sizes. `reference_catalog_shot_toolbar` captures the
+actual dark Portuguese interface with a selected text object in CI.
