@@ -102,6 +102,57 @@ shipped with unreadable icons.
   at 4x zoom before claiming it works, and say in the commit what you
   looked at.
 
+## How to work well here
+
+Lessons from the owner's reviews of agent work. They apply to every
+change, not only icons.
+
+**Understand the request**
+- The owner writes in Portuguese, often briefly and with typos; read
+  for intent. A question ("is it working now?") is a question: answer
+  it, do not take it as approval.
+- Do only what was asked. Offer the next step instead of doing it.
+  Never remove or rename something that works unless asked.
+- When the owner sends videos or screenshots of another program as the
+  reference, match the behaviour step by step and check each step in
+  the running app, not only in tests.
+
+**Before you write code**
+- Sync, read `CONTEXT.md`, claim the files, push the claim.
+- Read the code around the change and every caller of a function you
+  change. A change to a shared draw function (`icons::draw`,
+  `draw_action`, `draw_pic`, a theme token) shows up in the toolbox,
+  the flyouts, menus, dockers and dialogs: check them all.
+
+**Every visual state**
+- Check normal, hovered, pressed, active/selected (the lit blue
+  `prop_icons::LIT_BLUE` tile), disabled, light theme, dark theme,
+  coloured icons on and off, and at least interface sizes 100 % and
+  150 %. Contrast must hold in each: a dark icon on the lit blue is a
+  bug (use `prop_icons::LIT_ICON` there).
+
+**Tests and checks**
+- Every change comes with a test that fails without it.
+- Run `cargo fmt`, `cargo test -p tracedraw`, `cargo clippy -p tracedraw
+  -- -D warnings` and the Windows check `cargo clippy -p tracedraw
+  --target x86_64-pc-windows-msvc -- -D warnings` (Windows-only code
+  must compile too).
+- Read the result you are reporting: make sure a log or screenshot is
+  from this run, not an older file left on disk.
+- Run the app (Visual checks), capture what changed, zoom in on it and
+  look before saying it works.
+
+**Finishing**
+- Update `docs/behavior/` and `docs/features.md` when behaviour
+  changes; new strings go in all 18 `lang/*.toml` files.
+- Remove your claim, remove any request in "Notes for other agents"
+  that your work answered, and add one line to the Log.
+- Report honestly to the owner: what changed, what you checked, what
+  still does not work. Never say "done" for something you did not see
+  working.
+- A Windows build is made only when the owner asks (see `CLAUDE.md`:
+  `scripts/request-exe.sh`).
+
 ## Offline only
 
 CD Draw makes no network connections of any kind: no update checks, no

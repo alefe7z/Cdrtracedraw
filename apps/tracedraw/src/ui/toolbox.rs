@@ -199,14 +199,20 @@ fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
                 egui::pos2(rect.left() + side / 2.0, rect.center().y),
                 Vec2::splat(icon_side),
             );
+            // On the lit blue a monochrome icon is light in both themes.
+            let base = if active {
+                crate::ui::prop_icons::LIT_ICON
+            } else {
+                Tokens::icon()
+            };
             icons::draw(
                 ui.painter(),
                 icon_rect,
                 shown,
                 if matches!(shown, Tool::Pick | Tool::FreeformPick) {
-                    Tokens::icon()
+                    base
                 } else {
-                    icons::tool_color(shown, Tokens::icon())
+                    icons::tool_color(shown, base)
                 },
             );
         }

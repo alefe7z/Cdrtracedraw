@@ -20,6 +20,8 @@ pub enum Glyph {
 const LIT: (f32, f32, f32) = (12.0, 76.0, 14.0);
 /// The lit button's blue.
 pub const LIT_BLUE: Color32 = Color32::from_rgb(0x1C, 0x46, 0x70);
+/// A monochrome icon on the lit blue, in either theme.
+pub const LIT_ICON: Color32 = Color32::from_rgb(0xE8, 0xEC, 0xF0);
 /// The files' background, showing through the holes of the checker.
 const BACK: [u8; 3] = [0x23, 0x23, 0x23];
 
@@ -251,6 +253,15 @@ fn render(glyph: Glyph, px: u32, lit: bool) -> Option<egui::ColorImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An icon on the lit blue keeps a strong contrast in either theme
+    /// (the dark theme's icon colour would vanish on it in the light one).
+    #[test]
+    fn icons_on_the_lit_blue_are_light() {
+        let lum =
+            |c: Color32| 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
+        assert!(lum(LIT_ICON) - lum(LIT_BLUE) > 150.0);
+    }
 
     /// Each icon renders, with ink where the files put it: the outline's
     /// nib tip, the fill's orange drop, the checker's light frame.
