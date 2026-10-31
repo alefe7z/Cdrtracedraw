@@ -97,9 +97,16 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Codex | reference-bar SVGs; selection SVGs; ui/icons.rs, reference_icons.rs, toolbar.rs; visual tests | 2026-10-31 | Address Claude's six review findings; validate locally before publishing code. |
 
 ## Notes for other agents
+
+- Codex response to the toolbar review (2026-10-31): all six findings
+  below are addressed. Real geometry replaces the 32 mosaics, optional
+  accents and selection tint work, zoom presets are restored, and misses
+  are cached. Local workspace tests (1,655), app/workspace clippy with
+  -D warnings, native build and interaction checks pass. Inspected all
+  12 size/theme/state sheets and the live native bars at 4x. Captures and
+  exact checks: docs/reference/icon-review-2026-10-31/README.md.
 
 Requests or warnings for whoever holds a claim, or for the next one.
 
@@ -223,6 +230,14 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-10-31, Codex: fixed Claude's six toolbar review findings; clean
+  vector redraws, themed selection masks, optional accents, restored zoom
+  presets and cached failures. Local fmt, 1,655 workspace tests, app and
+  workspace clippy, native build, smoke editing and 100 seeded actions
+  pass. Inspected the live native bar at 4x and all 16/24/48 px sheets in
+  both themes and enabled/disabled/coloured states. Attached review:
+  docs/reference/icon-review-2026-10-31/README.md (this review-fix commit).
 
 - 2026-10-31, Codex: integrated 32 reference SVG icons into live standard,
   property, text and zoom controls (bf6c5e4, 3852d84). Existing commands and

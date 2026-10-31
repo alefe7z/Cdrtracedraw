@@ -719,6 +719,8 @@ fn reference_catalog_shot_toolbar() {
     app.settings.language = "pt-BR".into();
     crate::i18n::set_language("pt-BR");
     app.show_welcome = false;
+    app.show_zoom_toolbar = true;
+    app.settings.colored_icons = true;
     let mut capture = None;
     for _ in 0..6 {
         capture = Some(sh.frame(&mut app, |app, ctx| {
@@ -736,4 +738,91 @@ fn reference_catalog_shot_toolbar() {
     capture
         .expect("rendered toolbar")
         .save(&dir.join("toolbar-pt-BR-dark.png"), (0, 0, W, 180));
+}
+
+/// Every changed icon at native 16/24/48 px, on both backgrounds and states.
+#[test]
+#[ignore]
+fn reference_icon_matrix_shots() {
+    let Some(dir) = std::env::var_os("REFERENCE_SHOTS") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).expect("screenshot folder");
+    for theme in ["light", "dark"] {
+        for colored in [false, true] {
+            for side in [16.0, 24.0, 48.0] {
+                let mut sh = Shooter::new();
+                let mut app = demo_app();
+                app.settings.theme = theme.into();
+                app.settings.colored_icons = colored;
+                let mut capture = None;
+                for _ in 0..3 {
+                    capture = Some(sh.frame(&mut app, |app, ctx| {
+                        crate::ui::icons::set_colored(app.settings.colored_icons);
+                        let painter = ctx.layer_painter(egui::LayerId::new(
+                            egui::Order::Foreground,
+                            egui::Id::new("icon_matrix"),
+                        ));
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(W as f32, H as f32),
+                            ),
+                            0.0,
+                            crate::theme::Tokens::panel(),
+                        );
+                        for (i, name) in crate::ui::reference_icons::NAMES
+                            .iter()
+                            .copied()
+                            .chain(["selection", "freehand-selection"])
+                            .enumerate()
+                        {
+                            let x = 12.0 + (i % 8) as f32 * 173.0;
+                            let y = 12.0 + (i / 8) as f32 * 142.0;
+                            painter.text(
+                                egui::pos2(x, y),
+                                egui::Align2::LEFT_TOP,
+                                format!("{name} ({side:.0})"),
+                                egui::FontId::proportional(11.0),
+                                crate::theme::Tokens::text(),
+                            );
+                            for (offset, color) in [
+                                (0.0, crate::theme::Tokens::icon()),
+                                (80.0, crate::theme::Tokens::icon_off()),
+                            ] {
+                                let r = egui::Rect::from_min_size(
+                                    egui::pos2(x + offset, y + 28.0),
+                                    egui::Vec2::splat(side),
+                                );
+                                match name {
+                                    "selection" => crate::ui::icons::draw(
+                                        &painter,
+                                        r,
+                                        crate::tools::Tool::Pick,
+                                        color,
+                                    ),
+                                    "freehand-selection" => crate::ui::icons::draw(
+                                        &painter,
+                                        r,
+                                        crate::tools::Tool::FreeformPick,
+                                        color,
+                                    ),
+                                    _ => {
+                                        assert!(crate::ui::reference_icons::draw(
+                                            &painter, r, name, color
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }));
+                }
+                capture.expect("icon matrix").save(
+                    &dir.join(format!("icons-{theme}-{side:.0}-colored-{colored}.png")),
+                    (0, 0, W, 720),
+                );
+            }
+        }
+    }
 }

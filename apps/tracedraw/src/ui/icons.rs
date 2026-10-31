@@ -291,6 +291,12 @@ pub fn set_colored(on: bool) {
     COLORED.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether optional icon accents are enabled in this theme.
+pub fn colored() -> bool {
+    COLORED.load(std::sync::atomic::Ordering::Relaxed)
+        && crate::theme::theme() != crate::theme::Theme::HighContrast
+}
+
 /// The colour of a tool's group, for coloured icons.
 pub fn group_color(tool: Tool) -> Color32 {
     let group = crate::tools::GROUPS
@@ -393,33 +399,29 @@ fn selection_image(tool: Tool, side: u32) -> Option<egui::ColorImage> {
     ))
 }
 
-fn draw_selection_svg(painter: &Painter, rect: Rect, tool: Tool) {
+fn draw_selection_svg(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
     let ctx = painter.ctx();
     let side = (rect.width() * ctx.pixels_per_point())
         .ceil()
         .clamp(8.0, 512.0) as u32;
     let key = egui::Id::new(("approved_selection_svg", tool == Tool::FreeformPick, side));
-    let texture = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key));
-    let texture = match texture {
-        Some(texture) => texture,
-        None => {
-            let Some(image) = selection_image(tool, side) else {
-                return;
-            };
-            let texture = ctx.load_texture(
-                format!("approved_selection_svg_{tool:?}_{side}"),
+    let texture = super::reference_icons::cached_texture(ctx, key, || {
+        selection_image(tool, side).map(|image| {
+            ctx.load_texture(
+                format!("selection_{tool:?}_{side}"),
                 image,
                 egui::TextureOptions::LINEAR,
-            );
-            ctx.data_mut(|d| d.insert_temp(key, texture.clone()));
-            texture
-        }
+            )
+        })
+    });
+    let Some(texture) = texture else {
+        return;
     };
     painter.image(
         texture.id(),
         rect,
         Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
-        Color32::WHITE,
+        color,
     );
 }
 
@@ -452,7 +454,7 @@ pub fn draw(painter: &Painter, r: Rect, tool: Tool, color: Color32) {
     use std::f32::consts::{FRAC_PI_2, PI, TAU};
     match tool {
         // Both selection tools use the approved SVG files in every caller.
-        Tool::Pick | Tool::FreeformPick => draw_selection_svg(painter, r, tool),
+        Tool::Pick | Tool::FreeformPick => draw_selection_svg(painter, r, tool, color),
         Tool::FreeTransform => {
             ic.cursor(2.5, 3.5, 0.8, true);
             let a = ic.arc(10.0, 6.0, 4.5, 4.5, PI * 1.05, PI * 1.95, 12);
@@ -1570,6 +1572,15 @@ mod tests {
             let free = selection_image(Tool::FreeformPick, side).expect("freehand SVG renders");
             assert_eq!(pick.size, [side as usize; 2]);
             assert_eq!(free.size, pick.size);
+            for image in [&pick, &free] {
+                assert!(
+                    image
+                        .pixels
+                        .iter()
+                        .all(|p| p.r() == p.a() && p.g() == p.a() && p.b() == p.a()),
+                    "selection assets must be white coverage masks for caller tint"
+                );
+            }
             assert!(pick.pixels.iter().any(|pixel| pixel.a() > 0));
             assert!(free.pixels.iter().any(|pixel| pixel.a() > 0));
             assert_eq!(pick.pixels.first().map(|pixel| pixel.a()), Some(0));

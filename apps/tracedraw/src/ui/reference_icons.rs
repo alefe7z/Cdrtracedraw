@@ -1,5 +1,41 @@
-//! Approved reference artwork, isolated from labels and live field values.
+//! Hand-drawn toolbar vectors, theme colours and cached SVG rasterization.
 use egui::{Color32, Painter, Pos2, Rect};
+
+#[cfg(test)]
+pub(crate) const NAMES: &[&str] = &[
+    "abrir",
+    "capitular",
+    "captura",
+    "colar",
+    "colunas",
+    "configuracoes",
+    "copiar",
+    "desfazer",
+    "espelhar-horizontal",
+    "espelhar-vertical",
+    "exportar",
+    "girar",
+    "importar",
+    "imprimir",
+    "inicio",
+    "italico",
+    "lista",
+    "negrito",
+    "novo",
+    "pdf",
+    "recortar",
+    "refazer",
+    "salvar",
+    "sublinhado",
+    "texto",
+    "zoom-altura",
+    "zoom-largura",
+    "zoom-mais",
+    "zoom-menos",
+    "zoom-pagina",
+    "zoom-selecao",
+    "zoom-todos",
+];
 
 pub fn source(name: &str) -> Option<&'static str> {
     match name {
@@ -103,12 +139,16 @@ pub fn source(name: &str) -> Option<&'static str> {
     }
 }
 
-fn raster(name: &str, side: u32) -> Option<egui::ColorImage> {
-    let imported = tracedraw_io::svg_import::parse(
-        source(name)?,
-        &mut tracedraw_core::id::IdSource::default(),
-    )
-    .ok()?;
+fn raster(name: &str, side: u32, color: Color32, accents: bool) -> Option<egui::ColorImage> {
+    let [r, g, b, _] = color.to_srgba_unmultiplied();
+    let plain = format!("#{r:02x}{g:02x}{b:02x}");
+    let svg = source(name)?
+        .replace("#ffffff", &plain)
+        .replace("#00ff00", if accents { "#1e9e3c" } else { &plain })
+        .replace("#00ffff", if accents { "#149abd" } else { &plain })
+        .replace("#ff0000", if accents { "#cf5950" } else { &plain });
+    let imported =
+        tracedraw_io::svg_import::parse(&svg, &mut tracedraw_core::id::IdSource::default()).ok()?;
     let zoom = f64::from(side) / imported.size.width;
     let mut doc = tracedraw_core::Document::new("Toolbar icon", imported.size);
     let page = doc.pages.first_mut()?;
@@ -134,35 +174,46 @@ fn raster(name: &str, side: u32) -> Option<egui::ColorImage> {
     ))
 }
 
-/// Return false on failure so callers retain their original vector fallback.
-/// Rasterize at physical display resolution; tint supplies theme and enabled state.
+/// Cache both a successfully loaded texture and a failed load.
+/// Keeping None prevents a malformed resource being parsed on every frame.
+pub(super) fn cached_texture(
+    ctx: &egui::Context,
+    key: egui::Id,
+    load: impl FnOnce() -> Option<egui::TextureHandle>,
+) -> Option<egui::TextureHandle> {
+    if let Some(cached) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(key)) {
+        return cached;
+    }
+    let texture = load();
+    ctx.data_mut(|d| d.insert_temp(key, texture.clone()));
+    texture
+}
+
+/// Render at physical display resolution, with optional accents only when enabled.
 pub fn draw(painter: &Painter, rect: Rect, name: &'static str, color: Color32) -> bool {
     let ctx = painter.ctx();
     let side = (rect.width() * ctx.pixels_per_point())
         .ceil()
         .clamp(8.0, 256.0) as u32;
-    let key = egui::Id::new(("reference_bar_svg", name, side));
-    let cached = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key));
-    let texture = match cached {
-        Some(t) => t,
-        None => {
-            let Some(image) = raster(name, side) else {
-                return false;
-            };
-            let t = ctx.load_texture(
+    let accents = super::icons::colored() && color == crate::theme::Tokens::icon();
+    let key = egui::Id::new(("reference_bar_vector_v2", name, side, color, accents));
+    let texture = cached_texture(ctx, key, || {
+        raster(name, side, color, accents).map(|image| {
+            ctx.load_texture(
                 format!("reference_bar_{name}_{side}"),
                 image,
                 egui::TextureOptions::LINEAR,
-            );
-            ctx.data_mut(|d| d.insert_temp(key, t.clone()));
-            t
-        }
+            )
+        })
+    });
+    let Some(texture) = texture else {
+        return false;
     };
     painter.image(
         texture.id(),
         rect,
         Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)),
-        color,
+        Color32::from_white_alpha(color.a()),
     );
     true
 }
@@ -172,45 +223,48 @@ mod tests {
     use super::*;
     #[test]
     fn every_reference_icon_renders_with_transparent_background() {
-        for name in [
-            "abrir",
-            "capitular",
-            "captura",
-            "colar",
-            "colunas",
-            "configuracoes",
-            "copiar",
-            "desfazer",
-            "espelhar-horizontal",
-            "espelhar-vertical",
-            "exportar",
-            "girar",
-            "importar",
-            "imprimir",
-            "inicio",
-            "italico",
-            "lista",
-            "negrito",
-            "novo",
-            "pdf",
-            "recortar",
-            "refazer",
-            "salvar",
-            "sublinhado",
-            "texto",
-            "zoom-altura",
-            "zoom-largura",
-            "zoom-mais",
-            "zoom-menos",
-            "zoom-pagina",
-            "zoom-selecao",
-            "zoom-todos",
-        ] {
-            for side in [18, 24, 48] {
-                let image = raster(name, side).expect(name);
+        for name in NAMES {
+            for side in [16, 24, 48] {
+                let image = raster(name, side, Color32::WHITE, false).expect(name);
                 assert!(image.pixels.iter().any(|p| p.a() > 0), "{name}");
                 assert!(image.pixels.iter().any(|p| p.a() == 0), "{name}");
             }
         }
+    }
+    #[test]
+    fn failed_rasterization_is_cached() {
+        let ctx = egui::Context::default();
+        let key = egui::Id::new("missing_icon");
+        let mut attempts = 0;
+        for _ in 0..4 {
+            assert!(cached_texture(&ctx, key, || {
+                attempts += 1;
+                None
+            })
+            .is_none());
+        }
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn theme_tint_and_optional_accents_reach_the_rendered_pixels() {
+        let plain = Color32::from_rgb(80, 80, 80);
+        for name in ["novo", "pdf", "lista", "captura", "colunas"] {
+            let mono = raster(name, 48, plain, false).expect(name);
+            assert!(
+                mono.pixels
+                    .iter()
+                    .filter(|p| p.a() > 0)
+                    .all(|p| p.r() == p.g() && p.g() == p.b()),
+                "{name}"
+            );
+            let colored = raster(name, 48, plain, true).expect(name);
+            assert!(
+                colored.pixels.iter().any(|p| p.a() > 0 && p.r() != p.g()),
+                "{name}"
+            );
+            assert_ne!(mono.pixels, colored.pixels, "{name}");
+        }
+        assert!(raster("not_an_icon", 24, plain, false).is_none());
     }
 }

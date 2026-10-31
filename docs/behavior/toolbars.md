@@ -270,25 +270,27 @@ and the status bar move (`ui/bars.rs`).
 - `raster::tests::a_canvas_that_moves_renders_again`: moving a bar moves
   the drawing window; the drawing is rendered again for its new place.
 
-## Reference SVG artwork (2026-10-30)
+## Reference SVG artwork (reviewed 2026-10-31)
 
-The standard, property, text and zoom controls use 32 isolated SVGs in
-`assets/icons/reference-bar/`. Their geometry comes from the owner's
-approved rounded-contour reconstruction of the 1920 x 112 screenshot.
-The capture background and fixed field values are not part of the icons.
-The current theme supplies the foreground and disabled colours; textures
-are cached at physical display resolution. Existing artwork remains as a
-fallback for unmapped icons and parsing failures.
+The 32 toolbar SVGs in `assets/icons/reference-bar/` are hand-drawn
+lines, arcs and filled contours on a 24-unit grid. The previous
+screenshot-derived opacity mosaics have been replaced. Mirror controls
+show two reflected shapes and an axis; PDF uses outlined letters and an
+unfilled badge so it also remains readable in monochrome mode.
 
-Bold, italic and underline use the reference glyphs with their existing
-text commands. The font selector is 169 points wide. The standalone Zoom
-bar uses an editable percentage list and icon buttons for the existing
-zoom commands. The zoom presets remain in that list. Document values,
-shortcuts, docking and the standard toolbar's action order are unchanged.
+The caller supplies the foreground and disabled colour. New, PDF,
+bullets, columns and Snap Off retain optional green, cyan or red accents
+when coloured icons are enabled. Disabled and high-contrast controls use
+only the theme colour. Selection SVGs are white coverage masks tinted
+with the caller colour. Both render paths cache failed loads as well as
+successful textures at physical display resolution.
 
-These contours preserve the limited detail in the supplied raster; they
-are not the original application's vector artwork. The full toolbar is
-not claimed pixel-identical: unmapped commands and the existing control
-layout still differ from the reference. The regression test renders all
-32 SVGs at three sizes. `reference_catalog_shot_toolbar` captures the
-actual dark Portuguese interface with a selected text object in CI.
+The Zoom toolbar retains its 25 %, 50 %, 100 %, 200 % and 400 % buttons
+next to the editable percentage list and icon commands. Existing
+commands, editable values, shortcuts and docking remain unchanged.
+
+Validation includes the 32 vectors and both selection icons at native
+16, 24 and 48 px in light/dark, enabled/disabled and coloured/monochrome
+states (`reference_icon_matrix_shots`). The original application's
+vectors are not available, and this does not claim a pixel-identical
+replica of its complete toolbar layout.

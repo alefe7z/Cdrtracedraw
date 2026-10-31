@@ -618,6 +618,21 @@ pub fn zoom_toolbar(app: &mut App, ui: &mut Ui) {
     use crate::ui::propbar::{pic_button, Pic};
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 1.0;
+        for (label, percent) in [
+            ("25%", 25.0),
+            ("50%", 50.0),
+            ("100%", 100.0),
+            ("200%", 200.0),
+            ("400%", 400.0),
+        ] {
+            if ui
+                .add_enabled(app.drawing_shown(), egui::Button::new(label))
+                .clicked()
+            {
+                app.set_zoom_percent(percent);
+            }
+        }
+        vsep(ui);
         zoom_box(app, ui, "zoom_toolbar", 86.0);
         vsep(ui);
         for (pic, key) in [
