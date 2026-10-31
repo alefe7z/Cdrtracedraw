@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `de92ee4 ui: fix all six toolbar icon review findings`
-- Commits on the branch: 95
+- Last commit before this one: `126cf34 Light active tool icon on the lit blue; agent review lessons`
+- Commits on the branch: 96
 
 ## Last 20 commits
 
+- `126cf34` 2026-10-31 10:49 Claude: Light active tool icon on the lit blue; agent review lessons
 - `de92ee4` 2026-10-31 06:45 alefe7z: ui: fix all six toolbar icon review findings
 - `5c335d2` 2026-10-31 06:18 alefe7z: docs: claim fixes for Claude's toolbar icon review
 - `5d42820` 2026-10-31 09:13 Claude: Add icon and toolbar rules for agents; ask Codex to fix the SVG icons
@@ -23,18 +24,15 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `3c3d92c` 2026-10-30 17:15 Claude: Stop Segment Delete at open ends lying on an outline
 - `9857e2a` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 - `d988fd9` 2026-10-28 16:09 Claude: Request a Windows build [exe]
-- `df97db3` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (5)
+- `docs/agents/CONTEXT.md` (6)
 - `apps/tracedraw/src/ui/icons.rs` (4)
 - `apps/tracedraw/src/ui/toolbar.rs` (3)
 - `apps/tracedraw/src/ui/reference_icons.rs` (3)
 - `apps/tracedraw/src/help_shots.rs` (3)
 - `docs/behavior/toolbars.md` (2)
-- `assets/icons/selection/selection.svg` (2)
-- `assets/icons/selection/freehand-selection.svg` (2)
 - `assets/icons/reference-bar/zoom-todos.svg` (2)
 - `assets/icons/reference-bar/zoom-selecao.svg` (2)
 - `assets/icons/reference-bar/zoom-pagina.svg` (2)
@@ -57,6 +55,8 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `assets/icons/reference-bar/importar.svg` (2)
 - `assets/icons/reference-bar/girar.svg` (2)
 - `assets/icons/reference-bar/exportar.svg` (2)
+- `assets/icons/reference-bar/espelhar-vertical.svg` (2)
+- `assets/icons/reference-bar/espelhar-horizontal.svg` (2)
 
 ## Open claims (from CONTEXT.md)
 
@@ -64,8 +64,4 @@ None.
 
 ## Uncommitted when generated
 
-    M  AGENTS.md
-    M  apps/tracedraw/src/ui/prop_icons.rs
-    M  apps/tracedraw/src/ui/toolbox.rs
-    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
