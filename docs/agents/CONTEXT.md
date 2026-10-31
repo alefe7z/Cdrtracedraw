@@ -102,6 +102,31 @@ done.
 
 Requests or warnings for whoever holds a claim, or for the next one.
 
+- **Codex, from the owner (2026-10-31): please review and fix the
+  toolbar SVG work** (5cca848, fe25a44, bf6c5e4, 3852d84) against the
+  new section "Icons and toolbar changes" in `AGENTS.md`. Claude's
+  review of the live app (1920x1050, light theme) found:
+  1. `espelhar-horizontal.svg` and `espelhar-vertical.svg` read as the
+     letters "ш" and "E", `pdf.svg` as a dark blot; none is
+     recognisable at 16 to 21 px.
+  2. All 32 files in `assets/icons/reference-bar/` are one rounded
+     square per screenshot pixel (`fill-opacity` mosaic), so they are
+     soft at 100 % and will be jagged at 150 % / 200 %. Redraw them as
+     real vectors (or painter code) that follow the same reference.
+  3. The colour accents are gone (New's green plus and the others);
+     `draw_action` / `draw_pic` now tint everything one colour, and the
+     coloured-icons option no longer reaches these icons.
+  4. `icons.rs::draw_selection_svg` paints with `Color32::WHITE`, so the
+     two selection icons keep the SVGs' fixed greys (#cbd5df, #aeb6be)
+     instead of following the theme and the disabled colour.
+  5. `zoom_toolbar` lost the 25 %, 50 %, 100 %, 200 % and 400 % buttons;
+     put them back next to the new icon buttons unless the owner says
+     otherwise.
+  6. `reference_icons::draw` re-parses and re-renders the SVG every
+     frame when rasterising fails (no cached failure); cache the miss.
+  Claim the files before starting, check each icon at 16/24/48 px in
+  both themes, and attach what you looked at to the log line.
+
 - Interface (Claude, 2026-10-28): the dark palette in `theme.rs` now
   follows the reference (`docs/behavior/toolbars.md`); theme tests do not
   pin those colours, so check a screenshot after changing them. Check box

@@ -73,6 +73,35 @@ application running with no panic in the log after any interaction change.
 that the main window can be maximized and resized after the splash
 screen; CI runs it on the Linux build.
 
+## Icons and toolbar changes
+
+These rules come from the owner after a toolbar icon change that
+shipped with unreadable icons.
+
+- **Real vectors.** An icon is drawn as clean lines and shapes on its
+  design grid (painter code in `ui/icons.rs` / `ui/propbar.rs`, or a
+  hand-made SVG). Never turn a screenshot into an SVG of one small
+  square per pixel: it blurs at 100 % and turns jagged at 150 % and
+  200 %. When the owner's reference is a low-resolution picture,
+  redraw it as vectors that follow it.
+- **Readable at every size.** Look at each new or changed icon at 16,
+  24 and 48 px, in the light and the dark theme, enabled and disabled.
+  An icon whose meaning cannot be told at 16 px does not ship.
+- **Theme colour.** Monochrome icons take the colour the caller passes
+  (`Tokens::icon()`, `Tokens::icon_off()` when disabled); no fixed
+  colours that ignore the theme.
+- **Keep what is there.** Icons that had colour keep it (the green plus
+  of New and the other `NEW_GREEN`-style accents) and still follow
+  Options > Customization > coloured icons. Do not remove working
+  controls (for example the 25 % to 400 % zoom buttons) unless the
+  owner asks for it.
+- **Check before pushing.** `cargo fmt`, `cargo test -p tracedraw` and
+  `cargo clippy -p tracedraw -- -D warnings` pass locally before the
+  push; "Cargo unavailable, CI will check" is not enough. Run the app
+  (see Visual checks), capture the changed toolbar and look at the PNG
+  at 4x zoom before claiming it works, and say in the commit what you
+  looked at.
+
 ## Offline only
 
 CD Draw makes no network connections of any kind: no update checks, no
