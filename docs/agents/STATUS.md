@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `126cf34 Light active tool icon on the lit blue; agent review lessons`
-- Commits on the branch: 96
+- Last commit before this one: `4acc665 Update the agents' status file`
+- Commits on the branch: 97
 
 ## Last 20 commits
 
@@ -28,9 +28,9 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 ## Files changed in the last 10 commits
 
 - `docs/agents/CONTEXT.md` (6)
-- `apps/tracedraw/src/ui/icons.rs` (4)
 - `apps/tracedraw/src/ui/toolbar.rs` (3)
 - `apps/tracedraw/src/ui/reference_icons.rs` (3)
+- `apps/tracedraw/src/ui/icons.rs` (3)
 - `apps/tracedraw/src/help_shots.rs` (3)
 - `docs/behavior/toolbars.md` (2)
 - `assets/icons/reference-bar/zoom-todos.svg` (2)
