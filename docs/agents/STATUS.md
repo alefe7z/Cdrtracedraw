@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `4acc665 Update the agents' status file`
-- Commits on the branch: 97
+- Last commit before this one: `0558bc5 Build Windows exe [exe]`
+- Commits on the branch: 98
 
 ## Last 20 commits
 
+- `0558bc5` 2026-10-31 10:51 Claude: Build Windows exe [exe]
 - `126cf34` 2026-10-31 10:49 Claude: Light active tool icon on the lit blue; agent review lessons
 - `de92ee4` 2026-10-31 06:45 alefe7z: ui: fix all six toolbar icon review findings
 - `5c335d2` 2026-10-31 06:18 alefe7z: docs: claim fixes for Claude's toolbar icon review
@@ -23,11 +24,10 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `1020fd9` 2026-10-30 18:10 Claude: Closable Welcome Screen tab and many more page sizes
 - `3c3d92c` 2026-10-30 17:15 Claude: Stop Segment Delete at open ends lying on an outline
 - `9857e2a` 2026-10-28 16:09 Claude: Request a Windows build [exe]
-- `d988fd9` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (6)
+- `docs/agents/CONTEXT.md` (5)
 - `apps/tracedraw/src/ui/toolbar.rs` (3)
 - `apps/tracedraw/src/ui/reference_icons.rs` (3)
 - `apps/tracedraw/src/ui/icons.rs` (3)
@@ -64,4 +64,10 @@ None.
 
 ## Uncommitted when generated
 
+    A  .github/workflows/linux-appimage.yml
+    M  CLAUDE.md
+    M  docs/agents/CONTEXT.md
+    A  docs/linux-appimage.md
+    A  scripts/linux/appimage_offline_check.sh
+    A  scripts/request-appimage.sh
     ?? docs/agents/STATUS.md.tmp

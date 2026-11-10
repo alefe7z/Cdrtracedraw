@@ -21,3 +21,15 @@ result with
 `curl -s https://api.github.com/repos/alefe7z/Cdrtracedraw/releases`
 (the build takes about 15 to 25 minutes) and give the user the release
 link.
+
+## Linux AppImage on request
+
+When the user asks for an AppImage (a Linux build, for Fedora or any
+other distribution), commit and push the work, then run
+`scripts/request-appimage.sh`. `.github/workflows/linux-appimage.yml`
+builds it on Ubuntu 22.04, runs it on Fedora with no network
+(`scripts/linux/appimage_offline_check.sh`: it must draw, keep running
+and open no socket but local Unix ones) and only then publishes a
+pre-release under a new `appimage-<date>-<commit>` tag with the
+AppImage, its SHA256SUMS, the Fedora screenshot and the check's output.
+Check the result with the same releases URL as for the `.exe`.

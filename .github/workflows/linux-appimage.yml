@@ -1,0 +1,166 @@
+name: linux-appimage
+
+# A Linux AppImage on request, without the full release pipeline of
+# build.yml. It runs for a push whose last commit message contains
+# [appimage] (scripts/request-appimage.sh makes one), for a pushed tag
+# named appimage-*, or by hand from the Actions tab.
+#
+# The AppImage is built on Ubuntu 22.04 (glibc 2.35), so it runs on
+# Fedora 36 and later and on other distributions as recent. A second job
+# runs it on Fedora with no network at all and fails on any socket other
+# than a local Unix one (scripts/linux/appimage_offline_check.sh); only
+# then is a pre-release published under an appimage-* tag.
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["appimage-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-appimage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/appimage-') || contains(github.event.head_commit.message, '[appimage]')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: appimage-x86_64-unknown-linux-gnu
+
+      - name: Version
+        id: ver
+        run: |
+          base=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          echo "version=${base}-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/appimage-* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=appimage-$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Linux system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libgl1-mesa-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev
+
+      - name: Build
+        run: cargo build --release -p tracedraw -p tracedraw-cli
+
+      # The Help, shipped with the program and opened from disk.
+      - name: Help
+        run: python3 scripts/help/help_site.py docs/help apps/tracedraw/lang target/release/help
+
+      - name: AppImage
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          packaging/linux/build-appimage.sh "$v" target/release
+          rm -f dist/linuxdeploy.AppImage
+          mv "dist/tracedraw-$v-linux-x86_64.AppImage" "dist/CD-Draw-$v-linux-x86_64.AppImage"
+          (cd dist && sha256sum CD-Draw-*.AppImage > SHA256SUMS)
+          echo "Newest glibc symbol the program needs:"
+          objdump -T target/release/tracedraw | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cd-draw-appimage
+          path: dist/*
+          if-no-files-found: error
+
+  # The AppImage on Fedora, with no network: it must start, draw and keep
+  # running, and open no socket but local Unix ones.
+  fedora-offline:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: cd-draw-appimage
+          path: dist
+      - name: Fedora packages
+        run: |
+          cat /etc/fedora-release
+          dnf install -y xorg-x11-server-Xvfb xdotool strace util-linux ImageMagick procps-ng \
+            mesa-dri-drivers mesa-libGL mesa-libEGL libxkbcommon libxkbcommon-x11 libX11 \
+            libX11-xcb libXcursor libXi libXrender libxcb dbus-libs dejavu-sans-fonts
+      - name: Offline check
+        shell: bash
+        run: |
+          chmod +x dist/CD-Draw-*.AppImage
+          { cat /etc/fedora-release; scripts/linux/appimage_offline_check.sh dist/CD-Draw-*.AppImage check; } 2>&1 | tee offline-check.txt
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: Evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp offline-check.txt evidence/ 2>/dev/null || true
+          cp check/screenshot.png evidence/fedora-offline-screenshot.png 2>/dev/null || true
+          cp check/strace.log evidence/fedora-offline-strace.log 2>/dev/null || true
+          cp check/app.log evidence/fedora-offline-app.log 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fedora-offline-check
+          path: evidence/*
+
+  publish:
+    needs: [build, fedora-offline]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cd-draw-appimage
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: fedora-offline-check
+          path: evidence
+      - name: Release notes
+        run: |
+          cp evidence/fedora-offline-screenshot.png dist/ 2>/dev/null || true
+          cp evidence/offline-check.txt dist/fedora-offline-check.txt
+          {
+            echo "Linux AppImage of CD Draw ${{ needs.build.outputs.version }}, from commit ${GITHUB_SHA} (${{ github.ref_name }}, run ${{ github.run_id }})."
+            echo
+            echo "Built on Ubuntu 22.04 (glibc 2.35): runs on Fedora 36 and later."
+            echo
+            echo "On Fedora: download, then \`chmod +x CD-Draw-*.AppImage\` and \`./CD-Draw-*.AppImage\`."
+            echo "If it says FUSE is missing: \`sudo dnf install fuse\` (or run it with \`--appimage-extract-and-run\`)."
+            echo
+            echo "Offline: before publishing, this run started the AppImage on Fedora inside a network namespace with no network,"
+            echo "drew a rectangle, an ellipse and a text, and traced every socket the program opened:"
+            echo
+            echo '```'
+            cat evidence/offline-check.txt
+            echo '```'
+          } > release-notes.md
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: CD Draw ${{ needs.build.outputs.version }} (Linux AppImage)
+          body_path: release-notes.md
+          prerelease: true
+          make_latest: false
+          files: dist/*
+          fail_on_unmatched_files: true

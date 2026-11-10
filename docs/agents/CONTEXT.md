@@ -198,6 +198,10 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
+- 2026-11-10, Claude: Linux AppImage on request (`linux-appimage.yml`,
+  `scripts/request-appimage.sh`), built on Ubuntu 22.04 and checked on
+  Fedora with no network by `scripts/linux/appimage_offline_check.sh`
+  before it is published; `docs/linux-appimage.md`.
 - 2026-10-31, Claude: active toolbox tool icon light on the lit blue in
   both themes (`prop_icons::LIT_ICON`); AGENTS.md "How to work well
   here" with the owner's review lessons; closed the answered toolbar
