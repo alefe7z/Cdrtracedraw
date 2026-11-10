@@ -4,8 +4,8 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `018e45e Linux AppImage on request, checked offline on Fedora`
-- Commits on the branch: 99
+- Last commit before this one: `b6f7b4a Update the agents' status file`
+- Commits on the branch: 100
 
 ## Last 20 commits
 
@@ -24,16 +24,11 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `df2b55f` 2026-10-30 18:24 Claude: Build Windows exe [exe]
 - `1020fd9` 2026-10-30 18:10 Claude: Closable Welcome Screen tab and many more page sizes
 - `3c3d92c` 2026-10-30 17:15 Claude: Stop Segment Delete at open ends lying on an outline
-- `9857e2a` 2026-10-28 16:09 Claude: Request a Windows build [exe]
 
 ## Files changed in the last 10 commits
 
 - `docs/agents/CONTEXT.md` (6)
 - `docs/behavior/toolbars.md` (2)
-- `apps/tracedraw/src/ui/toolbar.rs` (2)
-- `apps/tracedraw/src/ui/reference_icons.rs` (2)
-- `apps/tracedraw/src/ui/icons.rs` (2)
-- `apps/tracedraw/src/help_shots.rs` (2)
 - `AGENTS.md` (2)
 - `scripts/request-appimage.sh` (1)
 - `scripts/linux/appimage_offline_check.sh` (1)
@@ -58,6 +53,10 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `docs/reference/icon-review-2026-10-31/icons-dark-16-colored-false.png` (1)
 - `docs/reference/icon-review-2026-10-31/README.md` (1)
 - `docs/linux-appimage.md` (1)
+- `assets/icons/selection/selection.svg` (1)
+- `assets/icons/selection/freehand-selection.svg` (1)
+- `assets/icons/reference-bar/zoom-todos.svg` (1)
+- `assets/icons/reference-bar/zoom-selecao.svg` (1)
 
 ## Open claims (from CONTEXT.md)
 
