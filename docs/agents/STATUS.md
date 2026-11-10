@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `6304063 Request a Linux AppImage [appimage]`
-- Commits on the branch: 101
+- Last commit before this one: `fc518a5 One workflow for every installer: exe, AppImage, deb, rpm`
+- Commits on the branch: 102
 
 ## Last 20 commits
 
+- `fc518a5` 2026-11-10 08:45 Claude: One workflow for every installer: exe, AppImage, deb, rpm
 - `6304063` 2026-11-10 01:53 Claude: Request a Linux AppImage [appimage]
 - `018e45e` 2026-11-10 01:53 Claude: Linux AppImage on request, checked offline on Fedora
 - `0558bc5` 2026-10-31 10:51 Claude: Build Windows exe [exe]
@@ -28,9 +29,17 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 ## Files changed in the last 10 commits
 
 - `docs/agents/CONTEXT.md` (5)
+- `scripts/request-appimage.sh` (2)
+- `docs/linux-appimage.md` (2)
+- `CLAUDE.md` (2)
 - `AGENTS.md` (2)
-- `scripts/request-appimage.sh` (1)
+- `.github/workflows/linux-appimage.yml` (2)
+- `scripts/request-packages.sh` (1)
+- `scripts/request-exe.sh` (1)
+- `scripts/linux/offline_check.sh` (1)
 - `scripts/linux/appimage_offline_check.sh` (1)
+- `packaging/linux/tracedraw.spec` (1)
+- `packaging/linux/build-rpm.sh` (1)
 - `docs/reference/icon-review-2026-10-31/text-and-zoom-dark.png` (1)
 - `docs/reference/icon-review-2026-10-31/review-4x-light-false.png` (1)
 - `docs/reference/icon-review-2026-10-31/review-4x-dark-true.png` (1)
@@ -49,14 +58,6 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `docs/reference/icon-review-2026-10-31/icons-dark-24-colored-true.png` (1)
 - `docs/reference/icon-review-2026-10-31/icons-dark-24-colored-false.png` (1)
 - `docs/reference/icon-review-2026-10-31/icons-dark-16-colored-true.png` (1)
-- `docs/reference/icon-review-2026-10-31/icons-dark-16-colored-false.png` (1)
-- `docs/reference/icon-review-2026-10-31/README.md` (1)
-- `docs/linux-appimage.md` (1)
-- `docs/behavior/toolbars.md` (1)
-- `assets/icons/selection/selection.svg` (1)
-- `assets/icons/selection/freehand-selection.svg` (1)
-- `assets/icons/reference-bar/zoom-todos.svg` (1)
-- `assets/icons/reference-bar/zoom-selecao.svg` (1)
 
 ## Open claims (from CONTEXT.md)
 
@@ -64,20 +65,4 @@ None.
 
 ## Uncommitted when generated
 
-    D  .github/workflows/linux-appimage.yml
-    A  .github/workflows/packages.yml
-    D  .github/workflows/windows-exe.yml
-    M  AGENTS.md
-    M  CLAUDE.md
-    M  README.md
-    M  apps/tracedraw/Cargo.toml
-    M  docs/agents/CONTEXT.md
-    D  docs/linux-appimage.md
-    A  docs/packages.md
-    A  packaging/linux/build-rpm.sh
-    A  packaging/linux/tracedraw.spec
-    R  scripts/linux/appimage_offline_check.sh -> scripts/linux/offline_check.sh
-    D  scripts/request-appimage.sh
-    M  scripts/request-exe.sh
-    A  scripts/request-packages.sh
     ?? docs/agents/STATUS.md.tmp
