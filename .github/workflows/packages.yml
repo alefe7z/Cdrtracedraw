@@ -1,0 +1,380 @@
+name: packages
+
+# Installers on request, without the full release pipeline of build.yml.
+# A push whose last commit message carries one or more of these tokens
+# builds those formats (scripts/request-packages.sh makes the commit):
+#
+#   [exe]       Windows: installer, portable zip, bare program
+#   [appimage]  Linux AppImage
+#   [deb]       Debian / Ubuntu package
+#   [rpm]       Fedora package
+#   [linux]     the three Linux formats
+#   [all]       all four
+#
+# Or run it by hand from the Actions tab with the formats to build.
+#
+# The Linux programs are built on Ubuntu 22.04 (glibc 2.35), so they run
+# on Fedora 36 and later and on Debian 12 / Ubuntu 22.04 and later. Each
+# Linux format is installed and run on its own distribution with no
+# network at all (scripts/linux/offline_check.sh: it must draw, keep
+# running and open no socket but local Unix ones). One pre-release under
+# a new build-<date>-<commit> tag holds every format, published only
+# when every check passed.
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      formats:
+        description: "Formats: exe appimage deb rpm (or linux, all)"
+        required: false
+        default: "all"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: packages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[exe]') ||
+      contains(github.event.head_commit.message, '[appimage]') ||
+      contains(github.event.head_commit.message, '[deb]') ||
+      contains(github.event.head_commit.message, '[rpm]') ||
+      contains(github.event.head_commit.message, '[linux]') ||
+      contains(github.event.head_commit.message, '[all]')
+    runs-on: ubuntu-latest
+    outputs:
+      exe: ${{ steps.p.outputs.exe }}
+      appimage: ${{ steps.p.outputs.appimage }}
+      deb: ${{ steps.p.outputs.deb }}
+      rpm: ${{ steps.p.outputs.rpm }}
+      linux: ${{ steps.p.outputs.linux }}
+      version: ${{ steps.p.outputs.version }}
+      tag: ${{ steps.p.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: Cargo.toml
+          sparse-checkout-cone-mode: false
+      - id: p
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+          INPUT: ${{ inputs.formats }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            words=" ${INPUT:-all} "
+          else
+            words=" $(grep -oE '\[(exe|appimage|deb|rpm|linux|all)\]' <<<"$MSG" | tr -d '[]' | tr '\n' ' ') "
+          fi
+          has() { [[ "$words" == *" $1 "* || "$words" == *" all "* ]] || { [[ "$1" != exe && "$words" == *" linux "* ]]; }; }
+          for f in exe appimage deb rpm; do
+            if has "$f"; then echo "$f=true"; else echo "$f=false"; fi >> "$GITHUB_OUTPUT"
+          done
+          if has appimage || has deb || has rpm; then echo "linux=true"; else echo "linux=false"; fi >> "$GITHUB_OUTPUT"
+          base=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          echo "version=${base}-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "tag=build-$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "formats:$words"
+          cat "$GITHUB_OUTPUT"
+
+  windows:
+    needs: plan
+    if: needs.plan.outputs.exe == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-pc-windows-msvc
+
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc -p tracedraw -p tracedraw-cli
+
+      # The Help, shipped with the program and opened from disk.
+      - name: Help
+        run: python scripts/help/help_site.py docs/help apps/tracedraw/lang target/x86_64-pc-windows-msvc/release/help
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = "${{ needs.plan.outputs.version }}"
+          $src = "target\x86_64-pc-windows-msvc\release"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DVersion=$v /DSrcDir="$PWD\$src" packaging\windows\tracedraw.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Move-Item "dist\tracedraw-$v-windows-x86_64-setup.exe" "dist\CD-Draw-$v-windows-x86_64-setup.exe"
+          Copy-Item -Recurse -Force packaging\windows\portable\tracedraw-settings "$src\tracedraw-settings"
+          Compress-Archive -Path "$src\tracedraw.exe","$src\tracedraw-cli.exe","$src\tracedraw-settings","$src\help",README.md,LICENSE-MIT,LICENSE-APACHE -DestinationPath "dist\CD-Draw-$v-windows-x86_64-portable.zip"
+          Copy-Item "$src\tracedraw.exe" "dist\CD-Draw-$v-windows-x86_64.exe"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-windows
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    needs: plan
+    if: needs.plan.outputs.linux == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: packages-x86_64-unknown-linux-gnu
+
+      - name: Linux system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libgl1-mesa-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgtk-3-dev
+
+      - name: Build
+        run: cargo build --release -p tracedraw -p tracedraw-cli
+
+      # The Help, shipped with the program and opened from disk.
+      - name: Help
+        run: python3 scripts/help/help_site.py docs/help apps/tracedraw/lang target/release/help
+
+      - name: Programs
+        run: |
+          echo "Newest glibc symbol the program needs:"
+          objdump -T target/release/tracedraw | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1
+          mkdir -p bin
+          cp -R target/release/tracedraw target/release/tracedraw-cli target/release/help bin/
+
+      # The programs and Help, for the .rpm made on Fedora.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-programs
+          path: bin
+          if-no-files-found: error
+
+      - name: AppImage
+        if: needs.plan.outputs.appimage == 'true'
+        run: |
+          v="${{ needs.plan.outputs.version }}"
+          packaging/linux/build-appimage.sh "$v" target/release
+          rm -f dist/linuxdeploy.AppImage
+          mkdir -p out-appimage
+          mv "dist/tracedraw-$v-linux-x86_64.AppImage" "out-appimage/CD-Draw-$v-linux-x86_64.AppImage"
+
+      - uses: actions/upload-artifact@v4
+        if: needs.plan.outputs.appimage == 'true'
+        with:
+          name: pkg-appimage
+          path: out-appimage/*
+          if-no-files-found: error
+
+      - name: Deb
+        if: needs.plan.outputs.deb == 'true'
+        run: |
+          v="${{ needs.plan.outputs.version }}"
+          cargo install cargo-deb --locked
+          mkdir -p out-deb
+          cargo deb -p tracedraw --no-build --deb-version "$v" -o out-deb/
+          mv out-deb/*.deb "out-deb/CD-Draw-$v-linux-x86_64.deb"
+          dpkg-deb -I out-deb/*.deb
+
+      - uses: actions/upload-artifact@v4
+        if: needs.plan.outputs.deb == 'true'
+        with:
+          name: pkg-deb
+          path: out-deb/*
+          if-no-files-found: error
+
+  # The .rpm, made and installed on Fedora, then run with no network.
+  rpm:
+    needs: [plan, linux]
+    if: needs.plan.outputs.rpm == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-programs
+          path: bin
+      - name: Fedora packages
+        run: |
+          dnf install -y rpm-build tar gzip findutils xorg-x11-server-Xvfb xdotool strace util-linux ImageMagick \
+            procps-ng mesa-dri-drivers dejavu-sans-fonts
+      - name: Build the rpm
+        run: |
+          chmod +x bin/tracedraw bin/tracedraw-cli
+          v="${{ needs.plan.outputs.version }}"
+          packaging/linux/build-rpm.sh "$v" bin out-rpm
+          mv out-rpm/*.rpm "out-rpm/CD-Draw-$v-linux-x86_64.rpm"
+          rpm -qpi out-rpm/*.rpm
+      - name: Install and check offline
+        shell: bash
+        run: |
+          dnf install -y ./out-rpm/*.rpm
+          { cat /etc/fedora-release; echo "installed: $(rpm -q tracedraw)"; scripts/linux/offline_check.sh /usr/bin/tracedraw check; } 2>&1 | tee offline-check-rpm.txt
+      - name: Evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp offline-check-rpm.txt evidence/ 2>/dev/null || true
+          cp check/screenshot.png evidence/offline-screenshot-rpm-fedora.png 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-rpm
+          path: out-rpm/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-rpm
+          path: evidence/*
+
+  # The AppImage on Fedora with no network.
+  appimage:
+    needs: [plan, linux]
+    if: needs.plan.outputs.appimage == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: pkg-appimage
+          path: dist
+      - name: Fedora packages
+        run: |
+          dnf install -y xorg-x11-server-Xvfb xdotool strace util-linux ImageMagick procps-ng \
+            mesa-dri-drivers mesa-libGL mesa-libEGL libxkbcommon libxkbcommon-x11 libX11 \
+            libX11-xcb libXcursor libXi libXrender libxcb dbus-libs dejavu-sans-fonts
+      - name: Check offline
+        shell: bash
+        run: |
+          chmod +x dist/CD-Draw-*.AppImage
+          { cat /etc/fedora-release; scripts/linux/offline_check.sh dist/CD-Draw-*.AppImage check; } 2>&1 | tee offline-check-appimage.txt
+      - name: Evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp offline-check-appimage.txt evidence/ 2>/dev/null || true
+          cp check/screenshot.png evidence/offline-screenshot-appimage-fedora.png 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-appimage
+          path: evidence/*
+
+  # The .deb installed on Ubuntu with apt, then run with no network.
+  deb:
+    needs: [plan, linux]
+    if: needs.plan.outputs.deb == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: pkg-deb
+          path: dist
+      - name: Install and check offline
+        shell: bash
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y xvfb xdotool strace util-linux imagemagick procps libgl1-mesa-dri fonts-dejavu-core
+          apt-get install -y ./dist/CD-Draw-*.deb
+          { . /etc/os-release; echo "$PRETTY_NAME"; echo "installed: $(dpkg-query -W tracedraw)"; scripts/linux/offline_check.sh /usr/bin/tracedraw check; } 2>&1 | tee offline-check-deb.txt
+      - name: Evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          cp offline-check-deb.txt evidence/ 2>/dev/null || true
+          cp check/screenshot.png evidence/offline-screenshot-deb-ubuntu.png 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-deb
+          path: evidence/*
+
+  publish:
+    needs: [plan, windows, linux, rpm, appimage, deb]
+    if: >-
+      !cancelled() && needs.plan.result == 'success' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: evidence-*
+          path: evidence
+          merge-multiple: true
+      - name: Release notes
+        run: |
+          ls -la dist evidence || true
+          (cd dist && sha256sum * > SHA256SUMS)
+          cp evidence/*.png dist/ 2>/dev/null || true
+          {
+            echo "CD Draw ${{ needs.plan.outputs.version }}, from commit ${GITHUB_SHA} (${{ github.ref_name }}, run ${{ github.run_id }})."
+            echo
+            if [[ "${{ needs.plan.outputs.exe }}" == true ]]; then
+              echo "**Windows**"
+              echo "- \`*-setup.exe\`: installer (Start menu, desktop shortcut, opens .tdraw and .cdr files, offline Help)."
+              echo "- \`*-portable.zip\`: unzip anywhere and run tracedraw.exe; settings stay in the folder."
+              echo "- \`*-windows-x86_64.exe\`: the program alone, without the Help."
+              echo "- Not code-signed: Windows SmartScreen may ask for confirmation (More info > Run anyway)."
+              echo
+            fi
+            if [[ "${{ needs.plan.outputs.linux }}" == true ]]; then
+              echo "**Linux** (built on Ubuntu 22.04: Fedora 36+, Debian 12+, Ubuntu 22.04+)"
+              [[ "${{ needs.plan.outputs.rpm }}" == true ]] && echo "- \`*.rpm\` (Fedora): \`sudo dnf install ./CD-Draw-*.rpm\`"
+              [[ "${{ needs.plan.outputs.deb }}" == true ]] && echo "- \`*.deb\` (Debian, Ubuntu, Mint): \`sudo apt install ./CD-Draw-*.deb\`"
+              [[ "${{ needs.plan.outputs.appimage }}" == true ]] && echo "- \`*.AppImage\` (any distribution): \`chmod +x CD-Draw-*.AppImage\` then \`./CD-Draw-*.AppImage\`"
+              echo
+              echo "Each Linux package was installed and run on its distribution with no network at all; the program drew"
+              echo "a rectangle, an ellipse and a text, and every socket it opened was traced:"
+              for f in evidence/offline-check-*.txt; do
+                [ -f "$f" ] || continue
+                echo
+                echo '```'
+                cat "$f"
+                echo '```'
+              done
+            fi
+          } > release-notes.md
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.plan.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: CD Draw ${{ needs.plan.outputs.version }}
+          body_path: release-notes.md
+          prerelease: true
+          make_latest: false
+          files: dist/*
+          fail_on_unmatched_files: true

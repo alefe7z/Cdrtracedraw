@@ -386,9 +386,10 @@ names is the version number.
 | Linux (x86_64) | `.deb`, `tracedraw-<version>-linux-x86_64.AppImage`, `tracedraw-<version>-linux-x86_64.tar.gz` |
 
 Each download includes `tracedraw-cli` and the Help next to the editor.
-Packaging sources are in [`packaging/`](packaging/). A Windows build of any
-commit can be asked for with `scripts/request-exe.sh` (see
-[`windows-exe.yml`](.github/workflows/windows-exe.yml)).
+Packaging sources are in [`packaging/`](packaging/). Installers of any
+commit (Windows `.exe`, `.AppImage`, `.deb`, `.rpm`) can be asked for with
+`scripts/request-packages.sh` (see [`packages.yml`](.github/workflows/packages.yml)
+and [`docs/packages.md`](docs/packages.md)).
 
 ## Code signing policy
 

@@ -150,8 +150,8 @@ change, not only icons.
 - Report honestly to the owner: what changed, what you checked, what
   still does not work. Never say "done" for something you did not see
   working.
-- A Windows build is made only when the owner asks (see `CLAUDE.md`:
-  `scripts/request-exe.sh`).
+- Installers (`.exe`, `.AppImage`, `.deb`, `.rpm`) are made only when
+  the owner asks (see `CLAUDE.md`: `scripts/request-packages.sh`).
 
 ## Offline only
 

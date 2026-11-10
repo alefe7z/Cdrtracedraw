@@ -58,7 +58,10 @@ license-file = ["../../LICENSE-MIT", "0"]
 extended-description = "Open-source vector illustration editor with a classic desktop workflow and a .cdr reader."
 section = "graphics"
 priority = "optional"
-depends = "$auto"
+# The window system libraries are loaded when the program starts, so
+# $auto (from ldd) cannot see them.
+depends = "$auto, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libgl1, libegl1, libwayland-client0, libwayland-egl1, libdbus-1-3"
+recommends = "xdg-utils"
 assets = [
     ["target/release/tracedraw", "usr/bin/", "755"],
     ["target/release/tracedraw-cli", "usr/bin/", "755"],

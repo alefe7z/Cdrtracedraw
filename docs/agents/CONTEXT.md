@@ -65,7 +65,7 @@ open claims); do not edit that one by hand.
 - Desktop only and fully offline: no network code, no web build, no AI,
   no updates (`AGENTS.md`, "Offline only"). Help is installed with the
   program and opened from disk.
-- Done lately: rebrand; `.exe` on request (`windows-exe.yml`); offline
+- Done lately: rebrand; installers on request (`packages.yml`: exe, AppImage, deb, rpm); offline
   Help; Crop and Curve toolbox flyouts like the reference; new logo
   (`assets/icon/cd-draw-logo.svg`); Print dialog with seven tabs
   (`ui/print_dialog.rs`); Print Preview window (`ui/print_preview.rs`);
@@ -198,10 +198,13 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
-- 2026-11-10, Claude: Linux AppImage on request (`linux-appimage.yml`,
-  `scripts/request-appimage.sh`), built on Ubuntu 22.04 and checked on
-  Fedora with no network by `scripts/linux/appimage_offline_check.sh`
-  before it is published; `docs/linux-appimage.md`.
+- 2026-11-10, Claude: one workflow for every installer on request,
+  `packages.yml` (`scripts/request-packages.sh exe appimage deb rpm`,
+  or `all`), replacing `windows-exe.yml`; Linux built on Ubuntu 22.04,
+  the .rpm made and installed on Fedora, the .deb on Ubuntu, the
+  AppImage run on Fedora, each checked with no network by
+  `scripts/linux/offline_check.sh` before one release holds them all;
+  `docs/packages.md`.
 - 2026-10-31, Claude: active toolbox tool icon light on the lit blue in
   both themes (`prop_icons::LIT_ICON`); AGENTS.md "How to work well
   here" with the owner's review lessons; closed the answered toolbar

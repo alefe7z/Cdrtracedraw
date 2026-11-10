@@ -1,6 +1,7 @@
 #!/bin/bash
-# usage: appimage_offline_check.sh <CD Draw AppImage> <output folder>
-# Runs the AppImage with no network at all (a fresh network namespace,
+# usage: offline_check.sh <CD Draw program or AppImage> <output folder>
+# Runs CD Draw (an AppImage, or the tracedraw an .rpm or .deb installed)
+# with no network at all (a fresh network namespace,
 # where only a loopback that is down exists), under strace, uses it
 # (new drawing, a rectangle, an ellipse, a text, undo and redo) and
 # fails if
@@ -26,11 +27,17 @@ Xvfb "$DISPLAY_NUM" -screen 0 1600x1000x24 >/dev/null 2>&1 &
 XPID=$!
 sleep 1
 
-# The AppImage is unpacked and run (no FUSE needed), with no network.
+# An AppImage is unpacked and run (no FUSE needed).
+EXTRA=()
+case "$APP" in
+    *.AppImage) EXTRA=(--appimage-extract-and-run) ;;
+esac
+
+# With no network.
 unshare -n env DISPLAY="$DISPLAY_NUM" WINIT_UNIX_BACKEND=x11 TRACEDRAW_NO_SPLASH=1 \
     LIBGL_ALWAYS_SOFTWARE=1 TRACEDRAW_CONFIG_DIR="$OUT/config" \
     strace -f -qq -e trace=socket,connect,bind -o "$OUT/strace.log" \
-    "$APP" --appimage-extract-and-run >"$OUT/app.log" 2>&1 &
+    "$APP" "${EXTRA[@]}" >"$OUT/app.log" 2>&1 &
 RUNNER=$!
 
 # A slow drag with the left button, as a hand would make it.

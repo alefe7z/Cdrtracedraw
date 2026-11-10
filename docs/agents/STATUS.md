@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `b6f7b4a Update the agents' status file`
-- Commits on the branch: 100
+- Last commit before this one: `6304063 Request a Linux AppImage [appimage]`
+- Commits on the branch: 101
 
 ## Last 20 commits
 
+- `6304063` 2026-11-10 01:53 Claude: Request a Linux AppImage [appimage]
 - `018e45e` 2026-11-10 01:53 Claude: Linux AppImage on request, checked offline on Fedora
 - `0558bc5` 2026-10-31 10:51 Claude: Build Windows exe [exe]
 - `126cf34` 2026-10-31 10:49 Claude: Light active tool icon on the lit blue; agent review lessons
@@ -23,12 +24,10 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `5cca848` 2026-10-30 15:49 alefe7z: assets: add approved selection SVG icons only
 - `df2b55f` 2026-10-30 18:24 Claude: Build Windows exe [exe]
 - `1020fd9` 2026-10-30 18:10 Claude: Closable Welcome Screen tab and many more page sizes
-- `3c3d92c` 2026-10-30 17:15 Claude: Stop Segment Delete at open ends lying on an outline
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (6)
-- `docs/behavior/toolbars.md` (2)
+- `docs/agents/CONTEXT.md` (5)
 - `AGENTS.md` (2)
 - `scripts/request-appimage.sh` (1)
 - `scripts/linux/appimage_offline_check.sh` (1)
@@ -53,6 +52,7 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `docs/reference/icon-review-2026-10-31/icons-dark-16-colored-false.png` (1)
 - `docs/reference/icon-review-2026-10-31/README.md` (1)
 - `docs/linux-appimage.md` (1)
+- `docs/behavior/toolbars.md` (1)
 - `assets/icons/selection/selection.svg` (1)
 - `assets/icons/selection/freehand-selection.svg` (1)
 - `assets/icons/reference-bar/zoom-todos.svg` (1)
@@ -64,4 +64,20 @@ None.
 
 ## Uncommitted when generated
 
+    D  .github/workflows/linux-appimage.yml
+    A  .github/workflows/packages.yml
+    D  .github/workflows/windows-exe.yml
+    M  AGENTS.md
+    M  CLAUDE.md
+    M  README.md
+    M  apps/tracedraw/Cargo.toml
+    M  docs/agents/CONTEXT.md
+    D  docs/linux-appimage.md
+    A  docs/packages.md
+    A  packaging/linux/build-rpm.sh
+    A  packaging/linux/tracedraw.spec
+    R  scripts/linux/appimage_offline_check.sh -> scripts/linux/offline_check.sh
+    D  scripts/request-appimage.sh
+    M  scripts/request-exe.sh
+    A  scripts/request-packages.sh
     ?? docs/agents/STATUS.md.tmp
