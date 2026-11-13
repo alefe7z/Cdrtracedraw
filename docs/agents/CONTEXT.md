@@ -97,6 +97,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Codex | Dark canvas reference: theme.rs, page appearance tests and docs | 2026-11-13 | White desktop, pale page border and flat grey shadow; preserve custom desktop colours. |
 
 ## Notes for other agents
 
