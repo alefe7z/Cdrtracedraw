@@ -376,8 +376,8 @@ const DARK: Palette = Palette {
     icon_off: rgb(0x5A5A5A),
     text: rgb(0xE0E0E0),
     text_dim: rgb(0x9A9A9A),
-    page_shadow: rgb(0x1A1A1A),
-    page_border: rgb(0x111111),
+    page_shadow: rgb(0xBFBFBF),
+    page_border: rgb(0xD6DADF),
     ruler_bg: rgb(0x1E1E1E),
     tool_active: rgb(0x1D416C),
     tool_hover: rgb(0x3A3A3A),
@@ -403,7 +403,7 @@ const DARK: Palette = Palette {
     ruler_tick: rgb(0x8A8A8A),
     ruler_label: rgb(0xA8A8A8),
     ruler_marker: rgb(0xF0F0F0),
-    desktop: rgb(0x3D3D3D),
+    desktop: rgb(0xFFFFFF),
 };
 
 pub struct Tokens;
@@ -838,6 +838,21 @@ fn fallback_fonts(defs: &mut egui::FontDefinitions) -> Vec<String> {
 #[cfg(test)]
 mod theme_tests {
     use super::*;
+
+    #[test]
+    fn dark_canvas_matches_the_owners_white_workspace_reference() {
+        let p = Theme::Dark.palette();
+        assert_eq!(p.desktop, Color32::WHITE);
+        assert_eq!(p.page_shadow, rgb(0xBFBFBF));
+        assert_eq!(p.page_border, rgb(0xD6DADF));
+        assert_eq!(p.panel, rgb(0x262626));
+        assert_eq!(Tokens::PAGE_SHADOW_OFFSET, egui::vec2(6.0, 4.0));
+
+        // An explicit desktop preference still takes precedence over the theme.
+        let mut app = crate::app::App::headless();
+        app.settings.desktop_rgb = [72, 96, 120];
+        assert_eq!(app.desktop_color(), Color32::from_rgb(72, 96, 120));
+    }
 
     #[test]
     fn themes_have_their_names_and_dark_ones_light_text() {

@@ -97,7 +97,6 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
-| Codex | Dark canvas reference: theme.rs, page appearance tests and docs | 2026-11-13 | White desktop, pale page border and flat grey shadow; preserve custom desktop colours. |
 
 ## Notes for other agents
 
@@ -198,6 +197,16 @@ Requests or warnings for whoever holds a claim, or for the next one.
 ## Log
 
 Newest first, one line per finished task: date, agent, what, commit.
+
+- 2026-11-13, Codex: Dark theme page appearance follows the owner's
+  white workspace reference: white default desktop, #D6DADF outline,
+  flat #BFBFBF shadow. Custom desktop colours remain honoured.
+  Rust 1.97 fmt, 1,657 workspace tests, workspace clippy and native
+  build pass. Windows clippy passes with the environment-only warning
+  about the missing Windows resource compiler. Inspected live native
+  screenshots in dark/light, custom desktop and 150% UI scale; sampled
+  rendered dark desktop/shadow/border pixels match the reference.
+  This fixes page colours, not the entire reference layout.
 
 - 2026-11-10, Claude: one workflow for every installer on request,
   `packages.yml` (`scripts/request-packages.sh exe appimage deb rpm`,

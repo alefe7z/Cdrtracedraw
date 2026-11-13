@@ -270,6 +270,16 @@ and the status bar move (`ui/bars.rs`).
 - `raster::tests::a_canvas_that_moves_renders_again`: moving a bar moves
   the drawing window; the drawing is rendered again for its new place.
 
+## Dark drawing workspace (reference 2026-11-13)
+
+The owner's screenshot uses a white desktop around the white page even
+with dark interface panels. The Dark theme therefore uses `#FFFFFF`
+for the default desktop, `#D6DADF` for the thin page outline and a flat
+`#BFBFBF` shadow, offset 6 interface points right and 4 down. There is
+no blur. The dark panels remain `#262626`. Explicit custom desktop
+colours still override the theme. Other themes and page dimensions are
+unchanged. This corrects page appearance, not the entire reference layout.
+
 ## Reference SVG artwork (reviewed 2026-10-31)
 
 The 32 toolbar SVGs in `assets/icons/reference-bar/` are hand-drawn
