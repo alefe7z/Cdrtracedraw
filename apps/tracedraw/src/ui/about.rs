@@ -1,7 +1,8 @@
 //! Help > About CD Draw: a deep blue banner with the application icon,
 //! the name, the tagline and the version over a few faint curves with a
-//! selected node (see `brand.rs`), then a short description, the facts
-//! (author, license, source code, how it is built) as a two-column list,
+//! selected node (see `brand.rs`), then the CD Draw artwork, a short
+//! description and the facts (author, license, source code, how it is
+//! built) as a two-column list,
 //! the copyright line and a Close button.
 
 use crate::i18n::{tr, trf};
@@ -19,6 +20,23 @@ const BODY_TOP: f32 = 12.0;
 /// The body's side margin plus the white edge, which the banner covers so
 /// it meets the window border.
 const BLEED: f32 = 14.0 + crate::ui::chrome::EDGE;
+const ABOUT_ART_TEXTURE: &str = "about_art_texture";
+
+fn about_art(ctx: &Context) -> Option<TextureHandle> {
+    let id = egui::Id::new(ABOUT_ART_TEXTURE);
+    if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let bytes = include_bytes!("../../../../assets/about/cd-draw.jpg");
+    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg)
+        .ok()?
+        .to_rgb8();
+    let size = [image.width() as usize, image.height() as usize];
+    let color = egui::ColorImage::from_rgb(size, image.as_raw());
+    let texture = ctx.load_texture("about_art", color, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
+}
 
 /// The banner across the top of the dialog body.
 fn banner(ui: &mut Ui, icon: Option<&TextureHandle>) {
@@ -88,6 +106,11 @@ pub fn about_dialog(ctx: &Context, close: &mut bool) {
         ui.spacing_mut().item_spacing.y = 4.0;
         banner(ui, icon.as_ref());
         ui.add_space(16.0);
+        if let Some(art) = about_art(ui.ctx()) {
+            let size = art.size_vec2();
+            ui.image((art.id(), size * (ui.available_width() / size.x)));
+            ui.add_space(12.0);
+        }
         ui.add(
             egui::Label::new(
                 RichText::new(tr("dialog.about_text"))
@@ -157,5 +180,10 @@ mod tests {
         });
         out.textures_delta.clear();
         assert!(!close);
+        let size = ctx.data(|data| {
+            data.get_temp::<TextureHandle>(egui::Id::new(ABOUT_ART_TEXTURE))
+                .map(|texture| texture.size())
+        });
+        assert_eq!(size, Some([1600, 909]));
     }
 }
