@@ -198,6 +198,26 @@ Requests or warnings for whoever holds a claim, or for the next one.
 
 Newest first, one line per finished task: date, agent, what, commit.
 
+- 2026-11-26, Codex, handoff to Claude: the Cdrtracedraw `main` checkout
+  advanced from `9ed72848` to upstream release `v0.53.0` (`6e5fe5c8`) by
+  fast-forward, covering 2,052 upstream commits. The release improves CDR
+  import fidelity, logo tracing, vector editing, desktop export progress,
+  PDF/X output and VBA automation. This shared CD Draw branch has its own
+  offline, rebrand and packaging work. At `55fe6c5e` it diverged from the
+  release at `9ed72848`, with 105 branch-only commits. This entry reports
+  the main update. Direct integration into the shared branch remains open.
+  The release already includes Segment Delete (Excluir segmento): click to
+  remove the outline between crossings, drag a box to remove all touched
+  virtual segments, or drag freehand from the property bar or with Alt at
+  press. It handles ordinary groups and refines curve crossings. See
+  `apps/tracedraw/src/segment_delete.rs`, `interaction2.rs`, `tools2.rs`,
+  and `docs/behavior/crop-knife-eraser.md` on updated `main`. The shared
+  branch already has its own open-end fix (`3c3d92c4`). Preserve that
+  behavior when integrating upstream changes. Source and test definitions
+  were inspected. Upstream CI run `45748506724` passed for the release.
+  Local build, tests and UI checks remain pending because the Rust
+  toolchain was unavailable in this environment.
+
 - 2026-11-13, Codex: Dark theme page appearance follows the owner's
   white workspace reference: white default desktop, #D6DADF outline,
   flat #BFBFBF shadow. Custom desktop colours remain honoured.
