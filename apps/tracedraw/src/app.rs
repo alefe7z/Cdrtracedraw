@@ -1385,9 +1385,6 @@ pub struct App {
     pub quit_after_closing: bool,
     /// Close the window on the next frame.
     pub quit_now: bool,
-    /// Share of the drawing window's bottom row given to the page tabs
-    /// (the rest is the horizontal scrollbar); set with the splitter.
-    pub page_tabs_fraction: f32,
     /// The Hints docker's page and history.
     pub hints: crate::ui::hints::HintsState,
 }
@@ -2166,7 +2163,6 @@ impl App {
             closing_all: false,
             quit_after_closing: false,
             quit_now: false,
-            page_tabs_fraction: 0.45,
             hints: Default::default(),
         };
         app.load_settings();

@@ -6,6 +6,10 @@ full, row-by-row status.
 
 ## Unreleased
 
+- Drawing window: the horizontal scrollbar now runs under the drawing on a row of its own, and under it the page row holds the document navigator (the insert buttons are a plus in a circle) followed by rounded page tabs, the current page's in blue. The dotted splitter that shared one row between the tabs and the scrollbar is gone.
+
+- Document palette: laid along the window it shows its colours as wide swatches with each colour's name written in it (or its values in short, such as `C100 M100 Y100 K100`, when it has no name), without the No Color well; it showed 20 px swatches with no names.
+
 - Toolbox: the Variable Outline tool has a button of its own at the bottom of the toolbox, after the Fill flyout; it was inside the Shape tool's flyout, where it was hard to find (#339).
 
 - Page bar: the Autofit Page button opens a popup with a Margin field (kept between sessions) and the Autofit Page button, so the page can be fitted to the drawing with room left around it; it fitted the page with no margin at once (#340).

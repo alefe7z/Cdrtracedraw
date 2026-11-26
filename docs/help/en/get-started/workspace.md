@@ -88,11 +88,12 @@ page lists every panel.
 The page sits on the desktop, the area around it, where you can also keep
 objects. Below the drawing are:
 
-- the **page navigator**: insert a page before, first page, previous page,
-  the page number, next page, last page and insert a page after;
-- one **tab per page** (click to go to a page, double-click to rename it);
-- the horizontal scroll bar. Drag the dotted splitter between the page tabs
-  and the scroll bar to share the space between them.
+- the horizontal scroll bar;
+- under it, the **page navigator**: insert a page before, first page,
+  previous page, the page number, next page, last page and insert a page
+  after;
+- one **tab per page** after the navigator, the current page's in blue
+  (click to go to a page, double-click to rename it).
 
 The **Navigator** button in the corner between the scroll bars shows a
 thumbnail of the page while you hold it; move the pointer over the thumbnail

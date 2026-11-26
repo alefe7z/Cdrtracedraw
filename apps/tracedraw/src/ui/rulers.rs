@@ -145,7 +145,11 @@ pub fn rulers(app: &mut App, ui: &mut Ui, full: Rect) {
     );
     let left = Rect::from_min_max(
         Pos2::new(full.min.x, full.min.y + r),
-        Pos2::new(full.min.x + r, full.max.y),
+        // Down to the page row, beside the horizontal scrollbar.
+        Pos2::new(
+            full.min.x + r,
+            full.max.y - crate::ui::window_bars::PAGE_ROW,
+        ),
     );
     let corner = Rect::from_min_size(full.min, egui::vec2(r, r));
     draw_horizontal(app, &ui.painter_at(top), top);

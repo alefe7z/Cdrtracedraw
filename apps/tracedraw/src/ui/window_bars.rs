@@ -1,8 +1,8 @@
-//! The drawing window's edges, laid out: the
-//! vertical scrollbar on the right; along the bottom the document
+//! The drawing window's edges, laid out: the vertical scrollbar on the
+//! right; under the drawing the horizontal scrollbar, with the Navigator
+//! button in its corner; and under that the page row: the document
 //! navigator (insert page before, first, previous, "1 of N", next, last,
-//! insert page after), the page tabs, a splitter, the horizontal
-//! scrollbar; and the Navigator button in the corner.
+//! insert page after) followed by one tab per page.
 
 use crate::app::App;
 use crate::i18n::{tr, trf};
@@ -10,51 +10,60 @@ use crate::theme::Tokens;
 use crate::ui::tips::RichTip;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
-/// Height of the bottom row and width of the vertical scrollbar.
+/// Height of the horizontal scrollbar and width of the vertical one.
 pub const BAR: f32 = 17.0;
+/// Height of the page row under the horizontal scrollbar.
+pub const PAGE_ROW: f32 = 22.0;
+/// Everything under the drawing: the scrollbar and the page row.
+pub const BOTTOM: f32 = BAR + PAGE_ROW;
+/// Width of a page tab, wider when the name needs it.
+const TAB_W: f32 = 100.0;
 /// One click on a scroll arrow moves the view this many pixels.
 const LINE: f32 = 40.0;
 
-/// Draw the scrollbars, the navigator row and the corner button around
+/// Draw the scrollbars, the page row and the corner button around
 /// `canvas` inside `full`.
 pub fn window_bars(app: &mut App, ui: &mut Ui, full: Rect, canvas: Rect, ruler: f32) {
     let p = ui.painter_at(full);
-    let row = Rect::from_min_max(
-        Pos2::new(full.min.x, full.max.y - BAR),
-        Pos2::new(full.max.x - BAR, full.max.y),
+    let hbar = Rect::from_min_max(
+        Pos2::new(full.min.x + ruler, full.max.y - BOTTOM),
+        Pos2::new(full.max.x - BAR, full.max.y - PAGE_ROW),
     );
+    let pages = Rect::from_min_max(Pos2::new(full.min.x, full.max.y - PAGE_ROW), full.max);
     let vbar = Rect::from_min_max(
         Pos2::new(full.max.x - BAR, full.min.y + ruler),
-        Pos2::new(full.max.x, full.max.y - BAR),
+        Pos2::new(full.max.x, full.max.y - BOTTOM),
     );
-    let corner = Rect::from_min_max(Pos2::new(full.max.x - BAR, full.max.y - BAR), full.max);
-    p.rect_filled(row, 0.0, Tokens::panel());
-    p.rect_filled(vbar, 0.0, crate::theme::Tokens::panel());
+    let corner = Rect::from_min_max(
+        Pos2::new(full.max.x - BAR, full.max.y - BOTTOM),
+        Pos2::new(full.max.x, full.max.y - PAGE_ROW),
+    );
+    p.rect_filled(hbar, 0.0, Tokens::panel());
+    p.rect_filled(vbar, 0.0, Tokens::panel());
     p.rect_filled(corner, 0.0, Tokens::panel());
-    p.hline(row.x_range(), row.min.y, Stroke::new(1.0, Tokens::border()));
+    p.rect_filled(pages, 0.0, Tokens::panel());
+    p.hline(
+        pages.x_range(),
+        pages.min.y,
+        Stroke::new(1.0, Tokens::border()),
+    );
 
-    // Bottom row: navigator, page tabs, splitter, horizontal scrollbar.
-    let nav_w = 200.0_f32.min(row.width() * 0.4);
-    let nav = Rect::from_min_max(
-        Pos2::new(row.min.x + ruler, row.min.y),
-        Pos2::new(row.min.x + ruler + nav_w, row.max.y),
-    );
-    let rest = Rect::from_min_max(Pos2::new(nav.max.x, row.min.y), row.max);
-    let split_x = rest.min.x + rest.width() * app.page_tabs_fraction.clamp(0.1, 0.9);
-    let tabs = Rect::from_min_max(rest.min, Pos2::new(split_x - 4.0, rest.max.y));
-    let grip = Rect::from_min_max(
-        Pos2::new(split_x - 4.0, rest.min.y),
-        Pos2::new(split_x + 4.0, rest.max.y),
-    );
-    let hbar = Rect::from_min_max(Pos2::new(split_x + 4.0, rest.min.y + 1.0), rest.max);
-    ui.scope_builder(egui::UiBuilder::new().max_rect(nav), |ui| {
-        page_navigator(app, ui)
-    });
-    ui.scope_builder(egui::UiBuilder::new().max_rect(tabs), |ui| {
-        ui.set_clip_rect(tabs);
-        page_tabs(app, ui, tabs)
-    });
-    splitter(app, ui, grip, rest);
+    // The page row: navigator, then the page tabs right after it.
+    let nav = Rect::from_min_max(Pos2::new(pages.min.x + 4.0, pages.min.y + 1.0), pages.max);
+    let used = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(nav), |ui| {
+            ui.set_clip_rect(nav);
+            page_navigator(app, ui)
+        })
+        .response
+        .rect;
+    let tabs = Rect::from_min_max(Pos2::new(used.max.x + 6.0, pages.min.y), pages.max);
+    if tabs.width() > 0.0 {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(tabs), |ui| {
+            ui.set_clip_rect(tabs);
+            page_tabs(app, ui, tabs)
+        });
+    }
     horizontal(app, ui, hbar, canvas);
     vertical(app, ui, vbar, canvas);
     super::view_navigator(app, ui, corner, canvas);
@@ -270,37 +279,9 @@ fn chevron(p: &egui::Painter, c: Pos2, dir: Dir, color: Color32) {
     p.line_segment([c + d, c + b], s);
 }
 
-/// The dotted grip between the page tabs and the horizontal scrollbar;
-/// dragging it shares the row between them.
-fn splitter(app: &mut App, ui: &mut Ui, grip: Rect, rest: Rect) {
-    let resp = ui.interact(grip, egui::Id::new("page_tabs_splitter"), Sense::drag());
-    if resp.hovered() || resp.dragged() {
-        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
-    }
-    if resp.dragged() {
-        if let Some(pos) = resp.interact_pointer_pos() {
-            app.page_tabs_fraction = ((pos.x - rest.min.x) / rest.width().max(1.0)).clamp(0.1, 0.9);
-        }
-    }
-    let p = ui.painter();
-    for row in 0..5 {
-        for col in 0..2 {
-            let c = Pos2::new(
-                grip.center().x - 1.5 + col as f32 * 3.0,
-                grip.min.y + 3.0 + row as f32 * 2.6,
-            );
-            p.rect_filled(
-                Rect::from_center_size(c, Vec2::splat(1.0)),
-                0.0,
-                Tokens::text_dim(),
-            );
-        }
-    }
-}
-
 /// Insert before, first, previous, "1 of N", next, last, insert after.
 pub fn page_navigator(app: &mut App, ui: &mut Ui) {
-    ui.horizontal_centered(|ui| {
+    ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 1.0;
         let n = app.doc().pages.len();
         let idx = app.page_index();
@@ -318,8 +299,8 @@ pub fn page_navigator(app: &mut App, ui: &mut Ui) {
                 "status.page_n_of_m",
                 &[("n", &(idx + 1).to_string()), ("m", &n.to_string())],
             ))
-            .size(11.0)
-            .color(Tokens::text_dim()),
+            .size(12.0)
+            .color(Tokens::text()),
         );
         if nav_button(ui, Glyph::Next, &tr("status.next_page")) {
             app.goto_page(idx + 1);
@@ -343,13 +324,13 @@ enum Glyph {
 }
 
 fn nav_button(ui: &mut Ui, g: Glyph, tip: &str) -> bool {
-    let (r, resp) = ui.allocate_exact_size(Vec2::new(16.0, BAR - 1.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(Vec2::new(19.0, PAGE_ROW - 3.0), Sense::click());
     let p = ui.painter();
     if resp.hovered() {
-        p.rect_filled(r, 0.0, Tokens::tool_hover());
+        p.rect_filled(r, 2.0, Tokens::tool_hover());
     }
     let c = r.center();
-    let color = Tokens::text_dim();
+    let color = Tokens::text();
     let s = Stroke::new(1.0, color);
     let tri = |p: &egui::Painter, tip: f32| {
         // A filled triangle pointing left (tip < 0) or right.
@@ -365,10 +346,10 @@ fn nav_button(ui: &mut Ui, g: Glyph, tip: &str) -> bool {
     };
     match g {
         Glyph::AddPage => {
-            let page = Rect::from_center_size(c, Vec2::new(9.0, 11.0));
-            p.rect_stroke(page, 0.0, s, egui::StrokeKind::Inside);
-            p.line_segment([c + Vec2::new(-2.5, 0.5), c + Vec2::new(2.5, 0.5)], s);
-            p.line_segment([c + Vec2::new(0.0, -2.0), c + Vec2::new(0.0, 3.0)], s);
+            // A plus in a circle.
+            p.circle_stroke(c, 5.5, s);
+            p.line_segment([c + Vec2::new(-3.0, 0.0), c + Vec2::new(3.0, 0.0)], s);
+            p.line_segment([c + Vec2::new(0.0, -3.0), c + Vec2::new(0.0, 3.0)], s);
         }
         Glyph::Previous => tri(p, -1.0),
         Glyph::Next => tri(p, 1.0),
@@ -384,11 +365,12 @@ fn nav_button(ui: &mut Ui, g: Glyph, tip: &str) -> bool {
     resp.rich_tip(tip).clicked()
 }
 
-/// One tab per page, slanted at the sides; the current page's tab is white.
+/// One rounded tab per page, side by side; the current page's tab is
+/// blue.
 fn page_tabs(app: &mut App, ui: &mut Ui, area: Rect) {
     let names: Vec<String> = app.doc().pages.iter().map(|p| p.name.clone()).collect();
     let current = app.page_index();
-    let mut x = area.min.x + 4.0;
+    let mut x = area.min.x;
     let mut clicked = None;
     let mut double = None;
     for (i, name) in names.iter().enumerate() {
@@ -397,44 +379,37 @@ fn page_tabs(app: &mut App, ui: &mut Ui, area: Rect) {
             egui::FontId::proportional(12.0),
             Tokens::text(),
         );
-        let w = galley.size().x + 24.0;
-        let r = Rect::from_min_max(Pos2::new(x, area.min.y), Pos2::new(x + w, area.max.y - 1.0));
+        let w = (galley.size().x + 24.0).max(TAB_W).round();
+        let r = Rect::from_min_max(
+            Pos2::new(x, area.min.y + 3.0),
+            Pos2::new(x + w, area.max.y - 2.0),
+        );
         if r.min.x > area.max.x {
             break;
         }
         let resp = ui.interact(r, egui::Id::new(("page_tab", i)), Sense::click());
         let selected = i == current;
-        let slant = 5.0;
-        let shape = vec![
-            Pos2::new(r.min.x, r.min.y),
-            Pos2::new(r.max.x, r.min.y),
-            Pos2::new(r.max.x - slant, r.max.y),
-            Pos2::new(r.min.x + slant, r.max.y),
-        ];
         let fill = if selected {
-            crate::theme::Tokens::field()
+            Tokens::tab_active()
         } else if resp.hovered() {
-            Tokens::tool_hover()
+            Tokens::control_border()
         } else {
-            Tokens::panel_dark()
+            Tokens::button()
         };
         let p = ui.painter();
-        p.add(egui::epaint::PathShape::convex_polygon(
-            shape.clone(),
-            fill,
-            Stroke::NONE,
-        ));
-        let edge = Stroke::new(1.0, Tokens::text_dim());
-        p.line_segment([shape[0], shape[3]], edge);
-        p.line_segment([shape[3], shape[2]], edge);
-        p.line_segment([shape[2], shape[1]], edge);
+        p.rect_filled(r, 3.0, fill);
+        let text = if selected {
+            crate::theme::on_highlight()
+        } else {
+            Tokens::text()
+        };
         p.galley(
             Pos2::new(
-                r.center().x - galley.size().x / 2.0,
+                (r.center().x - galley.size().x / 2.0).max(r.min.x + 4.0),
                 r.center().y - galley.size().y / 2.0,
             ),
             galley,
-            Tokens::text(),
+            text,
         );
         if resp.double_clicked() {
             double = Some(i);
@@ -451,7 +426,7 @@ fn page_tabs(app: &mut App, ui: &mut Ui, area: Rect) {
         if let Some(a) = action {
             apply_page_tab_action(app, a);
         }
-        x += w - slant;
+        x += w + 2.0;
     }
     if let Some(i) = clicked {
         app.goto_page(i);

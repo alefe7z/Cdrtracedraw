@@ -25,6 +25,12 @@ downwards.
 - The No Color well comes first: white with a red diagonal.
 - The swatch under the pointer gets a white frame; the document palette's
   current swatch (the one clicked last) keeps it.
+- The document palette, when it lies along the window, shows its colours
+  as named swatches instead: 160 x 20 px, side by side with no frame,
+  each with the colour's name centred in it (dark text on light colours,
+  white on dark ones), or its values in short (`C100 M100 Y100 K100`,
+  `R46 G48 B145`) when the colour has no name in a loaded palette. It has
+  no No Color well; the scroll arrows move one swatch at a time.
 - An empty document palette shows "Drag colors (or objects) here to store
   these colors with your document".
 

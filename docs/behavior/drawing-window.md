@@ -16,23 +16,27 @@
 ## Scrollbars
 
 - The vertical scrollbar runs down the right edge between the ruler and
-  the bottom row; the horizontal one fills the right part of the bottom
-  row. Both are 17 px: arrow buttons at the ends, a light track and a flat
+  the horizontal scrollbar; the horizontal one runs under the drawing
+  from the vertical ruler to the Navigator button, above the page row.
+  Both are 17 px: arrow buttons at the ends, a light track and a flat
   grey thumb that darkens when hovered or dragged.
 - They cover the page plus one page size on every side, grown to include
   whatever is visible. Dragging the thumb pans; a click on the track pages
   by 90 % of the window towards the click; an arrow moves 40 px, then
   repeats every 50 ms after 0.4 s while held.
 
-## Bottom row
+## Page row
 
-From the left, after the ruler's width:
+Under the horizontal scrollbar a 22 px row runs the whole width of the
+drawing window. From the left:
 
-1. The document navigator: insert page before, first page, previous
-   page, "n of m", next page, last page, insert page after. The insert
-   buttons add a page of the current size next to the current page and
-   make it current.
-2. The page tabs: one slanted tab per page, the current one white; a click
+1. The document navigator: insert page before (a plus in a circle),
+   first page, previous page, "n of m", next page, last page, insert
+   page after (a plus in a circle). The insert buttons add a page of the
+   current size next to the current page and make it current.
+2. The page tabs, right after the navigator: one rounded tab per page,
+   100 px wide (wider when the name needs it), 2 px apart, grey with the
+   current one in the selection blue; a click
    goes to the page, a double click renames it. A right click makes the
    page current and opens its menu, six rows with a picture each and no
    separators: Rename Page... (a page with a text cursor), Insert Page
@@ -46,9 +50,9 @@ From the left, after the ruler's width:
    (`ui::window_bars::tests::the_page_tab_menu_has_six_rows_in_order_each_with_a_picture`,
    `the_page_tab_menu_has_no_separators`,
    `the_page_tab_menu_inserts_duplicates_turns_and_deletes_pages`).
-3. A dotted splitter: dragging it shares the row between the page tabs and
-   the horizontal scrollbar (45 % for the tabs by default).
-4. The horizontal scrollbar.
+
+Tabs that do not fit are cut off at the right; the navigator still
+reaches every page.
 
 The Navigator button (a magnifier over a cross) sits in the corner under
 the vertical scrollbar; see `zoom-and-pan.md`.

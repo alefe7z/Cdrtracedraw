@@ -25,6 +25,9 @@ const STRIDE: f32 = 21.0;
 const LEAD: f32 = 77.0;
 /// Room for the scroll and expand buttons at the right.
 const TAIL: f32 = 51.0;
+/// Width of a named swatch in the document palette row: the colour
+/// across, its name (or its values) written in it.
+const NAMED_W: f32 = 160.0;
 const FRAME: Color32 = Color32::from_gray(90);
 const NO_COLOR_LINE: Color32 = Color32::from_rgb(255, 64, 64);
 /// Seconds a swatch is held before its shades pop up.
@@ -147,10 +150,42 @@ fn scroll_of(app: &mut App, which: Row) -> &mut usize {
     }
 }
 
-/// How many swatches fit in a row of this width (the No Color well
+/// How many 20 px swatches fit in a row of this width (the No Color well
 /// counts as one).
-pub fn visible_slots(width: f32) -> usize {
-    ((width - LEAD - TAIL - 1.0) / STRIDE).floor().max(1.0) as usize
+#[cfg(test)]
+fn visible_slots(width: f32) -> usize {
+    slots_of(width, STRIDE)
+}
+
+fn slots_of(width: f32, stride: f32) -> usize {
+    ((width - LEAD - TAIL - 1.0) / stride).floor().max(1.0) as usize
+}
+
+/// What a named swatch says: the colour's name, else its values in
+/// short (`C100 M100 Y100 K100`).
+pub fn swatch_label(name: &str, c: Color) -> String {
+    if !name.trim().is_empty() {
+        return name.to_string();
+    }
+    let pct = |v: f32| (v * 100.0).round() as i32;
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
+    match c {
+        Color::Cmyk { c, m, y, k } => {
+            format!("C{} M{} Y{} K{}", pct(c), pct(m), pct(y), pct(k))
+        }
+        Color::Rgb { r, g, b } => format!("R{} G{} B{}", byte(r), byte(g), byte(b)),
+        other => color_values(other),
+    }
+}
+
+/// Text that reads on a swatch of colour `fill`.
+fn label_color(fill: Color32) -> Color32 {
+    let l = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
+    if l > 150.0 {
+        Color32::from_gray(40)
+    } else {
+        Color32::WHITE
+    }
 }
 
 fn row(app: &mut App, ui: &mut Ui, which: Row, vertical: bool) {
@@ -203,9 +238,17 @@ fn row(app: &mut App, ui: &mut Ui, which: Row, vertical: bool) {
     );
 
     let colors = colors_of(app, which);
-    let no_color = app.settings.palette.show_no_color;
+    // The document palette, laid along the window, shows its colours as
+    // wide swatches with their names, and no No Color well.
+    let named = which == Row::Document && !vertical;
+    let (stride, side) = if named {
+        (NAMED_W, NAMED_W)
+    } else {
+        (STRIDE, SWATCH)
+    };
+    let no_color = app.settings.palette.show_no_color && !named;
     let count = colors.len() + usize::from(no_color);
-    let slots = visible_slots(len);
+    let slots = slots_of(len, stride);
     let max_scroll = count.saturating_sub(slots);
     let scroll = (*scroll_of(app, which)).min(max_scroll);
     *scroll_of(app, which) = scroll;
@@ -344,10 +387,12 @@ fn row(app: &mut App, ui: &mut Ui, which: Row, vertical: bool) {
         return;
     }
     let mut px = Pixels::default();
-    px.rect(
-        ax.rect(LEAD, EDGE, shown as f32 * STRIDE + 1.0, 22.0),
-        FRAME,
-    );
+    if !named {
+        px.rect(
+            ax.rect(LEAD, EDGE, shown as f32 * STRIDE + 1.0, 22.0),
+            FRAME,
+        );
+    }
     px.paint(&painter);
     let notch: f32 = if ui.rect_contains_pointer(rect) {
         ui.input(|i| {
@@ -376,12 +421,7 @@ fn row(app: &mut App, ui: &mut Ui, which: Row, vertical: bool) {
     }
     for slot in 0..shown {
         let index = scroll + slot;
-        let cell = ax.rect(
-            LEAD + 1.0 + slot as f32 * STRIDE,
-            EDGE + 1.0,
-            SWATCH,
-            SWATCH,
-        );
+        let cell = ax.rect(LEAD + 1.0 + slot as f32 * stride, EDGE + 1.0, side, SWATCH);
         let color_index = if no_color {
             index.checked_sub(1)
         } else {
@@ -392,7 +432,7 @@ fn row(app: &mut App, ui: &mut Ui, which: Row, vertical: bool) {
     }
     if which == Row::Document && shown < slots && colors.is_empty() && !vertical {
         painter.text(
-            ax.point(LEAD + shown as f32 * STRIDE + 9.0, EDGE + 11.0),
+            ax.point(LEAD + shown as f32 * stride + 9.0, EDGE + 11.0),
             Align2::LEFT_CENTER,
             tr("palette.document_hint"),
             FontId::proportional(11.0),
@@ -426,8 +466,19 @@ fn swatch(
                 Stroke::new(1.0, NO_COLOR_LINE),
             );
         }
-        Some((_, c)) => {
-            painter.rect_filled(cell, 0.0, crate::canvas::to_color32(*c));
+        Some((name, c)) => {
+            let fill = crate::canvas::to_color32(*c);
+            painter.rect_filled(cell, 0.0, fill);
+            if cell.width() > SWATCH + 1.0 {
+                // A named swatch: its name in the middle, clipped to it.
+                painter.with_clip_rect(cell.shrink(2.0)).text(
+                    cell.center(),
+                    Align2::CENTER_CENTER,
+                    swatch_label(name, *c),
+                    FontId::proportional(12.0),
+                    label_color(fill),
+                );
+            }
         }
     }
     let current =
@@ -1062,6 +1113,30 @@ mod tests {
         // Lighter above, darker below.
         assert!(g[2].luminance() > c.luminance());
         assert!(g[22].luminance() < c.luminance());
+    }
+
+    #[test]
+    fn named_swatches_say_the_name_or_the_short_values() {
+        let c = Color::cmyk_pct(100.0, 100.0, 100.0, 100.0);
+        assert_eq!(swatch_label("", c), "C100 M100 Y100 K100");
+        assert_eq!(swatch_label("  ", c), "C100 M100 Y100 K100");
+        assert_eq!(swatch_label("Preto", c), "Preto");
+        assert_eq!(swatch_label("", Color::rgb8(46, 48, 145)), "R46 G48 B145");
+        // Dark text on light colours, white on dark ones.
+        assert_eq!(label_color(Color32::WHITE), Color32::from_gray(40));
+        assert_eq!(
+            label_color(Color32::from_rgb(255, 242, 0)),
+            Color32::from_gray(40)
+        );
+        assert_eq!(label_color(Color32::BLACK), Color32::WHITE);
+        assert_eq!(label_color(Color32::from_rgb(46, 48, 145)), Color32::WHITE);
+    }
+
+    #[test]
+    fn named_swatches_fit_fewer_to_a_row() {
+        let w = LEAD + TAIL + 1.0 + NAMED_W * 4.0;
+        assert_eq!(slots_of(w, NAMED_W), 4);
+        assert!(slots_of(w, STRIDE) > 4);
     }
 
     #[test]

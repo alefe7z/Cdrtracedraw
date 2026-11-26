@@ -97,13 +97,12 @@ painéis.
 A página fica sobre a área de trabalho ao redor, onde você também pode deixar
 objetos. Abaixo do desenho ficam:
 
-- o **navegador de páginas**: inserir página antes, primeira página, página
-  anterior, o número da página, próxima página, última página e inserir página
-  depois;
-- uma **guia por página** (clique para ir à página, clique duas vezes para
-  renomeá-la);
-- a barra de rolagem horizontal. Arraste o divisor pontilhado entre as guias
-  das páginas e a barra de rolagem para dividir o espaço entre elas.
+- a barra de rolagem horizontal;
+- logo abaixo, o **navegador de páginas**: inserir página antes, primeira
+  página, página anterior, o número da página, próxima página, última página
+  e inserir página depois;
+- uma **guia por página** depois do navegador, a da página atual em azul
+  (clique para ir à página, clique duas vezes para renomeá-la).
 
 O botão **Navegador**, no canto entre as barras de rolagem, mostra uma
 miniatura da página enquanto você o mantém pressionado; mova o ponteiro sobre a

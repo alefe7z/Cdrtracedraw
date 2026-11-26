@@ -637,7 +637,7 @@ pub(crate) fn drawing_window(app: &mut App, ui: &mut Ui, full: egui::Rect) {
     let sb = window_bars::BAR;
     let canvas_rect = egui::Rect::from_min_max(
         full.min + egui::vec2(ruler, ruler),
-        full.max - egui::vec2(sb, sb),
+        full.max - egui::vec2(sb, window_bars::BOTTOM),
     );
     app.canvas_rect = canvas_rect;
     app.anchor_view(canvas_rect.min);
