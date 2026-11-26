@@ -4,30 +4,31 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `e60156a fix: match dark canvas page colours to the reference`
-- Commits on the branch: 23
+- Last commit before this one: `4396a68d docs: hand off upstream update and segment delete to Claude`
+- Commits on the branch: 156
 
 ## Last 20 commits
 
-- `e60156a` 2026-11-13 07:22 Codex: fix: match dark canvas page colours to the reference
-- `5621492` 2026-11-13 07:13 Codex: docs: claim reference page appearance correction
-- `a524894` 2026-11-13 07:15 Alux7: docs: claim reference page appearance correction
-- `fc518a5` 2026-11-10 08:45 Claude: One workflow for every installer: exe, AppImage, deb, rpm
-- `6304063` 2026-11-10 01:53 Claude: Request a Linux AppImage [appimage]
-- `018e45e` 2026-11-10 01:53 Claude: Linux AppImage on request, checked offline on Fedora
-- `0558bc5` 2026-10-31 10:51 Claude: Build Windows exe [exe]
-- `126cf34` 2026-10-31 10:49 Claude: Light active tool icon on the lit blue; agent review lessons
-- `de92ee4` 2026-10-31 06:45 alefe7z: ui: fix all six toolbar icon review findings
-- `5c335d2` 2026-10-31 06:18 alefe7z: docs: claim fixes for Claude's toolbar icon review
-- `5d42820` 2026-10-31 09:13 Claude: Add icon and toolbar rules for agents; ask Codex to fix the SVG icons
-- `b6f1017` 2026-10-31 06:10 alefe7z: docs: record validated toolbar SVG integration and handoff
-- `3852d84` 2026-10-30 16:40 alefe7z: test: fix toolbar capture for egui 0.36 and apply rustfmt
-- `bf6c5e4` 2026-10-30 16:35 alefe7z: ui: integrate reference SVG artwork into live toolbar controls
-- `86dd51b` 2026-10-30 16:31 alefe7z: docs: claim reference toolbar SVG integration
+- `4396a68d` 2026-11-26 09:28 Codex: docs: hand off upstream update and segment delete to Claude
+- `55fe6c5e` 2026-11-25 12:54 Alux7: Request installers [exe]
+- `3d4ac694` 2026-11-13 07:23 Alux7: fix: match dark canvas page colours to the reference
+- `a5248948` 2026-11-13 07:15 Alux7: docs: claim reference page appearance correction
+- `fc518a5d` 2026-11-10 08:45 Claude: One workflow for every installer: exe, AppImage, deb, rpm
+- `63040635` 2026-11-10 01:53 Claude: Request a Linux AppImage [appimage]
+- `018e45ee` 2026-11-10 01:53 Claude: Linux AppImage on request, checked offline on Fedora
+- `0558bc52` 2026-10-31 10:51 Claude: Build Windows exe [exe]
+- `126cf34f` 2026-10-31 10:49 Claude: Light active tool icon on the lit blue; agent review lessons
+- `de92ee4c` 2026-10-31 06:45 alefe7z: ui: fix all six toolbar icon review findings
+- `5c335d2c` 2026-10-31 06:18 alefe7z: docs: claim fixes for Claude's toolbar icon review
+- `5d428207` 2026-10-31 09:13 Claude: Add icon and toolbar rules for agents; ask Codex to fix the SVG icons
+- `b6f10171` 2026-10-31 06:10 alefe7z: docs: record validated toolbar SVG integration and handoff
+- `3852d84d` 2026-10-30 16:40 alefe7z: test: fix toolbar capture for egui 0.36 and apply rustfmt
+- `bf6c5e47` 2026-10-30 16:35 alefe7z: ui: integrate reference SVG artwork into live toolbar controls
+- `86dd51b1` 2026-10-30 16:31 alefe7z: docs: claim reference toolbar SVG integration
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (4)
+- `docs/agents/CONTEXT.md` (5)
 - `scripts/request-appimage.sh` (2)
 - `docs/linux-appimage.md` (2)
 - `CLAUDE.md` (2)
@@ -50,8 +51,11 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Open claims (from CONTEXT.md)
 
-None.
+| Agent | Area / files | Since | Note |
+| --- | --- | --- | --- |
+| Claude | Merge of upstream `main` v0.53.0 into this branch (whole tree), then the bottom bar (page row, document palette: `ui/window_bars.rs`, `ui/palette.rs`) | 2026-11-26 | Owner's order. One merge commit, no rebase of pushed history; keep `3c3d92c4` open-end fix |
 
 ## Uncommitted when generated
 
+    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp

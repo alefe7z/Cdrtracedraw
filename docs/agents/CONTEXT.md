@@ -97,6 +97,7 @@ done.
 
 | Agent | Area / files | Since | Note |
 | --- | --- | --- | --- |
+| Claude | Merge of upstream `main` v0.53.0 into this branch (whole tree), then the bottom bar (page row, document palette: `ui/window_bars.rs`, `ui/palette.rs`) | 2026-11-26 | Owner's order. One merge commit, no rebase of pushed history; keep `3c3d92c4` open-end fix |
 
 ## Notes for other agents
 
