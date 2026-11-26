@@ -4,11 +4,12 @@ Written by `scripts/update-context.sh` on every commit; do not
 edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 - Branch: `claude/rebrand-cd-draw`
-- Last commit before this one: `4396a68d docs: hand off upstream update and segment delete to Claude`
-- Commits on the branch: 156
+- Last commit before this one: `219939a7 Claim the v0.53.0 upstream merge and the bottom bar`
+- Commits on the branch: 157
 
 ## Last 20 commits
 
+- `219939a7` 2026-11-26 12:38 Claude: Claim the v0.53.0 upstream merge and the bottom bar
 - `4396a68d` 2026-11-26 09:28 Codex: docs: hand off upstream update and segment delete to Claude
 - `55fe6c5e` 2026-11-25 12:54 Alux7: Request installers [exe]
 - `3d4ac694` 2026-11-13 07:23 Alux7: fix: match dark canvas page colours to the reference
@@ -24,11 +25,10 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 - `b6f10171` 2026-10-31 06:10 alefe7z: docs: record validated toolbar SVG integration and handoff
 - `3852d84d` 2026-10-30 16:40 alefe7z: test: fix toolbar capture for egui 0.36 and apply rustfmt
 - `bf6c5e47` 2026-10-30 16:35 alefe7z: ui: integrate reference SVG artwork into live toolbar controls
-- `86dd51b1` 2026-10-30 16:31 alefe7z: docs: claim reference toolbar SVG integration
 
 ## Files changed in the last 10 commits
 
-- `docs/agents/CONTEXT.md` (5)
+- `docs/agents/CONTEXT.md` (6)
 - `scripts/request-appimage.sh` (2)
 - `docs/linux-appimage.md` (2)
 - `CLAUDE.md` (2)
@@ -57,5 +57,4 @@ edit by hand. The hand-written context is `docs/agents/CONTEXT.md`.
 
 ## Uncommitted when generated
 
-    M  docs/agents/CONTEXT.md
     ?? docs/agents/STATUS.md.tmp
