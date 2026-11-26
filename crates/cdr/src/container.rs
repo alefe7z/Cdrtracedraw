@@ -1,244 +1,18 @@
-//! Container detection: bare RIFF, or ZIP wrapping a RIFF stream.
+//! The members of a `.cdr` package that become parts of the document:
+//! the colour profile, the embedded fonts, the document palette and the
+//! page preview. Detecting the container and reading its streams is
+//! [`tracedraw_cdr_format::container`], re-exported here whole so every
+//! path through `tracedraw_cdr::container` stays the same.
 
-use crate::{Error, Result};
+pub use tracedraw_cdr_format::container::*;
+
 use std::io::Read;
 use tracedraw_core::Color;
-
-/// CDR major version, as encoded in the RIFF form type (`CDR9`,
-/// `CDRA` = 10, ... `CDRE` = 14, `CDRH` = 17, `CDRJ` = 18,
-/// `CDRK` = 19, and so on; the letter `I` is not used).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Version(pub u16);
-
-impl Version {
-    pub fn from_form_type(form: &[u8; 4]) -> Option<Version> {
-        let c = form[3];
-        // Templates carry `CDT` and their own letters: `CDTQ` holds a
-        // version 21 template (its `vrsn` 2100). The `vrsn` chunk, read
-        // later, has the last word.
-        if &form[..3] == b"CDT" {
-            return match c {
-                b'A'..=b'Z' => Some(Version(5 + (c - b'A') as u16)),
-                _ => None,
-            };
-        }
-        if &form[..3] != b"CDR" && &form[..3] != b"cdr" {
-            return None;
-        }
-        // Digits are versions 1 to 9; letters continue from `A` = 10 with
-        // `I` skipped: `H` = 17, `J` = 18, `N` = 22, `O` = 23. From there
-        // some updates took a letter of their own: `P` = 24, `Q` = 24 (its
-        // later update), `R` = 25, `S` = 25 (update), `T` = 26, `U` = 27.
-        // Version 3 files carry a space. The `vrsn` chunk has the last word.
-        match c {
-            b' ' => Some(Version(3)),
-            b'1'..=b'9' => Some(Version((c - b'0') as u16)),
-            b'A'..=b'H' => Some(Version(10 + (c - b'A') as u16)),
-            b'J'..=b'O' => Some(Version(9 + (c - b'A') as u16)),
-            b'P' | b'Q' => Some(Version(24)),
-            b'R' | b'S' => Some(Version(25)),
-            b'T'..=b'Z' => Some(Version(26 + (c - b'T') as u16)),
-            _ => None,
-        }
-    }
-
-    /// Human name: 9 → "CDR version 9", 21 → "CDR version 21".
-    pub fn name(self) -> String {
-        match self.0 {
-            0 => "CDR (unknown version)".into(),
-            v => format!("CDR version {v}"),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Container {
-    pub kind: ContainerKind,
-    pub version: Version,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContainerKind {
-    Riff,
-    /// ZIP archive; the RIFF stream is the named member. version 16 and later
-    /// store most chunk payloads outside the RIFF stream, in the members
-    /// listed by `content/dataFileList.dat` (`data_files`, in that order).
-    Zip {
-        riff_member: String,
-        data_files: Vec<String>,
-    },
-}
-
-const RIFF_MEMBERS: &[&str] = &[
-    "content/riffData.cdr",
-    "content/riffdata.cdr",
-    "riffData.cdr",
-    "content/root.dat",
-];
-
-const DATA_FILE_LIST: &str = "content/dataFileList.dat";
-
-pub fn detect(bytes: &[u8]) -> Result<Container> {
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" {
-        let form: [u8; 4] = bytes[8..12].try_into().map_err(|_| Error::NotCdr)?;
-        let version = Version::from_form_type(&form).ok_or(Error::NotCdr)?;
-        return Ok(Container {
-            kind: ContainerKind::Riff,
-            version,
-        });
-    }
-    if bytes.len() >= 4 && &bytes[0..4] == b"PK\x03\x04" {
-        let cursor = std::io::Cursor::new(bytes);
-        let mut archive = zip::ZipArchive::new(cursor)?;
-        let member = RIFF_MEMBERS
-            .iter()
-            .find(|m| archive.by_name(m).is_ok())
-            .map(|m| m.to_string())
-            .or_else(|| {
-                archive
-                    .file_names()
-                    .find(|n| n.to_ascii_lowercase().ends_with("riffdata.cdr"))
-                    .map(String::from)
-            })
-            .ok_or_else(|| {
-                Error::UnsupportedContainer("ZIP without a riffData.cdr member".into())
-            })?;
-        let mut head = [0u8; 12];
-        {
-            let mut f = archive.by_name(&member)?;
-            f.read_exact(&mut head).map_err(|_| Error::Truncated(0))?;
-        }
-        if &head[0..4] != b"RIFF" {
-            return Err(Error::UnsupportedContainer(format!(
-                "{member} is not a RIFF stream"
-            )));
-        }
-        let form: [u8; 4] = head[8..12].try_into().map_err(|_| Error::NotCdr)?;
-        let version = Version::from_form_type(&form).ok_or(Error::NotCdr)?;
-        // version 16+: the order of external data streams.
-        let mut data_files = Vec::new();
-        if let Ok(mut list) = archive.by_name(DATA_FILE_LIST) {
-            let mut text = String::new();
-            if list.read_to_string(&mut text).is_ok() {
-                data_files = text
-                    .lines()
-                    .map(|l| l.trim().to_string())
-                    .filter(|l| !l.is_empty())
-                    .collect();
-            }
-        }
-        return Ok(Container {
-            kind: ContainerKind::Zip {
-                riff_member: member,
-                data_files,
-            },
-            version,
-        });
-    }
-    Err(Error::NotCdr)
-}
-
-/// The RIFF stream as a contiguous byte vector.
-pub fn riff_stream(bytes: &[u8], container: &Container) -> Result<Vec<u8>> {
-    match &container.kind {
-        ContainerKind::Riff => Ok(bytes.to_vec()),
-        ContainerKind::Zip { riff_member, .. } => {
-            let cursor = std::io::Cursor::new(bytes);
-            let mut archive = zip::ZipArchive::new(cursor)?;
-            let f = archive.by_name(riff_member)?;
-            // The size the archive claims is not trusted for the
-            // allocation, and what inflates past the limit is cut off.
-            let mut out = Vec::with_capacity(f.size().min(MAX_STREAM) as usize);
-            f.take(MAX_STREAM).read_to_end(&mut out)?;
-            if out.len() as u64 >= MAX_STREAM {
-                log::warn!("{riff_member} inflates past {MAX_STREAM} bytes; cut off there");
-            }
-            Ok(out)
-        }
-    }
-}
-
-/// The external data streams of an version 16+ file, in `dataFileList.dat` order.
-/// A missing member yields an empty stream so indices stay aligned.
-pub fn external_streams(bytes: &[u8], container: &Container) -> Vec<Vec<u8>> {
-    let ContainerKind::Zip { data_files, .. } = &container.kind else {
-        return Vec::new();
-    };
-    data_files
-        .iter()
-        .map(|name| {
-            external_member(bytes, container, name).unwrap_or_else(|| {
-                log::warn!("data stream {name} listed but missing from the archive");
-                Vec::new()
-            })
-        })
-        .collect()
-}
-
-/// Read an external data member (`content/data/<name>`) from a ZIP file.
-/// Returns None for a RIFF container or a missing member.
-pub fn external_member(bytes: &[u8], container: &Container, name: &str) -> Option<Vec<u8>> {
-    if container.kind == ContainerKind::Riff {
-        return None;
-    }
-    let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).ok()?;
-    let candidates = [
-        format!("content/data/{name}"),
-        format!("content/{name}"),
-        name.to_string(),
-    ];
-    for c in candidates {
-        if let Ok(f) = archive.by_name(&c) {
-            // The member's own size, as the archive declares it, within
-            // the ceiling: a drawing of large bitmaps declares its
-            // `Bitmaps.dat` honestly (850 MB in a version 27 file of two
-            // pictures on a 1.5 m page, #323), a bomb claims less than it
-            // inflates to and stops there.
-            let declared = f.size();
-            let limit = member_limit(declared);
-            let mut out = Vec::new();
-            if f.take(limit).read_to_end(&mut out).is_ok() {
-                if cut_short(out.len() as u64, limit, declared) {
-                    log::warn!("{c} inflates past {limit} bytes; cut off there");
-                }
-                return Some(out);
-            }
-        }
-    }
-    None
-}
 
 /// Embedded members larger than this are skipped (fonts are far smaller;
 /// this keeps a damaged size from taking all memory).
 const MAX_EMBEDDED: u64 = 64 << 20;
 
-/// The most a member of the package (the RIFF stream, a data stream) or
-/// one compressed block may inflate to: a file that claims more is a
-/// decompression bomb or damaged, and is read only up to here.
-pub(crate) const MAX_STREAM: u64 = 512 << 20;
-
-/// The most an external data member may inflate to when the archive
-/// declares it that large (the bitmaps of a big drawing).
-pub(crate) const MAX_DATA_STREAM: u64 = 3 << 30;
-
-/// How far a data member declared `declared` bytes long may inflate:
-/// [`MAX_STREAM`] at least, its declared size up to [`MAX_DATA_STREAM`].
-pub(crate) fn member_limit(declared: u64) -> u64 {
-    declared.clamp(MAX_STREAM, MAX_DATA_STREAM)
-}
-
-/// Whether a member read to `len` bytes under `limit` was cut off: it
-/// filled the limit while claiming another size (a bomb inflating past
-/// what it declares, or a member larger than the ceiling).
-pub(crate) fn cut_short(len: u64, limit: u64, declared: u64) -> bool {
-    len >= limit && declared != limit
-}
-
-/// The CMYK colour profile a version 14+ ZIP file carries (a member
-/// under `color/profiles/cmyk/`, seen in version 17 to 21 files next to
-/// `color/color.xml`, which names it), when it reads as an ICC profile.
-/// `None` for RIFF files and files without one.
 /// The picture of the first page a ZIP container keeps (`previews/` from
 /// version 17, `metadata/thumbnails/` before), when there is one.
 pub fn page_preview(bytes: &[u8], container: &Container) -> Option<crate::spot::Preview> {
@@ -264,6 +38,35 @@ pub fn page_preview(bytes: &[u8], container: &Container) -> Option<crate::spot::
     None
 }
 
+/// The document's primary colour mode, from the `ColorModel` of the
+/// `color/color.xml` member of a ZIP file (`Rgb` or `Cmyk`): what an
+/// RGB document saved its drawing as (#3425). `None` for RIFF files and
+/// files that do not name one.
+pub fn primary_color_mode(
+    bytes: &[u8],
+    container: &Container,
+) -> Option<tracedraw_core::document::PrimaryColorMode> {
+    use tracedraw_core::document::PrimaryColorMode;
+    if container.kind == ContainerKind::Riff {
+        return None;
+    }
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
+    let f = archive.by_name("color/color.xml").ok()?;
+    let mut xml = String::new();
+    f.take(MAX_PROFILE).read_to_string(&mut xml).ok()?;
+    let start = xml.find("<ColorModel>")? + "<ColorModel>".len();
+    let end = start + xml[start..].find("</ColorModel>")?;
+    match xml[start..end].trim().to_ascii_lowercase().as_str() {
+        "rgb" => Some(PrimaryColorMode::Rgb),
+        "cmyk" => Some(PrimaryColorMode::Cmyk),
+        _ => None,
+    }
+}
+
+/// The CMYK colour profile a version 14+ ZIP file carries (a member
+/// under `color/profiles/cmyk/`, seen in version 17 to 21 files next to
+/// `color/color.xml`, which names it), when it reads as an ICC profile.
+/// `None` for RIFF files and files without one.
 pub fn cmyk_profile(
     bytes: &[u8],
     container: &Container,
@@ -274,6 +77,7 @@ pub fn cmyk_profile(
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
     let mut names: Vec<String> = archive
         .file_names()
+        .filter_map(|n| n.ok())
         .filter(|n| {
             let lower = n.to_ascii_lowercase();
             lower.starts_with("color/profiles/cmyk/")
@@ -335,6 +139,7 @@ pub fn embedded_fonts(
     const NOT_FONTS: [&str; 7] = [".png", ".curve", ".jpg", ".jpeg", ".bmp", ".xml", ".json"];
     let mut names: Vec<String> = archive
         .file_names()
+        .filter_map(|n| n.ok())
         .filter(|n| {
             let lower = n.to_ascii_lowercase();
             lower.starts_with("embed/")
@@ -366,7 +171,14 @@ pub fn embedded_fonts(
         match member.get(at..).map(crate::eot::read) {
             Some(Ok(font)) => {
                 if !fonts.iter().any(|f| f.data.as_slice() == font.data) {
-                    fonts.push(tracedraw_core::DocumentFont::new(font.family, font.data));
+                    // A face embedded under its vertical name (`@` and the
+                    // name, a version 22 file of #3217) is the face of
+                    // that name: vertical text names it without the `@`.
+                    let family = match font.family.strip_prefix('@') {
+                        Some(name) if !name.is_empty() => name.to_string(),
+                        _ => font.family,
+                    };
+                    fonts.push(tracedraw_core::DocumentFont::new(family, font.data));
                 }
             }
             Some(Err(e)) => notes.push(format!("embedded font in {name}: {e}")),
@@ -463,13 +275,183 @@ pub fn parse_palette_xml(xml: &str) -> Vec<(String, Color)> {
                 q: *q,
             },
             ("REGISTRATION", _) => Color::Registration,
-            _ => {
-                log::warn!("document palette colour {name:?} in {cs:?} skipped");
-                continue;
-            }
+            // A colour of a named library or ink (#4229): `cs` is then the
+            // ink's name ("PANTONE 443 C") or a written value
+            // ("C:61 M:0 Y:51 K:0", "R:255 G:0 B:0"). The written value
+            // gives the colour; otherwise four tints are CMYK and three RGB.
+            _ => match spec_color(&cs)
+                .or_else(|| spec_color(&name.to_ascii_uppercase()))
+                .or(match tints.as_slice() {
+                    [c, m, y, k] => Some(Color::Cmyk {
+                        c: *c,
+                        m: *m,
+                        y: *y,
+                        k: *k,
+                    }),
+                    [r, g, b] => Some(Color::Rgb {
+                        r: *r,
+                        g: *g,
+                        b: *b,
+                    }),
+                    // A single value is the ink's tint, not its colour.
+                    _ => None,
+                }) {
+                Some(c) => c,
+                None => {
+                    log::warn!("document palette colour {name:?} in {cs:?} skipped");
+                    continue;
+                }
+            },
         };
         out.push((name, color));
     }
+    out
+}
+
+/// A colour written out as its values, `C:61 M:0 Y:51 K:0` (percent) or
+/// `R:255 G:0 B:0` (0 to 255), upper case; `None` for anything else.
+fn spec_color(spec: &str) -> Option<Color> {
+    let mut vals = std::collections::BTreeMap::new();
+    for part in spec.split(|c: char| c.is_whitespace() || c == ',') {
+        let Some((k, v)) = part.split_once(':') else {
+            continue;
+        };
+        let v = v.trim().parse::<f32>().ok().filter(|v| v.is_finite())?;
+        let k = k.trim();
+        if k.len() != 1 {
+            return None;
+        }
+        vals.insert(k.chars().next()?, v);
+    }
+    let get = |k: char, full: f32| vals.get(&k).map(|v| (v / full).clamp(0.0, 1.0));
+    match vals.len() {
+        4 => Some(Color::Cmyk {
+            c: get('C', 100.0)?,
+            m: get('M', 100.0)?,
+            y: get('Y', 100.0)?,
+            k: get('K', 100.0)?,
+        }),
+        3 => Some(Color::Rgb {
+            r: get('R', 255.0)?,
+            g: get('G', 255.0)?,
+            b: get('B', 255.0)?,
+        }),
+        _ => None,
+    }
+}
+
+/// The document information a ZIP file keeps in the XMP packet of
+/// `META-INF/metadata.xml` (#3411): author, subject, keywords, copyright,
+/// notes and rating, under the standard XMP properties TraceDraw writes
+/// there (`dc:creator`, `dc:description`, `dc:subject`, `dc:rights`,
+/// `exif:UserComment`, `xmp:Rating`). Fields the file leaves out stay
+/// empty. `None` for RIFF files and files without the member.
+pub fn document_info(bytes: &[u8], container: &Container) -> Option<DocumentInfo> {
+    if container.kind == ContainerKind::Riff {
+        return None;
+    }
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
+    let f = archive.by_name("META-INF/metadata.xml").ok()?;
+    let mut xml = String::new();
+    f.take(MAX_PROFILE).read_to_string(&mut xml).ok()?;
+    Some(parse_document_info(&xml))
+}
+
+/// The document information of a file, as [`document_info`] reads it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DocumentInfo {
+    pub author: String,
+    pub subject: String,
+    pub keywords: String,
+    pub copyright: String,
+    pub notes: String,
+    pub rating: u8,
+}
+
+/// [`DocumentInfo`] out of an XMP packet.
+pub fn parse_document_info(xml: &str) -> DocumentInfo {
+    DocumentInfo {
+        author: xmp_values(xml, "dc:creator").join("; "),
+        subject: xmp_values(xml, "dc:description").join(" "),
+        keywords: xmp_values(xml, "dc:subject").join(", "),
+        copyright: xmp_values(xml, "dc:rights").join(" "),
+        notes: xmp_values(xml, "exif:UserComment").join(" "),
+        rating: xmp_values(xml, "xmp:Rating")
+            .first()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|r| r.is_finite())
+            .map(|r| r.clamp(0.0, 5.0).round() as u8)
+            .unwrap_or(0),
+    }
+}
+
+/// The values of XMP property `name`: the items of its `rdf:Seq`,
+/// `rdf:Bag` or `rdf:Alt`, or its text, or its value written as an
+/// attribute of `rdf:Description`; entities decoded, blanks left out.
+fn xmp_values(xml: &str, name: &str) -> Vec<String> {
+    let decode = |v: &str| {
+        v.replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+            .trim()
+            .to_string()
+    };
+    let open = format!("<{name}");
+    let close = format!("</{name}>");
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(at) = rest.find(&open) {
+        let after = &rest[at + open.len()..];
+        // The whole name, not the start of a longer one.
+        if !after.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace()) {
+            rest = after;
+            continue;
+        }
+        let Some(gt) = after.find('>') else { break };
+        if after[..gt].ends_with('/') {
+            rest = &after[gt + 1..];
+            continue;
+        }
+        let body_start = gt + 1;
+        let Some(len) = after[body_start..].find(&close) else {
+            break;
+        };
+        let body = &after[body_start..body_start + len];
+        if body.contains("<rdf:li") {
+            let mut items = body;
+            while let Some(li) = items.find("<rdf:li") {
+                let tail = &items[li..];
+                let Some(gt) = tail.find('>') else { break };
+                if tail[..gt].ends_with('/') {
+                    items = &tail[gt + 1..];
+                    continue;
+                }
+                let Some(end) = tail[gt + 1..].find("</rdf:li>") else {
+                    break;
+                };
+                out.push(decode(&tail[gt + 1..gt + 1 + end]));
+                items = &tail[gt + 1 + end..];
+            }
+        } else if !body.contains('<') {
+            out.push(decode(body));
+        }
+        rest = &after[body_start + len..];
+    }
+    // `xmp:Rating="3"` on the description itself.
+    if out.is_empty() {
+        let mut rest = xml;
+        while let Some(at) = rest.find("<rdf:Description") {
+            let tail = &rest[at..];
+            let Some(gt) = tail.find('>') else { break };
+            if let Some(v) = attribute(&tail[..gt], name) {
+                out.push(v.trim().to_string());
+            }
+            rest = &tail[gt..];
+        }
+    }
+    out.retain(|v| !v.is_empty());
     out
 }
 
@@ -499,29 +481,45 @@ fn attribute(tag: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    /// A data member inflates to the size the archive declares for it,
-    /// within the ceiling (a big drawing's bitmaps, #323), and never
-    /// below the plain limit; it is cut short when it fills the limit
-    /// while claiming another size.
-    #[test]
-    fn data_members_inflate_to_their_declared_size_within_the_ceiling() {
-        assert_eq!(super::member_limit(1 << 20), super::MAX_STREAM);
-        assert_eq!(super::member_limit(851_688_712), 851_688_712);
-        assert_eq!(super::member_limit(5 << 30), super::MAX_DATA_STREAM);
-        // Read whole: not cut.
-        assert!(!super::cut_short(851_688_712, 851_688_712, 851_688_712));
-        assert!(!super::cut_short(100, super::MAX_STREAM, 100));
-        // A member claiming 100 bytes that fills the plain limit: a bomb.
-        assert!(super::cut_short(super::MAX_STREAM, super::MAX_STREAM, 100));
-        // Past the ceiling: cut there.
-        assert!(super::cut_short(
-            super::MAX_DATA_STREAM,
-            super::MAX_DATA_STREAM,
-            5 << 30
-        ));
-    }
 
     use super::*;
+
+    /// #3411: author, subject, keywords, copyright, notes and rating go
+    /// into the XMP packet of a saved file and come back when it opens;
+    /// they were neither written nor read.
+    #[test]
+    fn document_information_goes_out_and_comes_back() {
+        let mut doc = tracedraw_core::Document::default();
+        doc.title = "Poster".into();
+        doc.metadata.author = "Ana & Rui".into();
+        doc.metadata.subject = "Spring fair".into();
+        doc.metadata.keywords = "fair, poster; spring".into();
+        doc.metadata.copyright = "(c) 2026 Ana".into();
+        doc.metadata.notes = "Print on <A3>".into();
+        doc.metadata.rating = 4;
+        for v in [17u16, 25] {
+            let bytes = crate::write::document_to_cdr_version(&doc, v);
+            let (back, _) = crate::open_bytes(&bytes, "file").expect("opens");
+            let md = &back.metadata;
+            assert_eq!(md.author, "Ana & Rui", "{v}");
+            assert_eq!(md.subject, "Spring fair");
+            assert_eq!(md.keywords, "fair, poster, spring");
+            assert_eq!(md.copyright, "(c) 2026 Ana");
+            assert_eq!(md.notes, "Print on <A3>");
+            assert_eq!(md.rating, 4);
+        }
+        // A packet of another writer: one creator per list item, the
+        // rating as an attribute, nothing else.
+        let xml = r#"<x:xmpmeta><rdf:RDF><rdf:Description rdf:about="" xmp:Rating="5"><dc:creator><rdf:Seq><rdf:li>A</rdf:li><rdf:li>B</rdf:li></rdf:Seq></dc:creator><dc:creatorTool>x</dc:creatorTool></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let info = parse_document_info(xml);
+        assert_eq!(info.author, "A; B");
+        assert_eq!(info.rating, 5);
+        assert_eq!(info.keywords, "");
+        // Damaged packets give what they can and never fail.
+        for bad in ["<dc:creator><rdf:li>x", "<dc:subject/>", "<dc:rights>", ""] {
+            let _ = parse_document_info(bad);
+        }
+    }
 
     #[test]
     fn document_palette_xml_reads_names_and_tints() {
@@ -580,6 +578,52 @@ mod tests {
     }
 
     #[test]
+    fn document_palette_reads_library_and_written_colours() {
+        let xml = r#"<color name="PANTONE 443 C" cs="PANTONE 443 C" tints="0.1,0.2,0.3,0.4"/>
+<color name="C:61 M:0 Y:51 K:0" cs="C:61 M:0 Y:51 K:0" tints=""/>
+<color name="R:255 G:0 B:0" cs="R:255 G:0 B:0"/>
+<color name="Ink" cs="Spot Ink" tints="0.5,0.25,1"/>
+<color name="Odd" cs="Something" tints="0.5,0.5"/>"#;
+        let p = parse_palette_xml(xml);
+        assert_eq!(p.len(), 4);
+        assert_eq!(p[0].0, "PANTONE 443 C");
+        assert_eq!(
+            p[0].1,
+            Color::Cmyk {
+                c: 0.1,
+                m: 0.2,
+                y: 0.3,
+                k: 0.4
+            }
+        );
+        assert_eq!(
+            p[1].1,
+            Color::Cmyk {
+                c: 0.61,
+                m: 0.0,
+                y: 0.51,
+                k: 0.0
+            }
+        );
+        assert_eq!(
+            p[2].1,
+            Color::Rgb {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0
+            }
+        );
+        assert_eq!(
+            p[3].1,
+            Color::Rgb {
+                r: 0.5,
+                g: 0.25,
+                b: 1.0
+            }
+        );
+    }
+
+    #[test]
     fn broken_palette_xml_yields_what_it_can() {
         assert!(parse_palette_xml("").is_empty());
         assert!(parse_palette_xml("<color cs=\"CMYK\" tints=\"a,b,c,d\"").is_empty());
@@ -593,51 +637,6 @@ mod tests {
                 k: 0.0
             }
         );
-    }
-
-    #[test]
-    fn version_letters() {
-        assert_eq!(Version::from_form_type(b"CDR9"), Some(Version(9)));
-        assert_eq!(Version::from_form_type(b"CDR "), Some(Version(3)));
-        assert_eq!(Version::from_form_type(b"CDRD"), Some(Version(13)));
-        assert_eq!(Version::from_form_type(b"CDRH"), Some(Version(17)));
-        // `I` is not used; `J` is version 18 and `K` is 19.
-        assert_eq!(Version::from_form_type(b"CDRI"), None);
-        assert_eq!(Version::from_form_type(b"CDRJ"), Some(Version(18)));
-        assert_eq!(Version::from_form_type(b"CDRN"), Some(Version(22)));
-        // Files saved in each version from 23 to 27 (and two updates).
-        assert_eq!(Version::from_form_type(b"CDRO"), Some(Version(23)));
-        assert_eq!(Version::from_form_type(b"CDRP"), Some(Version(24)));
-        assert_eq!(Version::from_form_type(b"CDRQ"), Some(Version(24)));
-        assert_eq!(Version::from_form_type(b"CDRR"), Some(Version(25)));
-        assert_eq!(Version::from_form_type(b"CDRS"), Some(Version(25)));
-        assert_eq!(Version::from_form_type(b"CDRT"), Some(Version(26)));
-        assert_eq!(Version::from_form_type(b"CDRU"), Some(Version(27)));
-        assert_eq!(
-            Version::from_form_type(b"CDRK").map(|v| v.name()),
-            Some("CDR version 19".to_string())
-        );
-        assert_eq!(Version::from_form_type(b"cdr8"), Some(Version(8)));
-        assert_eq!(Version(13).name(), "CDR version 13");
-        assert_eq!(Version::from_form_type(b"WAVE"), None);
-        // Templates.
-        assert_eq!(Version::from_form_type(b"CDTQ"), Some(Version(21)));
-        assert_eq!(Version::from_form_type(b"CDT1"), None);
-    }
-
-    #[test]
-    fn detects_riff() {
-        let mut b = b"RIFF".to_vec();
-        b.extend_from_slice(&4u32.to_le_bytes());
-        b.extend_from_slice(b"CDRC");
-        let c = detect(&b).unwrap();
-        assert_eq!(c.kind, ContainerKind::Riff);
-        assert_eq!(c.version, Version(12));
-    }
-
-    #[test]
-    fn rejects_garbage() {
-        assert!(matches!(detect(b"hello world!"), Err(Error::NotCdr)));
     }
 
     /// The bundled interface font (SIL Open Font License).

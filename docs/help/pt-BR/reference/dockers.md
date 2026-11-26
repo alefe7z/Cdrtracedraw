@@ -6,6 +6,10 @@ Abra-os em [[menu.window > menu.window.dockers]], com o atalho deles, ou com o
 direito da janela (o lado esquerdo em idiomas da direita para a esquerda). Esta
 página lista cada painel e a página que o explica.
 
+Solte a aba de um painel na parte de baixo de um painel aberto para mostrar os
+dois um acima do outro. A aba do painel de baixo vai para o fim das abas, e um
+clique em qualquer das duas abas fecha e abre a coluna sem desfazer a divisão.
+
 | Painel | Tecla | Página |
 |---|---|---|
 | [[docker.properties]] | <kbd>Alt+Enter</kbd> | [→](../objects/properties-docker.md) |
@@ -13,7 +17,7 @@ página lista cada painel e a página que o explica.
 | [[docker.hints]] |  | [→](../get-started/hints.md) |
 | [[docker.transformations]] | <kbd>Alt+F7</kbd> | [→](../objects/transforming.md#transformations-docker) |
 | [[docker.undo]] |  | [→](../get-started/undo-and-views.md#undo-docker) |
-| [[docker.align_distribute]] | <kbd>Ctrl+Shift+A</kbd> | [→](../objects/align-distribute.md) |
+| [[docker.align_distribute]] |  | [→](../objects/align-distribute.md) |
 | [[docker.shaping]] |  | [→](../lines-shapes/shaping.md) |
 | [[docker.step_and_repeat]] | <kbd>Ctrl+Shift+D</kbd> | [→](../objects/step-and-repeat.md) |
 | [[docker.text]] | <kbd>Ctrl+T</kbd> | [→](../text/adding-text.md#text-docker) |
@@ -56,6 +60,10 @@ página lista cada painel e a página que o explica.
 - O botão de fechar na barra de título de um painel o tira das abas; o botão de
   recolher dobra a área dos painéis.
 - Os painéis que você deixa abertos voltam na próxima vez que o CD Draw
+  recolher dobra a área dos painéis;
+  as setas dele apontam para o lado da janela para onde ela se dobra (para a
+  esquerda nos painéis encaixados à esquerda).
+- Os painéis que você deixa abertos voltam na próxima vez que o TraceDraw
   inicia.
 - Os atalhos dos painéis alternam: pressionar um quando o painel dele está na
   frente oculta os painéis.

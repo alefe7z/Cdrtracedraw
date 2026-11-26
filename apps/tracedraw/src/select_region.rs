@@ -153,12 +153,24 @@ fn children_on_page(g: &Shape) -> Vec<Shape> {
             .filter(|c| c.visible)
             .map(|c| {
                 let mut c = c.clone();
-                c.transform = g.transform * c.transform;
+                c.transform_by(g.transform);
                 c
             })
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// How a region takes an object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Take {
+    /// The object lies wholly inside the region, or the region crosses
+    /// or holds part of its outline.
+    Outline,
+    /// The whole region lies inside the object, touching no part of its
+    /// outline: in its fill, or in the box of a text, a bitmap and the
+    /// like.
+    Within,
 }
 
 /// The region takes `s` (in page space): wholly inside it, or with
@@ -171,6 +183,59 @@ pub fn takes(
     touching: bool,
     fill_counts: &dyn Fn(&Shape) -> bool,
 ) -> bool {
+    takes_how(region, s, touching, fill_counts).is_some()
+}
+
+/// The objects of `shapes` (in page space) a selection drag over
+/// `region` takes, by their place in `shapes`. A touching drag that
+/// crosses or holds the outline of some object leaves out the objects
+/// it merely lies in (#1503): a frame drawn round a small object over,
+/// or hidden behind, a larger filled one takes the small object alone.
+/// A drag that touches no outline at all takes the objects it lies in,
+/// as before.
+pub fn taken(
+    region: Region,
+    shapes: &[Shape],
+    touching: bool,
+    fill_counts: &dyn Fn(&Shape) -> bool,
+) -> Vec<usize> {
+    let how: Vec<Option<Take>> = shapes
+        .iter()
+        .map(|s| takes_how(region, s, touching, fill_counts))
+        .collect();
+    let by_outline = how.contains(&Some(Take::Outline));
+    how.iter()
+        .enumerate()
+        .filter(|(_, h)| match h {
+            Some(Take::Outline) => true,
+            Some(Take::Within) => !by_outline,
+            None => false,
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// [`takes`], with how: by the object's outline, or only by lying
+/// inside it.
+pub fn takes_how(
+    region: Region,
+    s: &Shape,
+    touching: bool,
+    fill_counts: &dyn Fn(&Shape) -> bool,
+) -> Option<Take> {
+    // Of several parts touched, one touched by its outline counts.
+    let any = |parts: &[Shape]| -> Option<Take> {
+        let mut found = None;
+        for q in parts {
+            match takes_how(region, q, true, fill_counts) {
+                Some(Take::Outline) => return Some(Take::Outline),
+                Some(Take::Within) => found = Some(Take::Within),
+                None => {}
+            }
+        }
+        found
+    };
+    let whole = |yes: bool| yes.then_some(Take::Outline);
     if !s.effects.is_empty() {
         // What the object draws: its warped outline and the objects its
         // effects add; wholly inside means all of them.
@@ -178,30 +243,37 @@ pub fn takes(
         let parts: Vec<Shape> = std::iter::once(ev.main)
             .chain(ev.below)
             .chain(ev.above)
+            // An object a bevelled extrusion draws among its faces is an
+            // empty path at the origin (#3227).
+            .filter(|part| !part.is_empty_path())
             .map(|mut part| {
                 part.effects.clear();
                 part
             })
             .collect();
         return if touching {
-            parts.iter().any(|q| takes(region, q, true, fill_counts))
+            any(&parts)
         } else {
-            parts.iter().all(|q| takes(region, q, false, fill_counts))
+            whole(parts.iter().all(|q| takes(region, q, false, fill_counts)))
         };
     }
     let b = s.bounds();
     if !b.x0.is_finite() || !b.y0.is_finite() || !b.x1.is_finite() || !b.y1.is_finite() {
-        return false;
+        return None;
     }
     if !touching {
-        return match region {
+        // A group lies inside when each of its shown objects does, by
+        // either marquee: the rectangle tested the group's whole box,
+        // hidden objects and all (#4136).
+        if matches!(s.kind, ShapeKind::Group { .. }) {
+            let kids = children_on_page(s);
+            return whole(
+                !kids.is_empty() && kids.iter().all(|c| takes(region, c, false, fill_counts)),
+            );
+        }
+        return whole(match region {
             Region::Rect(r) => r.contains_rect(b),
             Region::Polygon(_) => {
-                if matches!(s.kind, ShapeKind::Group { .. }) {
-                    let kids = children_on_page(s);
-                    return !kids.is_empty()
-                        && kids.iter().all(|c| takes(region, c, false, fill_counts));
-                }
                 let outline = if boxed(s) {
                     rect_path(b, 0.0)
                 } else {
@@ -210,15 +282,13 @@ pub fn takes(
                 let lines = polylines(&outline);
                 !lines.is_empty() && lines.iter().flatten().all(|p| region.contains(*p))
             }
-        };
+        });
     }
     if !overlap(region.bounds(), b) {
-        return false;
+        return None;
     }
     if matches!(s.kind, ShapeKind::Group { .. }) {
-        return children_on_page(s)
-            .iter()
-            .any(|c| takes(region, c, true, fill_counts));
+        return any(&children_on_page(s));
     }
     let (outline, inside) = if boxed(s) {
         (rect_path(b, 0.0), true)
@@ -227,7 +297,7 @@ pub fn takes(
     };
     let lines = polylines(&outline);
     if lines.iter().flatten().any(|p| region.contains(*p)) {
-        return true;
+        return Some(Take::Outline);
     }
     let edges = region.edges();
     for line in &lines {
@@ -236,12 +306,21 @@ pub fn takes(
                 .iter()
                 .any(|(c, d)| segments_meet(seg[0], seg[1], *c, *d))
             {
-                return true;
+                return Some(Take::Outline);
             }
         }
     }
-    // The whole region lies inside the object.
-    inside && region.sample().is_some_and(|p| outline.contains(p))
+    // The whole region lies inside the object; an open curve's inside is
+    // that of the curve closed across its open ends, as its fill shows
+    // (the raw path took one half of a slanted line's box, #4032). The
+    // raw path stays the outline crossed above: the closing chord is no
+    // drawn edge.
+    let inside_path = if s.kind.is_open_curve() {
+        tracedraw_core::command::close_subpaths(&outline)
+    } else {
+        outline
+    };
+    (inside && region.sample().is_some_and(|p| inside_path.contains(p))).then_some(Take::Within)
 }
 
 #[cfg(test)]
@@ -286,6 +365,92 @@ mod tests {
         assert!(takes(inside, &f, true, &filled));
     }
 
+    /// A slanted open line is taken by a touching marquee that crosses
+    /// it, not by one lying in the empty half of its box (#4032); an
+    /// open zigzag is not taken by a marquee crossing only the chord that
+    /// would close it.
+    #[test]
+    fn an_open_line_is_not_inside_the_empty_half_of_its_box() {
+        let mut path = tracedraw_core::geometry::BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((100.0, 100.0));
+        let line = Shape::new(ShapeId(1), ShapeKind::Path { path, closed: false });
+        let all = |_: &Shape| true;
+        for empty in [
+            Rect::new(70.0, 10.0, 80.0, 20.0),
+            Rect::new(10.0, 70.0, 20.0, 80.0),
+        ] {
+            assert_eq!(takes_how(Region::Rect(empty), &line, true, &all), None, "{empty:?}");
+        }
+        let across = Region::Rect(Rect::new(40.0, 45.0, 60.0, 55.0));
+        assert_eq!(takes_how(across, &line, true, &all), Some(Take::Outline));
+        // A V open at the top: the chord across the top is not an edge.
+        let mut v = tracedraw_core::geometry::BezPath::new();
+        v.move_to((0.0, 0.0));
+        v.line_to((50.0, 100.0));
+        v.line_to((100.0, 0.0));
+        let v = Shape::new(ShapeId(2), ShapeKind::Path { path: v, closed: false });
+        let on_chord = Region::Rect(Rect::new(40.0, -6.0, 60.0, 4.0));
+        assert_eq!(takes_how(on_chord, &v, true, &all), None);
+        // Inside the V (its fill as shown) it is taken as lying within.
+        let within = Region::Rect(Rect::new(45.0, 20.0, 55.0, 30.0));
+        assert_eq!(takes_how(within, &v, true, &all), Some(Take::Within));
+    }
+
+    /// A touching frame or lasso drawn round a small object that lies
+    /// over, or hidden behind, a larger filled one takes the small
+    /// object alone; drawn inside the large one and touching no outline,
+    /// it takes the large one as before (#1503).
+    #[test]
+    fn a_touching_drag_leaves_out_the_object_it_merely_lies_in() {
+        let large = rect_shape(1, Rect::new(0.0, 0.0, 100.0, 100.0), true);
+        let small = rect_shape(2, Rect::new(40.0, 40.0, 50.0, 50.0), true);
+        let far = rect_shape(3, Rect::new(200.0, 0.0, 210.0, 10.0), true);
+        let round_small = Region::Rect(Rect::new(35.0, 35.0, 55.0, 55.0));
+        assert_eq!(
+            takes_how(round_small, &large, true, &filled),
+            Some(Take::Within)
+        );
+        assert_eq!(
+            takes_how(round_small, &small, true, &filled),
+            Some(Take::Outline)
+        );
+        // The small one in front of the large one, or behind it.
+        for shapes in [
+            vec![large.clone(), small.clone(), far.clone()],
+            vec![small.clone(), large.clone(), far.clone()],
+        ] {
+            let got: Vec<u64> = taken(round_small, &shapes, true, &filled)
+                .into_iter()
+                .map(|i| shapes[i].id.0)
+                .collect();
+            assert_eq!(got, vec![2]);
+        }
+        let shapes = vec![large.clone(), small.clone(), far];
+        // Across the small one's edge only: still the small one alone.
+        let across = Region::Rect(Rect::new(45.0, 45.0, 60.0, 60.0));
+        assert_eq!(taken(across, &shapes, true, &filled), vec![1]);
+        // A lasso round the small one.
+        let lasso = [
+            Point::new(45.0, 30.0),
+            Point::new(60.0, 45.0),
+            Point::new(45.0, 60.0),
+            Point::new(30.0, 45.0),
+        ];
+        assert_eq!(
+            taken(Region::Polygon(&lasso), &shapes, true, &filled),
+            vec![1]
+        );
+        // In the large one's fill, touching no outline: the large one.
+        let in_fill = Region::Rect(Rect::new(10.0, 10.0, 20.0, 20.0));
+        assert_eq!(taken(in_fill, &shapes, true, &filled), vec![0]);
+        // Across the large one's edge too: both.
+        let both = Region::Rect(Rect::new(-5.0, 35.0, 55.0, 55.0));
+        assert_eq!(taken(both, &shapes, true, &filled), vec![0, 1]);
+        // Not touching: wholly inside only, as ever.
+        assert_eq!(taken(round_small, &shapes, false, &filled), vec![1]);
+    }
+
     #[test]
     fn a_lasso_takes_objects_wholly_inside_or_touched() {
         let s = rect_shape(1, Rect::new(10.0, 10.0, 20.0, 20.0), false);
@@ -327,6 +492,43 @@ mod tests {
         let over_b = Region::Rect(Rect::new(35.0, -5.0, 50.0, 5.0));
         assert!(takes(over_b, &g, true, &filled));
         assert!(!takes(over_b, &g, false, &filled));
+    }
+
+    /// A group of open lines is wholly inside a rectangle marquee when
+    /// each of its shown lines is, as with the lasso; a hidden member
+    /// far away no longer keeps it out (#4136).
+    #[test]
+    fn a_marquee_takes_a_group_of_lines_by_its_shown_lines() {
+        let line = |id: u64, a: (f64, f64), b: (f64, f64)| {
+            let mut path = tracedraw_core::geometry::BezPath::new();
+            path.move_to(a);
+            path.line_to(b);
+            Shape::new(ShapeId(id), ShapeKind::Path { path, closed: false })
+        };
+        let mut hidden = line(3, (200.0, 200.0), (250.0, 260.0));
+        hidden.visible = false;
+        let g = Shape::new(
+            ShapeId(4),
+            ShapeKind::Group {
+                children: vec![
+                    line(1, (0.0, 0.0), (10.0, 20.0)),
+                    line(2, (90.0, 80.0), (100.0, 100.0)),
+                    hidden,
+                ],
+            },
+        );
+        let around = Rect::new(-5.0, -5.0, 105.0, 105.0);
+        assert!(takes(Region::Rect(around), &g, false, &filled));
+        let poly = [
+            Point::new(around.x0, around.y0),
+            Point::new(around.x1, around.y0),
+            Point::new(around.x1, around.y1),
+            Point::new(around.x0, around.y1),
+        ];
+        assert!(takes(Region::Polygon(&poly), &g, false, &filled));
+        // Round one line only: the group is not wholly inside.
+        let one = Region::Rect(Rect::new(-5.0, -5.0, 20.0, 25.0));
+        assert!(!takes(one, &g, false, &filled));
     }
 
     #[test]

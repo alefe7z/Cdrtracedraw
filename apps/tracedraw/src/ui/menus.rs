@@ -5,26 +5,28 @@ use crate::app::{App, DockerTab};
 use crate::i18n::tr;
 use crate::theme::Tokens;
 use crate::ui::dialogs::Dialog;
+use crate::ui::tips::RichTip;
 use egui::Ui;
 use tracedraw_core::document::ShapeKind;
 use tracedraw_core::Command;
 
 pub(crate) const MENU_WIDTH: f32 = 250.0;
-/// Menu rows as in the reference (docs/reference/ui-reference.md): 22 px
-/// tall, a 28 px gutter for icons and check marks, labels from 34 px,
-/// shortcuts right-aligned 22 px from the edge, 12.5 px text.
-const ROW_HEIGHT: f32 = 22.0;
-const GUTTER: f32 = 28.0;
-const LABEL_X: f32 = 34.0;
-const SHORTCUT_PAD: f32 = 22.0;
-const FONT: f32 = 12.5;
+/// Menu rows: 26 px tall, a 30 px grey gutter
+/// for icons and check marks, labels from 38 px, shortcuts right-aligned
+/// 28 px from the edge, 13 px text.
+const ROW_HEIGHT: f32 = 26.0;
+const GUTTER: f32 = 30.0;
+const LABEL_X: f32 = 38.0;
+const SHORTCUT_PAD: f32 = 28.0;
+const FONT: f32 = 13.0;
 const SEPARATOR_HEIGHT: f32 = 7.0;
 
 /// The style of menu pop-ups: white, a one-pixel grey frame, square
-/// corners, rows touching.
+/// corners, rows touching. With Translucent menus on (Customization >
+/// Appearance) the body lets the window show through.
 pub(crate) fn menu_popup_style(style: &mut egui::Style) {
     egui::containers::menu::menu_style(style);
-    style.visuals.window_fill = crate::theme::Tokens::menu();
+    style.visuals.window_fill = crate::theme::menu_fill(crate::theme::Tokens::menu());
     style.visuals.window_stroke = egui::Stroke::new(1.0, crate::theme::Tokens::window_border());
     style.visuals.menu_corner_radius = egui::CornerRadius::ZERO;
     style.visuals.popup_shadow = crate::theme::shadow(egui::epaint::Shadow {
@@ -44,17 +46,69 @@ pub(crate) fn menu_popup_style(style: &mut egui::Style) {
 }
 
 /// The grey gutter down the left of a menu body, under its rows: reserved
-/// first, sized once the rows are laid out.
+/// first, sized once the rows are laid out. A body taller than the window
+/// scrolls (wheel, scroll bar, keyboard focus) instead of running past the
+/// window's edge; the pop-up then moves to fit inside the window.
 pub(crate) fn body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let limit = screen_body_limit(ui);
+    body_within(ui, limit, add)
+}
+
+/// The tallest a menu body may be anywhere in the window: the window's
+/// height less the pop-up frame around the rows.
+fn screen_body_limit(ui: &Ui) -> f32 {
+    let frame = egui::Frame::menu(ui.style()).total_margin().sum().y;
+    body_limit(ui.ctx().content_rect().height() - frame)
+}
+
+/// The tallest the body of a menu-bar menu may be: the room from its
+/// title's bottom edge (`title_bottom`, last frame's) down to the window's
+/// bottom edge, so the menu stays under its title instead of moving up
+/// over the bar. A pixel is kept spare so rounding never makes the menu
+/// miss the room below its title.
+fn below_body_limit(ui: &Ui, title_bottom: Option<f32>) -> f32 {
+    let Some(title_bottom) = title_bottom else {
+        return screen_body_limit(ui);
+    };
+    let frame = egui::Frame::menu(ui.style()).total_margin().sum().y;
+    body_limit(ui.ctx().content_rect().bottom() - title_bottom - frame - 1.0)
+}
+
+/// At least a few rows, however small the window.
+fn body_limit(room: f32) -> f32 {
+    room.max(3.0 * ROW_HEIGHT)
+}
+
+/// A menu body at most `max_height` tall; taller rows scroll.
+fn body_within<R>(ui: &mut Ui, max_height: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
     let width_id = ui.id().with("menu_width");
-    if let Some(w) = ui.ctx().data(|d| d.get_temp::<f32>(width_id)) {
+    let width = ui.ctx().data(|d| d.get_temp::<f32>(width_id));
+    if let Some(w) = width {
         ui.set_min_width(w);
     }
+    // The pop-up's room is last frame's size (or a default on its first
+    // frame); the rows may need more, up to the limit.
+    ui.set_max_height(max_height);
+    egui::ScrollArea::vertical()
+        .id_salt("menu_scroll")
+        .max_height(max_height)
+        .show(ui, |ui| {
+            if let Some(w) = width {
+                ui.set_min_width(w);
+            }
+            body_rows(ui, width_id, add)
+        })
+        .inner
+}
+
+fn body_rows<R>(ui: &mut Ui, width_id: egui::Id, add: impl FnOnce(&mut Ui) -> R) -> R {
     let slot = ui.painter().add(egui::Shape::Noop);
     let r = {
         let _keys = access::Scope::new();
         add(ui)
     };
+    // The row the keys moved to stays in view (#1839).
+    crate::ui::keynav::scroll_into_view(ui);
     let rows = ui.min_rect();
     ui.ctx().data_mut(|d| d.insert_temp(width_id, rows.width()));
     let gutter = egui::Rect::from_min_max(
@@ -63,7 +117,11 @@ pub(crate) fn body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     );
     ui.painter().set(
         slot,
-        egui::Shape::rect_filled(gutter, 0.0, crate::theme::Tokens::menu_gutter()),
+        egui::Shape::rect_filled(
+            gutter,
+            0.0,
+            crate::theme::menu_fill(crate::theme::Tokens::menu_gutter()),
+        ),
     );
     r
 }
@@ -76,6 +134,19 @@ fn menu_row(
     shortcut: &str,
     enabled: bool,
     mark: Mark,
+) -> (egui::Response, egui::layers::ShapeIdx) {
+    menu_row_at(ui, label, shortcut, enabled, mark, LABEL_X)
+}
+
+/// [`menu_row`] with the label starting `label_x` from the row's left
+/// edge (further right than usual when a picture sits after the gutter).
+fn menu_row_at(
+    ui: &mut Ui,
+    label: &str,
+    shortcut: &str,
+    enabled: bool,
+    mark: Mark,
+    label_x: f32,
 ) -> (egui::Response, egui::layers::ShapeIdx) {
     // Fixed width like a native menu; longer translations widen their row.
     let needed = ui.fonts_mut(|f| {
@@ -98,7 +169,7 @@ fn menu_row(
             .size()
             .x + 32.0
         };
-        LABEL_X + l + s + SHORTCUT_PAD
+        label_x + l + s + SHORTCUT_PAD
     });
     // As wide as the widest row (remembered by `body` from the last frame).
     let width = MENU_WIDTH.max(needed).max(ui.min_rect().width());
@@ -120,12 +191,19 @@ fn menu_row(
                 .insert(egui::response::Flags::FAKE_PRIMARY_CLICKED);
         }
     }
+    // The keyboard's row (#1839) is lit like the row under the pointer;
+    // while the keys move the highlight, the pointer's row is not lit.
+    if enabled {
+        crate::ui::keynav::note_menu_row(ui.ctx(), resp.id, mark == Mark::Submenu);
+    }
+    let lit = enabled
+        && (resp.has_focus() || resp.hovered() && !crate::ui::keynav::keyboard_mode(ui.ctx()));
     let painter = ui.painter();
     let slot = painter.add(egui::Shape::Noop);
-    if enabled && resp.hovered() {
+    if lit {
         painter.set(slot, highlight(rect));
     }
-    let color = if enabled && resp.hovered() {
+    let color = if lit {
         crate::theme::on_highlight()
     } else if enabled {
         crate::theme::Tokens::text()
@@ -135,7 +213,7 @@ fn menu_row(
     if let Some((at, _)) = access {
         access::underline(
             painter,
-            egui::pos2(rect.left() + LABEL_X, rect.center().y),
+            egui::pos2(rect.left() + label_x, rect.center().y),
             label,
             at,
             FONT,
@@ -162,7 +240,7 @@ fn menu_row(
         _ => {}
     }
     painter.text(
-        egui::pos2(rect.left() + LABEL_X, rect.center().y),
+        egui::pos2(rect.left() + label_x, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label,
         egui::FontId::proportional(FONT),
@@ -221,6 +299,13 @@ pub(crate) fn sep(ui: &mut Ui) {
     if invoke::active() {
         return;
     }
+    if !crate::ui::context_menu_filter::defer_separator(ui) {
+        paint_separator(ui);
+    }
+}
+
+/// Draws a separator after filtering has found its following visible row.
+pub(crate) fn paint_separator(ui: &mut Ui) {
     let width = ui.min_rect().width().max(MENU_WIDTH);
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(width, SEPARATOR_HEIGHT), egui::Sense::hover());
@@ -241,34 +326,220 @@ pub(crate) fn item(ui: &mut Ui, key: &str, shortcut: &str, enabled: bool) -> boo
     item_text(ui, &tr(key), shortcut, enabled, menu_icon(key), key)
 }
 
+/// A menu item with a hover tip shown while it is greyed (why it cannot
+/// run, such as an AI service that makes drawings only).
+pub(crate) fn item_tip(
+    ui: &mut Ui,
+    key: &str,
+    shortcut: &str,
+    enabled: bool,
+    tip: Option<&str>,
+) -> bool {
+    item_text_tip(ui, &tr(key), shortcut, enabled, menu_icon(key), key, tip)
+}
+
 /// A menu item with a ready label (a style name, a file).
 pub(crate) fn item_label(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool) -> bool {
     item_text(ui, label, shortcut, enabled, None, label)
 }
 
+/// A dynamic target with a stable visibility key and its own allocated widget ID.
+pub(crate) fn item_label_keyed(
+    ui: &mut Ui,
+    key: &str,
+    label: &str,
+    shortcut: &str,
+    enabled: bool,
+) -> bool {
+    item_text(ui, label, shortcut, enabled, None, key)
+}
+
+/// Object > Clip to Frame's Fit Contents rows, the clip bar's choices
+/// (#1299).
+pub(crate) const CLIP_FIT_ROWS: [(&str, crate::ui::clip_bar::FitContents); 4] = [
+    (
+        "menu.object.clip_frame_fit_center",
+        crate::ui::clip_bar::FitContents::Center,
+    ),
+    (
+        "menu.object.clip_frame_fit_proportional",
+        crate::ui::clip_bar::FitContents::FitProportionally,
+    ),
+    (
+        "menu.object.clip_frame_fill_proportional",
+        crate::ui::clip_bar::FitContents::FillProportionally,
+    ),
+    (
+        "menu.object.clip_frame_stretch",
+        crate::ui::clip_bar::FitContents::Stretch,
+    ),
+];
+
+/// Help > What's New: the Welcome Screen's history of the last releases.
+pub(crate) fn open_whats_new(app: &mut App) {
+    app.show_welcome = true;
+    app.welcome_tab = crate::app::WelcomeTab::News;
+}
+
 /// A menu item with a ready label and an optional icon; `id` names it for
 /// the test replay.
-/// Help > Highlight What's New: the menu rows new in this version and the
+/// Help > Mark New Features: the menu rows new in this version and the
 /// submenus that lead to them, by their keys. Each version replaces the
 /// list with its own.
 pub const NEW_IN_THIS_VERSION: &[&str] = &[
-    // Window > New Window.
-    "menu.window",
-    "menu.window.new_window",
-    // Window > Dockers > Effects (the effect stack).
-    "menu.window.dockers",
-    "docker.effects",
-    // Object > Clip to Frame > Opacity Mask, Invert Mask.
+    // Object: Edit Fill and Outline Pen, Convert to Guidelines, the clip
+    // frame's None and Center to Page across or down.
     "menu.object",
+    "menu.object.edit_fill",
+    "menu.object.outline_pen",
+    "menu.object.convert_to_guidelines",
     "menu.object.clip_frame",
-    "menu.object.clip_frame_opacity_mask",
-    "menu.object.clip_frame_invert_mask",
+    "menu.object.clip_frame_none",
+    "menu.object.align_distribute",
+    "menu.object.center_to_page_h",
+    "menu.object.center_to_page_v",
+    // Text: Text Height and Sort Lines.
+    "menu.text",
+    "menu.text.text_height",
+    "menu.text.sort_lines",
+    "menu.text.sort_a_z",
+    "menu.text.sort_z_a",
+    "menu.text.sort_numbers_up",
+    "menu.text.sort_numbers_down",
+    // Table: Edit in a spreadsheet program.
+    "menu.table",
+    "menu.table.edit_in_spreadsheet",
+    // Bitmaps: Edit Bitmap With another program.
+    "menu.bitmaps",
+    "menu.bitmaps.edit_bitmap_with",
 ];
 
 thread_local! {
-    /// Whether Help > Highlight What's New is on (set from the app each
+    /// Whether Help > Mark New Features is on (set from the app each
     /// frame the menus draw).
     static HIGHLIGHT_NEW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The Centerline presets, as Image > Trace and a bitmap's right-click
+/// menu list them.
+pub const CENTERLINE_TRACES: [(&str, crate::trace::Preset); 2] = [
+    (
+        "menu.bitmaps.trace_technical",
+        crate::trace::Preset::Technical,
+    ),
+    (
+        "menu.bitmaps.trace_line_drawing",
+        crate::trace::Preset::LineDrawing,
+    ),
+];
+
+/// The Outline presets.
+pub const OUTLINE_TRACES: [(&str, crate::trace::Preset); 7] = [
+    ("menu.bitmaps.trace_line_art", crate::trace::Preset::LineArt),
+    ("menu.bitmaps.trace_logo", crate::trace::Preset::Logo),
+    (
+        "menu.bitmaps.trace_detailed_logo",
+        crate::trace::Preset::DetailedLogo,
+    ),
+    ("menu.bitmaps.trace_clipart", crate::trace::Preset::Clipart),
+    (
+        "menu.bitmaps.trace_low_quality",
+        crate::trace::Preset::LowQualityImage,
+    ),
+    (
+        "menu.bitmaps.trace_high_quality",
+        crate::trace::Preset::HighQualityImage,
+    ),
+    (
+        "menu.bitmaps.trace_optimized",
+        crate::trace::Preset::Optimized,
+    ),
+];
+
+thread_local! {
+    /// The menu row right-clicked this frame, whose properties open
+    /// next (#2504).
+    static PROPERTIES_OF: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+    /// The Customization pages are open this frame: a click on a menu
+    /// row picks its command in the Commands list instead of running it
+    /// (#4088).
+    static PICK_ROWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Each drawn row's place, for the tests.
+    #[cfg(test)]
+    pub(crate) static ROWS: std::cell::RefCell<Vec<(String, egui::Rect)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static ROW_IDS: std::cell::RefCell<Vec<(String, egui::Id)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_row(response: &egui::Response, key: &str) {
+    ROWS.with(|rows| rows.borrow_mut().push((key.to_owned(), response.rect)));
+    ROW_IDS.with(|rows| rows.borrow_mut().push((key.to_owned(), response.id)));
+}
+
+/// A right-click on the menu row `id`, greyed or not, closes the menu and
+/// asks for the row's properties: Options > Customization > Commands at
+/// that command, on its Shortcut Keys tab (#2504).
+fn row_properties(ui: &mut Ui, r: &egui::Response, id: &str, enabled: bool) {
+    #[cfg(test)]
+    record_row(r, id);
+    let right = if enabled {
+        r.secondary_clicked()
+    } else {
+        // A greyed row only senses the hover (a widget that takes clicks
+        // would be lit by the arrow keys).
+        r.contains_pointer()
+            && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary))
+    };
+    if right {
+        PROPERTIES_OF.with(|p| *p.borrow_mut() = Some(id.to_string()));
+        ui.close();
+    }
+}
+
+/// A click on a menu row: true when its command is to run. While the
+/// Customization pages are open the click picks the row's command in the
+/// Commands list (with its Shortcut Keys tab) instead, as a click on a
+/// bar's button does (#4088, #3890).
+fn row_clicked(ui: &Ui, r: &egui::Response, id: &str) -> bool {
+    if !r.clicked() {
+        return false;
+    }
+    ui.close();
+    if PICK_ROWS.with(std::cell::Cell::get) {
+        PROPERTIES_OF.with(|p| *p.borrow_mut() = Some(id.to_string()));
+        return false;
+    }
+    true
+}
+
+/// Opens the properties a right-click on a menu row asked for.
+pub(crate) fn open_requested_properties(app: &mut App) {
+    if let Some(id) = PROPERTIES_OF.with(|p| p.borrow_mut().take()) {
+        open_command_properties(app, &id);
+    }
+}
+
+/// Options > Customization > Commands with the command `id` (a menu key
+/// or a row's label) picked, on its Shortcut Keys tab, where a key is
+/// given to it (#2504).
+pub(crate) fn open_command_properties(app: &mut App, id: &str) {
+    let ed = &mut app.shortcut_editor;
+    ed.category = None;
+    ed.filter.clear();
+    ed.selected = Some(id.to_string());
+    ed.keys_tab = true;
+    ed.capture = None;
+    ed.note = None;
+    ed.confirm_reset_all = false;
+    ed.scroll_to_selected = true;
+    app.open_options_page(crate::ui::dialogs::OptionsPage::Commands);
 }
 
 pub fn set_highlight_new(on: bool) {
@@ -286,7 +557,7 @@ fn paint_new_mark(ui: &Ui, row: egui::Rect) {
     ui.painter().circle_filled(c, 3.5, Tokens::ACCENT);
 }
 
-fn item_text(
+pub(crate) fn item_text(
     ui: &mut Ui,
     label: &str,
     shortcut: &str,
@@ -310,17 +581,21 @@ fn item_text_tip(
     if invoke::active() {
         return invoke::hit(id, shortcut, enabled);
     }
+    if !crate::ui::context_menu_filter::show_item(ui, id) {
+        return false;
+    }
     let shortcut = invoke::shown_shortcut(id, shortcut);
     let (r, _) = menu_row(ui, label, &shortcut, enabled, Mark::None);
+    row_properties(ui, &r, id, enabled);
     let r = match tip {
-        Some(t) if !enabled => r.on_hover_text(t),
+        Some(t) if !enabled => r.rich_tip(t),
         _ => r,
     };
     if marked_new(id) {
         paint_new_mark(ui, r.rect);
     }
     #[cfg(test)]
-    if replay::hit(id, enabled) {
+    if replay::hit_with_label(id, label, enabled) {
         return true;
     }
     let _ = id;
@@ -340,12 +615,41 @@ fn item_text_tip(
     } else if let Some(g) = crate::ui::menu_glyphs::for_key(id) {
         crate::ui::menu_glyphs::draw(ui.painter(), ir, g, color);
     }
-    if r.clicked() {
-        ui.close();
-        true
-    } else {
-        false
+    row_clicked(ui, &r, id)
+}
+
+/// A menu item whose picture in the gutter is drawn by `pic` in the
+/// row's ink (greyed with the row when it cannot run).
+pub(crate) fn item_drawn(
+    ui: &mut Ui,
+    label: &str,
+    shortcut: &str,
+    enabled: bool,
+    id: &str,
+    pic: &dyn Fn(&egui::Painter, egui::Rect, egui::Color32),
+) -> bool {
+    if invoke::active() {
+        return invoke::hit(id, shortcut, enabled);
     }
+    let shortcut = invoke::shown_shortcut(id, shortcut);
+    let (r, _) = menu_row(ui, label, &shortcut, enabled, Mark::None);
+    #[cfg(test)]
+    PICTURED.with(|p| p.borrow_mut().push(id.to_string()));
+    #[cfg(test)]
+    if replay::hit(id, enabled) {
+        return true;
+    }
+    let ir = egui::Rect::from_center_size(
+        egui::pos2(r.rect.left() + GUTTER / 2.0, r.rect.center().y),
+        egui::vec2(16.0, 16.0),
+    );
+    let color = if enabled {
+        Tokens::icon()
+    } else {
+        crate::theme::Tokens::menu_text_off()
+    };
+    pic(ui.painter(), ir, color);
+    row_clicked(ui, &r, id)
 }
 
 /// A menu item with a ready label and a picture (a texture) in the
@@ -360,8 +664,12 @@ fn item_picture(
     if invoke::active() {
         return invoke::hit(label, shortcut, enabled);
     }
+    if !crate::ui::context_menu_filter::show_item(ui, label) {
+        return false;
+    }
     let shortcut = invoke::shown_shortcut(label, shortcut);
     let (r, _) = menu_row(ui, label, &shortcut, enabled, Mark::None);
+    row_properties(ui, &r, label, enabled);
     #[cfg(test)]
     if replay::hit(label, enabled) {
         return true;
@@ -383,12 +691,7 @@ fn item_picture(
             tint,
         );
     }
-    if enabled && r.clicked() {
-        ui.close();
-        true
-    } else {
-        false
-    }
+    enabled && row_clicked(ui, &r, label)
 }
 
 /// Toolbar icon for a menu item, when it has one.
@@ -397,6 +700,7 @@ fn menu_icon(key: &str) -> Option<crate::ui::icons::Action> {
     Some(match key {
         "menu.file.new" => Action::New,
         "menu.file.open" => Action::Open,
+        "menu.file.new_from_template" => Action::Template,
         "menu.file.save" => Action::Save,
         "menu.file.print" => Action::Print,
         "menu.file.import" => Action::Import,
@@ -418,9 +722,73 @@ pub(crate) fn menu_titles() -> Vec<&'static str> {
     all_menus().iter().map(|(k, _)| *k).collect()
 }
 
-/// Draw the picture the menu row of `key` shows into `r`; false when the
-/// row has none.
+thread_local! {
+    /// The pictures the user chose for commands (`Settings::command_icons`).
+    static COMMAND_ICONS: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Keep the pictures the user chose for commands (#2100), for the menus
+/// and the toolbar buttons drawn after.
+pub(crate) fn set_command_icons(icons: &[(String, String)]) {
+    COMMAND_ICONS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.as_slice() != icons {
+            *c = icons.to_vec();
+        }
+    });
+}
+
+/// The picture the user chose for the command `key`: another command's
+/// key, or a tool ("tool:" and its id).
+pub(crate) fn chosen_icon(key: &str) -> Option<String> {
+    COMMAND_ICONS.with(|c| {
+        c.borrow()
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, src)| src.clone())
+    })
+}
+
+/// Draw the picture of `source` (a command's key with a picture of its
+/// own, or "tool:" and a tool's id); false when it has none.
+pub(crate) fn draw_icon_source(
+    painter: &egui::Painter,
+    r: egui::Rect,
+    source: &str,
+    color: egui::Color32,
+) -> bool {
+    if let Some(t) = crate::ui::bar_items::tool_of(source) {
+        crate::ui::icons::draw(painter, r, t, color);
+        true
+    } else {
+        draw_own_picture(painter, r, source, color)
+    }
+}
+
+/// Whether `source` names a picture [`draw_icon_source`] draws.
+pub(crate) fn is_icon_source(source: &str) -> bool {
+    crate::ui::bar_items::tool_of(source).is_some() || has_own_picture(source)
+}
+
+/// Draw the picture the menu row of `key` shows into `r`: the one the
+/// user chose for it (#2100), else its own; false when the row has none.
 pub(crate) fn draw_menu_picture(
+    painter: &egui::Painter,
+    r: egui::Rect,
+    key: &str,
+    color: egui::Color32,
+) -> bool {
+    if let Some(src) = chosen_icon(key).filter(|s| s != key) {
+        if draw_icon_source(painter, r, &src, color) {
+            return true;
+        }
+    }
+    draw_own_picture(painter, r, key, color)
+}
+
+/// The picture the menu row of `key` has of its own.
+pub(crate) fn draw_own_picture(
     painter: &egui::Painter,
     r: egui::Rect,
     key: &str,
@@ -440,6 +808,19 @@ pub(crate) fn draw_menu_picture(
     }
 }
 
+/// Whether the menu item `key` has a picture to draw, its own or one the
+/// user chose (#2100).
+pub(crate) fn has_menu_picture(key: &str) -> bool {
+    chosen_icon(key).is_some_and(|s| is_icon_source(&s)) || has_own_picture(key)
+}
+
+/// Whether the menu item `key` has a picture of its own.
+pub(crate) fn has_own_picture(key: &str) -> bool {
+    menu_icon(key).is_some()
+        || menu_pic(key).is_some()
+        || crate::ui::menu_glyphs::for_key(key).is_some()
+}
+
 /// Property bar picture for a menu item, when it has one.
 fn menu_pic(key: &str) -> Option<crate::ui::propbar::Pic> {
     use crate::ui::propbar::Pic;
@@ -451,7 +832,13 @@ fn menu_pic(key: &str) -> Option<crate::ui::propbar::Pic> {
         "menu.object.group_ungroup" => Pic::Ungroup,
         "menu.object.group_ungroup_all" => Pic::UngroupAll,
         "menu.object.combine" => Pic::Combine,
-        "menu.object.break_apart" | "menu.object.break_shadow_apart" => Pic::BreakApart,
+        "menu.object.break_apart"
+        | "menu.object.break_apart_keep_holes"
+        | "menu.object.break_shadow_apart"
+        | "menu.object.break_shadows_apart"
+        | "menu.object.break_contour_apart"
+        | "menu.object.break_blend_apart"
+        | "menu.object.break_extrude_apart" => Pic::BreakApart,
         "menu.object.weld" => Pic::Weld,
         "menu.object.trim" => Pic::Trim,
         "menu.object.intersect" => Pic::Intersect,
@@ -464,15 +851,25 @@ fn menu_pic(key: &str) -> Option<crate::ui::propbar::Pic> {
         "menu.object.to_back_of_page" => Pic::ToBack,
         "menu.object.to_back_of_layer" => Pic::ToBack,
         "menu.object.convert_to_curves" => Pic::ToCurves,
+        "menu.object.node_add" => Pic::AddNode,
+        "menu.object.node_join" => Pic::JoinNodes,
+        "menu.object.node_break" => Pic::BreakCurve,
+        "menu.object.node_to_line" => Pic::ToLine,
+        "menu.object.node_to_curve" => Pic::ToCurve,
+        "menu.object.node_cusp" => Pic::NodeCusp,
+        "menu.object.node_smooth" => Pic::NodeSmooth,
+        "menu.object.node_symmetrical" => Pic::NodeSymmetrical,
         "menu.object.lock_object" | "menu.object.lock" => Pic::Lock(true),
         "menu.object.group" => Pic::Group,
         "menu.object.shaping" => Pic::Weld,
         "menu.object.transformations" => Pic::Position,
         "menu.object.tf_position" => Pic::Position,
-        "menu.object.tf_rotate" => Pic::Rotate,
+        "menu.object.tf_rotate" | "menu.object.rotate_by_lines" => Pic::Rotate,
         "menu.object.tf_scale" => Pic::ScaleMirror,
-        "menu.object.tf_size" => Pic::SizeBox,
+        "menu.object.tf_size" | "menu.object.object_size" => Pic::SizeBox,
         "menu.object.tf_skew" => Pic::SkewBox,
+        "menu.object.mirror_h" => Pic::MirrorH,
+        "menu.object.mirror_v" => Pic::MirrorV,
         "menu.object.align_distribute_docker" => Pic::AlignDistribute,
         "menu.object.convert_to_bitmap" => Pic::ConvertToBitmap,
         "menu.object.copy_envelope_from" => Pic::EnvelopeCopy,
@@ -481,6 +878,7 @@ fn menu_pic(key: &str) -> Option<crate::ui::propbar::Pic> {
         "menu.text.tabs" => Pic::Tabs,
         "menu.text.columns" => Pic::Columns,
         "menu.text.bullets" => Pic::Bullets,
+        "menu.text.toggle_bullets" => Pic::Bullets,
         "menu.text.drop_cap" => Pic::DropCap,
         "menu.text.text_statistics" => Pic::TextStatistics,
         "menu.text.edit_text" => Pic::EditText,
@@ -492,8 +890,9 @@ fn menu_pic(key: &str) -> Option<crate::ui::propbar::Pic> {
         "menu.text.encode" => Pic::Encode,
         "menu.bitmaps.convert_to_bitmap" => Pic::ConvertToBitmap,
         "menu.bitmaps.straighten_image" => Pic::StraightenImage,
-        "menu.bitmaps.edit_bitmap" => Pic::EditBitmap,
+        "menu.bitmaps.edit_bitmap" | "menu.bitmaps.edit_bitmap_with" => Pic::EditBitmap,
         "menu.bitmaps.crop_bitmap" => Pic::CropBitmap,
+        "menu.bitmaps.crop_to_frame" => Pic::CropBitmap,
         "menu.bitmaps.resample" => Pic::Resample,
         "menu.bitmaps.break_link" => Pic::BreakLink,
         "menu.bitmaps.update_from_link" => Pic::UpdateLink,
@@ -516,14 +915,95 @@ pub(crate) fn check(ui: &mut Ui, key: &str, shortcut: &str, on: bool) -> bool {
     mark_item(ui, key, shortcut, Mark::Check(on))
 }
 
-/// A checkable item that can be unavailable.
-pub(crate) fn check_if(ui: &mut Ui, key: &str, shortcut: &str, on: bool, enabled: bool) -> bool {
-    mark_item_if(ui, key, shortcut, Mark::Check(on), enabled)
+/// A checkable item with a ready label (a palette's name); `id` names it
+/// for the command list and the test replay.
+pub(crate) fn check_label(ui: &mut Ui, label: &str, id: &str, on: bool) -> bool {
+    if invoke::active() {
+        return invoke::hit(id, "", true);
+    }
+    if !crate::ui::context_menu_filter::show_item(ui, id) {
+        return false;
+    }
+    let (r, _) = menu_row(ui, label, "", true, Mark::Check(on));
+    #[cfg(test)]
+    record_row(&r, id);
+    #[cfg(test)]
+    if replay::hit(id, true) {
+        return true;
+    }
+    row_clicked(ui, &r, id)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The rows [`check_pic`] drew with a picture (tests).
+    static PICTURED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The width of the picture slot of a [`check_pic`] row, between the
+/// gutter and the label.
+const PIC_SLOT: f32 = 22.0;
+
+/// A checkable item with a picture after the gutter (check mark, picture,
+/// name): `pic` paints the picture in a 16 px square, `None` leaves the
+/// slot blank so the names of a list stay aligned.
+pub(crate) fn check_pic(
+    ui: &mut Ui,
+    key: &str,
+    shortcut: &str,
+    on: bool,
+    pic: Option<&dyn Fn(&egui::Painter, egui::Rect)>,
+) -> bool {
+    if invoke::active() {
+        invoke::note_state(key, on);
+        return invoke::hit(key, shortcut, true);
+    }
+    if !crate::ui::context_menu_filter::show_item(ui, key) {
+        return false;
+    }
+    #[cfg(test)]
+    if pic.is_some() {
+        PICTURED.with(|p| p.borrow_mut().push(key.to_string()));
+    }
+    let shortcut = invoke::shown_shortcut(key, shortcut);
+    let (r, _) = menu_row_at(
+        ui,
+        &tr(key),
+        &shortcut,
+        true,
+        Mark::Check(on),
+        LABEL_X + PIC_SLOT,
+    );
+    if marked_new(key) {
+        paint_new_mark(ui, r.rect);
+    }
+    #[cfg(test)]
+    record_row(&r, key);
+    #[cfg(test)]
+    if replay::hit(key, true) {
+        return true;
+    }
+    if let Some(pic) = pic {
+        let ir = egui::Rect::from_center_size(
+            egui::pos2(
+                r.rect.left() + LABEL_X + PIC_SLOT / 2.0 - 2.0,
+                r.rect.center().y,
+            ),
+            egui::vec2(16.0, 16.0),
+        );
+        pic(ui.painter(), ir);
+    }
+    row_clicked(ui, &r, key)
 }
 
 /// One of a set of exclusive items (a dot in the gutter when `on`).
 pub(crate) fn radio(ui: &mut Ui, key: &str, shortcut: &str, on: bool) -> bool {
     mark_item(ui, key, shortcut, Mark::Radio(on))
+}
+
+/// A checkable item that can be unavailable (greyed, not clickable).
+pub(crate) fn check_if(ui: &mut Ui, key: &str, on: bool, enabled: bool) -> bool {
+    mark_item_if(ui, key, "", Mark::Check(on), enabled)
 }
 
 /// An exclusive item that can be unavailable (greyed, not clickable).
@@ -537,7 +1017,13 @@ fn mark_item(ui: &mut Ui, key: &str, shortcut: &str, mark: Mark) -> bool {
 
 fn mark_item_if(ui: &mut Ui, key: &str, shortcut: &str, mark: Mark, enabled: bool) -> bool {
     if invoke::active() {
+        if let Mark::Check(on) | Mark::Radio(on) = mark {
+            invoke::note_state(key, on);
+        }
         return invoke::hit(key, shortcut, enabled);
+    }
+    if !crate::ui::context_menu_filter::show_item(ui, key) {
+        return false;
     }
     let shortcut = invoke::shown_shortcut(key, shortcut);
     let (r, _) = menu_row(ui, &tr(key), &shortcut, enabled, mark);
@@ -545,15 +1031,12 @@ fn mark_item_if(ui: &mut Ui, key: &str, shortcut: &str, mark: Mark, enabled: boo
         paint_new_mark(ui, r.rect);
     }
     #[cfg(test)]
+    record_row(&r, key);
+    #[cfg(test)]
     if replay::hit(key, enabled) {
         return true;
     }
-    if enabled && r.clicked() {
-        ui.close();
-        true
-    } else {
-        false
-    }
+    enabled && row_clicked(ui, &r, key)
 }
 
 /// A submenu that is not made yet: shown greyed, left out of the
@@ -562,7 +1045,12 @@ fn todo_sub(ui: &mut Ui, key: &str) {
     if invoke::active() {
         return;
     }
+    if !crate::ui::context_menu_filter::show_item(ui, key) {
+        return;
+    }
     let (r, _) = menu_row(ui, &tr(key), "", false, Mark::Submenu);
+    #[cfg(test)]
+    record_row(&r, key);
     row_picture(ui, r.rect, key, false);
 }
 
@@ -589,29 +1077,68 @@ pub(crate) fn sub_if<R>(ui: &mut Ui, key: &str, enabled: bool, add: impl FnOnce(
     let replaying = false;
     if enabled || invoke::active() || replaying {
         sub(ui, key, add);
-    } else {
+    } else if crate::ui::context_menu_filter::submenu_visible(key, false)
+        && crate::ui::context_menu_filter::show_item(ui, key)
+    {
         let (r, _) = menu_row(ui, &tr(key), "", false, Mark::Submenu);
+        #[cfg(test)]
+        record_row(&r, key);
         row_picture(ui, r.rect, key, false);
     }
 }
 
 /// A submenu row: the submenu opens beside it while it is hovered.
 pub(crate) fn sub<R>(ui: &mut Ui, key: &str, add: impl FnOnce(&mut Ui) -> R) {
+    let _ = sub_row(ui, key, add);
+}
+
+/// A submenu whose dynamic target list can keep its static branch available.
+pub(crate) fn sub_dynamic<R>(
+    ui: &mut Ui,
+    key: &str,
+    has_dynamic_items: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) {
+    let _ = sub_row_dynamic(ui, key, has_dynamic_items, add);
+}
+
+/// [`sub`], returning the row when it was drawn.
+fn sub_row<R>(ui: &mut Ui, key: &str, add: impl FnOnce(&mut Ui) -> R) -> Option<egui::Response> {
+    sub_row_dynamic(ui, key, false, add)
+}
+
+fn sub_row_dynamic<R>(
+    ui: &mut Ui,
+    key: &str,
+    has_dynamic_items: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<egui::Response> {
+    let add = |ui: &mut Ui| {
+        let _branch = crate::ui::context_menu_filter::Branch::new(key);
+        add(ui)
+    };
     if invoke::active() {
         // Walked without the menus on screen: the submenu's items count
         // as if it were open.
         invoke::enter(key);
         let _ = add(ui);
         invoke::leave();
-        return;
+        return None;
+    }
+    if !crate::ui::context_menu_filter::submenu_visible(key, has_dynamic_items)
+        || !crate::ui::context_menu_filter::show_item(ui, key)
+    {
+        return None;
     }
     #[cfg(test)]
     if replay::active() {
         // Replaying: submenus are laid out inline so their items count.
         let _ = add(ui);
-        return;
+        return None;
     }
     let (resp, slot) = menu_row(ui, &tr(key), "", true, Mark::Submenu);
+    #[cfg(test)]
+    record_row(&resp, key);
     row_picture(ui, resp.rect, key, true);
     if marked_new(key) {
         // Left of the submenu arrow.
@@ -623,10 +1150,21 @@ pub(crate) fn sub<R>(ui: &mut Ui, key: &str, add: impl FnOnce(&mut Ui) -> R) {
     if open {
         ui.painter().set(slot, highlight(resp.rect));
     }
+    // A row scrolled out of a long menu's view does not open its submenu
+    // from a pointer outside that view (over the menu bar, say).
+    let view = ui.clip_rect();
+    let pointer_in_view = ui
+        .ctx()
+        .pointer_hover_pos()
+        .is_none_or(|p| view.contains(p));
+    if !view.intersects(resp.rect) || !(open || pointer_in_view) {
+        return Some(resp);
+    }
     egui::containers::menu::SubMenu::new().show(ui, &resp, |ui| {
         ui.set_min_width(MENU_WIDTH);
         body(ui, add)
     });
+    Some(resp)
 }
 
 /// Access keys: one letter of each menu row, underlined, that picks the
@@ -672,6 +1210,16 @@ pub(crate) mod access {
             .find(|&i| word_start(i) && free(chars[i]))
             .or_else(|| (0..chars.len()).find(|&i| free(chars[i])))
             .map(|i| (i, lower(chars[i])))
+    }
+
+    /// Keep `letters` out of the rows of the menu body being drawn (the
+    /// menu bar's titles, for the menus under More).
+    pub fn reserve(letters: &[char]) {
+        TAKEN.with(|t| {
+            if let Some(taken) = t.borrow_mut().last_mut() {
+                taken.extend(letters.iter().filter(|c| **c != ' '));
+            }
+        });
     }
 
     /// The access key of a row of the menu body being drawn (none outside
@@ -802,6 +1350,8 @@ pub(crate) mod invoke {
     enum Mode {
         Collect { path: Vec<String>, out: Vec<Entry> },
         Trigger { key: String, fired: bool },
+        /// The on/off state of each checkable command (#4208).
+        States { out: std::collections::HashMap<String, bool> },
     }
 
     thread_local! {
@@ -818,9 +1368,11 @@ pub(crate) mod invoke {
         MODE.with(|m| match m.borrow_mut().as_mut() {
             Some(Mode::Collect { path, out }) => {
                 if key.starts_with("menu.") && !out.iter().any(|e| e.key == key) {
+                    // The macOS desktop app's own key where macOS keeps
+                    // the built-in one (#1409).
                     out.push(Entry {
                         key: key.to_string(),
-                        shortcut: shortcut.to_string(),
+                        shortcut: crate::shortcuts::mac_shown(shortcut.to_string()),
                         path: path.clone(),
                     });
                 }
@@ -830,7 +1382,32 @@ pub(crate) mod invoke {
                 *fired = true;
                 true
             }
-            Some(Mode::Trigger { .. }) | None => false,
+            Some(Mode::Trigger { .. } | Mode::States { .. }) | None => false,
+        })
+    }
+
+    /// A checkable row walked: its state kept while states are collected.
+    pub fn note_state(key: &str, on: bool) {
+        MODE.with(|m| {
+            if let Some(Mode::States { out }) = m.borrow_mut().as_mut() {
+                out.entry(key.to_string()).or_insert(on);
+            }
+        });
+    }
+
+    pub(super) fn start_states() {
+        MODE.with(|m| {
+            *m.borrow_mut() = Some(Mode::States {
+                out: Default::default(),
+            })
+        });
+    }
+
+    /// End a walk of states: each checkable command's.
+    pub(super) fn finish_states() -> std::collections::HashMap<String, bool> {
+        MODE.with(|m| match m.borrow_mut().take() {
+            Some(Mode::States { out }) => out,
+            _ => Default::default(),
         })
     }
 
@@ -886,7 +1463,7 @@ pub(crate) mod invoke {
         MODE.with(|m| match m.borrow_mut().take() {
             Some(Mode::Collect { out, .. }) => (out, false),
             Some(Mode::Trigger { fired, .. }) => (Vec::new(), fired),
-            None => (Vec::new(), false),
+            Some(Mode::States { .. }) | None => (Vec::new(), false),
         })
     }
 
@@ -899,20 +1476,26 @@ pub(crate) mod invoke {
         });
     }
 
-    /// The shortcut a row shows: the user's for `key`, else `default`.
+    /// The shortcut a row shows: the user's for `key`, else `default`; in
+    /// the browser version the key that replaces one the browser keeps
+    /// (`shortcuts::BROWSER_KEYS`, #1409).
     pub fn shown_shortcut(key: &str, default: &str) -> String {
-        BINDINGS.with(|b| {
-            b.borrow()
-                .iter()
-                .find(|(k, _)| k == key)
-                .map(|(_, v)| v.clone())
-                .unwrap_or_else(|| default.to_string())
-        })
+        // The first of its keys (a command may have several, #822).
+        let keys = BINDINGS.with(|b| {
+            crate::shortcuts::keys_for(&b.borrow(), key, Some(default))
+                .into_iter()
+                .next()
+                .unwrap_or_default()
+        });
+        crate::shortcuts::shown(keys)
     }
 }
 
-/// The menus of the menu bar in order, with their title keys.
-fn all_menus() -> [(&'static str, fn(&mut App, &mut Ui)); 12] {
+/// The menus of the menu bar in order, with their title keys: File, Edit,
+/// View, Object, Text (with Table as a submenu), Image, Effects, Page,
+/// Tools, Window, Help. The keys keep their historical names (`layout`
+/// for Page, `bitmaps` for Image) so saved shortcuts keep working.
+pub(crate) fn all_menus() -> [(&'static str, fn(&mut App, &mut Ui)); 12] {
     [
         ("menu.file", file_menu),
         ("menu.edit", edit_menu),
@@ -973,6 +1556,32 @@ pub fn commands(app: &mut App, ctx: &egui::Context) -> Vec<invoke::Entry> {
     invoke::finish().0
 }
 
+/// Whether the checkable menu command `key` is on now (Snap To Objects,
+/// Show Page Border...); None for a command that is not a toggle. A bar
+/// button of such a command shows it pushed in while it is on, whether
+/// it has a picture or only its name (#4208). The states are read from
+/// one walk of the menus, kept a quarter of a second.
+pub fn command_on(app: &mut App, ctx: &egui::Context, key: &str) -> Option<bool> {
+    type States = std::sync::Arc<std::collections::HashMap<String, bool>>;
+    let id = egui::Id::new("menu_command_states");
+    let now = ctx.input(|i| i.time);
+    let kept = ctx.data(|d| d.get_temp::<(f64, States)>(id));
+    let states = match kept {
+        Some((at, st)) if now - at < 0.25 && now >= at => st,
+        _ => {
+            let st: States = {
+                let _guard = invoke::Guard;
+                invoke::start_states();
+                walk_invisibly(app, ctx, true, false);
+                std::sync::Arc::new(invoke::finish_states())
+            };
+            ctx.data_mut(|d| d.insert_temp(id, (now, st.clone())));
+            st
+        }
+    };
+    states.get(key).copied()
+}
+
 /// Run the menu command `key` as its item would when clicked; false when
 /// the menus shown now have no enabled item with that key.
 pub fn run_command(app: &mut App, ctx: &egui::Context, key: &str) -> bool {
@@ -992,20 +1601,30 @@ pub(crate) mod replay {
         static TARGET: Cell<Option<usize>> = const { Cell::new(None) };
         static COUNTER: Cell<usize> = const { Cell::new(0) };
         static HIT: RefCell<Option<String>> = const { RefCell::new(None) };
+        static HIT_LABEL: RefCell<Option<String>> = const { RefCell::new(None) };
     }
 
     /// Items that would block on a native file chooser, start another
     /// program (an editor or the web browser) or close the window.
-    const SKIP: [&str; 13] = [
+    const SKIP: [&str; 22] = [
+        "menu.tools.plugin_install",
+        "menu.object.insert_object_add",
+        "menu.object.insert_object_file",
         "menu.file.send_to_mail",
         "menu.tools.macros_load",
+        "menu.help.updates",
+        "menu.help.community",
+        "menu.help.support",
         "menu.file.open",
         "menu.file.save",
         "menu.file.save_as",
         "menu.file.save_as_template",
         "menu.file.import",
+        "menu.file.combine_files",
+        "menu.file.save_pages_as_files",
         "menu.file.exit",
         "menu.bitmaps.edit_bitmap",
+        "menu.bitmaps.edit_bitmap_with",
         "menu.tools.scripts_run",
         "menu.window.palette_open",
         "menu.window.workspace_export",
@@ -1016,16 +1635,32 @@ pub(crate) mod replay {
         TARGET.set(Some(target));
         COUNTER.set(0);
         HIT.replace(None);
+        HIT_LABEL.replace(None);
     }
 
     /// Stop replaying; returns the key that was hit and how many rows were seen.
     pub fn finish() -> (Option<String>, usize) {
+        let (key, _, count) = finish_labelled();
+        (key, count)
+    }
+
+    /// Dynamic rows share an operation key but keep distinct displayed labels.
+    pub fn finish_labelled() -> (Option<String>, Option<String>, usize) {
         TARGET.set(None);
-        (HIT.take(), COUNTER.get())
+        (HIT.take(), HIT_LABEL.take(), COUNTER.get())
     }
 
     pub fn active() -> bool {
         TARGET.get().is_some()
+    }
+
+    pub fn hit_with_label(key: &str, label: &str, enabled: bool) -> bool {
+        if hit(key, enabled) {
+            HIT_LABEL.replace(Some(label.to_owned()));
+            true
+        } else {
+            false
+        }
     }
 
     pub fn hit(key: &str, enabled: bool) -> bool {
@@ -1045,6 +1680,101 @@ pub(crate) mod replay {
 
 #[cfg(test)]
 mod tests {
+    /// #4088: with the Customization pages open, a click on a menu row
+    /// picks its command in the Commands list (Shortcut Keys tab,
+    /// scrolled to it) and does not run it; closed, the click runs it.
+    #[test]
+    fn a_menu_click_while_customizing_picks_the_command() {
+        let ctx = crate::theme::ui_context();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let frame = |events: Vec<egui::Event>, pick: bool| {
+            let mut ran = false;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    super::PICK_ROWS.with(|c| c.set(pick));
+                    super::ROWS.with(|r| r.borrow_mut().clear());
+                    ran = super::item(ui, "menu.view.toggle_wireframe", "", true);
+                },
+            );
+            out.textures_delta.clear();
+            ran
+        };
+        let click = |pick: bool| {
+            frame(Vec::new(), pick);
+            let at = super::ROWS
+                .with(|r| r.borrow().first().map(|(_, rect)| rect.center()))
+                .expect("the row");
+            let press = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let a = frame(vec![egui::Event::PointerMoved(at), press(true)], pick);
+            let b = frame(vec![press(false)], pick);
+            a || b
+        };
+        assert!(click(false), "a click runs the command");
+        assert!(!click(true), "customizing, the click does not run it");
+        let mut app = crate::app::App::headless();
+        super::open_requested_properties(&mut app);
+        let ed = &app.shortcut_editor;
+        assert_eq!(ed.selected.as_deref(), Some("menu.view.toggle_wireframe"));
+        assert!(ed.keys_tab && ed.scroll_to_selected);
+        assert_eq!(app.options_page, crate::ui::options::OptionsPage::Commands);
+        super::PICK_ROWS.with(|c| c.set(false));
+    }
+
+    /// Window > Panels shows each panel's picture beside its name, as
+    /// the panel bar's "..." list does (#3221).
+    #[test]
+    fn window_panels_show_the_panels_pictures() {
+        use crate::app::DockerTab;
+        let ctx = crate::theme::ui_context();
+        let mut app = crate::app::App::headless();
+        super::PICTURED.with(|p| p.borrow_mut().clear());
+        run_frame(&ctx, |ui| super::panels_menu(&mut app, ui));
+        let pictured = super::PICTURED.with(|p| p.borrow().clone());
+        for group in DockerTab::MENU_GROUPS.iter() {
+            for tab in group.iter() {
+                assert!(pictured.iter().any(|k| k == tab.key()), "{}", tab.key());
+            }
+        }
+    }
+
+    #[test]
+    fn select_same_opens_from_edit_menu_and_restores_its_panel_layout() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let id = app
+            .new_shape(ShapeKind::Rect {
+                rect: Rect::new(10.0, 10.0, 30.0, 30.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("reference rectangle");
+        app.select(vec![id]);
+        let mut ran = false;
+        run_frame(&ctx, |ui| {
+            let _guard = invoke::Guard;
+            invoke::start_trigger("docker.select_same");
+            edit_menu(&mut app, ui);
+            ran = invoke::finish().1;
+        });
+        assert!(ran);
+        assert_eq!(app.selection, vec![id]);
+        assert!(app.docker_shown(DockerTab::SelectSame));
+        let layout = app.docker_setup();
+        app.close_docker(DockerTab::SelectSame);
+        app.set_docker_setup(&layout);
+        assert!(app.docker_shown(DockerTab::SelectSame));
+    }
+
     #[test]
     fn the_panels_menu_lists_every_panel_once() {
         let mut listed: Vec<DockerTab> = DockerTab::MENU_GROUPS
@@ -1091,20 +1821,89 @@ mod tests {
     }
 
     fn menus() -> Vec<(&'static str, fn(&mut App, &mut Ui))> {
-        vec![
-            ("file", file_menu),
-            ("edit", edit_menu),
-            ("view", view_menu),
-            ("layout", layout_menu),
-            ("object", object_menu),
-            ("effects", effects_menu),
-            ("bitmaps", bitmaps_menu),
-            ("text", text_menu),
-            ("table", table_menu),
-            ("tools", tools_menu),
-            ("window", window_menu),
-            ("help", help_menu),
-        ]
+        all_menus().to_vec()
+    }
+
+    /// The menu bar holds eleven menus in this order: File, Edit, View,
+    /// Object, Text, Image, Effects, Page, Tools, Window, Help. Table is
+    /// a submenu of Text and the trace commands sit under Image > Trace;
+    /// the command keys stay as they were, so saved shortcuts still work.
+    #[test]
+    fn the_menu_bar_lists_eleven_menus_in_order() {
+        let keys: Vec<&str> = all_menus().iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            keys,
+            [
+                "menu.file",
+                "menu.edit",
+                "menu.view",
+                "menu.object",
+                "menu.text",
+                "menu.bitmaps",
+                "menu.effects",
+                "menu.layout",
+                "menu.tools",
+                "menu.window",
+                "menu.help",
+            ]
+        );
+        let titles: Vec<String> = keys.iter().map(|k| tr(k)).collect();
+        assert_eq!(
+            titles,
+            [
+                "File", "Edit", "View", "Object", "Text", "Image", "Effects", "Page", "Tools",
+                "Window", "Help",
+            ]
+        );
+        for key in MENUS_WITHOUT_DRAWING {
+            assert!(keys.contains(&key), "{key} is not a menu");
+        }
+        let ctx = crate::theme::ui_context();
+        let mut app = mixed_app();
+        let mut entries = Vec::new();
+        run_frame(&ctx, |ui| entries = commands(&mut app, ui.ctx()));
+        let find = |key: &str| entries.iter().find(|e| e.key == key).cloned();
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.path.first() == Some(&"menu.table".to_string())),
+            "Table is no menu of its own"
+        );
+        let table = find("menu.table.create_new_table").expect("Create New Table");
+        assert_eq!(table.path, ["menu.text", "menu.table"]);
+        assert_eq!(
+            find("menu.table.merge_cells")
+                .expect("Merge Cells")
+                .shortcut,
+            "Ctrl+M"
+        );
+        let trace = find("menu.bitmaps.quick_trace").expect("Automatic trace");
+        assert_eq!(trace.path, ["menu.bitmaps", "menu.bitmaps.trace"]);
+        assert_eq!(
+            find("menu.bitmaps.trace_logo").expect("Logo preset").path,
+            [
+                "menu.bitmaps",
+                "menu.bitmaps.trace",
+                "menu.bitmaps.outline_trace"
+            ]
+        );
+        assert_eq!(
+            find("menu.layout.insert_page").expect("Insert Page").path,
+            ["menu.layout"]
+        );
+        assert!(find("menu.text.grammar").is_some(), "the grammar checker");
+        assert!(find("menu.text.grammatik").is_none(), "the old key is gone");
+        // The commands come in menu order: a File command before an
+        // Object one, that before a Text one, and Page's last but for
+        // Tools, Window and Help.
+        let first = |menu: &str| {
+            entries
+                .iter()
+                .position(|e| e.path.first().map(String::as_str) == Some(menu))
+                .unwrap_or_else(|| panic!("{menu} has no command"))
+        };
+        let order: Vec<usize> = keys.iter().map(|k| first(k)).collect();
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
     }
 
     fn run_frame(ctx: &Context, f: impl FnOnce(&mut Ui)) {
@@ -1148,8 +1947,188 @@ mod tests {
         }
     }
 
+    /// #4132 #3752 #3954: No Frame, Center to Page Horizontally and
+    /// Vertically and Convert to Guidelines are commands of the Object
+    /// menu (so each can take a shortcut) and run by their keys.
+    #[test]
+    fn frame_center_and_guideline_commands_run_by_key() {
+        use tracedraw_core::document::GuideLine;
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let mut entries = Vec::new();
+        run_frame(&ctx, |ui| entries = commands(&mut app, ui.ctx()));
+        let path = |key: &str| {
+            entries
+                .iter()
+                .find(|e| e.key == key)
+                .map(|e| e.path.clone())
+                .unwrap_or_else(|| panic!("{key} listed"))
+        };
+        assert_eq!(
+            path("menu.object.clip_frame_none"),
+            ["menu.object", "menu.object.clip_frame"]
+        );
+        assert_eq!(
+            path("menu.object.center_to_page_h"),
+            ["menu.object", "menu.object.align_distribute"]
+        );
+        path("menu.object.center_to_page_v");
+        assert_eq!(path("menu.object.convert_to_guidelines"), ["menu.object"]);
+        let mut run = |app: &mut App, key: &str| {
+            let mut ran = false;
+            run_frame(&ctx, |ui| ran = run_command(app, ui.ctx(), key));
+            ran
+        };
+        // A small rectangle off the page centre moves across only, then
+        // down only.
+        let page = app.page_rect();
+        let id = app
+            .new_shape(ShapeKind::Rect {
+                rect: tracedraw_core::Rect::new(1.0, 2.0, 11.0, 6.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rect");
+        app.select(vec![id]);
+        let centre = |app: &App| app.doc().shape_on_page(id).expect("rect").bounds().center();
+        assert!(run(&mut app, "menu.object.center_to_page_h"));
+        let c = centre(&app);
+        assert!((c.x - page.center().x).abs() < 1e-6 && (c.y - 4.0).abs() < 1e-6, "{c:?}");
+        assert!(run(&mut app, "menu.object.center_to_page_v"));
+        let c = centre(&app);
+        assert!((c - page.center()).hypot() < 1e-6, "{c:?}");
+        // An empty clip frame goes back to its object.
+        app.objects_to_clip_frames();
+        assert_eq!(app.empty_clip_frames(), vec![id]);
+        assert!(run(&mut app, "menu.object.clip_frame_none"));
+        assert!(app.empty_clip_frames().is_empty());
+        assert!(matches!(
+            app.doc().shape_on_page(id).expect("rect again").kind,
+            ShapeKind::Rect { .. }
+        ));
+        // The rectangle becomes four guidelines along its sides.
+        app.select(vec![id]);
+        let b = app.doc().shape_on_page(id).expect("rect").bounds();
+        let before = app.page_guides().len();
+        assert!(run(&mut app, "menu.object.convert_to_guidelines"));
+        assert!(app.doc().shape_on_page(id).is_none(), "the object is gone");
+        let lines: Vec<GuideLine> = app.page_guides()[before..].iter().map(|g| g.line).collect();
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        for want in [
+            GuideLine::Vertical { x: b.x0 },
+            GuideLine::Vertical { x: b.x1 },
+            GuideLine::Horizontal { y: b.y0 },
+            GuideLine::Horizontal { y: b.y1 },
+        ] {
+            assert!(
+                lines.iter().any(|l| match (l, &want) {
+                    (GuideLine::Vertical { x }, GuideLine::Vertical { x: w })
+                    | (GuideLine::Horizontal { y: x }, GuideLine::Horizontal { y: w }) =>
+                        (x - w).abs() < 1e-6,
+                    _ => false,
+                }),
+                "{want:?} in {lines:?}"
+            );
+        }
+        // One undo step brings the rectangle back without the guidelines.
+        app.undo();
+        assert!(app.doc().shape_on_page(id).is_some());
+        assert_eq!(app.page_guides().len(), before);
+    }
+
+    /// #4208: a toggle's state reads from the menus, for its bar button.
+    #[test]
+    fn a_toggle_command_tells_whether_it_is_on() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let key = "menu.view.snap_objects";
+        let mut on = None;
+        app.snap.objects = true;
+        run_frame(&ctx, |ui| on = command_on(&mut app, ui.ctx(), key));
+        assert_eq!(on, Some(true));
+        app.snap.objects = false;
+        ctx.data_mut(|d| d.remove_temp::<(f64, std::sync::Arc<std::collections::HashMap<String, bool>>)>(egui::Id::new("menu_command_states")));
+        run_frame(&ctx, |ui| on = command_on(&mut app, ui.ctx(), key));
+        assert_eq!(on, Some(false));
+        run_frame(&ctx, |ui| on = command_on(&mut app, ui.ctx(), "menu.file.new"));
+        assert_eq!(on, None);
+    }
+
     /// The menus list their commands with the menus they sit in and their
     /// built-in shortcuts, and run one by its key with nothing shown.
+    /// Page > Page Spacing: the presets and Custom... (the dialog in the
+    /// drawing's units), next to Page Layout.
+    #[test]
+    fn the_page_menu_sets_the_page_spacing() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let mut entries = Vec::new();
+        run_frame(&ctx, |ui| entries = commands(&mut app, ui.ctx()));
+        let pos = |key: &str| entries.iter().position(|e| e.key == key);
+        let custom = pos("menu.layout.page_spacing_custom").expect("Custom...");
+        assert_eq!(
+            entries[custom].path,
+            ["menu.layout", "menu.layout.page_spacing"]
+        );
+        let layout = pos("menu.layout.page_layout").expect("Page Layout");
+        assert_eq!(pos("menu.layout.page_spacing_0"), Some(layout + 1));
+        for (mm, key) in crate::multipage::SPACING_PRESETS {
+            let mut ran = false;
+            run_frame(&ctx, |ui| ran = run_command(&mut app, ui.ctx(), key));
+            assert!(ran, "{key}");
+            assert_eq!(app.page_spacing(), mm, "{key}");
+        }
+        run_frame(&ctx, |ui| {
+            run_command(&mut app, ui.ctx(), "menu.layout.page_spacing_10");
+        });
+        app.units = crate::app::Units::Inches;
+        let mut ran = false;
+        run_frame(&ctx, |ui| {
+            ran = run_command(&mut app, ui.ctx(), "menu.layout.page_spacing_custom")
+        });
+        assert!(ran);
+        match app.dialog {
+            Dialog::PageSpacing { value } => assert!((value - 10.0 / 25.4).abs() < 1e-9),
+            ref d => panic!("{d:?}"),
+        }
+    }
+
+    /// Page > Facing Pages and its Start On submenu (#1972): run by key,
+    /// each one undo step; choosing a side turns facing pages on.
+    #[test]
+    fn the_page_menu_turns_facing_pages_on_and_picks_the_side() {
+        use tracedraw_core::spreads::PageSide;
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let mut entries = Vec::new();
+        run_frame(&ctx, |ui| entries = commands(&mut app, ui.ctx()));
+        let pos = |key: &str| entries.iter().position(|e| e.key == key);
+        let left = pos("menu.layout.facing_start_left").expect("Left Side");
+        assert_eq!(
+            entries[left].path,
+            ["menu.layout", "menu.layout.facing_start"]
+        );
+        let mut ran = false;
+        run_frame(&ctx, |ui| {
+            ran = run_command(&mut app, ui.ctx(), "menu.layout.facing_pages")
+        });
+        assert!(ran);
+        assert!(app.doc().metadata.facing_pages);
+        assert_eq!(app.doc().metadata.facing_start, PageSide::Right);
+        run_frame(&ctx, |ui| {
+            run_command(&mut app, ui.ctx(), "menu.layout.facing_pages");
+        });
+        assert!(!app.doc().metadata.facing_pages);
+        run_frame(&ctx, |ui| {
+            run_command(&mut app, ui.ctx(), "menu.layout.facing_start_left");
+        });
+        assert!(app.doc().metadata.facing_pages);
+        assert_eq!(app.doc().metadata.facing_start, PageSide::Left);
+        app.undo();
+        assert!(!app.doc().metadata.facing_pages);
+        assert_eq!(app.doc().metadata.facing_start, PageSide::Right);
+    }
+
     #[test]
     fn menu_commands_are_listed_and_run_by_key() {
         let ctx = crate::theme::ui_context();
@@ -1166,7 +2145,7 @@ mod tests {
         assert_eq!(all.shortcut, "Ctrl+A");
         assert!(find("menu.window.new_window").is_some());
         assert!(find("menu.window.cascade").is_some());
-        // Every row Highlight What's New marks is a command, or a menu or
+        // Every row Mark New Features marks is a command, or a menu or
         // submenu on the way to one.
         // (Window > Dockers lists the panels, which are not commands.)
         for key in NEW_IN_THIS_VERSION {
@@ -1179,9 +2158,9 @@ mod tests {
                 "{key} is not in the menus"
             );
         }
-        assert!(!marked_new("menu.object.clip_frame"));
+        assert!(!marked_new("menu.text.text_height"));
         set_highlight_new(true);
-        assert!(marked_new("menu.object.clip_frame"));
+        assert!(marked_new("menu.text.text_height"));
         assert!(!marked_new("menu.file.export"));
         set_highlight_new(false);
         assert!(
@@ -1226,6 +2205,67 @@ mod tests {
         assert!(!invoke::active());
     }
 
+    /// Window > Dockers checks every open docker, its tab in front or
+    /// behind another; choosing one behind brings it to the front, and
+    /// a closed column's dockers are unchecked (#3663).
+    #[test]
+    fn the_dockers_menu_checks_every_open_tab() {
+        let mut app = App::headless();
+        for tab in [DockerTab::Hints, DockerTab::Properties, DockerTab::Objects] {
+            app.open_docker(tab);
+        }
+        assert_eq!(app.docker_tab, DockerTab::Objects);
+        for tab in [DockerTab::Hints, DockerTab::Properties, DockerTab::Objects] {
+            assert!(effect_docker_open(&app, tab), "{tab:?}");
+        }
+        assert!(!effect_docker_open(&app, DockerTab::Blend));
+        app.open_docker(DockerTab::Hints);
+        assert_eq!(app.docker_tab, DockerTab::Hints);
+        assert!(effect_docker_open(&app, DockerTab::Objects));
+        app.show_dockers = false;
+        assert!(!effect_docker_open(&app, DockerTab::Objects));
+    }
+
+    /// Window > Panels ticks a floating panel too, and choosing it
+    /// brings its window in front of the others (#4352).
+    #[test]
+    fn the_panels_menu_ticks_and_raises_a_floating_panel() {
+        let ctx = crate::theme::ui_context();
+        let mut app = mixed_app();
+        for tab in [DockerTab::ShapeGenerator, DockerTab::Objects] {
+            app.open_docker(tab);
+            app.move_docker(tab, crate::app::DockerPlace::Floating, None);
+        }
+        let mut on = None;
+        run_frame(&ctx, |ui| on = command_on(&mut app, ui.ctx(), "docker.shape_generator"));
+        assert_eq!(on, Some(true));
+        assert!(effect_docker_open(&app, DockerTab::Objects));
+        let layer = |tab: DockerTab| {
+            egui::LayerId::new(
+                egui::Order::Middle,
+                egui::Id::new(("floating_docker", tab.key())),
+            )
+        };
+        let top = |ctx: &egui::Context| ctx.memory(|m| m.layer_ids().last());
+        run_frame(&ctx, |ui| crate::ui::dockers::floating_dockers(&mut app, ui.ctx()));
+        run_frame(&ctx, |ui| crate::ui::dockers::floating_dockers(&mut app, ui.ctx()));
+        app.open_docker(DockerTab::Objects);
+        assert_eq!(app.raise_docker, Some(DockerTab::Objects));
+        run_frame(&ctx, |ui| crate::ui::dockers::floating_dockers(&mut app, ui.ctx()));
+        run_frame(&ctx, |ui| crate::ui::dockers::floating_dockers(&mut app, ui.ctx()));
+        assert_eq!(app.raise_docker, None);
+        assert_eq!(top(&ctx), Some(layer(DockerTab::Objects)));
+        app.open_docker(DockerTab::ShapeGenerator);
+        run_frame(&ctx, |ui| crate::ui::dockers::floating_dockers(&mut app, ui.ctx()));
+        run_frame(&ctx, |ui| crate::ui::dockers::floating_dockers(&mut app, ui.ctx()));
+        assert_eq!(top(&ctx), Some(layer(DockerTab::ShapeGenerator)));
+        // Still open: the panel stays where it floats.
+        assert_eq!(
+            app.docker_place(DockerTab::ShapeGenerator),
+            Some(crate::app::DockerPlace::Floating)
+        );
+    }
+
     /// The Effects menu: Flatten Effects, the bitmap groups, then the
     /// effect panels, checked while open; Object > Create holds Arrowhead
     /// and Pattern Fill, which asks for the pattern's type.
@@ -1240,8 +2280,7 @@ mod tests {
             find("menu.effects.flatten").expect("flatten").path,
             ["menu.effects"]
         );
-        assert!(find("menu.effects.picker")
-            .is_none_or(|e| e.path == ["menu.window", "menu.window.dockers"]));
+        assert!(find("menu.effects.picker").is_none_or(|e| e.path == ["menu.window"]));
         assert_eq!(
             find("menu.effects.contour").expect("contour").shortcut,
             "Ctrl+F9"
@@ -1253,9 +2292,19 @@ mod tests {
             .collect();
         assert_eq!(
             create,
-            ["menu.object.create_arrowhead", "menu.object.create_pattern"]
+            [
+                "menu.object.create_arrowhead",
+                "menu.object.create_pattern",
+                "menu.object.add_common_shape",
+                "menu.object.shape_generator"
+            ]
         );
         assert!(find("menu.table.create_new_table").is_some());
+        // Table's commands sit in a submenu of Text.
+        assert_eq!(
+            find("menu.table.create_new_table").expect("table").path,
+            ["menu.text", "menu.table"]
+        );
         // The panels: checked while their tab is in the shown column.
         app.show_dockers = false;
         assert!(!effect_docker_open(&app, DockerTab::Blend));
@@ -1310,6 +2359,109 @@ mod tests {
         assert_eq!(app.active_doc, 1);
         assert!(app.document_tab_title(0).ends_with(":1"));
         assert!(app.document_tab_title(1).ends_with(":2"));
+    }
+
+    /// Mirror Horizontally and Mirror Vertically are commands of Object >
+    /// Transformations, so a shortcut of the user's runs them (#2622).
+    #[test]
+    fn the_mirror_buttons_take_a_shortcut() {
+        use egui::{Key, Modifiers};
+        let ctx = crate::theme::ui_context();
+        let mut app = mixed_app();
+        app.show_welcome = false;
+        let first = app.doc().pages[0].layers[0].shapes[0].id;
+        let coeffs = |app: &App| {
+            app.doc().pages[0].layers[0]
+                .shapes
+                .iter()
+                .find(|s| s.id == first)
+                .map(|s| s.transform.as_coeffs())
+                .unwrap_or_default()
+        };
+        app.select(vec![first]);
+        let c0 = coeffs(&app);
+        app.settings
+            .shortcuts
+            .push(("menu.object.mirror_h".into(), "Alt+Shift+H".into()));
+        app.settings
+            .shortcuts
+            .push(("menu.object.mirror_v".into(), "Alt+Shift+V".into()));
+        root_frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::H, Modifiers::ALT | Modifiers::SHIFT)],
+        );
+        root_frame(&ctx, &mut app, vec![]);
+        let c1 = coeffs(&app);
+        assert!((c1[0] + c0[0]).abs() < 1e-9, "{c0:?} {c1:?} {}", app.status);
+        assert!((c1[3] - c0[3]).abs() < 1e-9, "{c0:?} {c1:?}");
+        root_frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::V, Modifiers::ALT | Modifiers::SHIFT)],
+        );
+        root_frame(&ctx, &mut app, vec![]);
+        let c2 = coeffs(&app);
+        assert!((c2[3] + c0[3]).abs() < 1e-9, "{c0:?} {c2:?} {}", app.status);
+        // The menu rows are there and show their keys.
+        assert_eq!(
+            invoke::shown_shortcut("menu.object.mirror_h", ""),
+            "Alt+Shift+H"
+        );
+        let mut ran = false;
+        app.select(vec![first]);
+        run_frame(&ctx, |ui| {
+            ran = run_command(&mut app, ui.ctx(), "menu.object.mirror_h")
+        });
+        assert!(ran);
+        assert!((coeffs(&app)[0] - c0[0]).abs() < 1e-9);
+    }
+
+    /// A plugin's commands are commands like the menus' own: listed for
+    /// Options > Customization under their names, and run by a shortcut
+    /// of the user's (#3519).
+    #[test]
+    fn plugin_commands_take_shortcuts() {
+        use egui::{Key, Modifiers};
+        let ctx = crate::theme::ui_context();
+        let mut app = mixed_app();
+        app.show_welcome = false;
+        assert!(
+            app.install_plugin(crate::plugins::TEMPLATE),
+            "{}",
+            app.status
+        );
+        let mut entries = Vec::new();
+        run_frame(&ctx, |ui| entries = commands(&mut app, ui.ctx()));
+        let id = crate::plugins::command_key("My Plugin", "Box with a lid");
+        let e = entries
+            .iter()
+            .find(|e| e.key == id)
+            .expect("the plugin's command is listed");
+        assert_eq!(e.path.first().map(String::as_str), Some("menu.tools"));
+        assert_eq!(
+            crate::macros::command_name(&id),
+            Some(("Box with a lid".to_string(), "My Plugin".to_string()))
+        );
+        let count = |app: &App| {
+            app.doc().pages[0]
+                .layers
+                .iter()
+                .map(|l| l.shapes.len())
+                .sum::<usize>()
+        };
+        let before = count(&app);
+        app.settings
+            .shortcuts
+            .push((id.clone(), "Ctrl+Alt+D".into()));
+        root_frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::D, Modifiers::COMMAND | Modifiers::ALT)],
+        );
+        root_frame(&ctx, &mut app, vec![]);
+        assert_eq!(count(&app), before + 2, "{}", app.status);
+        assert_eq!(invoke::shown_shortcut(&id, ""), "Ctrl+Alt+D");
     }
 
     /// A shortcut of the user's runs its menu command, takes over a
@@ -1372,6 +2524,316 @@ mod tests {
         );
     }
 
+    /// #1409: in the browser version the menus show the key that runs a
+    /// command whose own key the browser keeps, and that key runs it; the
+    /// desktop shows and runs the command's own key only.
+    #[test]
+    fn browser_kept_shortcuts_have_alternatives_in_the_menus() {
+        use egui::{Key, Modifiers};
+        let ctx = crate::theme::ui_context();
+        let mut app = mixed_app();
+        app.show_welcome = false;
+        let first = app.doc().pages[0]
+            .layers
+            .iter()
+            .find_map(|l| l.shapes.first().map(|s| s.id))
+            .expect("a shape");
+        let shapes = move |app: &App| {
+            app.doc().pages[0]
+                .layers
+                .iter()
+                .find(|l| l.shapes.iter().any(|s| s.id == first))
+                .map(|l| l.shapes.iter().map(|s| s.id).collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        let alt_shift = Modifiers::ALT | Modifiers::SHIFT;
+        let back = |app: &mut App| app.selection = vec![first];
+
+        // Desktop: Ctrl+PgUp shown and run; Alt+PgUp does nothing.
+        crate::shortcuts::set_web_keys_for_test(false);
+        root_frame(&ctx, &mut app, vec![]);
+        assert_eq!(
+            invoke::shown_shortcut("menu.object.forward_one", "Ctrl+PgUp"),
+            "Ctrl+PgUp"
+        );
+        back(&mut app);
+        let before = shapes(&app);
+        root_frame(&ctx, &mut app, vec![key(Key::PageUp, Modifiers::ALT)]);
+        assert_eq!(shapes(&app), before);
+
+        // Browser: the rows show the alternatives (context menus too, as
+        // they draw their rows the same way), and they run the commands.
+        crate::shortcuts::set_web_keys_for_test(true);
+        for (id, own, web) in [
+            ("menu.object.forward_one", "Ctrl+PgUp", "Alt+PgUp"),
+            ("menu.object.back_one", "Ctrl+PgDn", "Alt+PgDn"),
+            ("menu.file.new", "Ctrl+N", "Alt+Shift+N"),
+            ("menu.window.refresh_window", "Ctrl+W", "Ctrl+F5"),
+            ("menu.window.close_window", "Ctrl+F4", "Alt+Shift+W"),
+            ("menu.text.text_docker", "Ctrl+T", "Alt+Shift+X"),
+            ("menu.text.edit_text", "Ctrl+Shift+T", "Alt+Shift+T"),
+            ("menu.object.convert_to_curves", "Ctrl+Q", "Alt+Shift+C"),
+            ("menu.file.exit", "Alt+F4", "Alt+F4"),
+            ("menu.file.save", "Ctrl+S", "Ctrl+S"),
+        ] {
+            assert_eq!(invoke::shown_shortcut(id, own), web, "{id}");
+        }
+        let mut entries = Vec::new();
+        run_frame(&ctx, |ui| entries = commands(&mut app, ui.ctx()));
+        assert!(entries
+            .iter()
+            .any(|e| e.key == "menu.object.forward_one" && e.shortcut == "Ctrl+PgUp"));
+        // Alt+PgUp brings the bottom object one step forward.
+        back(&mut app);
+        root_frame(&ctx, &mut app, vec![key(Key::PageUp, Modifiers::ALT)]);
+        root_frame(&ctx, &mut app, vec![]);
+        assert_ne!(shapes(&app), before);
+        assert_eq!(shapes(&app)[1], first);
+        // Alt+PgDn takes it back.
+        root_frame(&ctx, &mut app, vec![key(Key::PageDown, Modifiers::ALT)]);
+        root_frame(&ctx, &mut app, vec![]);
+        assert_eq!(shapes(&app), before);
+        // Alt+Shift+1 (the physical 1, `!` on the keyboard) stores the
+        // selection as group 1, which 1 selects again.
+        back(&mut app);
+        root_frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Key {
+                key: Key::Exclamationmark,
+                physical_key: Some(Key::Num1),
+                pressed: true,
+                repeat: false,
+                modifiers: alt_shift,
+            }],
+        );
+        app.selection.clear();
+        root_frame(&ctx, &mut app, vec![key(Key::Num1, Modifiers::NONE)]);
+        assert_eq!(app.selection, vec![first]);
+        // Alt+Shift+N asks for a new drawing.
+        let docs = app.docs.len();
+        root_frame(&ctx, &mut app, vec![key(Key::N, alt_shift)]);
+        for _ in 0..3 {
+            root_frame(&ctx, &mut app, vec![]);
+        }
+        assert!(
+            app.docs.len() > docs || !matches!(app.dialog, Dialog::None),
+            "{}",
+            app.status
+        );
+        crate::shortcuts::set_web_keys_for_test(false);
+    }
+
+    /// #1409: each browser alternative is a key no menu command, tool or
+    /// panel uses, and no key the editor checks by itself.
+    #[test]
+    fn browser_alternatives_are_free() {
+        let ctx = crate::theme::ui_context();
+        let mut app = mixed_app();
+        app.show_welcome = false;
+        let mut entries = Vec::new();
+        run_frame(&ctx, |ui| entries = commands(&mut app, ui.ctx()));
+        let mut used: Vec<String> = entries.into_iter().map(|e| e.shortcut).collect();
+        used.extend(
+            crate::tools::Tool::ALL
+                .iter()
+                .filter_map(|t| t.shortcut())
+                .map(str::to_string),
+        );
+        used.extend(DockerTab::ALL.iter().map(|t| t.shortcut().to_string()));
+        // The keys the canvas checks itself: `pressed(Key::X, mods)`.
+        let src = include_str!("../interaction.rs");
+        for part in src.split("pressed(Key::").skip(1) {
+            let Some((k, rest)) = part.split_once(',') else {
+                continue;
+            };
+            let Some((m, _)) = rest.split_once(')') else {
+                continue;
+            };
+            let mut text = String::new();
+            if m.contains("cmd") || m.contains("COMMAND") {
+                text.push_str("Ctrl+");
+            }
+            if m.contains("ALT") {
+                text.push_str("Alt+");
+            }
+            if m.contains("SHIFT") {
+                text.push_str("Shift+");
+            }
+            let k = k.trim();
+            let k = k.strip_prefix("Num").unwrap_or(k);
+            text.push_str(k);
+            used.push(text);
+        }
+        assert!(used
+            .iter()
+            .any(|u| crate::shortcuts::same(u, "Alt+Shift+R")));
+        for (taken, alt) in crate::shortcuts::BROWSER_KEYS {
+            let Some(alt) = alt else { continue };
+            assert!(
+                !used.iter().any(|u| crate::shortcuts::same(u, alt)),
+                "{alt} (for {taken}) is used"
+            );
+        }
+    }
+
+    /// A frame of the menu bar alone in a window `height` tall.
+    fn bar_frame(ctx: &Context, app: &mut App, height: f32, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, height),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| menu_bar(app, ui));
+        out.textures_delta.clear();
+    }
+
+    /// The rects of the pop-ups on screen.
+    fn popup_rects(ctx: &Context) -> Vec<egui::Rect> {
+        ctx.memory(|m| {
+            m.areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|l| l.order == egui::Order::Foreground)
+                .filter_map(|l| m.area_rect(l.id))
+                .collect()
+        })
+    }
+
+    /// The Object menu opened with Alt and its access key in a window
+    /// `height` tall: the rects of the pop-ups shown.
+    fn open_object_menu(height: f32) -> Vec<egui::Rect> {
+        let ctx = crate::theme::ui_context();
+        let mut app = mixed_app();
+        let mut taken = Vec::new();
+        let mut letter = ' ';
+        for key in ["menu.file", "menu.edit", "menu.view", "menu.object"] {
+            let c = access::choose(&tr(key), &taken).map(|a| a.1).unwrap_or(' ');
+            taken.push(c);
+            letter = c;
+        }
+        let k = access::key_of(letter).expect("object menu access key");
+        bar_frame(&ctx, &mut app, height, Vec::new());
+        bar_frame(&ctx, &mut app, height, vec![key(k, egui::Modifiers::ALT)]);
+        for _ in 0..4 {
+            bar_frame(&ctx, &mut app, height, Vec::new());
+        }
+        popup_rects(&ctx)
+    }
+
+    /// A long menu in a short window stays inside the window, under its
+    /// title, and scrolls instead of running past the bottom edge (#1008).
+    #[test]
+    fn a_long_menu_fits_a_short_window() {
+        let tall = open_object_menu(1200.0);
+        assert_eq!(tall.len(), 1, "{tall:?}");
+        let full = tall[0];
+        let height = 360.0;
+        assert!(full.height() > height, "the Object menu is {full:?}");
+        let short = open_object_menu(height);
+        assert_eq!(short.len(), 1, "{short:?}");
+        let menu = short[0];
+        assert!(
+            menu.bottom() <= height + 0.5,
+            "{menu:?} runs past the window"
+        );
+        assert!(
+            (menu.top() - full.top()).abs() < 0.5,
+            "{menu:?} left its title"
+        );
+        assert!(menu.height() > 3.0 * ROW_HEIGHT, "{menu:?}");
+    }
+
+    /// One frame of a menu pop-up with `rows` rows at the top left of a
+    /// window `height` tall: the pop-up's rect and the last row's rect.
+    fn long_menu_frame(
+        ctx: &Context,
+        height: f32,
+        rows: usize,
+        events: Vec<egui::Event>,
+    ) -> (egui::Rect, egui::Rect) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, height),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut last = egui::Rect::NOTHING;
+        let mut area = egui::Rect::NOTHING;
+        let mut out = ctx.run_ui(input, |ui| {
+            let r = egui::Area::new(egui::Id::new("long menu"))
+                .fixed_pos(egui::pos2(10.0, 10.0))
+                .order(egui::Order::Foreground)
+                .show(ui.ctx(), |ui| {
+                    ui.set_style(ui.ctx().global_style());
+                    menu_popup_style(ui.style_mut());
+                    egui::Frame::menu(ui.style()).show(ui, |ui| {
+                        body(ui, |ui| {
+                            for i in 0..rows {
+                                item_label(ui, &format!("Row {i}"), "", true);
+                            }
+                            last = ui.label("last").rect;
+                        })
+                    })
+                });
+            area = r.response.rect;
+        });
+        out.textures_delta.clear();
+        (area, last)
+    }
+
+    /// A menu that fits the window shows all its rows, however tall it
+    /// is, without a scroll bar's limit.
+    #[test]
+    fn a_menu_that_fits_shows_every_row() {
+        let ctx = crate::theme::ui_context();
+        let mut shown = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+        for _ in 0..4 {
+            shown = long_menu_frame(&ctx, 1000.0, 30, Vec::new());
+        }
+        let (area, last) = shown;
+        assert!(area.height() > 30.0 * ROW_HEIGHT, "{area:?}");
+        assert!(last.bottom() <= area.bottom(), "{last:?} in {area:?}");
+    }
+
+    /// The wheel scrolls a menu body taller than the window, so its last
+    /// rows come into view.
+    #[test]
+    fn the_wheel_scrolls_a_long_menu_body() {
+        let ctx = crate::theme::ui_context();
+        let height = 300.0;
+        let frame = |events: Vec<egui::Event>| long_menu_frame(&ctx, height, 40, events);
+        for _ in 0..3 {
+            frame(Vec::new());
+        }
+        let (area, before) = frame(vec![egui::Event::PointerMoved(egui::pos2(60.0, 100.0))]);
+        assert!(area.bottom() <= height + 0.5, "{area:?}");
+        assert!(
+            before.top() > height,
+            "the last row starts in view: {before:?}"
+        );
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -2000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![wheel]);
+        let mut after = before;
+        for _ in 0..30 {
+            after = frame(Vec::new()).1;
+        }
+        assert!(
+            after.bottom() <= height,
+            "the last row stays hidden: {after:?}"
+        );
+    }
+
     /// Every enabled row of every menu is clicked once against a mixed
     /// document; the application survives each command.
     #[test]
@@ -1418,6 +2880,35 @@ mod tests {
 /// first one 11 px from the edge).
 pub(crate) const BAR_FONT: f32 = 13.0;
 
+/// Where the menu bar's titles were drawn, and how many menus are under
+/// its More title (`(Vec<Rect>, usize)` in the context's data).
+pub(crate) const MENU_BAR_LAYOUT: &str = "menu_bar_layout";
+
+/// The menu under More whose submenu opens once More is shown (Alt and
+/// its letter).
+const MORE_PENDING: &str = "menu_bar_more_pending";
+
+/// The access keys of the menus under More, in their order (for tests).
+pub(crate) const MENU_MORE_KEYS: &str = "menu_bar_more_keys";
+
+/// Room kept at the end of a menu bar too short for every title, for the
+/// "More" title (»).
+const MORE_W: f32 = 28.0;
+
+/// A menu title's width on the bar before it was drawn once.
+fn title_width(ui: &Ui, label: &str) -> f32 {
+    let text = ui.fonts_mut(|f| {
+        f.layout_no_wrap(
+            label.to_string(),
+            egui::FontId::proportional(BAR_FONT),
+            Tokens::text(),
+        )
+        .size()
+        .x
+    });
+    text + 2.0 * ui.spacing().button_padding.x
+}
+
 pub(crate) fn menu_bar_style(style: &mut egui::Style) {
     egui::containers::menu::menu_style(style);
     style.override_font_id = Some(egui::FontId::proportional(BAR_FONT));
@@ -1441,42 +2932,56 @@ pub(crate) fn menu_bar_style(style: &mut egui::Style) {
 
 pub fn menu_bar(app: &mut App, ui: &mut Ui) {
     set_highlight_new(app.highlight_whats_new);
+    open_requested_properties(app);
+    PICK_ROWS.with(|c| c.set(crate::ui::bar_items::customization_open(app)));
     // Alt and a letter the user gave a command keeps running that command
     // instead of opening a menu; while Options waits for a shortcut's keys
     // no menu opens either.
     let capturing = app.shortcut_editor.capture.is_some();
-    // Alt+letter shortcuts of tools (the user's, else the defaults, such
-    // as Alt+C for the Pen) keep their letter from the menu bar.
-    let tool_labels = crate::tools::Tool::ALL.iter().filter_map(|t| {
-        app.settings
-            .shortcuts
-            .iter()
-            .find(|(id, _)| id == t.id())
-            .map(|(_, v)| v.clone())
-            .or_else(|| t.shortcut().map(str::to_string))
-    });
+    // Alt+E edits the selected object's symmetry (Object > Symmetry,
+    // run before the menu bar is drawn, so also while it is edited);
+    // with no symmetry selected it opens the Edit menu (#2881).
+    let symmetry_e = app.selected_symmetry().is_some();
     let user_alt_keys: Vec<egui::Key> = app
         .settings
         .shortcuts
         .iter()
-        .map(|(_, v)| v.clone())
-        .chain(tool_labels)
-        .filter_map(|v| crate::shortcuts::parse(&v))
+        .filter_map(|(_, v)| crate::shortcuts::parse(v))
         .filter(|(m, _)| m.alt && !(m.ctrl || m.command || m.shift))
         .map(|(_, k)| k)
         .collect();
-    let blocked =
-        move |c: char| capturing || access::key_of(c).is_some_and(|k| user_alt_keys.contains(&k));
+    // A dialog keeps Alt and its letters: Alt+O in Text > Edit Text
+    // opened the Object menu behind it (#3370).
+    let dialog_open = !matches!(app.dialog, crate::ui::dialogs::Dialog::None);
+    let blocked = move |c: char| {
+        capturing
+            || dialog_open
+            || (symmetry_e && c == 'e')
+            || access::key_of(c).is_some_and(|k| user_alt_keys.contains(&k))
+    };
     egui::MenuBar::new()
         .style(menu_bar_style)
         .config(egui::containers::menu::MenuConfig::new().style(menu_popup_style))
         .ui(ui, |ui| {
+            // The title the keyboard is on (Alt pressed alone, #1839).
+            let bar_focus = crate::ui::keynav::bar_focus(ui.ctx());
+            // A menu opened from the keyboard lights its title as a click
+            // does.
+            let open_title = crate::ui::keynav::open_title(ui.ctx());
             // Each title's access key, for Alt and the letter.
             let mut keys: Vec<char> = Vec::new();
             let mut menu = |ui: &mut Ui, key: &str, f: &mut dyn FnMut(&mut Ui)| -> egui::Response {
                 let label = tr(key);
                 let access = access::choose(&label, &keys);
+                let lit = bar_focus == Some(keys.len()) || open_title == Some(keys.len());
                 keys.push(access.map(|a| a.1).unwrap_or(' '));
+                let title_bottom_id = ui.id().with(key).with("title_bottom");
+                let title_bottom = ui.ctx().data(|d| d.get_temp::<f32>(title_bottom_id));
+                // Lit like a title under the pointer.
+                let inactive = ui.style().visuals.widgets.inactive;
+                if lit {
+                    ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.hovered;
+                }
                 let r = ui
                     .menu_button(
                         access::title(
@@ -1487,10 +2992,14 @@ pub fn menu_bar(app: &mut App, ui: &mut Ui) {
                         ),
                         |ui| {
                             ui.set_min_width(MENU_WIDTH);
-                            body(ui, |ui| f(ui))
+                            let limit = below_body_limit(ui, title_bottom);
+                            body_within(ui, limit, |ui| f(ui))
                         },
                     )
                     .response;
+                ui.style_mut().visuals.widgets.inactive = inactive;
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(title_bottom_id, r.rect.bottom()));
                 if marked_new(key) {
                     // A dot over the title's top right corner.
                     ui.painter().circle_filled(
@@ -1501,29 +3010,111 @@ pub fn menu_bar(app: &mut App, ui: &mut Ui) {
                 }
                 r
             };
-            let mut titles = vec![menu(ui, "menu.file", &mut |ui| file_menu(app, ui))];
-            // With no drawing open only File, Tools, Window and Help remain.
-            if app.has_document() {
-                titles.push(menu(ui, "menu.edit", &mut |ui| edit_menu(app, ui)));
-                titles.push(menu(ui, "menu.view", &mut |ui| view_menu(app, ui)));
-                titles.push(menu(ui, "menu.layout", &mut |ui| layout_menu(app, ui)));
-                titles.push(menu(ui, "menu.object", &mut |ui| object_menu(app, ui)));
-                titles.push(menu(ui, "menu.effects", &mut |ui| effects_menu(app, ui)));
-                titles.push(menu(ui, "menu.bitmaps", &mut |ui| bitmaps_menu(app, ui)));
-                titles.push(menu(ui, "menu.text", &mut |ui| text_menu(app, ui)));
-                titles.push(menu(ui, "menu.table", &mut |ui| table_menu(app, ui)));
+            // The menus in their order; with no drawing open only File,
+            // Tools, Window and Help remain.
+            let has_document = app.has_document();
+            let mut titles = Vec::new();
+            // The titles that do not fit the bar (a phone, a tablet in
+            // the Touch workspace, a narrow window) go under the "More"
+            // title at its end (#1301, #1691).
+            let menus: Vec<(&str, fn(&mut App, &mut Ui))> = all_menus()
+                .into_iter()
+                .filter(|(key, _)| has_document || MENUS_WITHOUT_DRAWING.contains(key))
+                .collect();
+            let gap = ui.spacing().item_spacing.x;
+            let width_id = |ui: &Ui, key: &str| ui.id().with(key).with("title_width");
+            let widths: Vec<f32> = menus
+                .iter()
+                .map(|(key, _)| {
+                    let id = width_id(ui, key);
+                    ui.ctx()
+                        .data(|d| d.get_temp::<f32>(id))
+                        .unwrap_or_else(|| title_width(ui, &tr(key)))
+                })
+                .collect();
+            let all = widths.iter().map(|w| w + gap).sum::<f32>();
+            let room = if all > ui.available_width() {
+                ui.available_width() - MORE_W
+            } else {
+                f32::INFINITY
+            };
+            let mut used = 0.0;
+            let mut more: Vec<(&str, fn(&mut App, &mut Ui))> = Vec::new();
+            for ((key, body), width) in menus.into_iter().zip(widths) {
+                if !more.is_empty() || used + width > room {
+                    more.push((key, body));
+                    continue;
+                }
+                let r = menu(ui, key, &mut |ui| body(app, ui));
+                let id = width_id(ui, key);
+                ui.ctx().data_mut(|d| d.insert_temp(id, r.rect.width()));
+                used += r.rect.width() + gap;
+                titles.push(r);
             }
-            titles.push(menu(ui, "menu.tools", &mut |ui| tools_menu(app, ui)));
-            titles.push(menu(ui, "menu.window", &mut |ui| window_menu(app, ui)));
-            titles.push(menu(ui, "menu.help", &mut |ui| help_menu(app, ui)));
+            // The menus under More keep the access keys they have on a
+            // wide bar: Alt and the letter open More and that menu in it.
+            let bar_keys = keys.clone();
+            let mut more_keys: Vec<char> = Vec::new();
+            for (key, _) in &more {
+                let mut taken = bar_keys.clone();
+                taken.extend(&more_keys);
+                more_keys.push(access::choose(&tr(key), &taken).map_or(' ', |a| a.1));
+            }
+            let mut more_title = None;
+            if !more.is_empty() {
+                let pending_id = egui::Id::new(MORE_PENDING);
+                let r = ui
+                    .menu_button(egui::RichText::new("\u{bb}").size(BAR_FONT), |ui| {
+                        ui.set_min_width(MENU_WIDTH);
+                        body(ui, |ui| {
+                            access::reserve(&bar_keys);
+                            let pending = ui.ctx().data(|d| d.get_temp::<usize>(pending_id));
+                            for (i, (key, f)) in more.iter().enumerate() {
+                                let row = sub_row(ui, key, |ui| f(app, ui));
+                                if let Some(row) = row.filter(|_| pending == Some(i)) {
+                                    open_row_submenu(ui, row.id);
+                                    ui.ctx().data_mut(|d| d.remove::<usize>(pending_id));
+                                }
+                            }
+                        })
+                    })
+                    .response;
+                keys.push(' ');
+                more_title = Some(r.clone());
+                titles.push(r);
+            }
+            // Where the titles went and how many are under More, for the
+            // layout checks.
+            let shown: Vec<egui::Rect> = titles.iter().map(|r| r.rect).collect();
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(egui::Id::new(MENU_BAR_LAYOUT), (shown, more.len()));
+                d.insert_temp(egui::Id::new(MENU_MORE_KEYS), more_keys.clone());
+            });
             switch_on_hover(ui.ctx(), &titles);
             open_with_alt(ui.ctx(), &titles, &keys, &blocked);
+            if let Some(more_title) = &more_title {
+                open_more_with_alt(ui.ctx(), &titles, more_title, &more_keys, &blocked);
+            }
+            // The titles for the keys of the next frame: Left and Right
+            // go from menu to menu (#1839).
+            crate::ui::keynav::note_titles(
+                ui.ctx(),
+                crate::ui::keynav::Titles {
+                    popups: titles
+                        .iter()
+                        .map(egui::Popup::default_response_id)
+                        .collect(),
+                    keys: keys.clone(),
+                },
+            );
         });
 }
 
 /// Alt+letter used by commands (symmetry, Alt+Q, Alt+Z): they keep it
-/// over opening a menu.
-const ALT_TAKEN: [char; 5] = ['e', 's', 'x', 'q', 'z'];
+/// over opening a menu. Alt+E opens the Edit menu, as on every Windows
+/// program (Alt+E, N clones); it edits a symmetry only while an object
+/// with one is selected (#2881).
+const ALT_TAKEN: [char; 4] = ['s', 'x', 'q', 'z'];
 
 /// Alt and a title's access key open that menu (closing another one),
 /// unless `blocked` keeps that letter for something else.
@@ -1534,24 +3125,62 @@ fn open_with_alt(
     blocked: &dyn Fn(char) -> bool,
 ) {
     let popup_id = egui::Popup::default_response_id;
-    let hit = keys.iter().zip(titles).find(|(c, _)| {
-        !ALT_TAKEN.contains(c)
-            && !blocked(**c)
-            && access::key_of(**c).is_some_and(|key| {
-                ctx.input(|i| {
-                    i.events.iter().any(|e| {
-                        matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. }
-                            if *k == key && modifiers.alt && !modifiers.ctrl && !modifiers.shift)
-                    })
-                })
-            })
-    });
+    let hit = keys
+        .iter()
+        .zip(titles)
+        .find(|(c, _)| alt_pressed(ctx, **c, blocked));
     if let Some((_, r)) = hit {
         for t in titles {
             egui::Popup::close_id(ctx, popup_id(t));
         }
         egui::Popup::open_id(ctx, popup_id(r));
+        // Its first row lit, for the arrows and Enter (#1839).
+        crate::ui::keynav::opened_by_keys(ctx, popup_id(r));
     }
+}
+
+/// Alt and the access key of a menu under More (») open More with that
+/// menu's submenu open, its first row lit, as the title would on a
+/// wide bar.
+fn open_more_with_alt(
+    ctx: &egui::Context,
+    titles: &[egui::Response],
+    more_title: &egui::Response,
+    more_keys: &[char],
+    blocked: &dyn Fn(char) -> bool,
+) {
+    let Some(at) = more_keys.iter().position(|c| alt_pressed(ctx, *c, blocked)) else {
+        return;
+    };
+    let popup_id = egui::Popup::default_response_id;
+    for t in titles {
+        egui::Popup::close_id(ctx, popup_id(t));
+    }
+    egui::Popup::open_id(ctx, popup_id(more_title));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(MORE_PENDING), at));
+    ctx.request_repaint();
+}
+
+/// Alt and the access key `c` were pressed (without Ctrl or Shift) and
+/// nothing else keeps that letter.
+fn alt_pressed(ctx: &egui::Context, c: char, blocked: &dyn Fn(char) -> bool) -> bool {
+    !ALT_TAKEN.contains(&c)
+        && !blocked(c)
+        && access::key_of(c).is_some_and(|key| {
+            ctx.input(|i| {
+                i.events.iter().any(|e| {
+                    matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. }
+                        if *k == key && modifiers.alt && !modifiers.ctrl && !modifiers.shift)
+                })
+            })
+        })
+}
+
+/// Open the submenu of the row `row` of the menu being drawn (next
+/// frame), its first row lit.
+fn open_row_submenu(ui: &Ui, row: egui::Id) {
+    let menu = egui::containers::menu::find_menu_root(ui).id;
+    crate::ui::keynav::open_submenu_by_keys(ui.ctx(), menu, row);
 }
 
 /// With one menu open, pointing at another title of the bar opens that
@@ -1718,6 +3347,10 @@ fn file_menu(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// The key of Edit Contents and of Finish Editing of a clip frame: into
+/// the frame and out again (`App::toggle_clip_frame_edit`).
+pub const CLIP_EDIT_KEY: &str = "Ctrl+Shift+F3";
+
 fn edit_menu(app: &mut App, ui: &mut Ui) {
     let has = !app.selection.is_empty();
     let undo = app
@@ -1754,7 +3387,7 @@ fn edit_menu(app: &mut App, ui: &mut Ui) {
         ui,
         "menu.edit.repeat",
         "Ctrl+R",
-        app.last_repeatable.is_some(),
+        app.last_repeatable().is_some(),
     ) {
         app.repeat_last();
     }
@@ -1967,8 +3600,8 @@ fn view_menu(app: &mut App, ui: &mut Ui) {
     });
     item(ui, "menu.view.split_view", "U", false);
     sep(ui);
-    check_if(ui, "menu.view.document_navigator", "", true, false);
-    check_if(ui, "menu.view.scroll_bars", "", true, false);
+    check_if(ui, "menu.view.document_navigator", true, false);
+    check_if(ui, "menu.view.scroll_bars", true, false);
 }
 
 pub(crate) fn layout_menu(app: &mut App, ui: &mut Ui) {
@@ -2059,6 +3692,49 @@ pub(crate) fn layout_menu(app: &mut App, ui: &mut Ui) {
     sep(ui);
     if item(ui, "menu.tools.border_and_grommet", "", true) {
         app.dialog = Dialog::BorderGrommet(Default::default());
+    }
+}
+
+/// The Shape tool's node commands, with their keys (#2001): Object >
+/// Nodes, so that they are in Options > Customization > Commands and can
+/// take keys of the user's. They work on the chosen nodes with the Shape
+/// tool; the keys are also read by the canvas
+/// (`App::node_command_key`).
+pub(crate) const NODE_COMMANDS: [(&str, &str); 8] = [
+    ("menu.object.node_add", "+"),
+    ("menu.object.node_join", "Shift+J"),
+    ("menu.object.node_break", "Shift+B"),
+    ("menu.object.node_to_line", "Shift+L"),
+    ("menu.object.node_to_curve", "Shift+U"),
+    ("menu.object.node_cusp", "Shift+C"),
+    ("menu.object.node_smooth", "Shift+M"),
+    ("menu.object.node_symmetrical", "Shift+Y"),
+];
+
+/// Object > Nodes: the node commands of the Shape tool's property bar.
+fn node_items(app: &mut App, ui: &mut Ui) {
+    let has = app.tool == crate::tools::Tool::Shape && !app.node_selection.is_empty();
+    for (key, keys) in NODE_COMMANDS {
+        let enabled = if key == "menu.object.node_join" {
+            has && app.node_selection.len() == 2
+        } else {
+            has
+        };
+        if matches!(
+            key,
+            "menu.object.node_join" | "menu.object.node_to_line" | "menu.object.node_cusp"
+        ) {
+            sep(ui);
+        }
+        if item(ui, key, keys, enabled) {
+            app.run_node_command(key);
+        }
+    }
+    // With any tool, on the whole of each selected curve.
+    sep(ui);
+    let every = app.can_add_node_every_segment();
+    if item(ui, "menu.object.node_add_every", "", every) {
+        app.add_node_every_segment();
     }
 }
 
@@ -2550,11 +4226,15 @@ fn effects_menu(app: &mut App, ui: &mut Ui) {
     }
 }
 
-/// An effect panel's tab is in an open docker column, or floating.
+/// A docker's tab is in an open docker column (in front or behind
+/// another tab), or floating: what the menus check it for (#3663).
 pub(crate) fn effect_docker_open(app: &App, tab: DockerTab) -> bool {
     match app.docker_place(tab) {
         Some(crate::app::DockerPlace::Right) => app.show_dockers,
         Some(crate::app::DockerPlace::Left) => app.show_left_dockers,
+        Some(p @ (crate::app::DockerPlace::RightInner | crate::app::DockerPlace::LeftInner)) => {
+            app.docker_column(p).2
+        }
         Some(crate::app::DockerPlace::Floating) => true,
         // Brought to the front and joining the default column.
         None => app.show_dockers && app.docker_tab == tab,
@@ -2818,7 +4498,9 @@ fn text_menu(app: &mut App, ui: &mut Ui) {
                 Dialog::WritingTools(crate::ui::writing_tools::WritingToolsState::on_tab(2));
         }
         if item(ui, "menu.text.autocorrect", "", true) {
-            app.dialog = Dialog::Autocorrect(Default::default());
+            app.dialog = Dialog::Options;
+            app.options_page = crate::ui::dialogs::OptionsPage::Text;
+            app.options_text_tab = crate::ui::options::AUTOCORRECT_TAB;
         }
         sep(ui);
         if item(ui, "menu.text.custom_hyphens", "", true) {
@@ -2875,7 +4557,9 @@ fn table_menu(app: &mut App, ui: &mut Ui) {
             .iter()
             .any(|s| matches!(s.kind, ShapeKind::Text { .. })),
     ) {
-        app.convert_text_to_table();
+        if let Some(text) = app.selected_text_for_table() {
+            app.dialog = Dialog::TextToTable(crate::table::TextToTable::detect(&text));
+        }
     }
     if item(ui, "menu.table.convert_table_to_text", "", in_table) {
         app.convert_table_to_text();
@@ -3054,56 +4738,99 @@ fn tools_menu(app: &mut App, ui: &mut Ui) {
 /// property bar, the toolbox, the colour palette, the AI prompt bar, the
 /// status bar, the Text, Zoom and Transform toolbars and the time
 /// tracker's bar.
+pub(crate) const TOOLBAR_KEYS: &[&str] = &[
+    "menu.window.toolbar_menu_bar",
+    "menu.window.toolbar_standard",
+    "menu.window.toolbar_property_bar",
+    "menu.window.toolbar_toolbox",
+    "bars.palette",
+    "bars.ai_prompt",
+    "menu.window.toolbar_status_bar",
+    "menu.window.toolbar_text",
+    "menu.window.toolbar_zoom",
+    "menu.window.toolbar_transform",
+    "menu.window.toolbar_time_tracker",
+];
+
 pub(crate) fn toolbars_list(app: &mut App, ui: &mut Ui) {
-    check(ui, "menu.window.toolbar_menu_bar", "", true);
-    if check(
-        ui,
-        "menu.window.toolbar_standard",
-        "",
-        app.show_standard_toolbar,
-    ) {
-        app.show_standard_toolbar = !app.show_standard_toolbar;
+    for key in crate::ui::context_menu_filter::ordered_keys(TOOLBAR_KEYS)
+        .iter()
+        .copied()
+    {
+        toolbar_item(app, ui, key);
     }
-    if check(
-        ui,
-        "menu.window.toolbar_property_bar",
-        "",
-        app.show_property_bar,
-    ) {
-        app.show_property_bar = !app.show_property_bar;
+}
+
+/// One toolbar toggle, shared by the main menu and the reordered context menu.
+pub(crate) fn toolbar_item(app: &mut App, ui: &mut Ui, key: &str) {
+    if key == "menu.window.toolbar_menu_bar" {
+        check(ui, key, "", true);
+        return;
     }
-    if check(ui, "menu.window.toolbar_toolbox", "", app.show_toolbox) {
-        app.show_toolbox = !app.show_toolbox;
+    let visible = match key {
+        "menu.window.toolbar_standard" => &mut app.show_standard_toolbar,
+        "menu.window.toolbar_property_bar" => &mut app.show_property_bar,
+        "menu.window.toolbar_toolbox" => &mut app.show_toolbox,
+        "bars.palette" => &mut app.settings.palette.show_palette,
+        "menu.window.toolbar_status_bar" => &mut app.show_status_bar,
+        "menu.window.toolbar_text" => &mut app.show_text_toolbar,
+        "menu.window.toolbar_zoom" => &mut app.show_zoom_toolbar,
+        "menu.window.toolbar_transform" => &mut app.show_transform_toolbar,
+        "menu.window.toolbar_time_tracker" => &mut app.settings.time_tracker.show_bar,
+        _ => return,
+    };
+    if check(ui, key, "", *visible) {
+        *visible = !*visible;
     }
-    let palette = app.settings.palette.show_palette;
-    if check(ui, "bars.palette", "", palette) {
-        app.settings.palette.show_palette = !palette;
+    // The toolbars the user made, by their names (#3264).
+    let slots: Vec<u8> = app.settings.bars.custom.iter().map(|c| c.slot).collect();
+    for slot in slots {
+        let bar = crate::ui::bars::Bar::Custom(slot);
+        let on = bar.visible(app);
+        let id = format!("menu.window.toolbar_{}", bar.id());
+        if check_label(ui, &bar.name(app), &id, on) {
+            bar.set_visible(app, !on);
+        }
     }
-    if check(
-        ui,
-        "menu.window.toolbar_status_bar",
-        "",
-        app.show_status_bar,
-    ) {
-        app.show_status_bar = !app.show_status_bar;
-    }
-    if check(ui, "menu.window.toolbar_text", "", app.show_text_toolbar) {
-        app.show_text_toolbar = !app.show_text_toolbar;
-    }
-    if check(ui, "menu.window.toolbar_zoom", "", app.show_zoom_toolbar) {
-        app.show_zoom_toolbar = !app.show_zoom_toolbar;
-    }
-    if check(
-        ui,
-        "menu.window.toolbar_transform",
-        "",
-        app.show_transform_toolbar,
-    ) {
-        app.show_transform_toolbar = !app.show_transform_toolbar;
-    }
-    let tracker = app.settings.time_tracker.show_bar;
-    if check(ui, "menu.window.toolbar_time_tracker", "", tracker) {
-        app.settings.time_tracker.show_bar = !tracker;
+}
+
+/// Window > Panels: each panel with the picture its tab shows (as the
+/// panel bar's "..." list has them, #3221), its name and shortcut,
+/// ticked while it shows; choosing one opens it.
+fn panels_menu(app: &mut App, ui: &mut Ui) {
+    let row = |ui: &mut Ui, app: &mut App, tab: DockerTab| {
+        let pic = crate::ui::dockers::tab_icon(tab);
+        let pic = pic
+            .as_ref()
+            .map(|f| f as &dyn Fn(&egui::Painter, egui::Rect));
+        // Checked while open, its tab in front or behind another in an
+        // open column, or floating (#3663).
+        if check_pic(
+            ui,
+            tab.key(),
+            tab.shortcut(),
+            effect_docker_open(app, tab),
+            pic,
+        ) {
+            app.open_docker(tab);
+        }
+    };
+    for (i, group) in DockerTab::MENU_GROUPS.iter().enumerate() {
+        if i > 0 {
+            sep(ui);
+        }
+        for tab in group.iter() {
+            row(ui, app, *tab);
+        }
+        // The effect panels follow the text group, as a submenu.
+        if i == 5 {
+            sep(ui);
+            sub(ui, "menu.window.dockers_effects", |ui| {
+                for tab in DockerTab::EFFECTS_MENU {
+                    row(ui, app, tab);
+                }
+            });
+        }
     }
 }
 
@@ -3342,5 +5069,470 @@ pub(crate) fn options_items(app: &mut App, ui: &mut Ui) {
     if item(ui, "menu.tools.options_workspaces", "", true) {
         app.dialog = Dialog::Options;
         app.options_page = crate::ui::dialogs::OptionsPage::Workspace;
+    }
+    // The dialog's last tab, the open drawing's own options: listed here
+    // as well as on the Layout menu, so every tab of the dialog has its
+    // entry (#2006).
+    if item(ui, "menu.layout.document_options", "", app.has_document()) {
+        app.dialog = Dialog::Options;
+        app.options_page = crate::ui::dialogs::OptionsPage::DocumentGeneral;
+    }
+}
+
+#[cfg(test)]
+mod options_items_tests {
+    use super::*;
+
+    /// Run `key` from the Options list alone (Tools > Options and the
+    /// standard bar's Options button): whether its item was there,
+    /// enabled, and fired.
+    fn run_in_options(app: &mut App, key: &str) -> bool {
+        let ctx = crate::theme::ui_context();
+        let _guard = invoke::Guard;
+        invoke::start_trigger(key);
+        let mut out = ctx.run_ui(Default::default(), |ui| options_items(app, ui));
+        out.textures_delta.clear();
+        invoke::finish().1
+    }
+
+    /// Tools > Options and the Options button list Document Setup, the
+    /// dialog's last tab, which only the Layout menu had (#2006).
+    #[test]
+    fn the_options_list_has_document_setup() {
+        let mut app = App::headless();
+        assert!(app.has_document());
+        assert!(run_in_options(&mut app, "menu.layout.document_options"));
+        assert!(matches!(app.dialog, Dialog::Options));
+        assert_eq!(
+            app.options_page,
+            crate::ui::dialogs::OptionsPage::DocumentGeneral
+        );
+        // With no drawing open there is no document to set up: greyed.
+        app.dialog = Dialog::None;
+        while app.has_document() {
+            app.docs.remove(0);
+        }
+        assert!(!run_in_options(&mut app, "menu.layout.document_options"));
+        assert!(matches!(app.dialog, Dialog::None));
+    }
+}
+
+#[cfg(test)]
+mod context_menu_filter_tests {
+    use super::*;
+    use crate::ui::context_menu_filter::{Preferences, Scope};
+
+    #[test]
+    fn replay_keeps_the_selected_dynamic_label_with_its_shared_operation_key() {
+        let context = crate::theme::ui_context();
+        let mut first = false;
+        let mut second = false;
+        replay::start(1);
+        let mut output = context.run_ui(Default::default(), |ui| {
+            first = item_label_keyed(ui, "palette.add_from_bitmap", "Eight colors", "", true);
+            second = item_label_keyed(ui, "palette.add_from_bitmap", "Sixteen colors", "", true);
+        });
+        output.textures_delta.clear();
+        let (key, label, count) = replay::finish_labelled();
+        assert!(!first);
+        assert!(second);
+        assert_eq!(key.as_deref(), Some("palette.add_from_bitmap"));
+        assert_eq!(label.as_deref(), Some("Sixteen colors"));
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn hidden_items_remain_collectable_and_executable_commands() {
+        const KEY: &str = "menu.edit.copy";
+        let context = crate::theme::ui_context();
+        let mut preferences = Preferences::default();
+        preferences.set_visible("canvas_object", KEY, false);
+        let mut output = context.run_ui(Default::default(), |ui| {
+            let _scope = Scope::new(&preferences, "canvas_object");
+            let _invocation = invoke::Guard;
+            invoke::start_collect();
+            assert!(!item(ui, KEY, "Ctrl+C", true));
+            let collected = invoke::finish().0;
+            assert_eq!(collected.len(), 1);
+            assert_eq!(collected.first().map(|entry| entry.key.as_str()), Some(KEY),);
+            invoke::start_trigger(KEY);
+            assert!(item(ui, KEY, "Ctrl+C", true));
+            assert!(invoke::finish().1);
+            assert!(!item(ui, KEY, "Ctrl+C", true));
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn every_check_radio_and_disabled_submenu_respects_visibility() {
+        let context = crate::theme::ui_context();
+        let mut preferences = Preferences::default();
+        for key in [
+            "ordinary",
+            "ready",
+            "check",
+            "check_label",
+            "check_pic",
+            "radio",
+            "check_disabled",
+            "radio_disabled",
+            "unfinished",
+            "disabled_sub",
+            "hidden_sub",
+        ] {
+            preferences.set_visible("canvas", key, false);
+        }
+        let mut output = context.run_ui(Default::default(), |ui| {
+            ROWS.with(|rows| rows.borrow_mut().clear());
+            let _scope = Scope::new(&preferences, "canvas");
+            assert!(!item(ui, "ordinary", "", true));
+            assert!(!item_label_keyed(ui, "ready", "A layer", "", true));
+            assert!(!check(ui, "check", "", true));
+            assert!(!check_label(ui, "A palette", "check_label", false));
+            assert!(!check_pic(ui, "check_pic", "", false, None));
+            assert!(!radio(ui, "radio", "", false));
+            assert!(!check_if(ui, "check_disabled", false, false));
+            assert!(!radio_if(ui, "radio_disabled", "", false, false));
+            todo_sub(ui, "unfinished");
+            sub_if(ui, "disabled_sub", false, |_| ());
+            sub(ui, "hidden_sub", |_| ());
+            ROWS.with(|rows| assert!(rows.borrow().is_empty()));
+            let _ = item(ui, "visible", "", true);
+            ROWS.with(|rows| {
+                let rows = rows.borrow();
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows.first().map(|row| row.0.as_str()), Some("visible"));
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn dynamic_targets_with_one_visibility_key_keep_distinct_widget_ids() {
+        let context = crate::theme::ui_context();
+        let mut output = context.run_ui(Default::default(), |ui| {
+            ROW_IDS.with(|rows| rows.borrow_mut().clear());
+            let _scope = Scope::new(&Preferences::default(), "objects_object");
+            let _ = item_label_keyed(ui, "docker.move_to_layer", "First layer", "", true);
+            let _ = item_label_keyed(ui, "docker.move_to_layer", "Second layer", "", true);
+            ROW_IDS.with(|rows| {
+                let rows = rows.borrow();
+                assert_eq!(rows.len(), 2);
+                let mut ids = rows.iter().map(|row| row.1);
+                assert_ne!(ids.next(), ids.next());
+            });
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn hiding_a_submenu_keeps_its_command_walk_single_and_executable() {
+        let context = crate::theme::ui_context();
+        let mut preferences = Preferences::default();
+        preferences.set_visible("canvas", "hidden.submenu", false);
+        preferences.set_visible("canvas", "child.command", false);
+        let mut output = context.run_ui(Default::default(), |ui| {
+            let _scope = Scope::new(&preferences, "canvas");
+            let _invocation = invoke::Guard;
+            invoke::start_trigger("child.command");
+            let mut visits = 0;
+            sub(ui, "hidden.submenu", |ui| {
+                visits += 1;
+                assert!(item(ui, "child.command", "", true));
+            });
+            assert_eq!(visits, 1);
+            assert!(invoke::finish().1);
+        });
+        output.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod empty_context_submenu_tests {
+    use super::*;
+    use crate::ui::context_menu_filter::{Preferences, Scope};
+
+    fn draw(
+        context: &egui::Context,
+        preferences: &Preferences,
+        scene: &str,
+        key: &str,
+        dynamic: bool,
+    ) -> bool {
+        let mut drawn = false;
+        let mut output = context.run_ui(Default::default(), |ui| {
+            let _scope = Scope::new(preferences, scene);
+            drawn = sub_row_dynamic(ui, key, dynamic, |_| ()).is_some();
+        });
+        output.textures_delta.clear();
+        drawn
+    }
+
+    #[test]
+    fn all_hidden_static_children_remove_the_parent_without_running_its_body() {
+        let context = crate::theme::ui_context();
+        let cases: &[(&str, &[&str])] = &[
+            ("context.internet_links", &["docker.hyperlink"]),
+            ("docker.color_styles", &["docker.new_from_selection"]),
+            (
+                "context.frame_type",
+                &[
+                    "context.frame_none",
+                    "context.frame_empty_clip_frame",
+                    "context.frame_text",
+                ],
+            ),
+            (
+                "menu.object.order",
+                &[
+                    "menu.object.to_front_of_page",
+                    "menu.object.to_back_of_page",
+                    "menu.object.forward_one",
+                    "menu.object.back_one",
+                    "menu.object.in_front_of",
+                    "menu.object.behind",
+                    "menu.object.reverse_order",
+                ],
+            ),
+            (
+                "context.wrap_paragraph_text",
+                &[
+                    "context.wrap_text_on",
+                    "context.wrap_contour_left",
+                    "context.wrap_contour_right",
+                    "context.wrap_contour_straddle",
+                    "context.wrap_square_left",
+                    "context.wrap_square_right",
+                    "context.wrap_square_straddle",
+                    "context.wrap_square_above_below",
+                    "context.wrap_offset",
+                ],
+            ),
+        ];
+        for scene in ["canvas_object", "objects_object"] {
+            for &(parent, children) in cases {
+                let mut preferences = Preferences::default();
+                for child in children {
+                    preferences.set_visible(scene, child, false);
+                }
+                let mut output = context.run_ui(Default::default(), |ui| {
+                    let _scope = Scope::new(&preferences, scene);
+                    assert!(sub_row(ui, parent, |_| panic!("hidden body ran")).is_none());
+                });
+                output.textures_delta.clear();
+                preferences.set_visible(scene, children[0], true);
+                assert!(draw(&context, &preferences, scene, parent, false));
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_object_styles_keep_a_branch_and_hiding_its_parent_hides_the_group() {
+        let context = crate::theme::ui_context();
+        let mut preferences = Preferences::default();
+        for key in [
+            "docker.new_style_from_selection",
+            "docker.break_style_link",
+            "docker.open_object_styles",
+        ] {
+            preferences.set_visible("canvas_object", key, false);
+        }
+        assert!(!draw(
+            &context,
+            &preferences,
+            "canvas_object",
+            "docker.object_styles",
+            false
+        ));
+        assert!(draw(
+            &context,
+            &preferences,
+            "canvas_object",
+            "docker.object_styles",
+            true
+        ));
+        preferences.set_visible("canvas_object", "docker.object_styles", false);
+        assert!(!draw(
+            &context,
+            &preferences,
+            "canvas_object",
+            "docker.object_styles",
+            true
+        ));
+    }
+
+    #[test]
+    fn nested_toolbar_and_palette_branches_follow_visible_leaf_operations() {
+        let context = crate::theme::ui_context();
+        let mut preferences = Preferences::default();
+        for key in [
+            "bars.size_default",
+            "bars.size_extra_small",
+            "bars.size_small",
+            "bars.size_medium",
+            "bars.size_large",
+            "bars.size_extra_large",
+            "bars.toolbox_reset",
+            "bars.image_only",
+            "bars.caption_only",
+            "bars.caption_right",
+            "menu.window.workspace_export",
+            "menu.window.workspace_import",
+            "bars.customize_options",
+        ] {
+            preferences.set_visible("toolbar", key, false);
+        }
+        assert!(!draw(
+            &context,
+            &preferences,
+            "toolbar",
+            "bars.customize",
+            false
+        ));
+        preferences.set_visible("toolbar", "bars.size_small", true);
+        assert!(draw(
+            &context,
+            &preferences,
+            "toolbar",
+            "bars.customize",
+            false
+        ));
+        for scene in ["palette", "palette_swatch", "palette_document"] {
+            for key in [
+                "palette.size_xs",
+                "palette.size_s",
+                "palette.size_m",
+                "palette.size_l",
+                "palette.size_xl",
+                "palette.rows_1",
+                "palette.rows_2",
+                "palette.rows_3",
+                "palette.rows_4",
+                "palette.rows_5",
+                "palette.rows_6",
+                "palette.rows_7",
+                "palette.rows_8",
+                "palette.rows_fit",
+                "bars.top",
+                "bars.bottom",
+                "bars.left",
+                "bars.right",
+                "palette.float",
+                "palette.open_as_bar",
+                "palette.reset",
+                "palette.rename",
+            ] {
+                preferences.set_visible(scene, key, false);
+            }
+            for parent in [
+                "palette.size",
+                "palette.rows",
+                "palette.position",
+                "palette.open_bar",
+                "palette.palette",
+            ] {
+                assert!(!draw(&context, &preferences, scene, parent, false));
+            }
+            assert!(draw(
+                &context,
+                &preferences,
+                scene,
+                "palette.position",
+                true
+            ));
+        }
+    }
+
+    #[test]
+    fn hidden_branch_is_walked_once_in_command_mode_and_unscoped_rows_are_preserved() {
+        let context = crate::theme::ui_context();
+        let mut preferences = Preferences::default();
+        preferences.set_visible("canvas_object", "docker.hyperlink", false);
+        let mut visits = 0;
+        let mut output = context.run_ui(Default::default(), |ui| {
+            {
+                let _scope = Scope::new(&preferences, "canvas_object");
+                assert!(sub_row(ui, "context.internet_links", |_| {
+                    visits += 1;
+                })
+                .is_none());
+                assert_eq!(visits, 0);
+                let _guard = invoke::Guard;
+                invoke::start_trigger("docker.hyperlink");
+                sub(ui, "context.internet_links", |ui| {
+                    visits += 1;
+                    assert!(item(ui, "docker.hyperlink", "", true));
+                });
+                assert_eq!(visits, 1);
+                assert!(invoke::finish().1);
+            }
+            assert!(sub_row(ui, "context.internet_links", |_| ()).is_some());
+        });
+        output.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod context_menu_order_tests {
+    use super::*;
+    use crate::ui::context_menu_filter::{ordered_menu, Preferences, Scope};
+
+    #[test]
+    fn context_menu_order_does_not_change_command_collection_or_repeat_actions() {
+        let context = crate::theme::ui_context();
+        let mut preferences = Preferences::default();
+        preferences.set_order("canvas_object", "", &["menu.edit.delete", "menu.edit.copy"]);
+        preferences.set_visible("canvas_object", "menu.edit.copy", false);
+        let mut output = context.run_ui(Default::default(), |ui| {
+            let _scope = Scope::new(&preferences, "canvas_object");
+            let _invocation = invoke::Guard;
+            invoke::start_collect();
+            ordered_menu! { ui;
+                "menu.edit.copy" => { assert!(!item(ui, "menu.edit.copy", "", true)); },
+                "menu.edit.delete" => { assert!(!item(ui, "menu.edit.delete", "", true)); },
+            }
+            let entries = invoke::finish().0;
+            assert_eq!(
+                entries
+                    .iter()
+                    .map(|entry| entry.key.as_str())
+                    .collect::<Vec<_>>(),
+                ["menu.edit.copy", "menu.edit.delete"]
+            );
+            invoke::start_trigger("menu.edit.copy");
+            let mut executed = 0;
+            ordered_menu! { ui;
+                "menu.edit.copy" => { if item(ui, "menu.edit.copy", "", true) { executed += 1; } },
+                "menu.edit.delete" => { if item(ui, "menu.edit.delete", "", true) { executed += 1; } },
+            }
+            assert_eq!(executed, 1);
+            assert!(invoke::finish().1);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn context_menu_order_submenus_apply_their_own_saved_sibling_sequence() {
+        let context = crate::theme::ui_context();
+        let mut preferences = Preferences::default();
+        preferences.set_order(
+            "canvas_object",
+            "menu.object.order",
+            &["menu.object.back_one", "menu.object.forward_one"],
+        );
+        let mut output = context.run_ui(Default::default(), |ui| {
+            let _scope = Scope::new(&preferences, "canvas_object");
+            replay::start(usize::MAX);
+            let mut visits = Vec::new();
+            sub(ui, "menu.object.order", |_ui| {
+                ordered_menu! { _ui;
+                    "menu.object.forward_one" => { visits.push("forward"); },
+                    "menu.object.back_one" => { visits.push("back"); },
+                }
+            });
+            let _ = replay::finish();
+            assert_eq!(visits, ["back", "forward"]);
+        });
+        output.textures_delta.clear();
     }
 }

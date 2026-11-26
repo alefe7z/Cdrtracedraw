@@ -12,6 +12,7 @@ define como o programa funciona. Escolha uma página na lista à esquerda.
 - [[options.show_new_document_dialog]] (ligado): pedir as configurações de um
   desenho novo; veja [Criar um desenho](../get-started/new-document.md).
 - [[options.show_splash]] (ligado).
+- [[options.hardware_acceleration]] (ligado): desenha a janela com a placa de vídeo escolhida ao lado ([[options.gpu_automatic]] de início); desligado, com o renderizador por software do computador. Vale a partir da próxima abertura. Se a janela não abrir assim, o TraceDraw abre de novo com o renderizador por software, depois com OpenGL, e guarda o que funcionou.
 - [[options.undo_levels]]: quantos passos você pode desfazer (150 de início).
 
 ## Exibição {#display}
@@ -25,6 +26,11 @@ define como o programa funciona. Escolha uma página na lista à esquerda.
 - [[options.full_screen_preview]]: [[options.show_page_border]].
 - [[options.wheel_default_action]]: [[options.wheel_zoom]] (de início) ou
   [[options.wheel_scroll]].
+- [[options.open_view]]: [[options.open_view_page]] (de início),
+  [[options.open_view_objects]], [[options.open_view_width]],
+  [[options.open_view_height]], [[options.open_view_actual]], [[options.open_view_percent]] ou
+  [[options.open_view_saved]] (a página, o lugar e o zoom guardados a cada
+  vez que um arquivo do TraceDraw é salvo).
 - [[options.ruler_calibration]]: segure uma régua contra a tela e mude a
   [[options.screen_resolution]] até as marcas coincidirem, para que o zoom de
   100% mostre tamanhos reais. [[options.reset]] devolve 96.
@@ -48,6 +54,7 @@ define como o programa funciona. Escolha uma página na lista à esquerda.
 - [[options.node_shape]] para nós [[options.node_cusp]],
   [[options.node_smooth]] e [[options.node_symmetrical]].
 - [[options.show_curve_direction]].
+- [[options.corner_widgets]].
 - [[options.colors]]: a [[options.main_color]] de nós e alças selecionados e a
   [[options.secondary_color]].
 - [[options.unselected_nodes_filled]].
@@ -92,8 +99,37 @@ Veja [Encaixe](../pages-layout/snapping.md).
 
 ![A página Texto das opções do CD Draw](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]: quanto <kbd>Ctrl+8</kbd> e
-  <kbd>Ctrl+2</kbd> aumentam e diminuem o texto selecionado (1 ponto).
-- [[options.default_font]] e [[options.default_size]] do texto novo.
-- [[menu.text.use_hyphenation]], [[menu.text.show_non_printing]] e
-  [[menu.text.show_text_frames]].
+A página tem cinco abas.
+
+- [[options.display]]: [[options.keyboard_text_increment]] (quanto <kbd>Ctrl+8</kbd>
+  e <kbd>Ctrl+2</kbd> aumentam e diminuem o texto selecionado, 1 ponto), a
+  [[options.default_font]] e o [[options.default_size]] do texto novo, e
+  [[menu.text.show_non_printing]].
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]: [[menu.text.show_text_frames]],
+  [[menu.text.use_hyphenation]] e os [[options.hyphenation_patterns]]
+  (incluídos, ou um dicionário de hifenização do seu idioma).
+  - [[options.default_tab_spacing]]: para onde salta <kbd>Tab</kbd> num parágrafo sem paradas de tabulação próprias (12,7 mm, meia polegada).
+- [[docker.fonts]]: [[options.show_recent_fonts]] no topo das listas de fontes,
+  o [[options.recent_font_count]] (5, até 20) e o
+  [[options.font_sample_size]].
+- [[options.spelling]]: [[writing.ignore_digits]], [[writing.ignore_capitals]]
+  e [[options.add_to_autocorrect]], para que uma palavra corrigida no corretor
+  ortográfico seja corrigida ao digitar da próxima vez; e os
+  [[options.dictionaries]] que ele usa, veja
+  [Dicionários](../text/writing-tools.md#dictionaries).
+- [[dialog.autocorrect]]: o que é corrigido ao digitar; veja
+  [Correção automática](../text/writing-tools.md#autocorrect).
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

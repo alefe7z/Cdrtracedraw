@@ -57,6 +57,19 @@ riempimento del pannello [[docker.properties]]:
 Una striscia sotto il tipo mostra l'intera sequenza di colori come verrà
 disegnata.
 
+## La finestra di dialogo Modifica riempimento {#edit-fill}
+
+<kbd>F11</kbd> apre la finestra di dialogo [[edit_fill.title]] sul riempimento
+della selezione. Per una sfumatura mostra un'anteprima, il
+[[edit_fill.fill_picker]], il tipo, la ripetizione e la banda dei colori: fate
+clic su un nodo per sceglierlo, trascinatelo per spostarlo, fate doppio clic
+per aggiungerne o toglierne uno. Sotto la banda: colore, trasparenza,
+posizione e [[edit_fill.midpoint]] del nodo, e [[edit_fill.reverse]].
+[[edit_fill.transform]] contiene rotazione, centro e margine del bordo. **OK**
+applica ciò che avete cambiato, con [[edit_fill.overprint]]. Finché la finestra di dialogo è aperta, la selezione mostra il riempimento mentre lo modificate; **Annulla** o <kbd>Esc</kbd> ripristina il riempimento precedente.
+
+![La finestra di dialogo Modifica riempimento](../../img/color-fills-edit-fill.png)
+
 ## Lo strumento Riempimento interattivo {#interactive-fill}
 
 Lo strumento [[tool.interactive_fill]] (<kbd>G</kbd>) modifica i riempimenti
@@ -83,10 +96,10 @@ formata da più oggetti sovrapposti, creando un nuovo oggetto di quell'area.
 Gli oggetti intorno restano come sono.
 
 1. Scegli lo strumento [[tool.area_fill]].
-2. Scegli riempimento e contorno nella barra delle proprietà: **Usa
-   predefinito** (il riempimento e il contorno dei nuovi oggetti; un colore
-   quando quello è nessun riempimento, così l'area si vede), **Specifica** (il
-   colore e, per il contorno, lo spessore, accanto) o **Nessuno**.
+2. Scegli riempimento e contorno nella barra delle proprietà: **Specifica**
+   (il colore e, per il contorno, lo spessore, accanto), **Usa predefinito**
+   (il riempimento e il contorno dei nuovi oggetti; un colore quando quello è
+   nessun riempimento, così l'area si vede) o **Nessuno**.
 3. Fai clic all'interno dell'area.
 
 Il nuovo oggetto va in cima al livello attivo e viene selezionato. Un clic su
@@ -119,6 +132,9 @@ maglia ne mantiene i colori.
 - Un riempimento [[docker.fill_texture]] è una texture generata dall'aspetto
   naturale: [[texture.clouds]], [[texture.marble]], [[texture.noise]] o
   [[texture.wood]], con i suoi colori e la sua scala.
+- [[texture.holographic]] e [[texture.holo_glitter]] danno un aspetto fisso di lamina olografica: colori
+  dell'arcobaleno tra zone scure e chiare (colori A e B), il glitter con grani
+  brillanti. Non cambia con l'angolo di vista; PDF e SVG lo portano come immagine.
 
 ## Più riempimenti su un oggetto {#several-fills}
 

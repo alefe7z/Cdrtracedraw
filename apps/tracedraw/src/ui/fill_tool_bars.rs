@@ -10,6 +10,7 @@
 //! width and colour, or none) of the objects it makes.
 
 use crate::app::App;
+use crate::ui::btn_icons::IconUi;
 use crate::i18n::tr;
 use crate::theme::Tokens;
 use crate::ui::field::NumField;
@@ -56,14 +57,7 @@ pub fn color_pick(
     painter.rect_stroke(
         swatch,
         0.0,
-        Stroke::new(
-            1.0,
-            if enabled {
-                Tokens::icon()
-            } else {
-                Tokens::border()
-            },
-        ),
+        Stroke::new(1.0, crate::ui::propbar::icon_color(enabled)),
         egui::StrokeKind::Inside,
     );
     let c = rect.right_center() - vec2(6.5, 0.0);
@@ -73,11 +67,7 @@ pub fn color_pick(
             c + vec2(3.0, -1.5),
             c + vec2(0.0, 2.0),
         ],
-        if enabled {
-            Tokens::icon()
-        } else {
-            Tokens::border()
-        },
+        crate::ui::propbar::icon_color(enabled),
         Stroke::NONE,
     ));
     let resp = resp.rich_tip(tip);
@@ -111,17 +101,41 @@ pub fn color_pick(
                 });
             }
             ui.separator();
-            let [r, g, b] = color.to_rgb8();
-            let mut rgb = [r, g, b];
+            // Other: the colour picker opens beside the bar's button and
+            // the menu closes. A picker inside the menu closed with it at
+            // its first click and took the menu away when its own lists
+            // were used (#1262).
             ui.horizontal(|ui| {
                 ui.label(tr("toolbar.other_colour"));
-                if ui.color_edit_button_srgb(&mut rgb).changed() {
-                    *color = Color::rgb8(rgb[0], rgb[1], rgb[2]);
-                    changed = true;
+                let (r, _) = ui.allocate_exact_size(vec2(40.0, 18.0), Sense::hover());
+                let other = ui
+                    .interact(r, other_colour_id(id_salt), Sense::click())
+                    .rich_tip(crate::ui::tips::keyed("color_picker.button"));
+                ui.painter().rect_filled(r.shrink(1.0), 2.0, rgb32(*color));
+                ui.painter().rect_stroke(
+                    r,
+                    2.0,
+                    Stroke::new(1.0, Tokens::control_border()),
+                    egui::StrokeKind::Inside,
+                );
+                if other.clicked() {
+                    crate::ui::color_picker::open_picker(ui.ctx(), picker_id(id_salt), *color);
+                    ui.close();
                 }
             });
         });
+    changed |= crate::ui::color_picker::picker_beside(ui, picker_id(id_salt), rect, color);
     changed
+}
+
+/// The Other colour swatch in the menu of [`color_pick`] `id_salt`.
+pub fn other_colour_id(id_salt: &str) -> egui::Id {
+    egui::Id::new(("color_pick_other", id_salt))
+}
+
+/// The colour picker [`color_pick`] `id_salt` opens from its menu.
+pub fn picker_id(id_salt: &str) -> egui::Id {
+    egui::Id::new(("color_pick_picker", id_salt))
 }
 
 /// The Mesh Fill tool's bar.
@@ -133,12 +147,19 @@ pub fn mesh_bar(app: &mut App, ui: &mut Ui) {
         .map(|(_, m)| (m.rows, m.cols))
         .unwrap_or((app.mesh_rows, app.mesh_cols));
     dim(ui, tr("toolbar.rows"));
-    let r1 = ui.add(NumField::new(&mut rows).range(1..=50));
+    let r1 = ui
+        .add(NumField::new(&mut rows).range(1..=50))
+        .rich_tip(tr("toolbar.rows"));
     dim(ui, tr("toolbar.columns"));
-    let r2 = ui.add(NumField::new(&mut cols).range(1..=50));
+    let r2 = ui
+        .add(NumField::new(&mut cols).range(1..=50))
+        .rich_tip(tr("toolbar.columns"));
     if r1.changed() || r2.changed() {
         app.set_mesh_grid(rows, cols);
     }
+    crate::ui::propbar::sep(ui);
+    // Rectangular or freehand marquee over the nodes (discussion #2730).
+    crate::ui::toolbar::node_selection_mode(app, ui);
     crate::ui::propbar::sep(ui);
     let mut smooth = mesh.as_ref().is_some_and(|(_, m)| m.smooth);
     if ui
@@ -146,6 +167,7 @@ pub fn mesh_bar(app: &mut App, ui: &mut Ui) {
             mesh.is_some(),
             egui::Checkbox::new(&mut smooth, tr("docker.smooth_colour")),
         )
+        .rich_tip(tr("docker.smooth_colour"))
         .changed()
     {
         app.set_mesh_smooth(smooth);
@@ -161,15 +183,62 @@ pub fn mesh_bar(app: &mut App, ui: &mut Ui) {
     let r = ui
         .add_enabled(
             node.is_some(),
-            egui::Slider::new(&mut transparency, 0..=100).suffix(" %"),
+            crate::ui::Slider::new(&mut transparency, 0..=100).suffix(" %"),
         )
         .rich_tip(tr("toolbar.mesh_node_transparency"));
     if r.changed() {
         app.set_mesh_node_alpha(1.0 - transparency as f32 / 100.0);
     }
+    // The mesh eyedropper: the next click takes a colour from the page
+    // (an object, a picture or the mesh itself) for every chosen node
+    // (discussion #2387).
+    if node.is_none() {
+        app.mesh_eyedropper = false;
+    }
+    if crate::ui::propbar::tool_button(
+        ui,
+        crate::tools::Tool::ColorEyedropper,
+        &crate::ui::tips::pair("toolbar.mesh_eyedropper", "toolbar.mesh_eyedropper_desc"),
+        node.is_some(),
+        app.mesh_eyedropper,
+    )
+    .clicked()
+    {
+        app.mesh_eyedropper = !app.mesh_eyedropper;
+    }
+    crate::ui::propbar::sep(ui);
+    // Shuffle: a new random mesh from a colour set for every selected
+    // object, each click another mix.
+    let sets = crate::mesh_tool::MESH_PALETTES;
+    let name = |i: usize| match sets.get(i) {
+        Some((key, _)) => tr(key),
+        None => tr("toolbar.mesh_colors_document"),
+    };
+    crate::ui::keynav::ComboBox::from_id_salt("mesh_shuffle_colors")
+        .selected_text(name(app.mesh_palette))
+        .width(110.0)
+        .show_ui(ui, |ui| {
+            for i in 0..=sets.len() {
+                ui.selectable_value(&mut app.mesh_palette, i, name(i));
+            }
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("toolbar.mesh_colors"));
+    if ui
+        .add_enabled(
+            !app.selection.is_empty(),
+            crate::ui::btn_icons::Ib::new("toolbar.mesh_shuffle"),
+        )
+        .rich_tip(crate::ui::tips::keyed("toolbar.mesh_shuffle"))
+        .rich_disabled_tip(crate::ui::tips::keyed("toolbar.mesh_shuffle"))
+        .clicked()
+    {
+        app.shuffle_mesh();
+    }
     crate::ui::propbar::sep(ui);
     if ui
-        .add_enabled(mesh.is_some(), egui::Button::new(tr("toolbar.clear_mesh")))
+        .add_enabled(mesh.is_some(), crate::ui::btn_icons::Ib::new("toolbar.clear_mesh"))
+        .rich_tip(tr("toolbar.clear_mesh"))
         .clicked()
     {
         app.clear_mesh();
@@ -185,26 +254,36 @@ pub fn mesh_bar(app: &mut App, ui: &mut Ui) {
     );
 }
 
-/// What Smart Fill gives the fill or the outline of the objects it makes.
+/// What Smart Fill gives the fill or the outline of the objects it makes,
+/// by the value kept for it (0 the default, 1 a colour of its own, 2 none).
 pub const SMART_CHOICES: [&str; 3] = [
     "toolbar.smart_default",
     "toolbar.smart_specify",
     "toolbar.smart_none",
 ];
 
+/// The order the Fill and Outline lists show their choices in: Specify,
+/// Use default, None (values as in [`SMART_CHOICES`]).
+pub const SMART_ORDER: [u8; 3] = [1, 0, 2];
+
 /// The Smart Fill tool's bar.
 pub fn smart_fill_bar(app: &mut App, ui: &mut Ui) {
     let palette = app.palette.clone();
     dim(ui, tr("toolbar.fill_options"));
     let mut mode = app.area_fill_mode.min(2);
-    egui::ComboBox::from_id_salt("smart_fill_mode")
+    crate::ui::keynav::ComboBox::from_id_salt("smart_fill_mode")
         .selected_text(tr(SMART_CHOICES[mode as usize]))
         .width(110.0)
         .show_ui(ui, |ui| {
-            for (i, key) in SMART_CHOICES.iter().enumerate() {
-                ui.selectable_value(&mut mode, i as u8, tr(key));
+            for v in SMART_ORDER {
+                ui.selectable_value(&mut mode, v, tr(SMART_CHOICES[v as usize]));
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::pair(
+            "toolbar.smart_fill_mode",
+            "toolbar.smart_fill_mode_desc",
+        ));
     app.area_fill_mode = mode;
     color_pick(
         ui,
@@ -217,14 +296,19 @@ pub fn smart_fill_bar(app: &mut App, ui: &mut Ui) {
     crate::ui::propbar::sep(ui);
     dim(ui, tr("toolbar.outline_options"));
     let mut omode = app.area_outline_mode.min(2);
-    egui::ComboBox::from_id_salt("smart_outline_mode")
+    crate::ui::keynav::ComboBox::from_id_salt("smart_outline_mode")
         .selected_text(tr(SMART_CHOICES[omode as usize]))
         .width(110.0)
         .show_ui(ui, |ui| {
-            for (i, key) in SMART_CHOICES.iter().enumerate() {
-                ui.selectable_value(&mut omode, i as u8, tr(key));
+            for v in SMART_ORDER {
+                ui.selectable_value(&mut omode, v, tr(SMART_CHOICES[v as usize]));
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::pair(
+            "toolbar.smart_outline_mode",
+            "toolbar.smart_outline_mode_desc",
+        ));
     app.area_outline_mode = omode;
     let mut w = app.units.from_mm(app.area_outline_width);
     let r = ui.add_enabled(
@@ -234,6 +318,8 @@ pub fn smart_fill_bar(app: &mut App, ui: &mut Ui) {
             .range(0.0..=1000.0)
             .suffix(format!(" {}", app.units.short())),
     );
+    let tip = crate::ui::tips::pair("toolbar.outline_width", "toolbar.smart_outline_width_desc");
+    let r = r.rich_tip(&tip).rich_disabled_tip(&tip);
     if r.changed() {
         app.area_outline_width = app.units.to_mm(w).max(0.0);
     }
@@ -246,12 +332,144 @@ pub fn smart_fill_bar(app: &mut App, ui: &mut Ui) {
         omode == 1,
     );
     crate::ui::propbar::sep(ui);
+    ui.checkbox(
+        &mut app.area_fill_outline_edges,
+        tr("toolbar.smart_outline_edges"),
+    )
+    .rich_tip(crate::ui::tips::keyed("toolbar.smart_outline_edges"));
+    ui.checkbox(&mut app.area_fill_live, tr("toolbar.smart_fill_live"))
+        .rich_tip(crate::ui::tips::keyed("toolbar.smart_fill_live"));
+    // The guidelines close off areas too (#3863), off by default.
+    ui.checkbox(&mut app.area_fill_guides, tr("toolbar.builder_guides"))
+        .rich_tip(crate::ui::tips::pair("toolbar.builder_guides", "toolbar.smart_fill_guides_desc"));
+    crate::ui::propbar::sep(ui);
+    // Every closed area of the selection at once, on a new layer (#4200).
+    if ui
+        .ibutton("toolbar.area_fill_all")
+        .rich_tip(crate::ui::tips::keyed("toolbar.area_fill_all"))
+        .clicked()
+    {
+        let n = app.area_fill_all();
+        if n > 0 {
+            app.status = tr("status.area_fill_all").replace("{n}", &n.to_string());
+        }
+    }
+    crate::ui::propbar::sep(ui);
     dim(ui, tr("toolbar.smart_fill_hint"));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One frame of a colour button at (100, 100), with `events`.
+    fn pick_frame(ctx: &egui::Context, color: &mut Color, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 900.0))),
+            events,
+            ..Default::default()
+        };
+        let palette = vec![
+            ("Red".to_string(), Color::rgb8(255, 0, 0)),
+            ("Blue".to_string(), Color::rgb8(0, 0, 255)),
+        ];
+        let mut out = ctx.run_ui(input, |ui| {
+            egui::Area::new(egui::Id::new("bar"))
+                .fixed_pos(egui::pos2(100.0, 100.0))
+                .show(ui.ctx(), |ui| {
+                    color_pick(ui, &palette, "t", color, "tip", true);
+                });
+        });
+        out.textures_delta.clear();
+    }
+
+    fn click(ctx: &egui::Context, color: &mut Color, at: egui::Pos2) {
+        let b = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        pick_frame(ctx, color, vec![egui::Event::PointerMoved(at)]);
+        pick_frame(ctx, color, vec![b(true)]);
+        pick_frame(ctx, color, vec![b(false)]);
+        pick_frame(ctx, color, Vec::new());
+    }
+
+    /// #1262: Other in a colour button's menu opens the picker at the
+    /// first click, and the picker stays while it is used.
+    #[test]
+    fn other_opens_a_picker_that_stays() {
+        let ctx = crate::theme::ui_context();
+        let mut color = Color::rgb8(255, 0, 0);
+        pick_frame(&ctx, &mut color, Vec::new());
+        // Open the menu, then click Other.
+        click(&ctx, &mut color, egui::pos2(110.0, 111.0));
+        let other = ctx
+            .read_response(other_colour_id("t"))
+            .expect("the menu shows Other")
+            .rect;
+        click(&ctx, &mut color, other.center());
+        let picker = picker_id("t");
+        assert!(crate::ui::color_picker::picker_open(&ctx, picker));
+        let area = ctx
+            .memory(|m| m.area_rect(picker.with("area")))
+            .expect("the picker is drawn");
+        // The menu is gone; a click in the picker keeps it and changes
+        // the colour.
+        assert!(!egui::Popup::is_any_open(&ctx), "the menu closed");
+        let before = color;
+        click(&ctx, &mut color, area.min + vec2(area.width() * 0.3, 60.0));
+        assert!(
+            crate::ui::color_picker::picker_open(&ctx, picker),
+            "still open"
+        );
+        assert_ne!(color, before, "the viewer set the colour");
+        // A click elsewhere closes it.
+        click(&ctx, &mut color, egui::pos2(1100.0, 850.0));
+        assert!(!crate::ui::color_picker::picker_open(&ctx, picker));
+    }
+
+    /// The colour picker on show: a foreground area other than the menu,
+    /// tall enough to hold the viewer.
+    fn shown_picker(ctx: &egui::Context) -> Option<Rect> {
+        let menu = egui::Id::new(("color_pick", "t"));
+        ctx.memory(|m| {
+            m.areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|l| l.order == egui::Order::Foreground && l.id != menu)
+                .filter_map(|l| m.area_rect(l.id))
+                .find(|r| r.height() > 150.0)
+        })
+    }
+
+    /// #1262, found by what is on screen alone: the first click on Other
+    /// opens a picker, and a click in its viewer sets the colour and
+    /// keeps it open.
+    #[test]
+    fn the_first_click_on_other_opens_a_picker_that_works() {
+        let ctx = crate::theme::ui_context();
+        let mut color = Color::rgb8(255, 0, 0);
+        pick_frame(&ctx, &mut color, Vec::new());
+        click(&ctx, &mut color, egui::pos2(110.0, 111.0));
+        let menu = ctx
+            .memory(|m| m.area_rect(egui::Id::new(("color_pick", "t"))))
+            .expect("the menu is open");
+        click(&ctx, &mut color, menu.left_bottom() + OTHER_FROM_MENU);
+        let picker = shown_picker(&ctx).expect("the picker opened at the first click");
+        let before = color;
+        click(
+            &ctx,
+            &mut color,
+            picker.min + vec2(picker.width() * 0.3, 60.0),
+        );
+        assert_ne!(color, before, "the viewer set the colour");
+        assert!(shown_picker(&ctx).is_some(), "the picker stays open");
+    }
+
+    /// Where the Other swatch sits from the bottom left of the menu.
+    const OTHER_FROM_MENU: egui::Vec2 = egui::vec2(64.7, -18.0);
 
     /// Smart Fill makes the object its bar says: the default fill and
     /// outline, its own colour and outline, or neither.
@@ -291,6 +509,107 @@ mod tests {
         let s = made(&mut app);
         assert_eq!(s.fill, Fill::None);
         assert!(s.stroke.is_none());
+    }
+
+    /// Fill All Areas (#4200): a grid of two rectangles crossing a third
+    /// makes every closed area at once, on a new layer, in one undo step.
+    #[test]
+    fn fill_all_areas_fills_every_closed_area_on_a_new_layer() {
+        use tracedraw_core::geometry::Rect;
+        use tracedraw_core::ShapeKind;
+        let mut app = App::headless();
+        let rect = |app: &mut App, r: Rect| {
+            app.new_shape(ShapeKind::Rect {
+                rect: r,
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rect")
+        };
+        // A frame with a bar across it, sticking out on both sides.
+        let a = rect(&mut app, Rect::new(0.0, 0.0, 100.0, 50.0));
+        let b = rect(&mut app, Rect::new(40.0, -10.0, 60.0, 60.0));
+        app.select(vec![a, b]);
+        let layers = |app: &App| app.doc().page(app.page).map(|p| p.layers.len()).unwrap_or(0);
+        let before = layers(&app);
+        let n = app.area_fill_all();
+        // Left, middle and right of the frame, and the bar's two ends.
+        assert_eq!(n, 5, "{:?}", app.selection);
+        assert_eq!(layers(&app), before + 1);
+        let total: f64 = app
+            .selection
+            .iter()
+            .filter_map(|id| app.doc().find_shape(*id))
+            .map(|s| {
+                tracedraw_core::shaping::filled_area(
+                    &s.local_path(),
+                    tracedraw_core::shaping::FillRule::NonZero,
+                )
+            })
+            .sum();
+        assert!((total - 5400.0).abs() < 1.0, "{total}");
+        app.undo();
+        assert_eq!(layers(&app), before);
+        // Nothing closed: nothing made.
+        app.select(vec![]);
+        let mut p = tracedraw_core::geometry::BezPath::new();
+        p.move_to((500.0, 500.0));
+        p.line_to((600.0, 500.0));
+        let line = app
+            .new_shape(ShapeKind::Path {
+                path: p,
+                closed: false,
+            })
+            .expect("line");
+        app.select(vec![line]);
+        assert_eq!(app.area_fill_all(), 0);
+    }
+
+    /// Smart Fill fills an area enclosed by a curve crossing itself, off
+    /// the page on the desktop and in a drawing far larger than the page;
+    /// a click in an open area makes nothing (#499).
+    #[test]
+    fn smart_fill_works_off_the_page_in_a_large_drawing() {
+        use tracedraw_core::geometry::BezPath;
+        use tracedraw_core::ShapeKind;
+        let mut app = App::headless();
+        // A bow tie 2 m wide, right of an A4 page: two triangles meeting
+        // where the curve crosses itself at (1500, 500).
+        let mut path = BezPath::new();
+        path.move_to((500.0, 0.0));
+        path.line_to((2500.0, 1000.0));
+        path.line_to((2500.0, 0.0));
+        path.line_to((500.0, 1000.0));
+        path.close_path();
+        app.new_shape(ShapeKind::Path { path, closed: true })
+            .expect("curve");
+        let before = app
+            .doc()
+            .all_layers()
+            .map(|l| l.shapes.len())
+            .sum::<usize>();
+        app.area_fill_at(tracedraw_core::Point::new(2200.0, 500.0));
+        let id = *app.selection.first().expect("an area");
+        let b = app.doc().find_shape(id).expect("area").bounds();
+        // The right triangle: from the crossing to the right edge.
+        assert!(
+            (b.x0 - 1500.0).abs() < 5.0 && (b.x1 - 2500.0).abs() < 5.0,
+            "{b:?}"
+        );
+        assert!(
+            (b.y0 - 0.0).abs() < 5.0 && (b.y1 - 1000.0).abs() < 5.0,
+            "{b:?}"
+        );
+        let count = |app: &App| {
+            app.doc()
+                .all_layers()
+                .map(|l| l.shapes.len())
+                .sum::<usize>()
+        };
+        assert_eq!(count(&app), before + 1);
+        // Above the tie, open to the outside: nothing.
+        app.area_fill_at(tracedraw_core::Point::new(1500.0, 900.0));
+        assert_eq!(count(&app), before + 1);
     }
 
     /// Both bars draw, with and without a mesh and a chosen node.

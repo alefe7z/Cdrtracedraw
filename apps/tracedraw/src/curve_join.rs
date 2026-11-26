@@ -196,7 +196,116 @@ fn joined(curve: &BezPath, line: &BezPath, tol: f64) -> Option<BezPath> {
     Some(to_path(&subs))
 }
 
+/// The handle a new segment from the open end of `sub` (its end when
+/// `at_end`, else its start) leaves along, so it goes on smoothly from the
+/// segment arriving there: the mirror of that segment's handle at the end
+/// node, `None` after a straight segment.
+fn mirrored_handle(sub: &Sub, at_end: bool) -> Option<Point> {
+    let (node, h) = if at_end {
+        let e = sub.end();
+        match *sub.segs.last()? {
+            Seg::Cubic(_, b, _) => (e, b),
+            Seg::Quad(c, _) => (e, e + (c - e) * (2.0 / 3.0)),
+            Seg::Line(_) => return None,
+        }
+    } else {
+        let s = sub.start;
+        match *sub.segs.first()? {
+            Seg::Cubic(a, _, _) => (s, a),
+            Seg::Quad(c, _) => (s, s + (c - s) * (2.0 / 3.0)),
+            Seg::Line(_) => return None,
+        }
+    };
+    let d = node - h;
+    (d.hypot() > 1e-9).then_some(node + d)
+}
+
 impl App {
+    /// The end node of an open curve under `p` (page) that a new Pen or
+    /// Bezier curve starts from to continue that curve: one of the
+    /// selected curve's, else one of the topmost visible, unlocked open
+    /// curve on the page that has one there. The curve, the end node
+    /// (page) and the handle the next segment leaves along, the mirror of
+    /// the end's own (#630).
+    pub(crate) fn open_end_at(&self, p: Point) -> Option<(ShapeId, Point, Option<Point>)> {
+        let tol = self.join_tolerance();
+        let selected = self.join_candidate();
+        let layers = self.page_layers();
+        let others = layers
+            .iter()
+            .rev()
+            .filter(|l| l.visible && !l.locked)
+            .flat_map(|l| l.shapes.iter().rev())
+            .filter(|s| s.visible && !s.locked && Some(s.id) != selected.as_ref().map(|c| c.id));
+        selected
+            .iter()
+            .chain(others)
+            .filter(|s| matches!(s.kind, ShapeKind::Path { .. }))
+            .filter(|s| s.transform.determinant().abs() > 1e-12)
+            .find_map(|s| {
+                let subs = subpaths(&s.page_path());
+                let (i, at_end) = end_near(&subs, p, tol)?;
+                let sub = subs.get(i)?;
+                let node = if at_end { sub.end() } else { sub.start };
+                Some((s.id, node, mirrored_handle(sub, at_end)))
+            })
+    }
+
+    /// Take the curve `id` up again with the Pen or Bezier `tool` as if
+    /// it were still being drawn (#631): the tool is chosen, the curve
+    /// selected (when it is still there), and a line goes on from `to`,
+    /// the node it stood at with the handle it had; without one (the step
+    /// closed the curve) the curve is only selected.
+    pub(crate) fn resume_curve(
+        &mut self,
+        id: ShapeId,
+        tool: crate::tools::Tool,
+        to: Option<crate::app::PenEnd>,
+    ) {
+        if self.tool != tool {
+            self.set_tool(tool);
+        }
+        if self.doc().shape_on_page(id).is_some() {
+            self.select(vec![id]);
+        } else {
+            self.select(Vec::new());
+        }
+        if let Some(node) = to {
+            self.curve = Some(crate::app::CurveInProgress {
+                nodes: vec![node],
+                smooth: true,
+                resumed: true,
+                ..Default::default()
+            });
+        }
+    }
+
+    /// The curve being drawn goes on from an end of the selected curve:
+    /// the other end of that open subpath when `p` (page) is within
+    /// `reach` of it, where a click closes the curve.
+    pub(crate) fn continuation_close_at(&self, p: Point, reach: f64) -> Option<Point> {
+        let c = self.curve.as_ref()?;
+        // The Pen and Bezier tools' lines, and the Curvature Pen's
+        // (#4245); not a B-spline's, whose points are not on its curve.
+        if !(c.curvature || (c.smooth && !c.bspline)) {
+            return None;
+        }
+        let from = c.nodes.first()?.0;
+        let curve = self.join_candidate()?;
+        let subs = subpaths(&curve.page_path());
+        subs.iter().filter(|s| !s.closed).find_map(|s| {
+            let (a, b) = (s.start, s.end());
+            let other = if (a - from).hypot() < 1e-6 {
+                b
+            } else if (b - from).hypot() < 1e-6 {
+                a
+            } else {
+                return None;
+            };
+            ((other - p).hypot() <= reach && (other - from).hypot() > 1e-6).then_some(other)
+        })
+    }
+
     /// The selected curve a new line may join: one open curve lying on a
     /// layer.
     pub(crate) fn join_candidate(&self) -> Option<tracedraw_core::Shape> {
@@ -212,9 +321,12 @@ impl App {
         }
     }
 
-    /// The join distance in page millimetres.
+    /// The join distance in page millimetres: as far as the end node
+    /// takes a press (the Pen with automatic adding and deleting reaches
+    /// as far as a node is picked), so a press that misses the end by a
+    /// few pixels goes on from it instead of deleting it (#2988).
     fn join_tolerance(&self) -> f64 {
-        self.settings.curves.join_px() / f64::from(self.view.zoom().max(1e-6))
+        self.curve_end_reach_px() / f64::from(self.view.zoom().max(1e-6))
     }
 
     /// `p` (page) is on an end node of the selected open curve, where a new
@@ -228,7 +340,27 @@ impl App {
     /// Add a newly drawn open line (page space): it continues the selected
     /// curve when one of its ends is on one of the curve's end nodes,
     /// otherwise it becomes a curve of its own. The result is selected.
+    /// A line drawn now would continue the selected curve (see
+    /// [`Self::add_drawn_line`]).
+    pub(crate) fn would_join(&self, line: &BezPath) -> bool {
+        self.join_candidate().is_some_and(|curve| {
+            joined(&curve.page_path(), line, self.join_tolerance()).is_some()
+                && curve.transform.determinant().abs() > 1e-12
+        })
+    }
+
     pub fn add_drawn_line(&mut self, line: BezPath) -> Option<ShapeId> {
+        self.add_drawn_line_with_widths(line, Vec::new())
+    }
+
+    /// `add_drawn_line`, with `widths` along the new line's outline (a
+    /// pen's pressure, #850); a line that continues a curve keeps that
+    /// curve's outline.
+    pub fn add_drawn_line_with_widths(
+        &mut self,
+        line: BezPath,
+        widths: Vec<tracedraw_core::style::WidthNode>,
+    ) -> Option<ShapeId> {
         if let Some(curve) = self.join_candidate() {
             if let Some(path) = joined(&curve.page_path(), &line, self.join_tolerance()) {
                 let det = curve.transform.determinant();
@@ -247,10 +379,17 @@ impl App {
                 }
             }
         }
-        let id = self.new_shape(ShapeKind::Path {
-            path: line,
-            closed: false,
-        })?;
+        let id = self.new_shape_styled(
+            ShapeKind::Path {
+                path: line,
+                closed: false,
+            },
+            |shape| {
+                if let Some(st) = shape.stroke.as_mut().filter(|_| !widths.is_empty()) {
+                    st.widths = widths;
+                }
+            },
+        )?;
         self.select(vec![id]);
         Some(id)
     }
@@ -392,5 +531,24 @@ mod tests {
             .expect("rect");
         app.select(vec![r]);
         assert!(!app.on_join_end(Point::new(0.0, 100.0)));
+    }
+
+    #[test]
+    fn pen_tap_near_open_end_continues_instead_of_deleting_anchor() {
+        let mut app = App::headless();
+        app.view.set_zoom(1.0);
+        app.tool = crate::tools::Tool::Pen;
+        app.settings.curves.pen_auto_add_delete = true;
+        app.settings.curves.join_px = 5.0;
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.line_to((20.0, 0.0));
+        p.line_to((40.0, 0.0));
+        app.add_drawn_line(p).expect("line");
+        // 5.5 px from the last anchor (40, 0): beyond join_px (5.0)
+        // yet inside node pick_px (>= 6.0) (#2988).
+        let tap = Point::new(45.5, 0.0);
+        assert!(app.on_join_end(tap));
+        assert!(app.pen_edit_at(tap).is_none());
     }
 }

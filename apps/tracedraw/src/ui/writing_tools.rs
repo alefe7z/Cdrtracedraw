@@ -1,11 +1,13 @@
-//! Text > Writing Tools: one dialog with three tabs (Spell Checker,
+//! Text > Proofing: one dialog with three tabs (Spell Checker,
 //! Grammar, Thesaurus), "?" and Close; and Text > Custom Optional
 //! Hyphens. See docs/behavior/writing-tools.md.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::i18n::{tr, trf};
 use crate::theme::Tokens;
 use crate::ui::dialogs::window;
+use crate::ui::tips::RichTip;
 use egui::{Context, Ui};
 use tracedraw_core::{document::ShapeKind, ShapeId};
 
@@ -31,9 +33,6 @@ pub struct SpellTab {
     pub skipped: Vec<String>,
     /// Replacements made, newest last, for Undo.
     pub done: usize,
-    /// Ignore words with digits, and words in capitals.
-    pub ignore_digits: bool,
-    pub ignore_capitals: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -62,7 +61,7 @@ pub struct ThesaurusTab {
     pub auto_close: bool,
 }
 
-/// Text > Writing Tools.
+/// Text > Proofing.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct WritingToolsState {
     /// 0 Spell Checker, 1 Grammar, 2 Thesaurus.
@@ -103,6 +102,7 @@ fn scope_ids(app: &App, scope: CheckScope) -> Vec<ShapeId> {
 
 /// The unknown words of the text objects `ids`, in order, each place once.
 pub fn unknown_words(app: &App, ids: &[ShapeId], tab: &SpellTab) -> Vec<(ShapeId, String)> {
+    let prefs = &app.settings.spelling;
     let mut out = Vec::new();
     for id in ids {
         let Some(s) = app.doc().find_shape(*id) else {
@@ -114,8 +114,8 @@ pub fn unknown_words(app: &App, ids: &[ShapeId], tab: &SpellTab) -> Vec<(ShapeId
         let text: String = spans.iter().map(|x| x.text.as_str()).collect();
         for w in crate::spell::unknown_words(&text) {
             if tab.skipped.contains(&w)
-                || (tab.ignore_digits && w.chars().any(|c| c.is_ascii_digit()))
-                || (tab.ignore_capitals && w.chars().all(|c| !c.is_lowercase()))
+                || (prefs.ignore_digits && w.chars().any(|c| c.is_ascii_digit()))
+                || (prefs.ignore_capitals && w.chars().all(|c| !c.is_lowercase()))
             {
                 continue;
             }
@@ -125,12 +125,30 @@ pub fn unknown_words(app: &App, ids: &[ShapeId], tab: &SpellTab) -> Vec<(ShapeId
     out
 }
 
+/// A spelling correction as an Autocorrect replacement (Options > Text >
+/// Spelling > Add corrections to Autocorrect): `word` to `with`, the
+/// row for `word` replaced if there is one; nothing for an empty or
+/// unchanged word, or one with spaces.
+pub fn add_correction(prefs: &mut crate::autocorrect::AutocorrectPrefs, word: &str, with: &str) {
+    if word.is_empty() || word == with || word.contains(char::is_whitespace) {
+        return;
+    }
+    match prefs.replacements.iter_mut().find(|(f, _)| f == word) {
+        Some(row) => row.1 = with.to_string(),
+        None => prefs
+            .replacements
+            .push((word.to_string(), with.to_string())),
+    }
+}
+
 /// A right-hand column button, 140 wide.
 fn side_button(ui: &mut Ui, key: &str, enabled: bool) -> bool {
     ui.add_enabled(
         enabled,
-        egui::Button::new(tr(key)).min_size(egui::vec2(140.0, 24.0)),
+        crate::ui::btn_icons::Ib::new(key).min_size(egui::vec2(140.0, 24.0)),
     )
+    .rich_tip(crate::ui::tips::keyed(key))
+    .rich_disabled_tip(crate::ui::tips::keyed(key))
     .clicked()
 }
 
@@ -158,7 +176,11 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut WritingToolsState, close: &
             .iter()
             .enumerate()
             {
-                if ui.selectable_label(st.tab == i, tr(key)).clicked() {
+                if ui
+                    .selectable_label(st.tab == i, tr(key))
+                    .rich_tip(crate::ui::tips::keyed(key))
+                    .clicked()
+                {
                     st.tab = i;
                 }
             }
@@ -178,11 +200,12 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut WritingToolsState, close: &
         ui.horizontal(|ui| {
             help = ui
                 .add_sized([27.0, 27.0], egui::Button::new("?"))
-                .on_hover_text(tr("dialog.help"))
+                .rich_tip(crate::ui::tips::keyed("dialog.help_button"))
                 .clicked();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add_sized([100.0, 27.0], egui::Button::new(tr("dialog.close")))
+                    .rich_tip(crate::ui::tips::keyed("dialog.close"))
                     .clicked()
                 {
                     *close = true;
@@ -215,7 +238,9 @@ fn spell_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState) {
                 ui.add_enabled(
                     current.is_some(),
                     egui::TextEdit::singleline(&mut t.replacement).desired_width(230.0),
-                );
+                )
+                .rich_tip(crate::ui::tips::keyed("writing.replace_with"))
+                .rich_disabled_tip(crate::ui::tips::keyed("writing.replace_with"));
                 ui.end_row();
                 ui.label(tr("writing.replacements"));
                 egui::Frame::new()
@@ -229,7 +254,9 @@ fn spell_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState) {
                                 if let Some((_, w)) = &current {
                                     for s in crate::spell::suggest(w) {
                                         let on = t.replacement == s;
-                                        let r = ui.selectable_label(on, &s);
+                                        let r = ui.selectable_label(on, &s).rich_tip_with(|| {
+                                            format!("{s}\n{}", tr("writing.suggestion_desc"))
+                                        });
                                         if r.clicked() {
                                             t.replacement = s.clone();
                                         }
@@ -279,17 +306,30 @@ fn spell_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState) {
                     undo |= side_button(ui, "writing.undo", t.done > 0);
                     ui.end_row();
                     skip_all |= side_button(ui, "writing.skip_all", current.is_some());
-                    ui.menu_button(tr("writing.options"), |ui| {
-                        ui.checkbox(&mut t.ignore_digits, tr("writing.ignore_digits"));
-                        ui.checkbox(&mut t.ignore_capitals, tr("writing.ignore_capitals"));
-                    });
+                    ui.imenu_button("writing.options", |ui| {
+                        let p = &mut app.settings.spelling;
+                        let mut changed = ui
+                            .checkbox(&mut p.ignore_digits, tr("writing.ignore_digits"))
+                            .changed();
+                        changed |= ui
+                            .checkbox(&mut p.ignore_capitals, tr("writing.ignore_capitals"))
+                            .changed();
+                        changed |= ui
+                            .checkbox(&mut p.add_to_autocorrect, tr("options.add_to_autocorrect"))
+                            .changed();
+                        if changed {
+                            app.settings.save();
+                        }
+                    })
+                    .response
+                    .rich_tip(crate::ui::tips::keyed("writing.options"));
                     ui.end_row();
                     add |= side_button(ui, "writing.add", current.is_some());
                     ui.end_row();
                 });
             ui.horizontal(|ui| {
                 ui.label(tr("writing.check"));
-                egui::ComboBox::from_id_salt("spell_scope")
+                crate::ui::keynav::ComboBox::from_id_salt("spell_scope")
                     .selected_text(tr(match scope {
                         CheckScope::Document => "writing.scope_document",
                         CheckScope::Selection => "writing.scope_selection",
@@ -305,7 +345,9 @@ fn spell_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState) {
                             CheckScope::Selection,
                             tr("writing.scope_selection"),
                         );
-                    });
+                    })
+                    .response
+                    .rich_tip(crate::ui::tips::keyed("writing.check"));
             });
         });
     });
@@ -350,6 +392,10 @@ fn spell_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState) {
             } else {
                 crate::spell::replace_word(app, id, &word, &t.replacement);
                 t.done += 1;
+            }
+            if app.settings.spelling.add_to_autocorrect {
+                add_correction(&mut app.settings.autocorrect, &word, &t.replacement);
+                app.settings.save();
             }
             refresh(app, t, st.scope);
         } else if skip_once {
@@ -511,7 +557,7 @@ fn grammar_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState, close: &m
                 });
             ui.horizontal(|ui| {
                 ui.label(tr("writing.check"));
-                egui::ComboBox::from_id_salt("grammar_scope")
+                crate::ui::keynav::ComboBox::from_id_salt("grammar_scope")
                     .selected_text(tr(match scope {
                         CheckScope::Document => "writing.scope_document",
                         CheckScope::Selection => "writing.scope_selection",
@@ -527,7 +573,9 @@ fn grammar_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState, close: &m
                             CheckScope::Selection,
                             tr("writing.scope_selection"),
                         );
-                    });
+                    })
+                    .response
+                    .rich_tip(crate::ui::tips::keyed("writing.check"));
             });
         });
     });
@@ -639,9 +687,11 @@ fn thesaurus_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState, close: 
     let mut pick_file = false;
     let mut relookup = None;
     ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut t.word).desired_width(330.0));
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut t.word).desired_width(330.0))
+            .rich_tip(crate::ui::tips::keyed("thesaurus.word"));
         let history = t.history.clone();
-        egui::ComboBox::from_id_salt("thesaurus_history")
+        crate::ui::keynav::ComboBox::from_id_salt("thesaurus_history")
             .width(20.0)
             .selected_text("")
             .show_ui(ui, |ui| {
@@ -650,24 +700,33 @@ fn thesaurus_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState, close: 
                         relookup = Some(h.clone());
                     }
                 }
-            });
+            })
+            .response
+            .rich_tip(crate::ui::tips::keyed("thesaurus.history"));
         look |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         look |= ui
-            .add_sized([100.0, 24.0], egui::Button::new(tr("thesaurus.look_up")))
+            .add_sized([100.0, 24.0], crate::ui::btn_icons::Ib::new("thesaurus.look_up"))
+            .rich_tip(crate::ui::tips::keyed("thesaurus.look_up"))
             .clicked();
         insert |= ui
             .add_enabled(
                 t.selected.is_some(),
-                egui::Button::new(tr("writing.insert")).min_size(egui::vec2(100.0, 24.0)),
+                crate::ui::btn_icons::Ib::new("writing.insert").min_size(egui::vec2(100.0, 24.0)),
             )
+            .rich_tip(crate::ui::tips::keyed("writing.insert"))
+            .rich_disabled_tip(crate::ui::tips::keyed("writing.insert"))
             .clicked();
-        ui.menu_button(tr("writing.options"), |ui| {
+        let options = ui.imenu_button("writing.options", |ui| {
             ui.checkbox(&mut t.auto_close, tr("writing.auto_close"));
-            if ui.button(tr("thesaurus.pick_file")).clicked() {
+            if ui.ibutton("thesaurus.pick_file").clicked() {
                 pick_file = true;
                 ui.close();
             }
         });
+        options.response.rich_tip(crate::ui::tips::pair(
+            "writing.options",
+            "thesaurus.options_desc",
+        ));
     });
     let th = crate::thesaurus::get(app.settings.thesaurus_file.as_deref());
     match &th.source {
@@ -708,7 +767,9 @@ fn thesaurus_tab(app: &mut App, ui: &mut Ui, st: &mut WritingToolsState, close: 
                     ui.horizontal_wrapped(|ui| {
                         for syn in &m.synonyms {
                             let on = t.selected.as_deref() == Some(syn.as_str());
-                            let r = ui.selectable_label(on, syn);
+                            let r = ui.selectable_label(on, syn).rich_tip_with(|| {
+                                format!("{syn}\n{}", tr("thesaurus.synonym_desc"))
+                            });
                             if r.clicked() {
                                 t.selected = Some(syn.clone());
                             }
@@ -895,8 +956,10 @@ pub fn custom_hyphens_dialog(
     window(ctx, tr("hyphens.title")).show(ctx, |ui| {
         ui.set_min_width(420.0);
         ui.label(tr("hyphens.auto_insert"));
-        ui.checkbox(&mut st.when_typing, tr("hyphens.when_typing"));
-        ui.checkbox(&mut st.when_pasting, tr("hyphens.when_pasting"));
+        ui.checkbox(&mut st.when_typing, tr("hyphens.when_typing"))
+            .rich_tip(crate::ui::tips::keyed("hyphens.when_typing"));
+        ui.checkbox(&mut st.when_pasting, tr("hyphens.when_pasting"))
+            .rich_tip(crate::ui::tips::keyed("hyphens.when_pasting"));
         ui.add_space(4.0);
         egui::Frame::new()
             .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(0xC8)))
@@ -911,7 +974,7 @@ pub fn custom_hyphens_dialog(
                         ui.label(tr("hyphens.language"));
                         let ui_lang = crate::i18n::language();
                         let ui_lang = ui_lang.split('-').next().unwrap_or("en").to_string();
-                        egui::ComboBox::from_id_salt("hyphens_lang")
+                        crate::ui::keynav::ComboBox::from_id_salt("hyphens_lang")
                             .width(230.0)
                             .selected_text(language_name(&st.language))
                             .show_ui(ui, |ui| {
@@ -924,20 +987,25 @@ pub fn custom_hyphens_dialog(
                                         );
                                     }
                                 }
-                            });
+                            })
+                            .response
+                            .rich_tip(crate::ui::tips::keyed("hyphens.language"));
                         ui.end_row();
                         ui.label("");
-                        ui.checkbox(&mut st.all_languages, tr("hyphens.all_languages"));
+                        ui.checkbox(&mut st.all_languages, tr("hyphens.all_languages"))
+                            .rich_tip(crate::ui::tips::keyed("hyphens.all_languages"));
                         ui.end_row();
                         ui.label(tr("hyphens.word"));
-                        ui.add(egui::TextEdit::singleline(&mut st.word).desired_width(230.0));
+                        ui.add(egui::TextEdit::singleline(&mut st.word).desired_width(230.0))
+                            .rich_tip(crate::ui::tips::keyed("hyphens.word"));
                         ui.end_row();
                         ui.label(tr("hyphens.hyphenated"));
                         ui.add(
                             egui::TextEdit::singleline(&mut st.hyphenated)
                                 .desired_width(230.0)
                                 .hint_text("hy-phen-a-tion"),
-                        );
+                        )
+                        .rich_tip(crate::ui::tips::keyed("hyphens.hyphenated"));
                         ui.end_row();
                     });
                 let valid = parse_hyphenated(&st.word, &st.hyphenated).is_some();
@@ -945,8 +1013,9 @@ pub fn custom_hyphens_dialog(
                     if ui
                         .add_enabled(
                             valid,
-                            egui::Button::new(tr("hyphens.add")).min_size(egui::vec2(130.0, 24.0)),
+                            crate::ui::btn_icons::Ib::new("hyphens.add").min_size(egui::vec2(130.0, 24.0)),
                         )
+                        .rich_tip_always(crate::ui::tips::keyed("hyphens.add"))
                         .clicked()
                     {
                         let w = st.word.trim().to_string();
@@ -963,9 +1032,10 @@ pub fn custom_hyphens_dialog(
                     if ui
                         .add_enabled(
                             st.selected.is_some(),
-                            egui::Button::new(tr("hyphens.remove"))
+                            crate::ui::btn_icons::Ib::new("hyphens.remove")
                                 .min_size(egui::vec2(130.0, 24.0)),
                         )
+                        .rich_tip_always(crate::ui::tips::keyed("hyphens.remove"))
                         .clicked()
                     {
                         if let Some(i) = st.selected.take() {
@@ -1002,10 +1072,11 @@ pub fn custom_hyphens_dialog(
                                         continue;
                                     }
                                     let on = st.selected == Some(i);
-                                    if ui.selectable_label(on, w).clicked() {
+                                    let tip = || format!("{w}\n{}", tr("hyphens.definition_desc"));
+                                    if ui.selectable_label(on, w).rich_tip_with(tip).clicked() {
                                         st.selected = Some(i);
                                     }
-                                    if ui.selectable_label(on, h).clicked() {
+                                    if ui.selectable_label(on, h).rich_tip_with(tip).clicked() {
                                         st.selected = Some(i);
                                     }
                                     ui.end_row();
@@ -1017,14 +1088,15 @@ pub fn custom_hyphens_dialog(
         ui.horizontal(|ui| {
             help = ui
                 .add_sized([27.0, 27.0], egui::Button::new("?"))
-                .on_hover_text(tr("dialog.help"))
+                .rich_tip(crate::ui::tips::keyed("dialog.help_button"))
                 .clicked();
             apply = ui
                 .add_enabled(
                     !app.text_shapes().is_empty(),
-                    egui::Button::new(tr("hyphens.apply_selection"))
+                    crate::ui::btn_icons::Ib::new("hyphens.apply_selection")
                         .min_size(egui::vec2(140.0, 27.0)),
                 )
+                .rich_tip_always(crate::ui::tips::keyed("hyphens.apply_selection"))
                 .clicked();
             ok = crate::ui::dialogs::ok_cancel(ui, close);
         });
@@ -1064,6 +1136,61 @@ mod tests {
         .expect("text")
     }
 
+    /// Text > Use Hyphenation turns hyphenation on for the selected text
+    /// and off again, the menu's check following it; with nothing
+    /// selected it is the setting new text takes (#255).
+    #[test]
+    fn use_hyphenation_acts_on_the_selected_text() {
+        let mut app = App::headless();
+        let hy = |app: &App, id| match &app.doc().find_shape(id).expect("text").kind {
+            ShapeKind::Text { para, .. } => para.hyphenate,
+            _ => false,
+        };
+        let a = text(&mut app, "una informazione", Some(Size::new(30.0, 40.0)));
+        let b = text(&mut app, "sillabazione", Some(Size::new(30.0, 40.0)));
+        assert!(!app.text_hyphenation && !hy(&app, a));
+        app.select(vec![a, b]);
+        assert!(!app.uses_hyphenation());
+        app.toggle_use_hyphenation();
+        assert!(hy(&app, a) && hy(&app, b));
+        assert!(app.uses_hyphenation());
+        assert!(!app.text_hyphenation, "new text keeps its setting");
+        app.toggle_use_hyphenation();
+        assert!(!hy(&app, a) && !hy(&app, b));
+        app.select(Vec::new());
+        app.toggle_use_hyphenation();
+        assert!(app.text_hyphenation && app.uses_hyphenation());
+        app.text_hyphenation = false;
+    }
+
+    /// Typing in a text keeps its own hyphenation (it took the setting
+    /// for new text, so editing turned it on or off), and Use
+    /// Hyphenation while editing is that text's, its check following
+    /// it (#470).
+    #[test]
+    fn editing_a_text_keeps_its_hyphenation() {
+        let mut app = App::headless();
+        // The paragraph's own setting, as the layout reads it.
+        let hy = |app: &App, id| {
+            let s = app.doc().find_shape(id).expect("text").clone();
+            app.paragraph_style_of(&s).is_some_and(|(_, p)| p.hyphenate)
+        };
+        let a = text(&mut app, "una informazione", Some(Size::new(30.0, 40.0)));
+        app.select(vec![a]);
+        app.toggle_use_hyphenation();
+        assert!(hy(&app, a) && !app.text_hyphenation);
+        app.begin_text_edit(a);
+        assert!(app.text_edit.is_some());
+        app.text_insert(" nuova");
+        assert!(hy(&app, a), "typing kept it");
+        assert!(app.uses_hyphenation(), "the check is the edited text's");
+        app.toggle_use_hyphenation();
+        assert!(!hy(&app, a) && !app.uses_hyphenation());
+        assert!(!app.text_hyphenation, "new text keeps its setting");
+        app.text_insert("!");
+        assert!(!hy(&app, a));
+    }
+
     fn frame(ctx: &Context, app: &mut App) {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -1099,12 +1226,37 @@ mod tests {
         let id = text(&mut app, "zqxw ZQXW zq2w", None);
         let mut tab = SpellTab::default();
         let all = unknown_words(&app, &[id], &tab);
-        tab.ignore_capitals = true;
-        tab.ignore_digits = true;
+        app.settings.spelling.ignore_capitals = true;
+        app.settings.spelling.ignore_digits = true;
         let fewer = unknown_words(&app, &[id], &tab);
         assert!(all.len() > fewer.len(), "{all:?} {fewer:?}");
         tab.skipped = fewer.iter().map(|(_, w)| w.clone()).collect();
         assert!(unknown_words(&app, &[id], &tab).is_empty());
+    }
+
+    /// Options > Text > Spelling > Add corrections to Autocorrect: a
+    /// replacement becomes a row, an existing row is replaced, and
+    /// nothing comes of an unchanged word or one with spaces.
+    #[test]
+    fn corrections_go_to_the_autocorrect_table() {
+        let mut p = crate::autocorrect::AutocorrectPrefs::default();
+        let n = p.replacements.len();
+        add_correction(&mut p, "teh", "the");
+        assert_eq!(p.replacements.len(), n + 1);
+        assert_eq!(p.replacements.last(), Some(&("teh".into(), "the".into())));
+        add_correction(&mut p, "teh", "tech");
+        assert_eq!(p.replacements.len(), n + 1);
+        assert_eq!(p.replacements.last(), Some(&("teh".into(), "tech".into())));
+        add_correction(&mut p, "same", "same");
+        add_correction(&mut p, "two words", "x");
+        add_correction(&mut p, "", "x");
+        assert_eq!(p.replacements.len(), n + 1);
+        // Typing the word wrong again corrects it.
+        let style = crate::autocorrect::QuoteStyle::Curly;
+        assert_eq!(
+            crate::autocorrect::on_typed("I saw teh ", &p, style).as_deref(),
+            Some("I saw tech ")
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 # Trabalhar com páginas
 
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
 ## Mover-se entre páginas {#go-to-page}
 
 - Clique em uma guia de página embaixo da janela de desenho, ou use o
@@ -33,7 +35,14 @@ e [[menu.layout.duplicate_page]] agem sobre a página atual, e
 
 ![A caixa de diálogo Inserir página](../../img/pages-layout-pages-insert-page.png)
 
-[[menu.layout.delete_page]] exclui páginas.
+## Excluir páginas {#delete-page}
+
+[[menu.layout.delete_page]] pergunta quais páginas excluir: o número da página
+em [[dialog.delete_page_from]] (de início, a página atual) e, para excluir um
+intervalo, [[dialog.delete_through]] com a última página dele. Todas saem em
+um passo só, que [[menu.edit.undo]] desfaz. Um desenho mantém pelo menos uma
+página. [[page_tab.delete]] no menu de uma aba de página exclui essa página na
+hora.
 
 ## Duplicar uma página {#duplicate-page}
 
@@ -72,8 +81,18 @@ da página. Digite o [[dialog.page_name]] e clique em [[dialog.ok]].
 
 [[menu.layout.switch_orientation]] alterna a página entre retrato e paisagem.
 Sem nada selecionado, a barra de propriedades da ferramenta [[tool.pick]]
-também define o tamanho e a orientação da página. As configurações completas
-da página estão em [Opções do documento](document-options.md#page-size).
+também define o tamanho e a orientação da página. A lista de tamanhos dela tem
+A4, Carta, A5, A3 e Ofício primeiro, depois os tamanhos que você salvou,
+depois cerca de 130 tamanhos em grupos (ISO A, ISO B e JIS B, América do
+Norte, gráfica, cartazes e faixas, envelopes, cartões e postais, foto, telas e
+redes sociais, anúncios da web). **Personalizado...** abre a caixa de diálogo
+Tamanho da página, e **Editar esta lista...** abre as opções do documento no
+tamanho da página, onde você pode salvar um tamanho com um nome. As
+configurações completas da página estão em
+[Opções do documento](document-options.md#page-size).
+
+Páginas que você acrescenta, e a primeira camada delas, recebem nomes no
+idioma da interface.
 
 ## Números de página {#page-numbers}
 

@@ -46,6 +46,11 @@ impl FitContents {
 
 /// The one clip frame selected, when the bar applies.
 fn selected_clip(app: &App) -> Option<tracedraw_core::ShapeId> {
+    // Asked each frame: a large selection is not one clip frame, and
+    // copying its objects to find that out took a good part of a frame.
+    if app.selection.len() != 1 {
+        return None;
+    }
     let shapes = app.selected_shapes();
     match shapes.as_slice() {
         [s] if matches!(s.kind, ShapeKind::ClipFrame { .. }) => Some(s.id),
@@ -72,6 +77,10 @@ pub fn show(app: &mut App, ctx: &Context) {
                     ui.horizontal(|ui| {
                         if editing {
                             finish_button(app, ui);
+                            if app.symbol_edit_index().is_some() {
+                                ui.separator();
+                                cancel_symbol_button(app, ui);
+                            }
                             return;
                         }
                         let Some(clip) = clip else {
@@ -79,7 +88,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                         };
                         let button = |ui: &mut egui::Ui, key: &str| {
                             ui.add(
-                                egui::Button::new(RichText::new(tr(key)).color(Tokens::text()))
+                                crate::ui::btn_icons::Ib::with_text(key, RichText::new(tr(key)).color(Tokens::text()))
                                     .frame(false),
                             )
                             .rich_tip(tr(&format!("{key}_tip")))
@@ -94,15 +103,19 @@ pub fn show(app: &mut App, ctx: &Context) {
                             app.select_clip_contents(clip);
                         }
                         if button(ui, "clip.extract") {
-                            app.run(tracedraw_core::Command::ExtractContents { clip });
+                            app.extract_keeping_frame(clip);
                             app.select(vec![clip]);
                         }
                         let locked = app.clip_frame_locked(clip);
                         if ui
-                            .add(egui::Button::selectable(
-                                locked,
-                                RichText::new(tr("clip.lock")).color(Tokens::text()),
-                            ))
+                            .add(
+                                crate::ui::btn_icons::Ib::with_text(
+                                    "clip.lock",
+                                    RichText::new(tr("clip.lock")).color(Tokens::text()),
+                                )
+                                .selected(locked)
+                                .frame(locked),
+                            )
                             .rich_tip(tr("clip.lock_tip"))
                             .clicked()
                         {
@@ -110,8 +123,9 @@ pub fn show(app: &mut App, ctx: &Context) {
                         }
                         ui.separator();
                         let resp = ui.add(
-                            egui::Button::new(
-                                RichText::new(format!("{} \u{25BE}", tr("clip.fit_contents")))
+                            crate::ui::btn_icons::Ib::with_text(
+                                "clip.fit_contents",
+                                RichText::new(format!("{} \u{23F7}", tr("clip.fit_contents")))
                                     .color(Tokens::text()),
                             )
                             .frame(false),
@@ -142,7 +156,11 @@ fn finish_button(app: &mut App, ui: &mut egui::Ui) {
             )
             .frame(false),
         )
-        .rich_tip(tr("menu.object.clip_frame_finish"));
+        .rich_tip(tr(if app.symbol_edit_index().is_some() {
+            "menu.object.symbol_finish"
+        } else {
+            "menu.object.clip_frame_finish"
+        }));
     let r = finish.rect;
     ui.painter().text(
         egui::pos2(r.left() + 2.0, r.center().y),
@@ -153,5 +171,23 @@ fn finish_button(app: &mut App, ui: &mut egui::Ui) {
     );
     if finish.clicked() {
         app.finish_clip_frame_edit();
+    }
+}
+
+/// Cancel beside Finish on the bar while a symbol is edited on its
+/// clean sheet.
+fn cancel_symbol_button(app: &mut App, ui: &mut egui::Ui) {
+    if ui
+        .add(
+            crate::ui::btn_icons::Ib::with_text(
+                "docker.cancel_symbol_edit",
+                RichText::new(tr("docker.cancel_symbol_edit")).color(Tokens::text()),
+            )
+            .frame(false),
+        )
+        .rich_tip(tr("docker.cancel_symbol_edit_tip"))
+        .clicked()
+    {
+        app.cancel_symbol_edit();
     }
 }

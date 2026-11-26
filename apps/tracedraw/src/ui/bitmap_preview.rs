@@ -1,10 +1,9 @@
-//! Before and after previews for the bitmap dialogs (colour modes and
-//! adjustments): a small copy of the selected bitmap and the dialog's
-//! result on it, worked out again only when the settings change.
+//! Copies of the selected bitmap for the dialogs' previews (see
+//! `before_after.rs`): a copy at most so many pixels across, made once
+//! per source and size, and results kept until their settings change.
 
 use crate::app::App;
-use crate::i18n::tr;
-use egui::{ColorImage, TextureHandle, TextureOptions, Ui};
+use egui::{ColorImage, TextureHandle, TextureOptions};
 use image::RgbaImage;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -39,7 +38,7 @@ fn color_image(img: &RgbaImage) -> ColorImage {
 /// The first selected bitmap: its id, pixels per inch and PNG bytes; else
 /// the first selected object as a picture (what bitmap effects start
 /// from: its picture with its effects when it has some, else itself).
-pub fn selected_bitmap(app: &App) -> Option<(ShapeId, f32, Vec<u8>)> {
+pub fn selected_bitmap(app: &App) -> Option<(ShapeId, f32, tracedraw_core::SharedBytes)> {
     let shapes = app.selected_shapes();
     let bitmap = shapes.iter().find_map(|s| match &s.kind {
         ShapeKind::Bitmap {
@@ -98,32 +97,57 @@ fn shrink(img: RgbaImage, side: u32) -> (RgbaImage, f32) {
     (small, scale)
 }
 
-/// The preview copy (at most [`THUMB`] across) and its scale, made once
-/// per source.
-fn thumb(app: &App, ctx: &egui::Context, src: &Source) -> Option<Thumb> {
-    copy_of(app, ctx, src, THUMB)
+/// How the picture of an object with transform `t` is mirrored on the
+/// page, across (left to right) and up and down: its picture is made in
+/// the object's own space, scaled but neither turned nor mirrored. A
+/// mirror with a turn that is not a quarter turn reads as one across.
+pub fn page_flips(t: tracedraw_core::Affine) -> (bool, bool) {
+    let [a, b, c, d, _, _] = t.as_coeffs();
+    let det = a * d - b * c;
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return (false, false);
+    }
+    let scale = a.abs().max(b.abs()).max(c.abs()).max(d.abs());
+    if b.abs() <= 1e-9 * scale && c.abs() <= 1e-9 * scale {
+        (a < 0.0, d < 0.0)
+    } else {
+        (det < 0.0, false)
+    }
 }
 
 /// A copy of the source at most `side` pixels across, made once per
 /// source and size.
 pub fn copy_of(app: &App, ctx: &egui::Context, src: &Source, side: u32) -> Option<Thumb> {
     let cache = egui::Id::new(("bitmap_preview_thumb", side));
-    let (shape, key, png, before): (ShapeId, u64, Vec<u8>, &[BitmapEffect]) = match src {
-        Source::Shown => {
-            let (id, _, png) = selected_bitmap(app)?;
-            let key = settings_key(&("shown", png.len(), side));
-            (id, key, png, &[])
-        }
-        Source::Stack {
-            shape,
-            stack,
-            index,
-        } => {
-            let before = &stack.effects[..(*index).min(stack.effects.len())];
-            let key = settings_key(&("stack", stack.png.len(), before, side));
-            (*shape, key, stack.png.clone(), before)
-        }
-    };
+    let (shape, key, png, before): (ShapeId, u64, tracedraw_core::SharedBytes, &[BitmapEffect]) =
+        match src {
+            Source::Shown => {
+                let (id, _, png) = selected_bitmap(app)?;
+                let key = settings_key(&("shown", png.len(), side));
+                (id, key, png, &[])
+            }
+            Source::Stack {
+                shape,
+                stack,
+                index,
+            } => {
+                let before = &stack.effects[..(*index).min(stack.effects.len())];
+                // With no effects before, the same copy as the bitmap
+                // shown: the dialogs' live preview moves between the two
+                // without making it again.
+                let key = if before.is_empty() {
+                    settings_key(&("shown", stack.png.len(), side))
+                } else {
+                    settings_key(&("stack", stack.png.len(), before, side))
+                };
+                (*shape, key, stack.png.clone(), before)
+            }
+        };
+    let flips = app
+        .doc()
+        .find_shape(shape)
+        .map_or((false, false), |s| page_flips(s.transform));
+    let key = settings_key(&(key, flips));
     if let Some(t) = ctx.data(|d| d.get_temp::<Thumb>(cache)) {
         if t.shape == shape && t.key == key {
             return Some(t);
@@ -132,6 +156,14 @@ pub fn copy_of(app: &App, ctx: &egui::Context, src: &Source, side: u32) -> Optio
     let (mut small, scale) = shrink(crate::bitmap_fx::decode(&png)?, side);
     for e in before.iter().filter(|e| e.visible) {
         small = crate::fx::apply_effect(&small, &crate::fx::scaled(e, scale));
+    }
+    // Shown the way round it lies on the page: a mirrored object's
+    // picture is made unmirrored and was shown so in the preview (#3983).
+    if flips.0 {
+        image::imageops::flip_horizontal_in_place(&mut small);
+    }
+    if flips.1 {
+        image::imageops::flip_vertical_in_place(&mut small);
     }
     let tex = ctx.load_texture(
         "bitmap_preview_before",
@@ -185,119 +217,29 @@ pub fn settings_key(v: &impl std::fmt::Debug) -> u64 {
     h.finish()
 }
 
-/// Draw the before and after previews side by side, each in a `side` px
-/// square; `f` gets the copy and its scale against the bitmap (so pixel
-/// sizes can follow) and runs when `key` changes. Returns the copy, for
-/// histograms and eyedroppers.
-pub fn before_after(
-    ui: &mut Ui,
-    app: &App,
-    key: u64,
-    side: f32,
-    f: impl FnOnce(&RgbaImage, f32) -> RgbaImage,
-) -> Option<Arc<RgbaImage>> {
-    before_after_from(ui, app, &Source::Shown, key, side, f)
-}
+#[cfg(test)]
+mod tests {
+    use super::page_flips;
+    use tracedraw_core::Affine;
 
-/// [`before_after`] starting from `src`.
-pub fn before_after_from(
-    ui: &mut Ui,
-    app: &App,
-    src: &Source,
-    key: u64,
-    side: f32,
-    f: impl FnOnce(&RgbaImage, f32) -> RgbaImage,
-) -> Option<Arc<RgbaImage>> {
-    before_after_pick(ui, app, src, key, side, false, f).map(|p| p.img)
-}
-
-/// What a preview gives back: the copy, and the copy's pixel under a
-/// click on either picture.
-pub struct Preview {
-    pub img: Arc<RgbaImage>,
-    pub picked: Option<(u32, u32)>,
-}
-
-/// [`before_after_from`] where a click on a picture picks a pixel; with
-/// `picking` the pointer shows a crosshair over the pictures.
-pub fn before_after_pick(
-    ui: &mut Ui,
-    app: &App,
-    src: &Source,
-    key: u64,
-    side: f32,
-    picking: bool,
-    f: impl FnOnce(&RgbaImage, f32) -> RgbaImage,
-) -> Option<Preview> {
-    let ctx = ui.ctx().clone();
-    let Some(t) = thumb(app, &ctx, src) else {
-        ui.label(tr("dialog.no_bitmap_preview"));
-        return None;
-    };
-    let full_key = key ^ (t.shape.raw().rotate_left(17)) ^ t.key.rotate_left(41);
-    let (after, _) = cached(&ctx, "bitmap_preview_after", full_key, || {
-        f(&t.img, t.scale)
-    });
-    let fit = |tex: &TextureHandle| {
-        let s = tex.size_vec2();
-        let k = (side / s.x.max(s.y).max(1.0)).min(1.0);
-        s * k
-    };
-    let (w, h) = t.img.dimensions();
-    let mut picked = None;
-    ui.horizontal(|ui| {
-        for (label, tex) in [(tr("dialog.before"), &t.tex), (tr("dialog.after"), &after)] {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new(label).size(11.0));
-                let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
-                // A checkerboard shows transparency.
-                let painter = ui.painter_at(rect);
-                let cell = 8.0;
-                let (nx, ny) = ((side / cell).ceil() as i32, (side / cell).ceil() as i32);
-                for j in 0..ny {
-                    for i in 0..nx {
-                        let c = if (i + j) % 2 == 0 { 0xFF } else { 0xE6 };
-                        painter.rect_filled(
-                            egui::Rect::from_min_size(
-                                rect.min + egui::vec2(i as f32 * cell, j as f32 * cell),
-                                egui::vec2(cell, cell),
-                            ),
-                            0.0,
-                            egui::Color32::from_gray(c),
-                        );
-                    }
-                }
-                let size = fit(tex);
-                let r = egui::Rect::from_center_size(rect.center(), size);
-                painter.image(
-                    tex.id(),
-                    r,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
-                painter.rect_stroke(
-                    rect,
-                    0.0,
-                    egui::Stroke::new(1.0, crate::theme::Tokens::border()),
-                    egui::StrokeKind::Inside,
-                );
-                if picking && resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-                }
-                if resp.clicked() {
-                    if let Some(pos) = resp.interact_pointer_pos() {
-                        if r.contains(pos) && w > 0 && h > 0 {
-                            let u = (pos - r.min) / r.size();
-                            picked = Some((
-                                ((u.x * w as f32) as u32).min(w - 1),
-                                ((u.y * h as f32) as u32).min(h - 1),
-                            ));
-                        }
-                    }
-                }
-            });
-        }
-    });
-    Some(Preview { img: t.img, picked })
+    /// The effect dialogs show a mirrored object's picture mirrored, as it
+    /// lies on the page (#3983).
+    #[test]
+    fn previews_show_a_mirrored_object_the_way_round_it_lies() {
+        assert_eq!(page_flips(Affine::scale(2.0)), (false, false));
+        assert_eq!(
+            page_flips(Affine::scale_non_uniform(-1.0, 1.0)),
+            (true, false)
+        );
+        assert_eq!(
+            page_flips(Affine::scale_non_uniform(1.0, -3.0)),
+            (false, true)
+        );
+        assert_eq!(page_flips(Affine::rotate(0.5)), (false, false));
+        assert_eq!(
+            page_flips(Affine::rotate(0.5) * Affine::scale_non_uniform(-1.0, 1.0)),
+            (true, false)
+        );
+        assert_eq!(page_flips(Affine::scale(0.0)), (false, false));
+    }
 }

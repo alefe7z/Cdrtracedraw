@@ -1,6 +1,9 @@
 # Preenchimentos
 
 Um preenchimento pinta o interior de um objeto fechado. O CD Draw tem seis
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
+Um preenchimento pinta o interior de um objeto fechado. O TraceDraw tem seis
 tipos de preenchimento: [[docker.fill_none]], [[docker.fill_uniform]] (uma cor
 lisa), [[docker.fill_fountain]] (cores que se misturam),
 [[docker.fill_pattern]], [[docker.fill_texture]] e [[docker.fill_mesh]] (cores
@@ -9,9 +12,10 @@ que fluem entre os nós de uma grade).
 ## Formas de preencher um objeto {#ways}
 
 - Clique em uma cor da paleta para dar à seleção um preenchimento uniforme.
-- Use a seção [[docker.fill]] do painel [[docker.properties]] (<kbd>F11</kbd>):
-  escolha o tipo de preenchimento na fileira de imagens e depois as
-  configurações.
+- Pressione <kbd>F11</kbd> para a caixa de diálogo [[edit_fill.title]] (veja
+  [abaixo](#edit-fill)), ou use a seção [[docker.fill]] do painel
+  [[docker.properties]]: escolha o tipo de preenchimento na fileira de imagens
+  e depois as configurações.
 - Use a ferramenta [[tool.interactive_fill]] (<kbd>G</kbd>) para definir
   gradientes no próprio objeto.
 - Use a ferramenta [[tool.area_fill]] para preencher uma área cercada por vários
@@ -35,8 +39,13 @@ preenchimento do painel [[docker.properties]]:
 
 - O tipo: [[fill.linear]] (ao longo de uma linha), [[fill.radial]] (do centro
   para fora), [[fill.conical]] (em volta do centro), [[fill.square]] (em
-  quadrados crescentes) ou [[fill.shaped]] (seguindo o contorno do objeto, da
-  borda para dentro).
+  quadrados crescentes), [[fill.shaped]] (seguindo o contorno do objeto, da
+  borda para dentro) ou **Pontos de cor** (cada cor num ponto próprio em
+  qualquer lugar do objeto, misturando-se com as outras ao redor). Com a
+  ferramenta Preenchimento interativo ou Forma os pontos de cor aparecem no
+  objeto: arraste um para movê-lo, clique num e depois numa cor da paleta
+  para trocar a cor, clique duas vezes dentro do objeto para adicionar um e
+  pressione Delete para remover o escolhido (dois sempre ficam).
 - [[docker.gradient_presets]]: gradientes prontos para começar.
 - As **paradas**: as cores e onde ficam no gradiente, de 2 a 64. Selecione uma
   parada para mudar a cor ou a posição; [[docker.add_stop]] e
@@ -53,19 +62,58 @@ preenchimento do painel [[docker.properties]]:
 
 Uma faixa abaixo do tipo mostra toda a sequência de cores como será desenhada.
 
+![Um degradê de pontos de cor com os quatro pontos no canvas](../../img/color-fills-color-points.png)
+
+## A caixa de diálogo Editar preenchimento {#edit-fill}
+
+<kbd>F11</kbd> abre a caixa de diálogo [[edit_fill.title]] no preenchimento da
+seleção (ou dos objetos novos, sem nada selecionado).
+
+- A fileira de imagens no alto escolhe o tipo de preenchimento.
+- Um preenchimento uniforme mostra o visualizador de cores.
+- Um gradiente mostra à esquerda uma prévia do preenchimento e o
+  [[edit_fill.fill_picker]] com os gradientes prontos. À direita: o tipo, como
+  ele se repete e a faixa de cores com seus nós. Clique num nó para escolhê-lo
+  e arraste para movê-lo; clique duas vezes na faixa para acrescentar um nó e
+  num nó para removê-lo. <kbd>Alt</kbd> e um arrasto num nó o copiam e movem a
+  cópia: dois nós da mesma cor fazem uma faixa sólida, e dois nós de cores
+  diferentes lado a lado fazem uma borda dura. A cor, a transparência, a posição e o
+  [[edit_fill.midpoint]] do nó escolhido ficam sob a faixa, com
+  [[edit_fill.reverse]]. [[edit_fill.transform]] tem a rotação, o centro (para
+  gradientes radiais, cônicos e quadrados), a margem da borda, o espelho e a
+  inversão. A prévia tem as proporções do objeto e mostra os nós de início, de
+  fim e de inclinação: arraste-os para mover, girar e esticar o gradiente como
+  na tela (<kbd>Ctrl</kbd> gira em passos de 15 graus).
+- **OK** muda só o que você mudou em todos os objetos selecionados, com
+  [[edit_fill.overprint]].
+- Enquanto a caixa de diálogo está aberta, a seleção mostra o preenchimento conforme você o altera; **Cancelar** ou <kbd>Esc</kbd> devolve o preenchimento anterior.
+
+![A caixa de diálogo Editar preenchimento](../../img/color-fills-edit-fill.png)
+
 ## A ferramenta Preenchimento interativo {#interactive-fill}
 
 A ferramenta [[tool.interactive_fill]] (<kbd>G</kbd>) edita preenchimentos no
 próprio objeto.
 
-1. Escolha a ferramenta e arraste através de um objeto: você obtém um gradiente
-   linear de onde pressiona até onde solta. Mantenha <kbd>Ctrl</kbd>
-   pressionado para limitar o ângulo a passos de 15 graus. Um clique dá o
-   preenchimento padrão.
-2. Arraste os nós no objeto para mudar o gradiente: os dois nós quadrados de um
-   gradiente linear giram a direção e mudam o comprimento; o nó de um gradiente
-   radial, cônico ou quadrado move o centro.
-3. Arraste uma cor da paleta até um nó para mudar a cor dele, ou até a linha
+1. Escolha a ferramenta e arraste através de um objeto: o gradiente começa
+   onde você pressiona e termina onde solta, mantendo as cores de um
+   gradiente que o objeto já tenha. Mantenha <kbd>Ctrl</kbd> pressionado para
+   limitar o ângulo a passos de 15 graus. Um clique num objeto sem gradiente
+   dá o preenchimento padrão.
+2. Arraste os nós para mudar o gradiente: o nó inicial o move, o nó final
+   define o comprimento e a direção, e o nó redondo de inclinação inclina as
+   faixas (ou faz de um gradiente radial uma elipse).
+3. Clique duas vezes na linha entre os nós para acrescentar um nó de cor ali;
+   clique duas vezes num nó de cor para removê-lo. Arraste um nó de cor ao
+   longo da linha, ou a barrinha entre dois nós para mover o ponto onde as
+   cores deles se encontram no meio. Segure <kbd>Alt</kbd> ao começar a
+   arrastar um nó para copiá-lo e arrastar a cópia, para faixas de cor sólida
+   com bordas duras.
+4. Clique num nó para escolhê-lo: abre-se embaixo dele uma pequena barra com
+   a cor do nó (clique na amostra para o seletor de cores) e a transparência.
+   Uma cor da paleta clicada com um nó escolhido vai para esse nó, e a barra
+   de propriedades mostra a cor, a transparência e a posição do nó.
+5. Arraste uma cor da paleta até um nó para mudar a cor dele, ou até a linha
    entre os nós para acrescentar uma cor ali.
 
 A barra de propriedades tem o tipo de preenchimento e as configurações: a cor
@@ -79,14 +127,29 @@ formada por vários objetos sobrepostos, criando um novo objeto com essa área. 
 objetos em volta ficam como estão.
 
 1. Escolha a ferramenta [[tool.area_fill]].
-2. Escolha o preenchimento e o contorno na barra de propriedades: **Usar
+2. Escolha o preenchimento e o contorno na barra de propriedades:
+   **Especificar** (a cor, e para o contorno a largura, ao lado), **Usar
    padrão** (o preenchimento e o contorno dos novos objetos; uma cor quando o
-   padrão é sem preenchimento, para a área aparecer), **Especificar** (a cor, e
-   para o contorno a largura, ao lado) ou **Nenhum**.
+   padrão é sem preenchimento, para a área aparecer) ou **Nenhum**.
 3. Clique dentro da área.
 
 O novo objeto vai para o topo da camada ativa e fica selecionado. Um clique em
 um contorno, ou em uma área que nada cerca, não cria nada.
+
+Com **Até a borda do contorno** ligado na barra de propriedades, os contornos
+contam com a largura com que são desenhados: a área para nas bordas internas
+deles, e linhas que só se tocam pela largura ainda a fecham.
+
+Dentro de uma [simetria](../objects/symmetry.md), um clique numa cópia preenche
+a mesma área em todas as cópias: o novo objeto passa a fazer parte da simetria.
+
+Com **Ao vivo** ligado, um clique dentro de um grupo pinta a área que as linhas
+dele fecham como um preenchimento ao vivo do grupo (o grupo selecionado, ou
+então o grupo mais acima sob o clique) em vez de criar um objeto novo. Quando
+você move ou remodela as linhas do grupo, os preenchimentos as acompanham.
+Clique de novo numa área pintada para dar a ela a cor de preenchimento da
+barra, ou com o Preenchimento em Nenhum para retirá-la. Cada clique é um passo
+de desfazer.
 
 ## Preenchimentos de malha {#mesh-fill}
 
@@ -99,14 +162,20 @@ sombreamentos realistas.
 2. Clique em um objeto. Ele recebe uma malha na cor do preenchimento.
 3. Clique em um nó para selecioná-lo e depois em uma cor da paleta para
    colori-lo. Arraste nós para curvar o fluxo das cores.
-4. Clique duas vezes dentro da malha para acrescentar uma linha ou coluna pelo
-   nó mais próximo; selecione um nó e pressione <kbd>Delete</kbd> para remover
+4. Clique duas vezes dentro da malha para acrescentar um nó exatamente ali,
+   numa nova linha e coluna por esse ponto; selecione um nó e pressione <kbd>Delete</kbd> para remover
    a linha e a coluna dele.
 
 A barra de propriedades também tem **Cor suave**, que mistura as cores com mais
 suavidade, a **transparência** do nó selecionado e **Limpar malha**, que remove
 o preenchimento de malha. Mudar as linhas e colunas de uma malha mantém as
 cores.
+
+Para um fundo colorido rápido, escolha um conjunto na lista **Cores**
+(Aurora, Pôr do sol, Oceano, Doce, Floresta, Neon ou a paleta do documento)
+e clique em **Embaralhar**: cada objeto selecionado ganha uma malha aleatória
+com essas cores, com os nós deslocados da grade. Clique de novo para outra
+mistura, ou desfaça para voltar.
 
 ## Preenchimentos de padrão e textura {#pattern-texture}
 
@@ -115,6 +184,12 @@ cores.
 - Um preenchimento [[docker.fill_texture]] é uma textura gerada, de aparência
   natural: [[texture.clouds]], [[texture.marble]], [[texture.noise]] ou
   [[texture.wood]], com cores e escala.
+- [[texture.holographic]] e [[texture.holo_glitter]] dão um visual fixo de foil holográfico: cores do arco-íris
+  correndo entre manchas escuras e claras (cores A e B), o glitter com
+  grãos brilhantes. Não muda com o ângulo de visão; PDF e SVG levam como
+  imagem.
+
+![As texturas Holográfico e Brilho holográfico](../../img/color-fills-holographic.png)
 
 ## Vários preenchimentos em um objeto {#several-fills}
 
@@ -123,6 +198,16 @@ pinta outro preenchimento sobre o do objeto, começando como uma cópia para
 você mudar. Os preenchimentos extras aparecem como "Preenchimento 2",
 "Preenchimento 3" e assim por diante, cada um com seu editor e um botão para
 removê-lo. A seção de contorno pode acrescentar contornos extras da mesma forma.
+
+As setas ao lado de cada preenchimento ou contorno extra pintam-no uma posição
+antes ou depois; o segundo troca de lugar com o primeiro, então qualquer um
+pode ir para baixo ou para cima.
+
+Sob cada preenchimento extra, Crescer, Mover e Desfocar dão a ele uma
+aparência própria: a área crescida (ou encolhida, abaixo de zero), movida e
+desfocada, enquanto o objeto e os outros preenchimentos ficam como estão. Um
+preenchimento menor de outra cor, movido e um pouco desfocado, faz um brilho
+suave, por exemplo.
 
 Os preenchimentos também podem ser pintados em contornos; veja
 [Definir contornos](../lines-shapes/outlines.md#outline-pen).

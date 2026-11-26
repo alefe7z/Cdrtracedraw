@@ -25,7 +25,6 @@
 | [[tool.attract_repel]] |  | [→](../lines-shapes/distortion-tools.md#attract-repel) |
 | [[tool.smudge]] | <kbd>V</kbd> | [→](../lines-shapes/distortion-tools.md#smudge) |
 | [[tool.roughen]] | <kbd>E</kbd> | [→](../lines-shapes/distortion-tools.md#roughen) |
-| [[tool.variable_outline]] |  | [→](../lines-shapes/outlines.md#variable-outline) |
 
 ## Обрезка и стирание {#crop-erase}
 
@@ -58,6 +57,7 @@
 | [[tool.painterly_brush]] |  | [→](../lines-shapes/artistic-media.md#painterly-brush) |
 | [[tool.shape_recognition]] | <kbd>Shift+S</kbd> | [→](../lines-shapes/shape-recognition.md#shape-recognition) |
 | [[tool.sketch]] | <kbd>S</kbd> | [→](../lines-shapes/shape-recognition.md#sketch) |
+| [[tool.variable_outline]] |  | [→](../lines-shapes/outlines.md#variable-outline) |
 
 ## Фигуры {#shapes}
 
@@ -73,6 +73,7 @@
 | [[tool.common_shapes]] |  | [→](../lines-shapes/polygons-stars-spirals.md#common-shapes) |
 | [[tool.action_lines]] |  | [→](../lines-shapes/polygons-stars-spirals.md#action-lines) |
 | [[tool.graph_paper]] | <kbd>D</kbd> | [→](../lines-shapes/polygons-stars-spirals.md#graph-paper) |
+| [[tool.shape_generator]] |  | [→](../objects/shape-generator.md#tool) |
 
 ## Текст и таблицы {#text-tables}
 

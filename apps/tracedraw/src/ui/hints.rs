@@ -1,15 +1,28 @@
 //! The Hints panel: a Home page
 //! listing topics, one page per topic (an introduction and the tools that
-//! serve it), and one page per tool (what it does, how to use it, and a
-//! link to its help topic). Choosing a tool shows its page; a bar at the
+//! serve it), one page per tool (what it does, how to use it, and a
+//! link to its help topic) and one page per kind of object (what can be
+//! done with it, its tools and its property bar). Choosing a tool shows
+//! its page, selecting an object shows the page of what was picked, and
+//! letting go of the selection goes back to the tool's page; a bar at the
 //! bottom goes home, back and forward.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::i18n::tr;
 use crate::theme::{self, Tokens};
 use crate::tools::Tool;
+use crate::ui::tips::RichTip;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+use tracedraw_core::live::Effect as LiveEffect;
+use tracedraw_core::{PageId, Shape, ShapeId, ShapeKind};
+
+/// What the selection was when the panel last looked: the document, its
+/// revision, the page, how many objects and the first and last of them.
+/// Cheap to build and compare every frame; the selected objects are only
+/// read when it changes.
+pub type SelectionKey = (u64, u64, PageId, usize, Option<ShapeId>, Option<ShapeId>);
 
 /// A page of the docker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +30,177 @@ pub enum HintPage {
     Home,
     Topic(Topic),
     Tool(Tool),
+    Object(ObjectKind),
+}
+
+/// The kinds of selected object the panel has a page for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectKind {
+    Curve,
+    Rectangle,
+    Ellipse,
+    Polygon,
+    Text,
+    ParagraphText,
+    Bitmap,
+    Group,
+    ClipFrame,
+    Blend,
+    Dimension,
+    Connector,
+    Callout,
+    Table,
+    Symbol,
+    Effect,
+    Several,
+}
+
+impl ObjectKind {
+    #[cfg(test)]
+    pub const ALL: [ObjectKind; 17] = [
+        ObjectKind::Curve,
+        ObjectKind::Rectangle,
+        ObjectKind::Ellipse,
+        ObjectKind::Polygon,
+        ObjectKind::Text,
+        ObjectKind::ParagraphText,
+        ObjectKind::Bitmap,
+        ObjectKind::Group,
+        ObjectKind::ClipFrame,
+        ObjectKind::Blend,
+        ObjectKind::Dimension,
+        ObjectKind::Connector,
+        ObjectKind::Callout,
+        ObjectKind::Table,
+        ObjectKind::Symbol,
+        ObjectKind::Effect,
+        ObjectKind::Several,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            ObjectKind::Curve => "curve",
+            ObjectKind::Rectangle => "rectangle",
+            ObjectKind::Ellipse => "ellipse",
+            ObjectKind::Polygon => "polygon",
+            ObjectKind::Text => "text",
+            ObjectKind::ParagraphText => "paragraph_text",
+            ObjectKind::Bitmap => "bitmap",
+            ObjectKind::Group => "group",
+            ObjectKind::ClipFrame => "clip_frame",
+            ObjectKind::Blend => "blend",
+            ObjectKind::Dimension => "dimension",
+            ObjectKind::Connector => "connector",
+            ObjectKind::Callout => "callout",
+            ObjectKind::Table => "table",
+            ObjectKind::Symbol => "symbol",
+            ObjectKind::Effect => "effect",
+            ObjectKind::Several => "several",
+        }
+    }
+
+    /// The tools that work on this kind of object.
+    pub fn tools(self) -> &'static [Tool] {
+        match self {
+            ObjectKind::Curve => &[Tool::Shape, Tool::Knife, Tool::Eraser],
+            ObjectKind::Rectangle => &[Tool::Shape, Tool::Rectangle],
+            ObjectKind::Ellipse => &[Tool::Shape, Tool::Ellipse],
+            ObjectKind::Polygon => &[Tool::Shape, Tool::Polygon, Tool::Star],
+            ObjectKind::Text => &[Tool::Text, Tool::Shape],
+            ObjectKind::ParagraphText => &[Tool::Text],
+            ObjectKind::Bitmap => &[Tool::Crop, Tool::ColorEyedropper],
+            ObjectKind::Group | ObjectKind::ClipFrame | ObjectKind::Symbol => &[Tool::Pick],
+            ObjectKind::Blend => &[Tool::Blend],
+            ObjectKind::Dimension => &[
+                Tool::ParallelDimension,
+                Tool::HorizontalVerticalDimension,
+                Tool::AngularDimension,
+            ],
+            ObjectKind::Connector => &[Tool::Connector, Tool::AnchorEditing],
+            ObjectKind::Callout => &[Tool::Callout, Tool::Text],
+            ObjectKind::Table => &[Tool::Table],
+            ObjectKind::Effect => &[Tool::Contour, Tool::Envelope, Tool::Extrude, Tool::Distort],
+            ObjectKind::Several => &[Tool::Pick, Tool::FreeTransform],
+        }
+    }
+
+    /// The Help page about this kind of object.
+    pub fn help_topic(self) -> &'static str {
+        match self {
+            ObjectKind::Curve => "lines-shapes/shape-tool",
+            ObjectKind::Rectangle | ObjectKind::Ellipse => "lines-shapes/rectangles-and-ellipses",
+            ObjectKind::Polygon => "lines-shapes/polygons-stars-spirals",
+            ObjectKind::Text => "text/adding-text",
+            ObjectKind::ParagraphText => "text/paragraphs",
+            ObjectKind::Bitmap => "bitmaps/index",
+            ObjectKind::Group | ObjectKind::Several => "objects/selecting",
+            ObjectKind::ClipFrame => "objects/clip-frames",
+            ObjectKind::Blend => "effects/blend",
+            ObjectKind::Dimension | ObjectKind::Callout => "lines-shapes/dimensions",
+            ObjectKind::Connector => "lines-shapes/connectors",
+            ObjectKind::Table => "objects/tables",
+            ObjectKind::Symbol => "objects/symbols",
+            ObjectKind::Effect => "effects/index",
+        }
+    }
+
+    /// The page for a selection: the kind its objects share, Several when
+    /// they differ, None when nothing is selected.
+    pub fn of_selection(shapes: &[Shape]) -> Option<ObjectKind> {
+        let first = ObjectKind::of(shapes.first()?);
+        if shapes.iter().skip(1).all(|s| ObjectKind::of(s) == first) {
+            Some(first)
+        } else {
+            Some(ObjectKind::Several)
+        }
+    }
+
+    /// The kind of one object. Dimensions, connectors, callouts and blends
+    /// are known by their data and effects before their plain shape.
+    pub fn of(s: &Shape) -> ObjectKind {
+        if crate::dimensions::is_dimension(s) {
+            return ObjectKind::Dimension;
+        }
+        if crate::connectors::Connection::of(s).is_some() {
+            return ObjectKind::Connector;
+        }
+        if crate::callouts::Callout::of(s).is_some() {
+            return ObjectKind::Callout;
+        }
+        if s.effects
+            .iter()
+            .any(|e| matches!(e, LiveEffect::Blend { .. }))
+        {
+            return ObjectKind::Blend;
+        }
+        if s.effects.iter().any(|e| {
+            matches!(
+                e,
+                LiveEffect::Contour { .. }
+                    | LiveEffect::Distort(_)
+                    | LiveEffect::Envelope { .. }
+                    | LiveEffect::Perspective { .. }
+                    | LiveEffect::Extrude { .. }
+                    | LiveEffect::Bevel { .. }
+                    | LiveEffect::BlockShadow { .. }
+            )
+        }) {
+            return ObjectKind::Effect;
+        }
+        match &s.kind {
+            ShapeKind::Rect { .. } => ObjectKind::Rectangle,
+            ShapeKind::Ellipse { .. } => ObjectKind::Ellipse,
+            ShapeKind::Polygon { .. } => ObjectKind::Polygon,
+            ShapeKind::Path { .. } => ObjectKind::Curve,
+            ShapeKind::Text { frame: Some(_), .. } => ObjectKind::ParagraphText,
+            ShapeKind::Text { .. } => ObjectKind::Text,
+            ShapeKind::Group { .. } => ObjectKind::Group,
+            ShapeKind::ClipFrame { .. } => ObjectKind::ClipFrame,
+            ShapeKind::Table(_) => ObjectKind::Table,
+            ShapeKind::SymbolInstance { .. } => ObjectKind::Symbol,
+            ShapeKind::Bitmap { .. } => ObjectKind::Bitmap,
+        }
+    }
 }
 
 /// The Home page's topics, in its order.
@@ -94,6 +278,7 @@ impl Topic {
                 Tool::Bezier,
                 Tool::Pen,
                 Tool::BSpline,
+                Tool::CurvaturePen,
                 Tool::Polyline,
                 Tool::ThreePointCurve,
                 Tool::BrushStrokes,
@@ -124,13 +309,16 @@ impl Topic {
                 Tool::Spiral,
                 Tool::CommonShapes,
                 Tool::GraphPaper,
+                Tool::ShapeGenerator,
                 Tool::ActionLines,
+                Tool::Balloon,
             ],
             Topic::Select => &[Tool::Pick, Tool::FreeformPick],
             Topic::MoveScale => &[Tool::Pick, Tool::FreeTransform],
             Topic::RotateSkew => &[Tool::Pick, Tool::FreeTransform],
             Topic::ShapeObjects => &[
                 Tool::Shape,
+                Tool::Join,
                 Tool::Smooth,
                 Tool::Smear,
                 Tool::Twirl,
@@ -141,9 +329,11 @@ impl Topic {
                 Tool::Knife,
                 Tool::SegmentDelete,
                 Tool::Eraser,
+                Tool::ShapeBuilder,
             ],
             Topic::Effects => &[
                 Tool::DropShadow,
+                Tool::InnerShadow,
                 Tool::Contour,
                 Tool::Blend,
                 Tool::Distort,
@@ -175,9 +365,13 @@ impl Topic {
 pub struct HintsState {
     history: Vec<HintPage>,
     pos: usize,
-    /// The tool the docker last followed: a different active tool shows
+    /// The tool the docker last followed and the count of tool choices
+    /// then: a different active tool, or the same one chosen again, shows
     /// that tool's page.
     followed: Tool,
+    chosen: u64,
+    /// The selection the docker last followed.
+    selection: Option<SelectionKey>,
 }
 
 impl Default for HintsState {
@@ -186,6 +380,8 @@ impl Default for HintsState {
             history: vec![HintPage::Home],
             pos: 0,
             followed: Tool::Pick,
+            chosen: 0,
+            selection: None,
         }
     }
 }
@@ -228,18 +424,97 @@ impl HintsState {
         }
     }
 
-    /// Follow the active tool: a newly chosen tool shows its page.
-    pub fn follow(&mut self, tool: Tool) {
-        if tool != self.followed {
+    /// Follow the active tool: a newly chosen tool shows its page, and so
+    /// does the active tool chosen again (`chosen` is the app's count of
+    /// tool choices), after a topic, an object page or Home (#1321).
+    pub fn follow(&mut self, tool: Tool, chosen: u64) {
+        if tool != self.followed || chosen != self.chosen {
             self.followed = tool;
+            self.chosen = chosen;
             self.go(HintPage::Tool(tool));
+        }
+    }
+
+    /// Follow the selection after the tool. `key` names the selection;
+    /// `kind` reads it and is only called when the key changed. With the
+    /// Pick, Freehand Pick, Free Transform and Shape tools a newly picked
+    /// object shows its kind's page. Any other tool keeps its own page in
+    /// view whatever it selects or draws (an effect, fill or drawing tool
+    /// is used on an object it picks first, and its steps are what the
+    /// panel is for then, #1321); an object page already in view follows
+    /// the new selection. An empty selection goes back to the tool's page
+    /// from an object page. A change to the drawing that keeps the
+    /// selection only updates an object page already in view (Convert to
+    /// Curves turns the rectangle's page into the curve's).
+    pub fn follow_selection(
+        &mut self,
+        tool: Tool,
+        key: SelectionKey,
+        kind: impl FnOnce() -> Option<ObjectKind>,
+    ) {
+        let Some(old) = self.selection.replace(key) else {
+            // First look: follow what is selected now, as a pick.
+            if let Some(k) = kind() {
+                self.go(HintPage::Object(k));
+            }
+            return;
+        };
+        if old == key {
+            return;
+        }
+        let same_selection =
+            (old.0, old.2, old.3, old.4, old.5) == (key.0, key.2, key.3, key.4, key.5);
+        let kind = kind();
+        let on_object = matches!(self.current(), HintPage::Object(_));
+        if same_selection {
+            if let (true, Some(k)) = (on_object, kind) {
+                self.go(HintPage::Object(k));
+            }
+            return;
+        }
+        match kind {
+            None => {
+                if on_object {
+                    self.go(HintPage::Tool(tool));
+                }
+            }
+            Some(k) => {
+                let selects = matches!(
+                    tool,
+                    Tool::Pick | Tool::FreeformPick | Tool::FreeTransform | Tool::Shape
+                );
+                if selects || on_object {
+                    self.go(HintPage::Object(k));
+                }
+            }
         }
     }
 }
 
+/// The key of the app's selection for [`HintsState::follow_selection`].
+pub fn selection_key(app: &App) -> SelectionKey {
+    (
+        app.engine.instance(),
+        app.engine.revision(),
+        app.page,
+        app.selection.len(),
+        app.selection.first().copied(),
+        app.selection.last().copied(),
+    )
+}
+
 /// The docker: the page in a scroll area and the navigation bar under it.
 pub fn hints_docker(app: &mut App, ui: &mut Ui) {
-    app.hints.follow(app.tool);
+    app.hints.follow(app.tool, app.tool_chosen);
+    let key = selection_key(app);
+    let tool = app.tool;
+    // The selection is read only when its key changed (once per change,
+    // not every frame).
+    let mut hints = std::mem::take(&mut app.hints);
+    hints.follow_selection(tool, key, || {
+        ObjectKind::of_selection(app.selected_rc().as_slice())
+    });
+    app.hints = hints;
     let bar_h = 30.0;
     let content_h = (ui.available_height() - bar_h - 6.0).max(40.0);
     let mut go = None;
@@ -252,6 +527,7 @@ pub fn hints_docker(app: &mut App, ui: &mut Ui) {
                 HintPage::Home => home(app, ui),
                 HintPage::Topic(t) => topic(app, ui, t),
                 HintPage::Tool(t) => tool_page(app, ui, t),
+                HintPage::Object(k) => object_page(app, ui, k),
             };
         });
     if let Some(page) = go {
@@ -265,6 +541,9 @@ fn title(ui: &mut Ui, text: &str) {
     ui.label(egui::RichText::new(text).font(theme::bold(18.0)));
     ui.add_space(6.0);
 }
+
+/// The widest a step's picture grows, in points.
+const PICTURE_MAX_W: f32 = 320.0;
 
 /// The panel's text: 14 px on 21 px lines.
 const TEXT_SIZE: f32 = 14.0;
@@ -376,6 +655,7 @@ fn tool_row(ui: &mut Ui, tool: Tool) -> bool {
     let galley = ui.painter().layout_job(job);
     let h = galley.size().y.max(20.0);
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, h), Sense::click());
+    let resp = resp.rich_tip(format!("{}\n{}", tool.name(), tr("hint.tool_row_desc")));
     let icon = Rect::from_min_size(rect.min + Vec2::new(0.0, 0.0), Vec2::splat(20.0));
     if resp.hovered() {
         ui.painter()
@@ -399,12 +679,21 @@ fn tool_row(ui: &mut Ui, tool: Tool) -> bool {
 fn tool_page(app: &mut App, ui: &mut Ui, tool: Tool) -> Option<HintPage> {
     title(ui, &tr(&format!("hinttitle.{}", tool.id())));
     tool_row(ui, tool);
-    ui.add_space(6.0);
-    // The status bar hint, one bullet per instruction, keys in bold.
-    let hint = crate::ui::status::tool_hint_for(tool, app.selection.is_empty());
-    for part in split_hint(&hint) {
-        bullet_row(ui, |ui| rich(ui, &emphasize_keys(&part)));
-        ui.add_space(4.0);
+    ui.add_space(8.0);
+    // The steps, keys in bold, each with its picture under it.
+    for (i, pic) in crate::ui::hint_pics::steps(tool).iter().enumerate() {
+        let text = tr(&format!("hintstep.{}.{}", tool.id(), i + 1));
+        bullet_row(ui, |ui| {
+            rich(ui, &emphasize_keys(&text));
+            if let Some(pic) = pic {
+                ui.add_space(6.0);
+                let w = ui.available_width().min(PICTURE_MAX_W);
+                let h = w * crate::ui::hint_pics::H / crate::ui::hint_pics::W;
+                let (r, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
+                crate::ui::hint_pics::draw(ui.painter(), r, *pic);
+            }
+        });
+        ui.add_space(10.0);
     }
     learn_more(
         app,
@@ -425,25 +714,55 @@ fn tool_page(app: &mut App, ui: &mut Ui, tool: Tool) -> Option<HintPage> {
     go
 }
 
-/// Split a hint into its instructions (separated by semicolons in every
-/// script the interface uses).
-pub fn split_hint(hint: &str) -> Vec<String> {
-    hint.split([';', '；', '؛', '。'])
-        .map(|s| s.trim().trim_end_matches('.').trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            let mut c = s.chars();
-            match c.next() {
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                None => s,
-            }
-        })
-        .collect()
+/// The page of a kind of object: what it is and what can be done with it,
+/// the tools that work on it (each opens its own page) and what the
+/// property bar offers for it.
+fn object_page(app: &mut App, ui: &mut Ui, kind: ObjectKind) -> Option<HintPage> {
+    let id = kind.id();
+    title(ui, &tr(&format!("hintobj.{id}.title")));
+    for n in 1..=2 {
+        bullet_row(ui, |ui| {
+            rich(
+                ui,
+                &emphasize_keys(&crate::shortcuts::shown_in(tr(&format!(
+                    "hintobj.{id}.{n}"
+                )))),
+            );
+        });
+        ui.add_space(6.0);
+    }
+    let mut go = None;
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tr("hint.obj_tools")).font(theme::bold(TEXT_SIZE)));
+    ui.add_space(4.0);
+    for &tool in kind.tools() {
+        if tool_row(ui, tool) {
+            go = Some(HintPage::Tool(tool));
+        }
+        ui.add_space(4.0);
+    }
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(tr("hint.obj_bar")).font(theme::bold(TEXT_SIZE)));
+    ui.add_space(2.0);
+    rich(ui, &tr(&format!("hintobj.{id}.bar")));
+    ui.add_space(8.0);
+    ui.label(
+        egui::RichText::new(tr("hint.obj_back"))
+            .size(TEXT_SIZE - 1.0)
+            .color(Tokens::text_dim()),
+    );
+    learn_more(
+        app,
+        ui,
+        &tr(&format!("hintobj.{id}.title")),
+        kind.help_topic(),
+    );
+    go
 }
 
 /// Put the modifier and special key names of a hint in bold.
 pub fn emphasize_keys(text: &str) -> String {
-    const KEYS: [&str; 16] = [
+    const KEYS: [&str; 27] = [
         "Ctrl",
         "Shift",
         "Alt",
@@ -460,6 +779,17 @@ pub fn emphasize_keys(text: &str) -> String {
         "Espaço",
         "Espace",
         "Leertaste",
+        "Espacio",
+        "Spazio",
+        "Delete",
+        "Entf",
+        "Suppr",
+        "Supr",
+        "Canc",
+        "Échap",
+        "Eingabetaste",
+        "Invio",
+        "Maiusc",
     ];
     let mut out = String::with_capacity(text.len() + 16);
     let mut word = String::new();
@@ -473,8 +803,17 @@ pub fn emphasize_keys(text: &str) -> String {
         }
         word.clear();
     };
+    // Key names are Latin; a change of script ends a word, so "Ctrlキー" still finds Ctrl.
+    let latin = |c: char| (c as u32) < 0x0250;
     for ch in text.chars() {
         if ch.is_alphanumeric() {
+            if word
+                .chars()
+                .last()
+                .is_some_and(|last| latin(last) != latin(ch))
+            {
+                flush(&mut word, &mut out);
+            }
             word.push(ch);
         } else {
             flush(&mut word, &mut out);
@@ -530,13 +869,13 @@ fn nav_bar(app: &mut App, ui: &mut Ui) {
     let back_r = fwd_r.translate(Vec2::new(-28.0, 0.0));
     let home = ui
         .interact(home_r, egui::Id::new("hints_home"), Sense::click())
-        .on_hover_text(tr("hint.home"));
+        .rich_tip(tr("hint.home"));
     let back = ui
         .interact(back_r, egui::Id::new("hints_back"), Sense::click())
-        .on_hover_text(tr("hint.back"));
+        .rich_tip(tr("hint.back"));
     let fwd = ui
         .interact(fwd_r, egui::Id::new("hints_forward"), Sense::click())
-        .on_hover_text(tr("hint.forward"));
+        .rich_tip(tr("hint.forward"));
     let p = ui.painter();
     for (r, resp) in [(home_r, &home), (back_r, &back), (fwd_r, &fwd)] {
         if resp.hovered() {
@@ -625,12 +964,16 @@ mod tests {
         h.back();
         h.back();
         assert_eq!(h.current(), HintPage::Home);
-        // Choosing a tool shows its page; the same tool again does nothing.
-        h.follow(Tool::Rectangle);
+        // Choosing a tool shows its page; frames with no new choice leave
+        // the page the user went to.
+        h.follow(Tool::Rectangle, 1);
         assert_eq!(h.current(), HintPage::Tool(Tool::Rectangle));
         h.back();
-        h.follow(Tool::Rectangle);
+        h.follow(Tool::Rectangle, 1);
         assert_eq!(h.current(), HintPage::Home);
+        // The active tool chosen again shows its page again (#1321).
+        h.follow(Tool::Rectangle, 2);
+        assert_eq!(h.current(), HintPage::Tool(Tool::Rectangle));
     }
 
     #[test]
@@ -657,13 +1000,85 @@ mod tests {
     }
 
     #[test]
-    fn hints_split_into_instructions_with_keys_in_bold() {
-        let parts = split_hint("Ctrl+drag constrains; Shift+drag draws from center");
-        assert_eq!(
-            parts,
-            vec!["Ctrl+drag constrains", "Shift+drag draws from center"]
-        );
+    fn every_object_kind_has_its_texts_tools_and_a_help_page() {
+        crate::i18n::set_language("en");
+        let pages = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/help/contents.txt"
+        ))
+        .expect("contents");
+        for k in ObjectKind::ALL {
+            for part in ["title", "1", "2", "bar"] {
+                let key = format!("hintobj.{}.{part}", k.id());
+                assert_ne!(tr(&key), key, "missing {key}");
+            }
+            assert!(!k.tools().is_empty(), "{k:?}");
+            assert!(
+                pages.lines().any(|l| l.trim() == k.help_topic()),
+                "{k:?}: {} is not a Help page",
+                k.help_topic()
+            );
+        }
+        for key in ["hint.obj_tools", "hint.obj_bar", "hint.obj_back"] {
+            assert_ne!(tr(key), key, "missing {key}");
+        }
+    }
+
+    #[test]
+    fn the_selection_shows_its_page_and_letting_go_shows_the_tool() {
+        let key = |rev: u64, ids: &[u64]| -> SelectionKey {
+            (
+                1,
+                rev,
+                PageId(1),
+                ids.len(),
+                ids.first().map(|i| ShapeId(*i)),
+                ids.last().map(|i| ShapeId(*i)),
+            )
+        };
+        let mut h = HintsState::default();
+        h.follow(Tool::Pick, 0);
+        h.follow_selection(Tool::Pick, key(0, &[]), || None);
+        assert_eq!(h.current(), HintPage::Home);
+        // A pick shows the object's page; the same key reads nothing.
+        h.follow_selection(Tool::Pick, key(0, &[5]), || Some(ObjectKind::Text));
+        assert_eq!(h.current(), HintPage::Object(ObjectKind::Text));
+        h.follow_selection(Tool::Pick, key(0, &[5]), || panic!("read again"));
+        // Two objects of different kinds.
+        h.follow_selection(Tool::Pick, key(0, &[5, 6]), || Some(ObjectKind::Several));
+        assert_eq!(h.current(), HintPage::Object(ObjectKind::Several));
+        // Letting go goes back to the tool's page.
+        h.follow_selection(Tool::Pick, key(0, &[]), || None);
+        assert_eq!(h.current(), HintPage::Tool(Tool::Pick));
+        // An edit that keeps the selection leaves a page that is not an
+        // object page alone.
+        h.follow_selection(Tool::Pick, key(0, &[7]), || Some(ObjectKind::Rectangle));
+        h.go(HintPage::Home);
+        h.follow_selection(Tool::Pick, key(1, &[7]), || Some(ObjectKind::Curve));
+        assert_eq!(h.current(), HintPage::Home);
+        // A drawing tool: the object it just drew and an object it picks
+        // keep the tool's steps (#1321).
+        h.follow(Tool::Ellipse, 0);
+        h.follow_selection(Tool::Ellipse, key(2, &[8]), || Some(ObjectKind::Ellipse));
+        assert_eq!(h.current(), HintPage::Tool(Tool::Ellipse));
+        h.follow_selection(Tool::Ellipse, key(2, &[7]), || Some(ObjectKind::Curve));
+        assert_eq!(h.current(), HintPage::Tool(Tool::Ellipse));
+        // An effect tool picks its object first: its page stays.
+        h.follow(Tool::Contour, 0);
+        h.follow_selection(Tool::Contour, key(2, &[9]), || Some(ObjectKind::Rectangle));
+        assert_eq!(h.current(), HintPage::Tool(Tool::Contour));
+        // An object page the user opened follows the selection.
+        h.go(HintPage::Object(ObjectKind::Rectangle));
+        h.follow_selection(Tool::Contour, key(2, &[7]), || Some(ObjectKind::Curve));
+        assert_eq!(h.current(), HintPage::Object(ObjectKind::Curve));
+        h.follow_selection(Tool::Contour, key(2, &[]), || None);
+        assert_eq!(h.current(), HintPage::Tool(Tool::Contour));
+    }
+
+    #[test]
+    fn step_keys_are_in_bold() {
         assert_eq!(emphasize_keys("Ctrl+drag"), "**Ctrl**+drag");
-        assert_eq!(split_hint("单击放大；右键单击缩小").len(), 2);
+        assert_eq!(emphasize_keys("Hold Alt"), "Hold **Alt**");
+        assert_eq!(emphasize_keys("Ctrlキーを押す"), "**Ctrl**キーを押す");
     }
 }

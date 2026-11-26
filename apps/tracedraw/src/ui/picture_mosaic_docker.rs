@@ -8,12 +8,16 @@
 use crate::app::App;
 use crate::i18n::{tr, trf};
 use crate::picture_mosaic::{grid, tile_pixels, Composition, Edges, Priority};
-use crate::ui::docker_form::{indented, row, section, wide_button};
+use crate::ui::docker_form::{indented, row, section};
+use crate::ui::tips::RichTip;
 use egui::{RichText, Ui};
 
 /// The library section: the picture count, the folder, Browse and the
 /// progress while the folder is read.
 fn library(app: &mut App, ui: &mut Ui) {
+    if let Some(dir) = crate::files::take_picked("picture-mosaic-folder") {
+        app.picture_mosaic_load_library(dir);
+    }
     section(ui, Some(&tr("docker.picture_mosaic_library")));
     let none = tr("docker.form_none");
     let n = app.picture_mosaic.images.len();
@@ -28,19 +32,28 @@ fn library(app: &mut App, ui: &mut Ui) {
         .picture_mosaic
         .library
         .as_ref()
-        .and_then(|p| p.file_name())
-        .map(|n| n.to_string_lossy().to_string())
+        .map(|p| {
+            if crate::files::is_gathered(p) {
+                // Pictures picked where no folder can be read (#1399).
+                trf("folder.picked_n", &[("n", &n.to_string())])
+            } else {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            }
+        })
         .unwrap_or_else(|| none.clone());
     let full = app
         .picture_mosaic
         .library
         .as_ref()
+        .filter(|p| !crate::files::is_gathered(p))
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     row(ui, &tr("docker.picture_mosaic_path"), |ui| {
         let r = ui.add(egui::Label::new(name).truncate());
         if !full.is_empty() {
-            r.on_hover_text(full);
+            r.rich_tip(full);
         }
     });
     let busy = app.picture_mosaic_job.is_some();
@@ -48,15 +61,16 @@ fn library(app: &mut App, ui: &mut Ui) {
         if ui
             .add_enabled(
                 !busy,
-                egui::Button::new(tr("docker.picture_mosaic_browse"))
+                crate::ui::btn_icons::Ib::new("docker.picture_mosaic_browse")
                     .min_size(egui::vec2(100.0, 24.0)),
             )
-            .on_hover_text(tr("docker.picture_mosaic_browse_tip"))
+            .rich_tip(match crate::files::FolderUse::MosaicLibrary.tip() {
+                Some(why) => format!("{}\n{}", tr("docker.picture_mosaic_browse_tip"), tr(why)),
+                None => tr("docker.picture_mosaic_browse_tip"),
+            })
             .clicked()
         {
-            if let Some(dir) = crate::files::pick_folder() {
-                app.picture_mosaic_load_library(dir);
-            }
+            choose_library(app);
         }
     });
     if let Some(job) = &app.picture_mosaic_job {
@@ -64,12 +78,37 @@ fn library(app: &mut App, ui: &mut Ui) {
         let total = job.total.max(1);
         ui.add(
             egui::ProgressBar::new(done as f32 / total as f32)
-                .desired_width(ui.available_width().min(240.0))
+                .desired_width(crate::ui::docker_form::fit_w(ui, 240.0))
                 .text(trf(
                     "docker.picture_mosaic_indexing",
                     &[("n", &done.to_string()), ("total", &job.total.to_string())],
                 )),
         );
+    }
+}
+
+/// Browse: a folder on the desktop; where no folder can be read, the
+/// pictures themselves, several at once, put together as the library's
+/// folder (#1399).
+fn choose_library(app: &mut App) {
+    match crate::files::FolderUse::MosaicLibrary.action() {
+        crate::files::FolderAction::PickFolder(token) => {
+            crate::files::pick_folder_into(token, None, "picture-mosaic-folder");
+        }
+        crate::files::FolderAction::OpenFiles => {
+            crate::files::Dialog::new()
+                .add_filter(
+                    "Pictures",
+                    &["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff"],
+                )
+                .pick_files(app, |app, paths| {
+                    match crate::files::gather("picture-mosaic", &paths) {
+                        Ok(dir) => app.picture_mosaic_load_library(dir),
+                        Err(e) => app.status = e.to_string(),
+                    }
+                });
+        }
+        crate::files::FolderAction::SaveZip | crate::files::FolderAction::Unavailable(_) => {}
     }
 }
 
@@ -79,15 +118,25 @@ fn pixels(ui: &mut Ui, label: &str, v: &mut u32, editable: bool, max: u32) -> bo
         ui.label(label);
         ui.add_enabled(
             editable,
-            egui::DragValue::new(v).range(1..=max).suffix(" px"),
+            crate::ui::field::NumField::new(v)
+                .range(1..=max)
+                .suffix(" px"),
         )
+        .rich_tip(crate::ui::tips::pair(
+            "docker.picture_mosaic_pixels",
+            "docker.picture_mosaic_pixels_desc",
+        ))
+        .rich_disabled_tip(crate::ui::tips::pair(
+            "docker.picture_mosaic_pixels",
+            "docker.picture_mosaic_pixels_desc",
+        ))
         .changed()
     })
     .inner
 }
 
 pub fn picture_mosaic(app: &mut App, ui: &mut Ui) {
-    ui.spacing_mut().slider_width = 110.0;
+    crate::ui::docker_form::fit_sliders(ui);
     let bounds = app.selection_bounds();
     let selected = app.selection.len();
     // Reference.
@@ -103,7 +152,10 @@ pub fn picture_mosaic(app: &mut App, ui: &mut Ui) {
         ui.checkbox(
             &mut app.picture_mosaic.keep_original,
             tr("docker.picture_mosaic_keep_original"),
-        );
+        )
+        .rich_tip(crate::ui::tips::keyed(
+            "docker.picture_mosaic_keep_original",
+        ));
     });
     library(app, ui);
     let dpi = app.document_dpi();
@@ -114,34 +166,41 @@ pub fn picture_mosaic(app: &mut App, ui: &mut Ui) {
     };
     section(ui, Some(&tr("docker.form_grid")));
     row(ui, &tr("docker.picture_mosaic_columns"), |ui| {
-        ui.add(egui::DragValue::new(&mut s.columns).range(2..=300));
+        ui.add(crate::ui::field::NumField::new(&mut s.columns).range(2..=300))
+            .rich_tip(crate::ui::tips::keyed("docker.picture_mosaic_columns"));
     });
     row(ui, &tr("docker.picture_mosaic_rows"), |ui| {
         let mut r = rows;
-        ui.add_enabled(false, egui::DragValue::new(&mut r));
+        ui.add_enabled(false, crate::ui::field::NumField::new(&mut r))
+            .rich_disabled_tip(crate::ui::tips::keyed("docker.picture_mosaic_rows"));
     });
     row(ui, &tr("docker.picture_mosaic_blending"), |ui| {
-        ui.add(crate::ui::Rail(
-            egui::Slider::new(&mut s.blending, 0.0..=100.0)
+        ui.add(
+            crate::ui::Slider::new(&mut s.blending, 0.0..=100.0)
                 .suffix(" %")
                 .max_decimals(0),
-        ));
+        )
+        .rich_tip(crate::ui::tips::keyed("docker.picture_mosaic_blending"));
     });
     section(ui, None);
     ui.horizontal(|ui| {
-        ui.checkbox(&mut s.duplicates, tr("docker.picture_mosaic_duplicates"));
+        ui.checkbox(&mut s.duplicates, tr("docker.picture_mosaic_duplicates"))
+            .rich_tip(crate::ui::tips::keyed("docker.picture_mosaic_duplicates"));
         ui.add_enabled(
             s.duplicates,
-            egui::DragValue::new(&mut s.spacing).range(0..=20),
+            crate::ui::field::NumField::new(&mut s.spacing).range(0..=20),
         )
-        .on_hover_text(tr("docker.picture_mosaic_spacing_tip"));
+        .rich_tip(tr("docker.picture_mosaic_spacing_tip"));
     });
     section(ui, Some(&tr("docker.form_output")));
     let combo = |ui: &mut Ui, id: &str, text: String, add: &mut dyn FnMut(&mut Ui)| {
-        egui::ComboBox::from_id_salt(id)
+        crate::ui::keynav::ComboBox::from_id_salt(id)
             .selected_text(text)
-            .width(ui.available_width().clamp(120.0, 180.0))
-            .show_ui(ui, |ui| add(ui));
+            .width(crate::ui::docker_form::fit_w(ui, 180.0))
+            .truncate()
+            .show_ui(ui, |ui| add(ui))
+            .response
+            .rich_tip(crate::ui::tips::keyed(&format!("docker.{id}")));
     };
     row(ui, &tr("docker.picture_mosaic_composition"), |ui| {
         combo(
@@ -180,8 +239,16 @@ pub fn picture_mosaic(app: &mut App, ui: &mut Ui) {
         if ui
             .add_enabled(
                 custom,
-                egui::DragValue::new(&mut shown).range(10.0..=2400.0),
+                crate::ui::field::NumField::new(&mut shown).range(10.0..=2400.0),
             )
+            .rich_tip(crate::ui::tips::pair(
+                "docker.form_dpi",
+                "docker.picture_mosaic_dpi_desc",
+            ))
+            .rich_disabled_tip(crate::ui::tips::pair(
+                "docker.form_dpi",
+                "docker.picture_mosaic_dpi_desc",
+            ))
             .changed()
         {
             s.dpi = shown;
@@ -214,8 +281,12 @@ pub fn picture_mosaic(app: &mut App, ui: &mut Ui) {
     let ready = bounds.is_some()
         && !app.picture_mosaic.images.is_empty()
         && app.picture_mosaic_job.is_none();
-    if wide_button(ui, &tr("docker.apply"), ready) {
+    let tip = crate::ui::tips::pair("docker.apply", "docker.picture_mosaic_apply_desc");
+    if crate::ui::docker_form::wide_button(ui, "docker.apply", ready, &tip) {
         let s = app.picture_mosaic.clone();
         app.apply_picture_mosaic(&s);
+    }
+    if crate::ui::docker_form::reset_button(ui) {
+        app.picture_mosaic.reset();
     }
 }

@@ -1,6 +1,6 @@
 //! Drawings side by side: Window > Cascade, Tile Horizontally and Tile
 //! Vertically give every open drawing a window in the drawing area;
-//! Combine Windows and Dock Window bring the tabs back. A window has a
+//! Merge Windows and Dock Window bring the tabs back. A window has a
 //! title bar naming its drawing (an asterisk while it has unsaved
 //! changes) with buttons to go back to tabs (as a double click on the
 //! bar does) and to close the drawing. The active drawing's window is
@@ -12,6 +12,7 @@
 use crate::app::{App, Drag};
 use crate::i18n::tr;
 use crate::theme::Tokens;
+use crate::ui::tips::RichTip;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 /// How the drawings' windows are arranged.
@@ -98,7 +99,7 @@ fn fit_all(app: &mut App) {
 }
 
 /// Arrange the windows as `layout` says (Window > Cascade, Tile; Tabs for
-/// Combine Windows and Dock Window): every page is fitted again.
+/// Merge Windows and Dock Window): every page is fitted again.
 pub fn set_layout(app: &mut App, layout: WindowLayout) {
     if app.window_layout != layout {
         app.window_layout = layout;
@@ -120,7 +121,7 @@ fn title_button(
         ui.painter().rect_filled(rect, 2.0, Tokens::tool_hover());
     }
     paint(ui.painter(), rect.shrink(6.0), Tokens::icon());
-    resp.on_hover_text(tip).clicked()
+    resp.rich_tip(tip).clicked()
 }
 
 /// A window's frame and title bar; returns the rectangle left for its
@@ -225,7 +226,7 @@ fn frame(
 
 /// Draw drawing `i`, which is not the active one, into `rect`: its page
 /// as its own view shows it, fitted when its window is new.
-fn paint_parked(app: &mut App, ui: &Ui, i: usize, rect: Rect) {
+pub(crate) fn paint_parked(app: &mut App, ui: &Ui, i: usize, rect: Rect) {
     let holder = app.peek(i);
     // What the active window is doing is not drawn here.
     let drag = std::mem::replace(&mut app.drag, Drag::None);
@@ -236,6 +237,9 @@ fn paint_parked(app: &mut App, ui: &Ui, i: usize, rect: Rect) {
     if app.fit_pending {
         app.view.fit(app.page_rect(), rect);
         app.fit_pending = false;
+        if std::mem::take(&mut app.open_view_pending) {
+            app.apply_open_view(rect);
+        }
     }
     crate::canvas::draw_parked(app, &ui.painter_at(rect), rect);
     app.drag = drag;
@@ -247,7 +251,11 @@ fn paint_parked(app: &mut App, ui: &Ui, i: usize, rect: Rect) {
 
 /// The drawing area with every drawing in a window (see the module notes).
 pub fn arranged(app: &mut App, ui: &mut Ui, area: Rect) {
-    let n = app.docs.len();
+    // Drawings in windows of their own (#2904) are not arranged here.
+    let shown = crate::ui::detached::main_tabs(app);
+    let n = shown.len();
+    ui.painter()
+        .rect_filled(area, 0.0, crate::theme::Tokens::page_shadow());
     if n == 0 {
         return;
     }
@@ -256,13 +264,11 @@ pub fn arranged(app: &mut App, ui: &mut Ui, area: Rect) {
         app.window_layout_seen = Some(seen);
         fit_all(app);
     }
-    ui.painter()
-        .rect_filled(area, 0.0, crate::theme::Tokens::page_shadow());
     let rects = window_rects(app.window_layout, n, area);
-    let active = app.active_doc.min(n - 1);
+    let active = app.active_doc;
     let mut act = None;
-    for i in (0..n).filter(|i| *i != active) {
-        let r = rects[i];
+    for (k, &i) in shown.iter().enumerate().filter(|(_, i)| **i != active) {
+        let r = rects[k];
         // Under the title bar's buttons, so these win.
         let resp = ui.interact(r, egui::Id::new(("document_window", i)), Sense::click());
         let title = app.document_tab_title(i);
@@ -272,10 +278,12 @@ pub fn arranged(app: &mut App, ui: &mut Ui, area: Rect) {
             act = Some(Action::Activate(i));
         }
     }
-    let r = rects[active];
-    let title = app.document_tab_title(active);
-    let content = frame(ui, r, active, &title, true, &mut act);
-    crate::ui::drawing_window(app, ui, content);
+    if let Some(k) = shown.iter().position(|&i| i == active) {
+        let r = rects[k];
+        let title = app.document_tab_title(active);
+        let content = frame(ui, r, active, &title, true, &mut act);
+        crate::ui::drawing_window(app, ui, content);
+    }
     match act {
         Some(Action::Activate(i)) => app.switch_document(i),
         Some(Action::Close(i)) => {
@@ -315,7 +323,7 @@ mod tests {
     }
 
     /// Drawing the windows leaves every drawing as it was; a click on
-    /// another window makes it active, and Combine Windows goes back to
+    /// another window makes it active, and Merge Windows goes back to
     /// tabs with every page fitted again.
     #[test]
     fn tiled_windows_draw_every_drawing_and_switch() {

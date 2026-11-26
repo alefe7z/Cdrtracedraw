@@ -7,8 +7,13 @@
 
 use crate::{FontKind, FontSystem};
 use kurbo::BezPath;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// How many font files [`FontSystem::install_paths`] loads under one
+/// hold of the database.
+const INSTALL_CHUNK: usize = 64;
 
 /// What a face's licence allows (its OS/2 `fsType` bits).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -163,7 +168,7 @@ fn be32(b: &[u8], at: usize) -> u32 {
 }
 
 /// The English name `id` of a face, else any.
-fn name(f: &ttf_parser::Face, id: u16) -> Option<String> {
+pub(crate) fn name(f: &ttf_parser::Face, id: u16) -> Option<String> {
     let mut best: Option<(bool, String)> = None;
     for n in f.names() {
         if n.name_id != id {
@@ -185,7 +190,7 @@ fn name(f: &ttf_parser::Face, id: u16) -> Option<String> {
 }
 
 /// The OpenType feature tags of a GSUB or GPOS table.
-fn feature_tags(table: &[u8]) -> Vec<[u8; 4]> {
+pub(crate) fn feature_tags(table: &[u8]) -> Vec<[u8; 4]> {
     let list = be16(table, 6) as usize;
     if list == 0 {
         return Vec::new();
@@ -199,27 +204,10 @@ fn feature_tags(table: &[u8]) -> Vec<[u8; 4]> {
         .collect()
 }
 
-/// What the manager knows of face `index` in font `data` (not yet marked
-/// installed or system).
-pub fn describe(data: &[u8], index: u32) -> Option<FaceRecord> {
-    let f = ttf_parser::Face::parse(data, index).ok()?;
-    let raw = f.raw_face();
-    let os2 = raw
-        .table(ttf_parser::Tag::from_bytes(b"OS/2"))
-        .unwrap_or(&[]);
-    let tables = f.tables();
-    let kind = if tables.fvar.is_some() {
-        FontKind::Variable
-    } else if tables.cff.is_some() || tables.cff2.is_some() {
-        FontKind::OpenType
-    } else {
-        FontKind::TrueType
-    };
-    let symbol = tables.cmap.is_some_and(|c| {
-        c.subtables
-            .into_iter()
-            .any(|s| s.platform_id == ttf_parser::PlatformId::Windows && s.encoding_id == 0)
-    });
+/// The writing systems face `f` covers: those its OS/2 Unicode ranges
+/// name (`os2` is the whole table), Latin for a font without ranges that
+/// maps Latin letters, and Symbols for a symbol font.
+pub(crate) fn face_scripts(f: &ttf_parser::Face, os2: &[u8], symbol: bool) -> Vec<Script> {
     let ranges = [be32(os2, 42), be32(os2, 46), be32(os2, 50), be32(os2, 54)];
     let bit = |n: usize| ranges[n / 32] & (1 << (n % 32)) != 0;
     let mut scripts = Vec::new();
@@ -247,6 +235,31 @@ pub fn describe(data: &[u8], index: u32) -> Option<FaceRecord> {
     if symbol {
         scripts.push(Script::Symbols);
     }
+    scripts
+}
+
+/// What the manager knows of face `index` in font `data` (not yet marked
+/// installed or system).
+pub fn describe(data: &[u8], index: u32) -> Option<FaceRecord> {
+    let f = ttf_parser::Face::parse(data, index).ok()?;
+    let raw = f.raw_face();
+    let os2 = raw
+        .table(ttf_parser::Tag::from_bytes(b"OS/2"))
+        .unwrap_or(&[]);
+    let tables = f.tables();
+    let kind = if tables.fvar.is_some() {
+        FontKind::Variable
+    } else if tables.cff.is_some() || tables.cff2.is_some() {
+        FontKind::OpenType
+    } else {
+        FontKind::TrueType
+    };
+    let symbol = tables.cmap.is_some_and(|c| {
+        c.subtables
+            .into_iter()
+            .any(|s| s.platform_id == ttf_parser::PlatformId::Windows && s.encoding_id == 0)
+    });
+    let scripts = face_scripts(&f, os2, symbol);
     let mut tags = Vec::new();
     for t in [b"GSUB", b"GPOS"] {
         if let Some(table) = raw.table(ttf_parser::Tag::from_bytes(t)) {
@@ -331,7 +344,12 @@ pub fn is_font_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
-        .is_some_and(|e| matches!(e.as_str(), "ttf" | "otf" | "ttc" | "otc"))
+        .is_some_and(|e| {
+            matches!(
+                e.as_str(),
+                "ttf" | "otf" | "ttc" | "otc" | "pfb" | "pfa" | "pfm"
+            )
+        })
 }
 
 /// The font files in `dir` and its subfolders (three levels down at
@@ -363,7 +381,16 @@ pub fn font_files(dir: &Path) -> Vec<PathBuf> {
 pub fn scan_folder(dir: &Path) -> Vec<FaceRecord> {
     let mut out = Vec::new();
     for path in font_files(dir) {
-        let Ok(data) = std::fs::read(&path) else {
+        // A Type 1 font is listed once, by its .pfb (#193).
+        let data = if crate::type1::is_type1_file(&path) {
+            if !crate::type1::is_type1_path(&path) {
+                continue;
+            }
+            crate::type1::convert_file(&path)
+        } else {
+            std::fs::read(&path).ok()
+        };
+        let Some(data) = data else {
             continue;
         };
         for mut r in describe_file(&data) {
@@ -408,7 +435,15 @@ pub fn sample_outline(data: &[u8], index: u32, text: &str) -> Option<(BezPath, f
             );
         }
         fn close(&mut self) {
-            self.path.close_path();
+            // Only an outline begun is closed (#4119).
+            if self
+                .path
+                .elements()
+                .last()
+                .is_some_and(|e| !matches!(e, kurbo::PathEl::ClosePath))
+            {
+                self.path.close_path();
+            }
         }
     }
     let k = 1.0 / upem;
@@ -416,7 +451,7 @@ pub fn sample_outline(data: &[u8], index: u32, text: &str) -> Option<(BezPath, f
     let mut x = 0.0;
     let mut any = false;
     for c in text.chars() {
-        let Some(g) = f.glyph_index(c).or_else(|| f.glyph_index('?')) else {
+        let Some(g) = crate::face_glyph(&f, c).or_else(|| f.glyph_index('?')) else {
             continue;
         };
         let mut pen = Pen {
@@ -435,6 +470,22 @@ pub fn sample_outline(data: &[u8], index: u32, text: &str) -> Option<(BezPath, f
     Some((path, x, ascent.max(0.0), descent.max(0.0)))
 }
 
+/// The file a face was loaded from, or the name it was installed under
+/// from memory ([`FontSystem::install_named`]); `None` for other faces
+/// loaded from memory.
+fn source_path(face: &fontdb::FaceInfo, named: &[(fontdb::ID, PathBuf)]) -> Option<PathBuf> {
+    match &face.source {
+        #[cfg(not(target_arch = "wasm32"))]
+        fontdb::Source::File(p) => Some(p.clone()),
+        #[cfg(not(target_arch = "wasm32"))]
+        fontdb::Source::SharedFile(p, _) => Some(p.clone()),
+        _ => named
+            .iter()
+            .find(|(id, _)| *id == face.id)
+            .map(|(_, p)| p.clone()),
+    }
+}
+
 impl FontSystem {
     /// Every face in the font database as the manager lists it, installed;
     /// fonts documents brought are left out (they are not installed).
@@ -444,17 +495,14 @@ impl FontSystem {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let named = self.named.read().unwrap_or_else(|e| e.into_inner()).clone();
         let db = self.db();
         let mut out = Vec::new();
         for face in db.faces() {
             if face.families.iter().any(|(n, _)| document.contains(n)) {
                 continue;
             }
-            let path = match &face.source {
-                fontdb::Source::File(p) => Some(p.clone()),
-                fontdb::Source::SharedFile(p, _) => Some(p.clone()),
-                _ => None,
-            };
+            let path = source_path(face, &named);
             let read = db.with_face_data(face.id, describe);
             let Some(Some(mut r)) = read else {
                 continue;
@@ -476,14 +524,11 @@ impl FontSystem {
     /// The font files loaded into the database, for telling installed
     /// files of a folder from the others.
     pub fn installed_paths(&self) -> Vec<PathBuf> {
+        let named = self.named.read().unwrap_or_else(|e| e.into_inner()).clone();
         let db = self.db();
         let mut out: Vec<PathBuf> = db
             .faces()
-            .filter_map(|face| match &face.source {
-                fontdb::Source::File(p) => Some(p.clone()),
-                fontdb::Source::SharedFile(p, _) => Some(p.clone()),
-                _ => None,
-            })
+            .filter_map(|face| source_path(face, &named))
             .collect();
         out.sort();
         out.dedup();
@@ -495,20 +540,46 @@ impl FontSystem {
     /// files that do not read as fonts are skipped. Returns the families
     /// added.
     pub fn install_paths(&self, paths: &[PathBuf]) -> Vec<String> {
-        let loaded = self.installed_paths();
+        // A set: a library of tens of thousands of fonts looked each file
+        // up in a list of all those loaded (d#2166).
+        let loaded: HashSet<PathBuf> = self.installed_paths().into_iter().collect();
         let mut ids = Vec::new();
-        {
+        // A few files at a time, so that drawing, which reads the
+        // database, goes on while a large library loads off the
+        // interface's thread (d#2166, d#3200).
+        for chunk in paths.chunks(INSTALL_CHUNK) {
+            // The names before the database, as everywhere.
+            let mut named = self.named.write().unwrap_or_else(|e| e.into_inner());
             let mut db = self.db.write().unwrap_or_else(|e| e.into_inner());
-            for path in paths {
+            for path in chunk {
                 if loaded.contains(path) {
                     continue;
                 }
-                let Ok(data) = std::fs::read(path) else {
+                // A Type 1 font (#193), turned into one the engine reads
+                // and kept under its file's name.
+                if crate::type1::is_type1_file(path) {
+                    if let Some(data) = crate::type1::convert_file(path) {
+                        let got = db.load_font_source(fontdb::Source::Binary(Arc::new(data)));
+                        named.extend(got.iter().map(|id| (*id, path.clone())));
+                        ids.extend(got);
+                    }
                     continue;
-                };
+                }
+                // The database maps the file itself; it used to be read
+                // whole first, for nothing.
+                #[cfg(not(target_arch = "wasm32"))]
                 let source = {
-                    let _ = data;
+                    if !path.is_file() {
+                        continue;
+                    }
                     fontdb::Source::File(path.clone())
+                };
+                #[cfg(target_arch = "wasm32")]
+                let source = {
+                    let Ok(data) = std::fs::read(path) else {
+                        continue;
+                    };
+                    fontdb::Source::Binary(Arc::new(data))
                 };
                 ids.extend(db.load_font_source(source));
             }
@@ -516,7 +587,31 @@ impl FontSystem {
         self.after_loading(&ids)
     }
 
-    /// Install font data loaded from memory for CD Draw (the browser
+    /// Install fonts held in memory under the names the application keeps
+    /// them by (the fonts the browser build stores, #1400): the catalog
+    /// lists each face with its name as the path, [`Self::installed_paths`]
+    /// has it, and [`Self::uninstall_path`] takes it out again. A name
+    /// already loaded is skipped. Returns the families added.
+    pub fn install_named(&self, files: Vec<(PathBuf, Vec<u8>)>) -> Vec<String> {
+        let loaded = self.installed_paths();
+        let mut ids = Vec::new();
+        {
+            // The names before the database, as everywhere.
+            let mut named = self.named.write().unwrap_or_else(|e| e.into_inner());
+            let mut db = self.db.write().unwrap_or_else(|e| e.into_inner());
+            for (name, data) in files {
+                if loaded.contains(&name) || named.iter().any(|(_, n)| *n == name) {
+                    continue;
+                }
+                let got = db.load_font_source(fontdb::Source::Binary(Arc::new(data)));
+                named.extend(got.iter().map(|id| (*id, name.clone())));
+                ids.extend(got);
+            }
+        }
+        self.after_loading(&ids)
+    }
+
+    /// Install font data loaded from memory for TraceDraw (the browser
     /// build's uploads). Returns the families added.
     pub fn install_data(&self, files: Vec<Vec<u8>>) -> Vec<String> {
         let mut ids = Vec::new();
@@ -557,27 +652,54 @@ impl FontSystem {
     /// installed for CD Draw; the system's own stay). True when some
     /// were removed.
     pub fn uninstall_path(&self, path: &Path) -> bool {
-        if is_system_font(path) {
-            return false;
+        self.uninstall_paths(&[path.to_path_buf()]) > 0
+    }
+
+    /// Take the faces of the font files `paths` out of the database at
+    /// once (the system's own stay): one pass over the faces, the
+    /// families listed again once. A folder of tens of thousands of fonts
+    /// went one file at a time, each time over every face (d#2166).
+    /// Returns how many of the files had faces.
+    pub fn uninstall_paths(&self, paths: &[PathBuf]) -> usize {
+        let wanted: HashSet<&Path> = paths
+            .iter()
+            .map(PathBuf::as_path)
+            .filter(|p| !is_system_font(p))
+            .collect();
+        if wanted.is_empty() {
+            return 0;
         }
-        let removed = {
+        let (removed, files) = {
+            // The names before the database, as everywhere.
+            let mut named = self.named.write().unwrap_or_else(|e| e.into_inner());
             let mut db = self.db.write().unwrap_or_else(|e| e.into_inner());
-            let ids: Vec<fontdb::ID> = db
-                .faces()
-                .filter(|face| match &face.source {
-                    fontdb::Source::File(p) => p == path,
-                    fontdb::Source::SharedFile(p, _) => p == path,
-                    _ => false,
-                })
-                .map(|f| f.id)
-                .collect();
+            let by_id: HashMap<fontdb::ID, &PathBuf> =
+                named.iter().map(|(id, p)| (*id, p)).collect();
+            let mut files: HashSet<PathBuf> = HashSet::new();
+            let mut ids: Vec<fontdb::ID> = Vec::new();
+            for face in db.faces() {
+                let path = match &face.source {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fontdb::Source::File(p) => Some(p),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fontdb::Source::SharedFile(p, _) => Some(p),
+                    _ => by_id.get(&face.id).copied(),
+                };
+                if let Some(p) = path.filter(|p| wanted.contains(p.as_path())) {
+                    files.insert(p.clone());
+                    ids.push(face.id);
+                }
+            }
+            drop(by_id);
             for id in &ids {
                 db.remove_face(*id);
             }
-            ids
+            let gone: HashSet<fontdb::ID> = ids.iter().copied().collect();
+            named.retain(|(id, _)| !gone.contains(id));
+            (gone, files.len())
         };
         if removed.is_empty() {
-            return false;
+            return 0;
         }
         {
             let mut legacy = self.legacy.write().unwrap_or_else(|e| e.into_inner());
@@ -604,7 +726,7 @@ impl FontSystem {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.faces.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.fonts_changed();
-        true
+        files
     }
 }
 
@@ -669,6 +791,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A library of many fonts (d#2166): installed in several holds of
+    /// the database, installed again for nothing, and taken out all at
+    /// once, each file counted once and the families listed again.
+    #[test]
+    fn a_large_library_is_installed_and_uninstalled_at_once() {
+        let dir = temp_dir("many");
+        let n = INSTALL_CHUNK * 2 + 5;
+        let mut paths: Vec<PathBuf> = (0..n)
+            .map(|i| {
+                let p = dir.join(format!("f{i:04}.ttf"));
+                std::fs::write(&p, if i % 2 == 0 { SELAWIK } else { SELAWIK_BOLD }).expect("write");
+                p
+            })
+            .collect();
+        paths.push(dir.join("gone.ttf"));
+        let fs = FontSystem::from_db(fontdb::Database::new());
+        let added = fs.install_paths(&paths);
+        assert!(added.contains(&"Selawik".to_string()), "{added:?}");
+        assert_eq!(fs.installed_paths().len(), n);
+        assert!(fs.install_paths(&paths).is_empty(), "nothing new");
+        assert_eq!(fs.installed_paths().len(), n);
+        // Half of them, then the rest with a file never installed.
+        let (first, rest) = paths.split_at(n / 2);
+        assert_eq!(fs.uninstall_paths(first), n / 2);
+        assert_eq!(fs.installed_paths().len(), n - n / 2);
+        assert!(fs.has_family("Selawik"));
+        assert_eq!(fs.uninstall_paths(rest), n - n / 2);
+        assert!(fs.installed_paths().is_empty());
+        assert!(!fs.has_family("Selawik"));
+        assert_eq!(fs.uninstall_paths(&paths), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn font_files_are_installed_and_uninstalled() {
         let dir = temp_dir("install");
@@ -695,6 +850,41 @@ mod tests {
         assert!(fs.catalog().is_empty());
         assert!(!fs.uninstall_path(&path));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fonts held in memory under a name (the browser's stored fonts,
+    /// #1400) list with that name as their path, install once and
+    /// uninstall by it like a file.
+    #[test]
+    fn named_fonts_are_installed_and_uninstalled_by_their_name() {
+        let fs = FontSystem::from_db(fontdb::Database::new());
+        let name = PathBuf::from("/fonts/Selawik-Regular.ttf");
+        let added = fs.install_named(vec![(name.clone(), SELAWIK.to_vec())]);
+        assert_eq!(added, vec!["Selawik".to_string()]);
+        assert!(fs.has_family("Selawik"));
+        assert!(fs
+            .install_named(vec![(name.clone(), SELAWIK.to_vec())])
+            .is_empty());
+        let cat = fs.catalog();
+        assert_eq!(cat.len(), 1);
+        assert_eq!(cat[0].path.as_deref(), Some(name.as_path()));
+        assert!(cat[0].installed && !cat[0].system);
+        assert_eq!(fs.installed_paths(), vec![name.clone()]);
+        // Not a font: nothing is named.
+        let junk = PathBuf::from("/fonts/junk.ttf");
+        assert!(fs
+            .install_named(vec![(junk.clone(), b"x".to_vec())])
+            .is_empty());
+        assert!(!fs.installed_paths().contains(&junk));
+        assert!(fs.uninstall_path(&name));
+        assert!(!fs.has_family("Selawik"));
+        assert!(fs.catalog().is_empty() && fs.installed_paths().is_empty());
+        assert!(!fs.uninstall_path(&name));
+        // Once out, it can come back.
+        assert_eq!(
+            fs.install_named(vec![(name, SELAWIK.to_vec())]),
+            vec!["Selawik".to_string()]
+        );
     }
 
     #[test]

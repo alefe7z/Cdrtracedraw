@@ -6,8 +6,10 @@
 //! - Smear and Smudge: Pressure, how far the curve follows the pointer.
 //! - Twirl: Speed and the turn, counterclockwise or clockwise.
 //! - Attract and Repel: Speed and the mode (Shift while dragging swaps it).
-//! - Roughen: Frequency (spikes per 10 mm) and Spike size.
+//! - Roughen: Frequency (spikes per 10 mm), Spike size and the Edge
+//!   (Jagged, Thorns, Petals, Crumple).
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::i18n::tr;
 use crate::theme::Tokens;
@@ -35,6 +37,8 @@ pub struct BrushSettings {
     pub smudge_pressure: u32,
     /// Roughen: spikes per 10 mm, 1 to 10.
     pub roughen_frequency: u32,
+    /// Roughen: the edge it makes.
+    pub roughen_edge: tracedraw_core::effects::RoughEdge,
 }
 
 impl Default for BrushSettings {
@@ -48,6 +52,7 @@ impl Default for BrushSettings {
             repel: false,
             smudge_pressure: 100,
             roughen_frequency: 5,
+            roughen_edge: tracedraw_core::effects::RoughEdge::Jagged,
         }
     }
 }
@@ -163,13 +168,15 @@ pub fn brush_bar(app: &mut App, ui: &mut Ui) {
                 &mut b.twirl_speed,
             );
             if ui
-                .selectable_label(!b.twirl_clockwise, tr("toolbar.counterclockwise"))
+                .iselectable(!b.twirl_clockwise, "toolbar.counterclockwise")
+                .rich_tip(crate::ui::tips::keyed("toolbar.counterclockwise"))
                 .clicked()
             {
                 b.twirl_clockwise = false;
             }
             if ui
-                .selectable_label(b.twirl_clockwise, tr("toolbar.clockwise"))
+                .iselectable(b.twirl_clockwise, "toolbar.clockwise")
+                .rich_tip(crate::ui::tips::keyed("toolbar.clockwise"))
                 .clicked()
             {
                 b.twirl_clockwise = true;
@@ -183,14 +190,14 @@ pub fn brush_bar(app: &mut App, ui: &mut Ui) {
                 &mut b.attract_speed,
             );
             if ui
-                .selectable_label(!b.repel, tr("toolbar.attract"))
+                .iselectable(!b.repel, "toolbar.attract")
                 .rich_tip(tr("toolbar.attract_tip"))
                 .clicked()
             {
                 b.repel = false;
             }
             if ui
-                .selectable_label(b.repel, tr("toolbar.repel"))
+                .iselectable(b.repel, "toolbar.repel")
                 .rich_tip(tr("toolbar.attract_tip"))
                 .clicked()
             {
@@ -210,15 +217,48 @@ pub fn brush_bar(app: &mut App, ui: &mut Ui) {
                         .range(0.05..=50.0)
                         .suffix(format!(" {}", app.units.short())),
                 )
+                .rich_tip(crate::ui::tips::keyed("toolbar.spike_size"))
                 .changed()
             {
                 app.roughen_amount = app.units.to_mm(a).clamp(0.05, 50.0);
             }
+            edge_combo(ui, &mut b.roughen_edge);
         }
         _ => {}
     }
     crate::ui::propbar::sep(ui);
     dim(ui, tr("toolbar.drag_over_selected"));
+}
+
+/// The Roughen edges with their names' keys, in the bar's order.
+pub const EDGES: [(tracedraw_core::effects::RoughEdge, &str); 4] = {
+    use tracedraw_core::effects::RoughEdge::*;
+    [
+        (Jagged, "toolbar.edge_jagged"),
+        (Thorns, "toolbar.edge_thorns"),
+        (Petals, "toolbar.edge_petals"),
+        (Crumple, "toolbar.edge_crumple"),
+    ]
+};
+
+/// Roughen's Edge: the shape of what the nib makes.
+fn edge_combo(ui: &mut Ui, edge: &mut tracedraw_core::effects::RoughEdge) {
+    dim(ui, tr("toolbar.edge"));
+    let shown = EDGES
+        .iter()
+        .find(|(e, _)| e == edge)
+        .map_or("toolbar.edge_jagged", |(_, k)| k);
+    crate::ui::keynav::ComboBox::from_id_salt("roughen_edge")
+        .selected_text(tr(shown))
+        .width(90.0)
+        .show_ui(ui, |ui| {
+            for (e, key) in EDGES {
+                ui.selectable_value(edge, e, tr(key))
+                    .rich_tip(crate::ui::tips::keyed(key));
+            }
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("toolbar.edge"));
 }
 
 #[cfg(test)]

@@ -37,6 +37,14 @@ Only when you ask it to, and only to programs on your computer:
 - Edit Bitmap opens a picture in the editor you choose; printing opens
   the print PDF in your system's viewer.
 
+## Independence and trademarks
+
+TraceDraw is an independent open-source project, not affiliated with,
+endorsed by or sponsored by Corel Corporation, Alludo or any other
+software vendor. CorelDRAW is a registered trademark of Corel Corporation.
+`.cdr` support is implemented independently, for interoperability. Other
+trademarks and product names belong to their owners.
+
 ## Contact
 
 Questions about this policy: open an issue at

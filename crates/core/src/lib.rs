@@ -9,7 +9,11 @@
 
 #![allow(clippy::should_implement_trait)]
 pub mod clip;
+pub mod alpha_outline;
+pub mod bitmap_warp;
+pub mod bytes;
 pub mod color;
+pub mod color_convert;
 pub mod command;
 pub mod corner_cut;
 pub mod distort;
@@ -19,42 +23,69 @@ pub mod engine;
 pub mod envelope;
 pub mod extrude;
 pub mod extrude3d;
+pub mod find;
+pub mod finite;
+pub mod fit;
 pub mod geometry;
 pub mod icc;
 pub mod id;
+pub mod jpeg_source;
 pub mod join;
+pub mod linked_text;
 pub mod live;
+pub mod live_paint;
 pub mod nodes;
+pub mod outline_fx;
+pub mod page_range;
 pub mod painterly;
 pub mod paragraphs;
+pub mod parallel;
 pub mod patch;
+pub mod picture_inks;
 mod press;
+pub mod procedural;
+pub mod rough;
+pub mod recolor;
+pub mod scale_grid;
+pub mod select_same;
 pub mod shadow;
 pub mod shaping;
+pub mod spreads;
 pub mod style;
+pub mod surface_map;
+pub mod symbols;
 pub mod table;
 pub mod text_flow;
+pub mod text_path;
+pub mod tiles;
+pub mod toc;
 
+pub use bytes::SharedBytes;
 pub use color::Color;
 pub use command::Command;
 pub use document::{
-    merge_equal_spans, spans_apply, spans_char_count, spans_delete, spans_insert, spans_text,
-    split_spans_at, Baseline, BitmapEffect, BitmapFxStack, ColorStyle, CornerKind, Corners,
-    DefaultKind, DefaultProperties, Document, DocumentFont, DocumentProfile, EllipseArc, Layer,
-    LeadingUnit, MasterScope, Metadata, ObjectDefaults, ObjectStyle, Page, ParagraphStyle,
-    PathTextOrientation, PathTextVertical, QrCode, QrKind, Shadow, Shape, ShapeKind, StyleParts,
-    Symbol, Table, TableCell, TextAlign, TextOnPath, TextSpan, TimeTracker, TrackedTask,
-    VerticalAlign,
+    bullet_numbers, default_tab_step, merge_equal_spans, normalized_tabs, set_default_tab_step,
+    spans_apply, spans_char_count, spans_delete, spans_insert, spans_text, split_spans_at,
+    Baseline, BitmapEffect, BitmapFxStack, BulletStyle, ColorStyle, CornerKind, Corners,
+    DefaultKind, DefaultProperties, Document, DocumentFont, DocumentProfile, EllipseArc,
+    FollowBlack, FontVariation, Layer, LeadingUnit, LineStyle, MasterScope, Metadata, Numbering,
+    ObjectDefaults, ObjectStyle, Page, ParagraphStyle, PathTextOrientation, PathTextVertical,
+    QrCode, QrKind, QrSymbol, Shadow, Shape, ShapeKind, StyleParts, StyleText, Symbol, TabKind, TabStop, Table,
+    TableCell, TextAlign, TextDirection, Kashida, TextOnPath, CurvePreset, TextPosition, TextSpan, TimeTracker,
+    TrackedTask, VerticalAlign, VerticalColumns, DEFAULT_TAB_STEP,
 };
+pub use document::{BulletPart, CommonShapeParams, MAX_LIST_LEVEL};
 pub use engine::Engine;
 pub use geometry::{Affine, BezPath, Point, Rect, Size, Vec2};
 pub use icc::{Intent as RenderingIntent, Profile as IccProfile, Transform as IccTransform};
 pub use id::{LayerId, PageId, ShapeId};
+pub use page_range::PageRanges;
 pub use paragraphs::ParagraphFormat;
 pub use style::{
-    arrowhead_paths, Arrowhead, Fill, Fountain, FountainKind, FountainRepeat, LineCap, LineJoin,
-    Mesh, MeshNode, OutlinePosition, Pattern, PatternTile, Stop, Stroke, Texture, TextureKind,
-    WidthNode,
+    arrowhead_paths, arrowhead_stroke_path, Arrowhead, ArrowheadPlacement, ColorBlend, Fill,
+    Fountain, FountainKind, FountainRepeat, LineCap, LineJoin, Mesh, MeshHandle, MeshNode,
+    OutlinePosition, Pattern, PatternTile, Procedural, ProceduralParam, ProceduralParams,
+    ProceduralPattern, Stop, Stroke, Texture, TextureKind, WidthNode,
 };
 pub use table::{BorderSet, CellBorders, CellMargins, CellSide, EdgeBorder, TableHit};
 pub use text_flow::{TextWrap, WrapMode, WrapSide};
@@ -74,6 +105,8 @@ pub enum Error {
     LastPage,
     #[error("cannot delete the last layer of a page")]
     LastLayer,
+    #[error("page range must include at least one positive page number")]
+    InvalidPageRange,
     #[error("nothing to undo")]
     NothingToUndo,
     #[error("nothing to redo")]
@@ -84,8 +117,24 @@ pub enum Error {
     SelectionGroup(u8),
     #[error("object {0:?} is not a clip frame")]
     NotClipFrame(ShapeId),
+    #[error("object {0:?} is not a group")]
+    NotGroup(ShapeId),
+    #[error("object {0:?} is not a bitmap")]
+    NotBitmap(ShapeId),
+    #[error("object {0:?} is not a text")]
+    NotText(ShapeId),
     #[error("a B-spline needs two finite control points or more")]
     BadSpline,
+    #[error("a shape needs a finite outline and settings on a curve")]
+    BadShape,
+    #[error("selection size tolerance must be finite and non-negative")]
+    BadSelectionTolerance,
+    #[error("a selection query must run on its own, outside a document edit batch")]
+    SelectionQueryInBatch,
+    #[error("symbol {0} not found")]
+    SymbolNotFound(usize),
+    #[error("symbol {0} cannot hold an instance of itself")]
+    SymbolCycle(usize),
     #[error("serialization error: {0}")]
     Serde(#[from] serde_json::Error),
 }

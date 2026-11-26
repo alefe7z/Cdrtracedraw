@@ -12,6 +12,7 @@ stelt in hoe het programma werkt. Kies een pagina in de lijst links.
 - [[options.show_new_document_dialog]] (aan): om de instellingen van een
   nieuwe tekening vragen; zie [Een tekening maken](../get-started/new-document.md).
 - [[options.show_splash]] (aan).
+- [[options.hardware_acceleration]] (aan): tekent het venster met de grafische kaart die ernaast is gekozen ([[options.gpu_automatic]] in het begin); uit, met de softwarerenderer van de computer. Het geldt vanaf de volgende start. Als het venster zo niet opent, start TraceDraw opnieuw met de softwarerenderer, daarna met OpenGL, en onthoudt wat werkte.
 - [[options.undo_levels]]: hoeveel stappen u ongedaan kunt maken (in het begin
   150).
 
@@ -26,6 +27,11 @@ stelt in hoe het programma werkt. Kies een pagina in de lijst links.
 - [[options.full_screen_preview]]: [[options.show_page_border]].
 - [[options.wheel_default_action]]: [[options.wheel_zoom]] (in het begin) of
   [[options.wheel_scroll]].
+- [[options.open_view]]: [[options.open_view_page]] (in het begin),
+  [[options.open_view_objects]], [[options.open_view_width]],
+  [[options.open_view_height]], [[options.open_view_actual]], [[options.open_view_percent]] of
+  [[options.open_view_saved]] (de pagina, plek en zoom die bij elke keer
+  opslaan van een TraceDraw-bestand worden bewaard).
 - [[options.ruler_calibration]]: houd een liniaal tegen het scherm en wijzig de
   [[options.screen_resolution]] totdat de streepjes overeenkomen, zodat zoom
   100% echte maten toont. [[options.reset]] zet 96 terug.
@@ -49,6 +55,7 @@ stelt in hoe het programma werkt. Kies een pagina in de lijst links.
 - [[options.node_shape]] voor knooppunten van het type [[options.node_cusp]],
   [[options.node_smooth]] en [[options.node_symmetrical]].
 - [[options.show_curve_direction]].
+- [[options.corner_widgets]].
 - [[options.colors]]: de [[options.main_color]] van geselecteerde knooppunten
   en grepen en de [[options.secondary_color]].
 - [[options.unselected_nodes_filled]].
@@ -93,8 +100,37 @@ Zie [Kleven](../pages-layout/snapping.md).
 
 ![De pagina Tekst van de CD Draw-opties](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]: hoeveel <kbd>Ctrl+8</kbd> en
-  <kbd>Ctrl+2</kbd> de geselecteerde tekst groter en kleiner maken (1 punt).
-- [[options.default_font]] en [[options.default_size]] van nieuwe tekst.
-- [[menu.text.use_hyphenation]], [[menu.text.show_non_printing]] en
-  [[menu.text.show_text_frames]].
+De pagina heeft vijf tabbladen.
+
+- [[options.display]]: [[options.keyboard_text_increment]] (hoeveel
+  <kbd>Ctrl+8</kbd> en <kbd>Ctrl+2</kbd> de geselecteerde tekst groter en kleiner
+  maken, 1 punt), [[options.default_font]] en [[options.default_size]] van
+  nieuwe tekst, en [[menu.text.show_non_printing]].
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]: [[menu.text.show_text_frames]],
+  [[menu.text.use_hyphenation]] en de [[options.hyphenation_patterns]]
+  (ingebouwd, of een afbreekwoordenboek voor uw taal).
+  - [[options.default_tab_spacing]]: waar <kbd>Tab</kbd> naartoe springt in een alinea zonder eigen tabstops (12,7 mm, een halve inch).
+- [[docker.fonts]]: [[options.show_recent_fonts]] bovenaan de
+  lettertypelijsten, het [[options.recent_font_count]] (5, tot 20) en de
+  [[options.font_sample_size]].
+- [[options.spelling]]: [[writing.ignore_digits]], [[writing.ignore_capitals]]
+  en [[options.add_to_autocorrect]], zodat een woord dat u in de
+  spellingcontrole verbetert de volgende keer tijdens het typen wordt verbeterd;
+  en de [[options.dictionaries]] die ze gebruikt, zie
+  [Woordenboeken](../text/writing-tools.md#dictionaries).
+- [[dialog.autocorrect]]: wat tijdens het typen wordt verbeterd; zie
+  [AutoCorrectie](../text/writing-tools.md#autocorrect).
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

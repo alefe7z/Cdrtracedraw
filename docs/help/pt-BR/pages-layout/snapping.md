@@ -1,5 +1,7 @@
 # Encaixe
 
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
 O encaixe puxa o ponteiro, e os objetos que você move, para pontos exatos: nós,
 o meio de segmentos, o centro de formas, linhas-guia, a grade ou a página. Assim
 fica fácil unir linhas e alinhar objetos sem dar zoom.
@@ -11,7 +13,10 @@ fica fácil unir linhas e alinhar objetos sem dar zoom.
   [[menu.view.snap_document_grid]] (<kbd>Ctrl+Y</kbd>),
   [[menu.view.snap_baseline_grid]], [[menu.view.snap_guidelines]],
   [[menu.view.snap_objects]] (<kbd>Alt+Z</kbd>) e [[menu.view.snap_page]]. De
-  início, objetos, linhas-guia e a página estão ativados.
+  início, linhas-guia, a página e objetos estão ativados; desativado, o
+  encaixe em objetos continua desativado. A grade de linha de
+  base também funciona sozinha: só com ela ativada, nós e objetos se encaixam
+  nas linhas dela.
 - [[menu.view.snap_off]] (<kbd>Alt+Q</kbd>) desativa todo o encaixe e o
   reativa.
 
@@ -43,7 +48,10 @@ e as bordas vêm por último. Os modos, o raio e as marcas são definidos na pá
 Quando você começa a mover uma seleção com a ferramenta [[tool.pick]] a partir
 de um dos pontos dela (um nó, um ponto médio ou o centro), esse ponto é levado
 até o ponto ou a borda do outro objeto. Senão, as bordas e o centro da caixa da
-seleção se encaixam em linhas-guia, grades, na página e em outros objetos. As
+seleção se encaixam em linhas-guia, grades, na página e nos objetos ao lado,
+acima ou abaixo dela: um objeto só puxa a caixa quando os dois ficam frente a
+frente, então um movimento longe de outros objetos vai aonde o ponteiro o leva.
+Para alinhar com objetos mais distantes, ative as guias de alinhamento. As
 alças se encaixam enquanto você redimensiona.
 
 ## Guias dinâmicas e de alinhamento {#dynamic-guides}

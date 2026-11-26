@@ -6,6 +6,9 @@ adımda çalışır: **seç** (örnek al) ve **uygula** (onunla boya). Bir örne
 sonra araç uygulamaya geçer; yeniden örnek almak için seçme düğmesine
 tıklayın. <kbd>Esc</kbd> örneği bırakır ve [[tool.pick]] aracına geri döner.
 
+İşaretçi, araç örnek alırken damlalık, uygularken boya kovasıdır. Resimler bir
+grubun ya da çerçevenin içinde de renklerini verir.
+
 ## Renk Damlalığı {#color-eyedropper}
 
 1. [[tool.color_eyedropper]] aracını seçin.
@@ -19,6 +22,11 @@ tıklayın. <kbd>Esc</kbd> örneği bırakır ve [[tool.pick]] aracına geri dö
    ince bir anahat alır). Boş, kapalı bir şeklin içine tıklamak onu doldurur.
 
 Özellik çubuğu örneklenen rengi gösterir.
+
+Bir renk almak için işaretçiyi hareket ettirirken yanındaki küçük bir kutu
+altındaki rengi gösterir: bir örnek, palet rengi veya spot mürekkep ise rengin
+adı, çizimin renk modundaki (CMYK veya RGB) değerleri ve onaltılık değeri. Bir
+renk seçicinin damlalığı da aynı kutuyu gösterir.
 
 ## Öznitelik Damlalığı {#attributes-eyedropper}
 

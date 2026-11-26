@@ -687,7 +687,7 @@ fn outline_section(app: &mut App, ui: &mut Ui) {
         }
     }
     divider(ui);
-    dk::extra_strokes(app, ui, &first);
+    dk::extra_strokes(app, ui, &first, first.stroke.is_some());
 }
 
 /// The flame of Variable Outline picks its tool.
@@ -1519,7 +1519,7 @@ fn variable_outline(ui: &mut Ui, s: &mut Stroke, touched: &mut Vec<StrokeField>)
 fn fill_section(app: &mut App, ui: &mut Ui) {
     if app.selection.is_empty() {
         let mut fill = app.default_fill();
-        if dk::fill_editor_mixed(ui, &mut fill, &FillMix::default(), &mut Vec::new()) {
+        if dk::fill_editor_mixed(ui, &mut fill, &FillMix::default(), &mut Vec::new(), None) {
             app.set_default_properties(tracedraw_core::DefaultKind::Graphic, |p| {
                 p.fill = fill.clone()
             });
@@ -1531,7 +1531,7 @@ fn fill_section(app: &mut App, ui: &mut Ui) {
     }
     if app.text_selection_active() {
         let mut fill = app.text_selection_fill().unwrap_or(Fill::None);
-        if dk::fill_editor_mixed(ui, &mut fill, &FillMix::default(), &mut Vec::new()) {
+        if dk::fill_editor_mixed(ui, &mut fill, &FillMix::default(), &mut Vec::new(), None) {
             app.text_apply_fill(fill);
         }
         return;
@@ -1545,7 +1545,7 @@ fn fill_section(app: &mut App, ui: &mut Ui) {
     let mix = app.selection_fill_mix();
     let mut fill = old.clone();
     let mut touched: Vec<FillField> = Vec::new();
-    if dk::fill_editor_mixed(ui, &mut fill, &mix, &mut touched) {
+    if dk::fill_editor_mixed(ui, &mut fill, &mix, &mut touched, None) {
         let live = app.live_fill.is_some() || ui.input(|i| i.pointer.any_down());
         if live && !matches!(fill, Fill::Fountain(_)) {
             app.apply_fill_live(fill.clone());
@@ -1557,7 +1557,7 @@ fn fill_section(app: &mut App, ui: &mut Ui) {
         note(ui, &tr("prp.no_fill"));
     }
     divider(ui);
-    dk::extra_fills(app, ui, &first);
+    dk::extra_fills(app, ui, &first, !matches!(first.fill, Fill::None));
 }
 
 fn note(ui: &mut Ui, text: &str) {

@@ -150,7 +150,9 @@ enum Res {
     Enum(String),
     EnumType(usize, usize),
     Module(usize),
-    Declared(String),
+    /// A declared Windows API procedure: its name and, lowercase, the
+    /// library's name for it (its alias, or its name).
+    Declared(String, String),
     BuiltinFn(String),
     BuiltinConst(String),
     Err,
@@ -216,6 +218,8 @@ struct Gen<'a> {
     lnames: Vec<String>,
     tmp: u32,
     statics: String,
+    /// [`crate::Options::keep_going`].
+    keep_going: bool,
 }
 
 pub fn generate(modules: &[Module], asts: &[ModuleAst], opts: &crate::Options) -> R<Program> {
@@ -236,6 +240,7 @@ pub fn generate(modules: &[Module], asts: &[ModuleAst], opts: &crate::Options) -
         lnames: modules.iter().map(|m| low(&m.name)).collect(),
         tmp: 0,
         statics: String::new(),
+        keep_going: opts.keep_going,
     };
     let mut out = String::from("\"use strict\";\n");
     let mut procedures = Vec::new();
@@ -474,6 +479,8 @@ impl<'a> Gen<'a> {
         match key.as_str() {
             "collection" => "new __v.Collection()".into(),
             "dictionary" => "new __v.Dictionary()".into(),
+            "filesystemobject" => "new __v.Fso()".into(),
+            "wshshell" | "iwshshell_class" => "new __v.WshShell()".into(),
             _ => {
                 let last = name.rsplit('.').next().unwrap_or(name);
                 let value = if is_js_ident(last) && !JS_BLOCK.contains(&last) {
@@ -696,12 +703,12 @@ impl<'a> Gen<'a> {
                     Res::StdProp(m, key.to_string())
                 });
             }
-            if let Some((n, _)) = a
+            if let Some((n, _, alias)) = a
                 .declares
                 .iter()
-                .find(|(n, p)| low(n) == key && (own || *p))
+                .find(|(n, p, _)| low(n) == key && (own || *p))
             {
-                return Some(Res::Declared(n.clone()));
+                return Some(Res::Declared(n.clone(), low(alias.as_deref().unwrap_or(n))));
             }
         }
         for e in &a.enums {
@@ -1061,8 +1068,7 @@ impl<'a> Gen<'a> {
             return Ok(String::new());
         }
         let line = format!("__f.l={};", st.line);
-        let wrap = cx.onerror
-            && !matches!(
+        let wrappable = !matches!(
                 st.kind,
                 StmtKind::Label(_)
                     | StmtKind::OnErrorResumeNext
@@ -1075,8 +1081,21 @@ impl<'a> Gen<'a> {
                     | StmtKind::End
                     | StmtKind::Nop
             );
-        if !wrap {
+        if !wrappable || !(cx.onerror || self.keep_going) {
             return Ok(format!("{line}{code}\n"));
+        }
+        // Keep going: a statement that stops on what TraceDraw cannot do
+        // is skipped (and listed) when no handler of the procedure takes
+        // the error.
+        let skip = if self.keep_going {
+            "else if(__v.skip(__e,__f)){}"
+        } else {
+            ""
+        };
+        if !cx.onerror {
+            return Ok(format!(
+                "{line}try{{{code}\n}}catch(__e){{if(__e===__v.END||!__v.skip(__e,__f))throw __e;}}\n"
+            ));
         }
         let goto = if cx.sm {
             format!(
@@ -1087,7 +1106,7 @@ impl<'a> Gen<'a> {
             String::new()
         };
         Ok(format!(
-            "{line}try{{{code}\n}}catch(__e){{if(__e===__v.END)throw __e;__v.seterr(__e,__f);if(__oe===1){{}}{goto}else throw __e;}}\n"
+            "{line}try{{{code}\n}}catch(__e){{if(__e===__v.END)throw __e;__v.seterr(__e,__f);if(__oe===1){{}}{goto}{skip}else throw __e;}}\n"
         ))
     }
 
@@ -1376,6 +1395,11 @@ impl<'a> Gen<'a> {
             StmtKind::OnErrorResumeNext => "__oe=1;__v.Err.Clear();".into(),
             StmtKind::OnErrorGoTo0 => "__oe=0;__v.Err.Clear();".into(),
             StmtKind::OnErrorGoToMinus1 => "__inh=false;__v.Err.Clear();".into(),
+            // A handler inside a block cannot be jumped to from the error:
+            // errors are passed over, as with On Error Resume Next.
+            StmtKind::OnErrorGoTo(l) if !cx.labels.contains_key(&low(l)) => {
+                "__oe=1;__v.Err.Clear();".into()
+            }
             StmtKind::OnErrorGoTo(l) => {
                 let i = self.label_index(cx, l)?;
                 format!("__oe=2;__oeh={i};__v.Err.Clear();")
@@ -1383,6 +1407,14 @@ impl<'a> Gen<'a> {
             StmtKind::Resume(k) => {
                 if !cx.onerror {
                     return self.err(cx, "Resume without error handling");
+                }
+                if let ResumeKind::Label(l) = k {
+                    if !cx.labels.contains_key(&low(l)) {
+                        return Ok(format!(
+                            "__v.unsupported({});",
+                            js_string(&format!("Resume {l} (a label inside a block)"))
+                        ));
+                    }
                 }
                 let target = match k {
                     ResumeKind::Here => "__rs".to_string(),
@@ -1453,6 +1485,42 @@ impl<'a> Gen<'a> {
             StmtKind::Load(e) => {
                 let e = self.expr(cx, e)?;
                 format!("__v.load({e});")
+            }
+            StmtKind::File {
+                op,
+                args,
+                items,
+                targets,
+            } => {
+                let mut a = Vec::new();
+                for x in args {
+                    a.push(self.expr(cx, x)?);
+                }
+                let f = op.runtime();
+                match op {
+                    FileOp::Print | FileOp::Write => {
+                        let mut parts = Vec::new();
+                        for (e, sep) in items {
+                            let e = self.expr(cx, e)?;
+                            let sep = match sep {
+                                Some(';') => "\";\"",
+                                Some(',') => "\",\"",
+                                _ => "\"\"",
+                            };
+                            parts.push(format!("[{e},{sep}]"));
+                        }
+                        format!("__v.{f}({},[{}]);", a.join(","), parts.join(","))
+                    }
+                    FileOp::Input | FileOp::LineInput => {
+                        let mut s = String::new();
+                        for t in targets {
+                            s.push_str(&self.assign(cx, t, format!("__v.{f}({})", a.join(",")), false)?);
+                        }
+                        s
+                    }
+                    FileOp::Close => format!("__v.{f}([{}]);", a.join(",")),
+                    _ => format!("__v.{f}({});", a.join(",")),
+                }
             }
             StmtKind::Unsupported(what) => format!("__v.unsupported({});", js_string(what)),
         })
@@ -1572,6 +1640,9 @@ impl<'a> Gen<'a> {
             (Expr::Call(..), Some(args)) => Expr::Call(Box::new(e.clone()), args.to_vec()),
             (_, Some(_)) => return self.err(cx, "Expected a procedure call"),
         };
+        if let Some(js) = self.out_args_call(cx, &call)? {
+            return Ok(js);
+        }
         let js = match &call {
             Expr::Member(base, name) => {
                 if let Expr::Ident(b) = base.as_ref() {
@@ -1598,12 +1669,70 @@ impl<'a> Gen<'a> {
         Ok(format!("{js};"))
     }
 
+    /// A call to an object method that hands its results back through
+    /// the variables it is given (`s.GetBoundingBox x, y, w, h, True`):
+    /// the object model returns them as an array, and each one goes into
+    /// its variable. Without this the variables kept 0, and a crop-marks
+    /// macro drew its marks around the page's corner (#2165).
+    fn out_args_call(&mut self, cx: &mut Ctx, call: &Expr) -> R<Option<String>> {
+        let Expr::Call(callee, args) = call else {
+            return Ok(None);
+        };
+        let Expr::Member(_, name) = callee.as_ref() else {
+            return Ok(None);
+        };
+        // The argument each item of the returned array goes into.
+        let outs: &[usize] = match low(name).as_str() {
+            "getboundingbox" => &[0, 1, 2, 3],
+            "getposition" | "getsize" => &[0, 1],
+            "getdashandgaplength" => &[1, 2],
+            _ => return Ok(None),
+        };
+        let js = self.expr(cx, call)?;
+        let mut sets = String::new();
+        for (i, &at) in outs.iter().enumerate() {
+            let Some(Arg {
+                value: Some(target @ Expr::Ident(_)),
+                name: None,
+                ..
+            }) = args.get(at)
+            else {
+                continue;
+            };
+            if !matches!(target, Expr::Ident(n) if matches!(self.resolve(cx, n), Res::Var { .. })) {
+                continue;
+            }
+            sets.push_str(&self.assign(cx, target, format!("__o[{i}]"), false)?);
+        }
+        Ok(Some(format!(
+            "{{const __o={js};if(Array.isArray(__o)){{{sets}}}}}"
+        )))
+    }
+
     // ----- Expressions ------------------------------------------------------
 
     fn plain_args(&mut self, cx: &mut Ctx, args: &[Arg]) -> R<String> {
         let mut out = Vec::new();
         for a in args {
             out.push(match &a.value {
+                Some(v) => self.expr(cx, v)?,
+                None => "__v.Missing".into(),
+            });
+        }
+        Ok(out.join(","))
+    }
+
+    /// Arguments to a declared function that writes into a string it is
+    /// given (as Windows does with a buffer passed by value): variables
+    /// go by reference, so it can.
+    fn declared_args(&mut self, cx: &mut Ctx, args: &[Arg]) -> R<String> {
+        let mut out = Vec::new();
+        for a in args {
+            out.push(match &a.value {
+                Some(Expr::Ident(n)) => match self.resolve(cx, n) {
+                    Res::Var { js, .. } => format!("__v.ref(()=>{js},(__x)=>{{{js}=__x;}})"),
+                    _ => self.expr(cx, a.value.as_ref().unwrap())?,
+                },
                 Some(v) => self.expr(cx, v)?,
                 None => "__v.Missing".into(),
             });
@@ -1820,10 +1949,7 @@ impl<'a> Gen<'a> {
                     return self.err(cx, format!("Expected a value, not the module {n}"));
                 }
             }
-            Res::Declared(name) => format!(
-                "__v.unsupported({})",
-                js_string(&format!("Windows API function {name}"))
-            ),
+            Res::Declared(name, api) => declared_call(&name, &api, ""),
             Res::BuiltinFn(f) => format!("__b.{f}()"),
             Res::BuiltinConst(c) => format!("__b.{c}"),
             Res::Err => "__v.Err".into(),
@@ -1922,10 +2048,14 @@ impl<'a> Gen<'a> {
                             Ok(format!("__v.callf(__b.{f},[{pos}],{named})"))
                         }
                     }
-                    Res::Declared(name) => Ok(format!(
-                        "__v.unsupported({})",
-                        js_string(&format!("Windows API function {name}"))
-                    )),
+                    Res::Declared(name, api) => {
+                        let a = if writes_back(&api) {
+                            self.declared_args(cx, args)?
+                        } else {
+                            self.plain_args(cx, args)?
+                        };
+                        Ok(declared_call(&name, &api, &a))
+                    }
                     Res::Unknown => {
                         let h = self.host(cx, n);
                         let (pos, named) = self.dyn_args(cx, args)?;
@@ -2125,8 +2255,8 @@ fn uses_jumps(stmts: &[Stmt]) -> bool {
 }
 
 /// Every GoTo target is a label of the procedure's top level or of a
-/// statement list the GoTo is in; On Error GoTo and Resume go to labels
-/// of the top level.
+/// statement list the GoTo is in; On Error GoTo and Resume to a label of
+/// a block they are in compile too (see `stmt_kind`).
 fn check_jumps(
     stmts: &[Stmt],
     labels: &HashMap<String, usize>,
@@ -2141,15 +2271,18 @@ fn check_jumps(
         .collect();
     inner.push(here);
     for s in stmts {
-        let (target, any) = match &s.kind {
-            StmtKind::GoTo(l) => (Some(l), true),
-            StmtKind::OnErrorGoTo(l) => (Some(l), false),
-            StmtKind::Resume(ResumeKind::Label(l)) => (Some(l), false),
-            _ => (None, false),
+        let target = match &s.kind {
+            StmtKind::GoTo(l) | StmtKind::OnErrorGoTo(l) | StmtKind::Resume(ResumeKind::Label(l)) => {
+                Some(l)
+            }
+            _ => None,
         };
         if let Some(l) = target {
             let k = low(l);
-            let found = labels.contains_key(&k) || (any && inner.iter().any(|ls| ls.contains(&k)));
+            // On Error GoTo and Resume to a label of a block they are in
+            // (#4315: a macro whose handler and label sit inside an If):
+            // compiled, see `stmt_kind`.
+            let found = labels.contains_key(&k) || inner.iter().any(|ls| ls.contains(&k));
             if !found {
                 inner.pop();
                 return Err((s.line, l.clone()));
@@ -2180,4 +2313,31 @@ fn check_jumps(
     }
     inner.pop();
     Ok(())
+}
+
+/// Whether declared function `api` writes into a string argument.
+fn writes_back(api: &str) -> bool {
+    api.starts_with("urldownloadtocachefile")
+}
+
+/// A call of a declared Windows API procedure (`api` the library's name
+/// for it, lowercase) with the arguments `args`: ShellExecute opens a web
+/// address with the system (`__v.shellexecute`, #2165), as macros do to
+/// show their makers' pages; the others are not supported here.
+fn declared_call(name: &str, api: &str, args: &str) -> String {
+    match api {
+        "shellexecute" | "shellexecutea" | "shellexecutew" => {
+            format!("__v.shellexecute([{args}])")
+        }
+        "urldownloadtofile" | "urldownloadtofilea" | "urldownloadtofilew" => {
+            format!("__v.urldownload([{args}],false)")
+        }
+        "urldownloadtocachefile" | "urldownloadtocachefilea" | "urldownloadtocachefilew" => {
+            format!("__v.urldownload([{args}],true)")
+        }
+        _ => format!(
+            "__v.unsupported({})",
+            js_string(&format!("Windows API function {name}"))
+        ),
+    }
 }

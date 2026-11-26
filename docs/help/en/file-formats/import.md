@@ -11,11 +11,24 @@ At first, imported objects go where the file has them. To center them in the
 view instead, change the setting on the [[options.file_formats]] page of the
 global options; see [Global options](../customize/global-options.md#file-formats).
 
+When the import waits for its place with the pointer, several files picked
+at once come in one after another. To lay them out in a grid instead, drag
+a box for the first one and, while you drag, press the arrow keys: Right and
+Left add and take away a column, Up and Down a row, and the tag beside the
+pointer shows how many. When you let go, each file comes in fitted in its
+own cell, its proportions kept, in the middle of it; files beyond the last
+cell wait for their own place as before.
+
 ## Notes on some formats {#formats}
 
-- **PDF and AI**: a protected file asks for its password in the
-  [[pdf_password.title]] dialog box. Text keeps its fonts when they are
-  installed.
+- **PDF and AI**: the [[pdf_import.title]] dialog box asks how to read the
+  text: as editable text, which keeps its fonts when they are installed, or as
+  curves, drawn from the fonts the file embeds so the text looks exactly as
+  it does in the file. When you import, a third choice, **Picture**, brings
+  each page in as one picture at the resolution you give (300 dpi at
+  first), exactly as the page looks but no longer editable as objects; one
+  Undo takes it away. Options > File Formats keeps the choice. A protected
+  file asks for its password in the [[pdf_password.title]] dialog box.
 - **EPS and PostScript**: each printed page becomes a page.
 - **PSD**: each layer becomes a bitmap with its opacity, visibility and mask.
 - **DXF**: drawing units are taken from the file.
@@ -27,3 +40,19 @@ When some objects of a file cannot be read, or fonts are missing, a message
 says so; see [Notes after opening](../get-started/open-and-save.md#open-notes).
 You can also drag files onto the window, or paste from other programs; see
 [Paste Special](../objects/paste-special.md).
+
+## PDF files of several pages {#pdf-pages}
+
+Importing a PDF or AI file of more than one page opens the
+[[pdf_pages.title]] dialog box, after the questions about its text and its
+password. Choose [[pdf_pages.all]] or type the pages, such as `1-3, 5`; the
+list shows each page with its size and orientation, and ticking a page adds
+it. Then choose where they go:
+
+- [[pdf_pages.new_pages]]: each page becomes a page of the drawing, with its
+  own size and orientation, in order. This merges PDF files into one drawing.
+- [[pdf_pages.current_page]]: the objects go on the active layer; with
+  several pages, each page's objects are a group.
+
+The whole import is one undo step. A file of one page comes in without the
+dialog box.

@@ -10,6 +10,7 @@ use crate::i18n::{tr, trf};
 use crate::theme::Tokens;
 use crate::tools::Tool;
 use crate::ui::dockers::kind_name;
+use crate::ui::tips::RichTip;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 use tracedraw_core::document::ShapeKind;
@@ -47,9 +48,28 @@ impl StatusInfo {
     }
 }
 
-/// The active tool's hint; the Pick tool's depends on the selection.
+/// The active tool's hint; the Pick tool's depends on the selection. The
+/// shaping brushes add how their nib is sized, with the wheel's key of
+/// the wheel setting (see `brushes::wheel_resizes`).
 pub fn tool_hint(app: &App) -> String {
-    tool_hint_for(app.tool, app.selection.is_empty())
+    // Over a path's outline the Text tool types along it (#3255).
+    if app.tool == Tool::Text
+        && app
+            .pointer_page
+            .is_some_and(|p| app.text_tool_path_at(p).is_some())
+    {
+        return tr("status_hint.text_on_path");
+    }
+    let hint = tool_hint_for(app.tool, app.selection.is_empty());
+    if !app.tool.is_shaping_brush() {
+        return hint;
+    }
+    let size = tr(if app.settings.wheel_zooms {
+        "status_hint.brush_size"
+    } else {
+        "status_hint.brush_size_alt"
+    });
+    format!("{hint} · {size}")
 }
 
 /// A tool's hint, with or without a selection.
@@ -63,10 +83,22 @@ pub fn tool_hint_for(tool: Tool, nothing_selected: bool) -> String {
 /// "Rectangle on Layer 1", "3 Objects Selected on Layer 1", and with the
 /// Shape tool "Curve: 17 Nodes". Empty with nothing selected.
 pub fn object_info(app: &App) -> String {
-    if app.text_edit.is_some() {
+    if let Some(te) = &app.text_edit {
+        // Typing in a linked text changes the texts linked with it (#1568).
+        let doc = app.doc();
+        if doc
+            .find_shape(te.shape)
+            .and_then(tracedraw_core::linked_text::link_of)
+            .is_some()
+        {
+            let n = doc.content_linked_with(te.shape).len();
+            if n > 0 {
+                return trf("status.editing_linked_text", &[("n", &n.to_string())]);
+            }
+        }
         return tr("status.editing_text");
     }
-    let shapes = app.selected_shapes();
+    let shapes = app.selected_rc();
     // An object inside a group is on its group's layer.
     let layer_of = |id| {
         let doc = app.doc();
@@ -94,15 +126,51 @@ pub fn object_info(app: &App) -> String {
                     _ => None,
                 };
                 if let Some(key) = hint {
-                    return tr(key);
+                    return crate::shortcuts::shown_in(tr(key));
                 }
             }
             let mut kind = match &s.kind {
                 ShapeKind::Path { .. } => tr("kind.curve"),
+                // A bitmap with its colour mode (#1254); a grayscale PNG
+                // is a grayscale picture (#1777), an indexed one indexed
+                // (#2607), one marked Lab a Lab picture (#2605).
+                k @ ShapeKind::Bitmap { png, .. } => trf(
+                    "status.bitmap_mode",
+                    &[
+                        ("k", &kind_name(k)),
+                        (
+                            "mode",
+                            &tr(crate::bitmap_fx::mode_key(s.cmyk_bitmap, png)),
+                        ),
+                    ],
+                ),
                 k => kind_name(k),
             };
             if app.is_effect_clone(s.id) {
                 kind = format!("{kind} ({})", tr("status.effect_clone"));
+            }
+            // A symmetry and an object clone say so, and a clone's master
+            // how many clones follow it (#2997, #2877).
+            kind = crate::ui::dockers::tagged_kind(s, kind);
+            let clones = app
+                .object_clones()
+                .iter()
+                .filter(|(_, m)| *m == s.id)
+                .count();
+            if clones > 0 {
+                kind = trf(
+                    "status.clone_master_kind",
+                    &[("k", &kind), ("n", &clones.to_string())],
+                );
+            }
+            if tracedraw_core::linked_text::link_of(s).is_some() {
+                let n = app.doc().content_linked_with(s.id).len();
+                if n > 0 {
+                    kind = trf(
+                        "status.content_linked_kind",
+                        &[("k", &kind), ("n", &n.to_string())],
+                    );
+                }
             }
             if app.doc().is_nested(s.id) {
                 kind = trf("status.in_group", &[("k", &kind)]);
@@ -113,6 +181,19 @@ pub fn object_info(app: &App) -> String {
             )
         }
         many => {
+            // The layer of each object on a layer, from one pass (a search
+            // of the drawing for each made Select All slow, #367).
+            let mut on_layer: std::collections::HashMap<tracedraw_core::ShapeId, &str> =
+                std::collections::HashMap::new();
+            for l in app.doc().all_layers() {
+                for s in &l.shapes {
+                    on_layer.entry(s.id).or_insert(l.name.as_str());
+                }
+            }
+            let layer_of = |id| match on_layer.get(&id) {
+                Some(name) => name.to_string(),
+                None => layer_of(id),
+            };
             let first = layer_of(many[0].id);
             let same = many.iter().all(|s| layer_of(s.id) == first);
             let n = many.len().to_string();
@@ -263,12 +344,20 @@ fn outline_text(app: &App, stroke: &Option<tracedraw_core::Stroke>) -> String {
                 let decimals = if u == crate::app::Units::Pixels { 2 } else { 3 };
                 format!("{:.*} {}", decimals, u.from_mm(s.width), u.short())
             };
-            format!("{}  {}", crate::app::color_description(s.color), width)
+            format!(
+                "{}  {}",
+                crate::app::color_description_in(app.doc(), s.color),
+                width
+            )
         }
     }
 }
 
 pub fn status_bar(app: &mut App, ui: &mut Ui) {
+    if app.pixel_edit.is_some() {
+        crate::ui::pixel_mode::status_bar(app, ui);
+        return;
+    }
     let full = ui.available_rect_before_wrap();
     // The separator between the bar and the drawing window, the colour of
     // the palette lines: over the bar at the bottom of the window, under
@@ -306,7 +395,7 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
     let gear = Rect::from_center_size(Pos2::new(row.min.x + 14.0, cy), Vec2::splat(26.0));
     let gear_resp = ui
         .interact(gear, egui::Id::new("status_settings"), Sense::click())
-        .on_hover_text(tr("status.bar_options"));
+        .rich_tip(tr("status.bar_options"));
     if gear_resp.hovered() {
         painter.rect_filled(gear, 2.0, Tokens::tool_hover());
     }
@@ -339,79 +428,10 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
             }
         });
 
-    // Positions of the right-hand parts, as fractions of the bar (fill
-    // about 70 %, outline about 82 %).
-    let fill_x = row.min.x + row.width() * 0.685;
-    let outline_x = row.min.x + row.width() * 0.818;
-    let proof = Rect::from_center_size(Pos2::new(row.max.x - 17.0, cy), Vec2::splat(26.0));
-    // The light and dark interface button, left of it.
-    let theme_btn = proof.translate(Vec2::new(-30.0, 0.0));
-    // A line sets the two buttons apart.
-    let sep_x = (theme_btn.min.x - 8.0).round() + 0.5;
-    painter.line_segment(
-        [
-            Pos2::new(sep_x, row.min.y + 7.0),
-            Pos2::new(sep_x, row.max.y - 7.0),
-        ],
-        Stroke::new(1.0, Tokens::border()),
-    );
-
-    // Left field and object information.
-    let (left, info) = if !doc {
-        (tr("status.tool_hints"), tr("status.object_information"))
-    } else if let Some(drag) = drag_info(app) {
-        (drag, object_info(app))
-    } else {
-        let left = match app.settings.status_info {
-            StatusInfo::ToolHints => {
-                let hint = tool_hint(app);
-                if app.status.is_empty() {
-                    hint
-                } else {
-                    format!("{}    {hint}", app.status)
-                }
-            }
-            StatusInfo::ObjectDetails => object_details(app),
-            StatusInfo::CursorCoordinates => cursor_coordinates(app),
-            StatusInfo::DocumentColor => document_color(app),
-        };
-        (left, object_info(app))
-    };
-    let text_x = gear.max.x + 3.0;
-    let info_w = if info.is_empty() {
-        0.0
-    } else {
-        painter
-            .layout_no_wrap(info.clone(), font.clone(), Tokens::text())
-            .size()
-            .x
-            .min((fill_x - text_x) * 0.45)
-    };
-    let left_max = fill_x - 16.0 - if info_w > 0.0 { info_w + 24.0 } else { 0.0 };
-    let left_galley = painter.layout_no_wrap(left, font.clone(), Tokens::text());
-    let left_w = left_galley.size().x.min(left_max - text_x).max(0.0);
-    let clip = Rect::from_min_max(Pos2::new(text_x, row.min.y), Pos2::new(left_max, row.max.y));
-    painter.with_clip_rect(clip).galley(
-        Pos2::new(text_x, cy - left_galley.size().y / 2.0),
-        left_galley,
-        Tokens::text(),
-    );
-    if info_w > 0.0 {
-        // After the left field, never closer than a placeholder's width.
-        let x = (text_x + left_w + 24.0)
-            .max(text_x + 156.0)
-            .min(left_max + 24.0);
-        let g = painter.layout_no_wrap(info, font.clone(), Tokens::text());
-        let clip = Rect::from_min_max(Pos2::new(x, row.min.y), Pos2::new(fill_x - 8.0, row.max.y));
-        painter
-            .with_clip_rect(clip)
-            .galley(Pos2::new(x, cy - g.size().y / 2.0), g, Tokens::text());
-    }
-
     // Fill and outline of the selection, or of new objects.
-    let shapes = app.selected_shapes();
+    let shapes = app.selected_rc();
     // A clip frame shows its frame's, a group its first member's.
-    let (fill, stroke) = match app.paint_targets().first() {
+    let (fill, stroke) = match app.first_paint_target().as_ref() {
         Some(s) => (s.fill.clone(), s.stroke.clone()),
         None => (app.default_fill(), app.default_stroke()),
     };
@@ -420,12 +440,26 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
     let several = shapes.len() > 1;
     let fill_mixed = several && !app.selection_fill_mix().is_empty();
     let stroke_mixed = several && !app.selection_stroke_mix().is_empty();
+    // The colours behind the swatches and whether each overprints, for the
+    // spot colour and overprint marks (#2455); a mixed selection has none.
+    let fill_marks = match &fill {
+        tracedraw_core::Fill::Solid(c) if doc && !fill_mixed => {
+            Some((*c, app.selection_overprint(true) == Some(true)))
+        }
+        _ => None,
+    };
+    let outline_marks = match &stroke {
+        Some(s) if doc && !stroke_mixed => {
+            Some((s.color, app.selection_overprint(false) == Some(true)))
+        }
+        _ => None,
+    };
     let (fill_text, fill_swatch, outline_label, outline_swatch) = if doc {
         (
             if fill_mixed {
                 tr("docker.mixed")
             } else {
-                crate::app::fill_description(&fill)
+                crate::app::fill_description_in(app.doc(), &fill)
             },
             if fill_mixed {
                 None
@@ -451,41 +485,177 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
             None,
         )
     };
+    let proof = Rect::from_center_size(Pos2::new(row.max.x - 17.0, cy), Vec2::splat(26.0));
+    // The light and dark interface button, left of it.
+    let theme_btn = proof.translate(Vec2::new(-30.0, 0.0));
+    // A line sets the two buttons apart.
+    let sep_x = (theme_btn.min.x - 8.0).round() + 0.5;
+    painter.line_segment(
+        [
+            Pos2::new(sep_x, row.min.y + 7.0),
+            Pos2::new(sep_x, row.max.y - 7.0),
+        ],
+        Stroke::new(1.0, Tokens::border()),
+    );
+
+    // Positions of the fill and outline parts: fractions of the bar (fill
+    // about 70 %, outline about 82 %) while their swatches and values fit
+    // there, else further left, so a narrow window cuts the hints before
+    // them (#1004).
+    let outline_end = theme_btn.min.x - 8.0;
+    let gear_end = gear.max.x + 3.0;
+    let (fill_x, outline_x) = part_positions(
+        row,
+        gear_end,
+        outline_end,
+        Indicator::width_for(&painter, &fill_text),
+        Indicator::width_for(&painter, &outline_label),
+    );
+
+    // The status message can be a link to Options > General (the note
+    // that hardware acceleration is off), while it is the one shown.
+    let drag = if doc { drag_info(app) } else { None };
+    let linked = doc
+        && drag.is_none()
+        && app.settings.status_info == StatusInfo::ToolHints
+        && !app.status.is_empty()
+        && app
+            .status_opens_options
+            .as_ref()
+            .is_some_and(|(s, _)| *s == app.status);
+    // A message (a file opened or saved, with its path) gives the tool
+    // hint its place back after a while (#1126).
+    if doc && !linked {
+        expire_status(app, ui.ctx());
+    }
+    // Left field and object information.
+    let (left, info) = if !doc {
+        (tr("status.tool_hints"), tr("status.object_information"))
+    } else if let Some(drag) = drag {
+        (drag, object_info(app))
+    } else {
+        let left = match app.settings.status_info {
+            StatusInfo::ToolHints => {
+                let hint = tool_hint(app);
+                if app.status.is_empty() {
+                    hint
+                } else {
+                    format!("{}    {hint}", app.status)
+                }
+            }
+            StatusInfo::ObjectDetails => object_details(app),
+            StatusInfo::CursorCoordinates => cursor_coordinates(app),
+            StatusInfo::DocumentColor => document_color(app),
+        };
+        (left, object_info(app))
+    };
+    let text_x = gear_end;
+    let info_w = if info.is_empty() {
+        0.0
+    } else {
+        painter
+            .layout_no_wrap(info.clone(), font.clone(), Tokens::text())
+            .size()
+            .x
+            .min((fill_x - text_x) * 0.45)
+    };
+    let left_max = fill_x - 16.0 - if info_w > 0.0 { info_w + 24.0 } else { 0.0 };
+    // Cut off at the right, it shows whole on hover (#1126).
+    let left_cut = cut_off(&painter, &left, left_max - text_x);
+    let left_full = left_cut.then(|| left.clone());
+    let left_galley = elided(&painter, left, left_max - text_x);
+    let left_w = left_galley.size().x.min(left_max - text_x).max(0.0);
+    let clip = Rect::from_min_max(Pos2::new(text_x, row.min.y), Pos2::new(left_max, row.max.y));
+    painter.with_clip_rect(clip).galley(
+        Pos2::new(text_x, cy - left_galley.size().y / 2.0),
+        left_galley,
+        Tokens::text(),
+    );
+    if linked {
+        let r = Rect::from_min_max(
+            Pos2::new(text_x, row.min.y),
+            Pos2::new(text_x + left_w, row.max.y),
+        );
+        let resp = ui
+            .interact(r, egui::Id::new("status_opens_options"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let resp = match &left_full {
+            Some(t) => resp.on_hover_text(t.as_str()),
+            None => resp,
+        };
+        if resp.clicked() {
+            let page = app
+                .status_opens_options
+                .take()
+                .map(|(_, page)| page)
+                .unwrap_or_default();
+            app.status.clear();
+            app.open_options_page(page);
+        }
+    } else if let Some(t) = &left_full {
+        let r = Rect::from_min_max(
+            Pos2::new(text_x, row.min.y),
+            Pos2::new(text_x + left_w, row.max.y),
+        );
+        ui.interact(r, egui::Id::new("status_left_text"), Sense::hover())
+            .on_hover_text(t.as_str());
+    }
+    if info_w > 0.0 {
+        // After the left field, never closer than a placeholder's width.
+        let x = (text_x + left_w + 24.0)
+            .max(text_x + 156.0)
+            .min(left_max + 24.0);
+        let g = elided(&painter, info, fill_x - 8.0 - x);
+        let clip = Rect::from_min_max(Pos2::new(x, row.min.y), Pos2::new(fill_x - 8.0, row.max.y));
+        painter
+            .with_clip_rect(clip)
+            .galley(Pos2::new(x, cy - g.size().y / 2.0), g, Tokens::text());
+    }
+
     let fill_part = Rect::from_min_max(
         Pos2::new(fill_x, row.min.y),
         Pos2::new(outline_x - 8.0, row.max.y),
     );
-    let fill_hit = Indicator {
+    let (fill_hit, fill_resp) = Indicator {
         id: "status_fill",
         icon: Tool::InteractiveFill,
         swatch: fill_swatch,
+        marks: fill_marks,
         text: &fill_text,
         tip: &tr("status.swatch_fill"),
     }
     .show(ui, &painter, fill_part);
+    // A double click opens the dialog box, as in the reference program
+    // (#465): Edit Fill for the fill, Outline Pen for the outline.
     if fill_hit && doc {
-        app.open_fill_editor();
+        app.open_edit_fill();
+    }
+    // Dragging the fill onto an object copies it there, whatever it is:
+    // a colour, a fountain, a pattern. See docs/behavior/color-palettes.md.
+    if doc {
+        drag_fill(app, ui, &fill_resp, &fill, fill_swatch);
     }
     let outline_part = Rect::from_min_max(
         Pos2::new(outline_x, row.min.y),
         Pos2::new(theme_btn.min.x - 8.0, row.max.y),
     );
-    let outline_hit = Indicator {
+    let (outline_hit, _) = Indicator {
         id: "status_outline",
         icon: Tool::OutlinePen,
         swatch: outline_swatch,
+        marks: outline_marks,
         text: &outline_label,
         tip: &tr("status.swatch_outline"),
     }
     .show(ui, &painter, outline_part);
     if outline_hit && doc {
-        app.open_outline_editor();
+        app.open_outline_pen();
     }
 
     // Proof colours.
     let proof_resp = ui
         .interact(proof, egui::Id::new("status_proof"), Sense::click())
-        .on_hover_text(if app.proof_colors {
+        .rich_tip(if app.proof_colors {
             tr("status.proof_on")
         } else {
             tr("status.proof_off")
@@ -505,7 +675,7 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
     let dark = crate::theme::theme().is_dark();
     let theme_resp = ui
         .interact(theme_btn, egui::Id::new("status_theme"), Sense::click())
-        .on_hover_text(if dark {
+        .rich_tip(if dark {
             tr("status.theme_to_light")
         } else {
             tr("status.theme_to_dark")
@@ -536,21 +706,72 @@ pub fn status_bar(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// Drag the fill shown in the bar onto an object (`App::drop_fill`).
+fn drag_fill(
+    app: &mut App,
+    ui: &Ui,
+    resp: &egui::Response,
+    fill: &tracedraw_core::Fill,
+    swatch: Option<Color32>,
+) {
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        app.fill_drag = Some(fill.clone());
+    }
+    if app.fill_drag.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.fill_drag = None;
+    }
+    let pos = ui.ctx().pointer_latest_pos();
+    if resp.dragged() {
+        if let (Some(_), Some(pos)) = (&app.fill_drag, pos) {
+            let ctx = ui.ctx();
+            let ok = app.fill_target(pos).is_some();
+            ctx.set_cursor_icon(if ok {
+                egui::CursorIcon::Copy
+            } else {
+                egui::CursorIcon::NoDrop
+            });
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip,
+                egui::Id::new("status_fill_drag_chip"),
+            ));
+            let r = Rect::from_min_size(pos + Vec2::new(12.0, 12.0), Vec2::splat(16.0));
+            painter.rect_filled(r.expand(1.0), 0.0, Color32::WHITE);
+            draw_swatch(&painter, r, swatch);
+            painter.rect_stroke(
+                r,
+                0.0,
+                egui::Stroke::new(1.0, Color32::from_gray(0x5A)),
+                egui::StrokeKind::Outside,
+            );
+            ctx.request_repaint();
+        }
+    }
+    if resp.drag_stopped() {
+        let dragged = app.fill_drag.take();
+        let on_part = pos.is_some_and(|p| resp.rect.contains(p));
+        if let (Some(f), Some(p), false) = (dragged, pos, on_part) {
+            app.drop_fill(f, p);
+        }
+    }
+}
+
 /// The fill or outline part: tool icon, swatch, description.
 struct Indicator<'a> {
     id: &'a str,
     icon: Tool,
     swatch: Option<Color32>,
+    /// The swatch's colour and whether it overprints, for its marks.
+    marks: Option<(tracedraw_core::Color, bool)>,
     text: &'a str,
     tip: &'a str,
 }
 
 impl Indicator<'_> {
     /// Draw it; true when double-clicked.
-    fn show(&self, ui: &mut Ui, painter: &egui::Painter, part: Rect) -> bool {
+    fn show(&self, ui: &mut Ui, painter: &egui::Painter, part: Rect) -> (bool, egui::Response) {
         let resp = ui
-            .interact(part, egui::Id::new(self.id), Sense::click())
-            .on_hover_text(self.tip);
+            .interact(part, egui::Id::new(self.id), Sense::click_and_drag())
+            .rich_tip(self.tip);
         let cy = part.center().y;
         let icon_r = Rect::from_center_size(Pos2::new(part.min.x + 11.0, cy), Vec2::splat(20.0));
         crate::ui::icons::draw(painter, icon_r, self.icon, Tokens::icon());
@@ -559,16 +780,112 @@ impl Indicator<'_> {
             Vec2::new(26.0, 25.0),
         );
         draw_swatch(painter, sw, self.swatch);
+        if let Some((c, overprint)) = self.marks {
+            crate::ui::palette::swatch_marks(painter, sw, c, overprint);
+        }
         let clip = Rect::from_min_max(Pos2::new(sw.max.x + 5.0, part.min.y), part.max);
-        painter.with_clip_rect(clip).text(
-            Pos2::new(sw.max.x + 5.0, cy),
-            egui::Align2::LEFT_CENTER,
-            self.text,
-            egui::FontId::proportional(TEXT),
+        let g = elided(painter, self.text.to_owned(), part.max.x - sw.max.x - 5.0);
+        painter.with_clip_rect(clip).galley(
+            Pos2::new(sw.max.x + 5.0, cy - g.size().y / 2.0),
+            g,
             Tokens::text(),
         );
-        resp.double_clicked()
+        (resp.double_clicked(), resp)
     }
+
+    /// The width of the part without its text: icon, swatch and gaps.
+    const MIN_W: f32 = 22.0 + 3.0 + 26.0 + 5.0;
+
+    /// The width a part needs to show `text` whole.
+    fn width_for(painter: &egui::Painter, text: &str) -> f32 {
+        let w = painter
+            .layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::proportional(TEXT),
+                Tokens::text(),
+            )
+            .size()
+            .x;
+        Self::MIN_W + w.ceil() + 2.0
+    }
+}
+
+/// How long a status message stays before the tool hint has the field
+/// to itself again, seconds.
+pub const STATUS_SECS: f64 = 12.0;
+
+/// Clear the status message once it has been shown for [`STATUS_SECS`]:
+/// a message such as "Saved" with a long file path stayed until the next
+/// one and squeezed the tool hint after it off the bar (#1126). A new
+/// message starts its own time, and so does the same text set again
+/// after it went.
+fn expire_status(app: &mut App, ctx: &egui::Context) {
+    let id = egui::Id::new("status_message_since");
+    let now = ctx.input(|i| i.time);
+    if app.status.is_empty() {
+        ctx.data_mut(|d| d.remove::<(String, f64)>(id));
+        return;
+    }
+    let since = ctx.data_mut(|d| {
+        let kept = d.get_temp_mut_or_insert_with(id, || (app.status.clone(), now));
+        if kept.0 != app.status || now < kept.1 {
+            *kept = (app.status.clone(), now);
+        }
+        kept.1
+    });
+    let left = STATUS_SECS - (now - since);
+    if left <= 0.0 {
+        app.status.clear();
+        ctx.data_mut(|d| d.remove::<(String, f64)>(id));
+    } else {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+    }
+}
+
+/// Where the fill and outline parts of bar `row` start: at about 70 %
+/// and 82 % of it, or further left when the part (`fill_w`, `outline_w`
+/// wide with its text) would not fit before the next one or before
+/// `outline_end`; never left of `gear_end`, the end of the settings button.
+fn part_positions(
+    row: Rect,
+    gear_end: f32,
+    outline_end: f32,
+    fill_w: f32,
+    outline_w: f32,
+) -> (f32, f32) {
+    let outline_x = (row.min.x + row.width() * 0.818)
+        .min(outline_end - outline_w)
+        .max(gear_end + Indicator::MIN_W + 8.0);
+    let fill_x = (row.min.x + row.width() * 0.685)
+        .min(outline_x - 8.0 - fill_w)
+        .max(gear_end);
+    (fill_x, outline_x)
+}
+
+/// `text` on one line in the bar's font, cut with an ellipsis when it is
+/// wider than `width`.
+/// Whether `text` is wider than `width` in the status bar's font, so
+/// [`elided`] cuts it off.
+fn cut_off(painter: &egui::Painter, text: &str, width: f32) -> bool {
+    painter
+        .layout_no_wrap(
+            text.to_string(),
+            egui::FontId::proportional(TEXT),
+            Tokens::text(),
+        )
+        .size()
+        .x
+        > width.max(0.0) + 0.5
+}
+
+fn elided(painter: &egui::Painter, text: String, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        text,
+        egui::FontId::proportional(TEXT),
+        Tokens::text(),
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(0.0));
+    painter.layout_job(job)
 }
 
 /// A colour swatch; no colour is a white box crossed by a red line.
@@ -657,6 +974,151 @@ mod tests {
     use super::*;
     use tracedraw_core::geometry::Rect as PRect;
 
+    /// On a wide bar the fill and outline sit at their usual places; on a
+    /// narrow one they move left so their swatches and values stay whole
+    /// before the buttons, and the hints give way (#1004).
+    /// A tool hint the bar cuts off at the right shows whole on hover; one
+    /// that fits needs no tip (#1126).
+    #[test]
+    fn a_cut_off_hint_shows_whole_on_hover() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.show_welcome = false;
+        app.settings.status_info = StatusInfo::ToolHints;
+        let mut has_tip = |app: &mut App, width: f32| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 60.0))),
+                    ..Default::default()
+                },
+                |ui| status_bar(app, ui),
+            );
+            out.textures_delta.clear();
+            ctx.read_response(egui::Id::new("status_left_text"))
+                .is_some()
+        };
+        app.status =
+            "Saved /home/someone/a/very/long/folder/name/that/goes/on/and/on/drawing.tdraw".into();
+        assert!(has_tip(&mut app, 700.0));
+        assert!(has_tip(&mut app, 700.0));
+        app.status = "Saved".into();
+        has_tip(&mut app, 3000.0);
+        assert!(!has_tip(&mut app, 3000.0));
+    }
+
+    /// A status message, such as "Saved" with a long file path, gives the
+    /// tool hint its place back after a while instead of staying until the
+    /// next message (#1126). The same message set again shows again.
+    #[test]
+    fn a_status_message_goes_after_a_while() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.show_welcome = false;
+        app.settings.status_info = StatusInfo::ToolHints;
+        let run = |app: &mut App, time: f64| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 60.0))),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| status_bar(app, ui),
+            );
+            out.textures_delta.clear();
+        };
+        let saved = "Saved /home/someone/a/long/folder/drawing.tdraw".to_string();
+        app.status = saved.clone();
+        run(&mut app, 100.0);
+        run(&mut app, 100.0 + STATUS_SECS - 1.0);
+        assert_eq!(app.status, saved, "still shown");
+        run(&mut app, 100.0 + STATUS_SECS + 0.5);
+        assert!(app.status.is_empty(), "gone after a while");
+        // Saved again: shown again, for its own while.
+        app.status = saved.clone();
+        run(&mut app, 200.0);
+        run(&mut app, 200.0 + STATUS_SECS - 1.0);
+        assert_eq!(app.status, saved);
+        // A new message starts its own time.
+        app.status = "Opened".into();
+        run(&mut app, 200.0 + STATUS_SECS + 0.5);
+        assert_eq!(app.status, "Opened");
+        run(&mut app, 200.0 + 2.0 * STATUS_SECS + 1.0);
+        assert!(app.status.is_empty());
+    }
+
+    /// The status bar's fill and outline swatches carry the spot colour's
+    /// dot and, while the selection overprints, the ring (#2455).
+    #[test]
+    fn the_status_swatches_carry_the_spot_and_overprint_marks() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.show_welcome = false;
+        let circles = |app: &mut App| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1600.0, 60.0))),
+                    ..Default::default()
+                },
+                |ui| status_bar(app, ui),
+            );
+            out.textures_delta.clear();
+            out.shapes
+                .iter()
+                .filter(|s| matches!(s.shape, egui::Shape::Circle(_)))
+                .count()
+        };
+        let id = app
+            .new_shape(ShapeKind::Ellipse {
+                rect: PRect::new(0.0, 0.0, 20.0, 20.0),
+                arc: None,
+            })
+            .expect("ellipse");
+        app.select(vec![id]);
+        app.apply_fill(tracedraw_core::Fill::Solid(
+            tracedraw_core::Color::cmyk_pct(0.0, 100.0, 100.0, 0.0),
+        ));
+        let plain = circles(&mut app);
+        // A spot fill: its dot.
+        let gold = crate::palette::spot_color(
+            "Gold 871",
+            tracedraw_core::Color::cmyk_pct(0.0, 20.0, 80.0, 10.0),
+        );
+        app.apply_fill(tracedraw_core::Fill::Solid(gold));
+        assert_eq!(circles(&mut app), plain + 1, "the dot");
+        // Overprinting too: the ring of two circles beside the dot.
+        app.set_overprint(true, true);
+        assert_eq!(circles(&mut app), plain + 3, "the dot and the ring");
+        // The outline overprints as well, adding its own ring.
+        app.set_overprint(false, true);
+        assert_eq!(circles(&mut app), plain + 5, "both rings");
+        // Nothing selected: the defaults' swatches, with no marks.
+        app.select(Vec::new());
+        assert_eq!(circles(&mut app), plain);
+    }
+
+    #[test]
+    fn fill_and_outline_stay_whole_on_a_narrow_bar() {
+        let bar = |w: f32| Rect::from_min_size(Pos2::new(4.0, 0.0), Vec2::new(w, 41.0));
+        let (fill_w, outline_w) = (110.0, 190.0);
+        let wide = bar(1600.0);
+        let end = wide.max.x - 68.0;
+        let (f, o) = part_positions(wide, 31.0, end, fill_w, outline_w);
+        assert!((f - (4.0 + 1600.0 * 0.685)).abs() < 1e-3);
+        assert!((o - (4.0 + 1600.0 * 0.818)).abs() < 1e-3);
+        for w in [500.0, 700.0, 900.0] {
+            let row = bar(w);
+            let end = row.max.x - 68.0;
+            let (f, o) = part_positions(row, 31.0, end, fill_w, outline_w);
+            assert!(o + outline_w <= end + 1e-3, "{w}: outline cut");
+            assert!(f + fill_w <= o - 8.0 + 1e-3, "{w}: fill cut");
+            assert!(f >= 31.0, "{w}");
+        }
+        // Too narrow for both: they keep at least their swatches, in order.
+        let row = bar(200.0);
+        let (f, o) = part_positions(row, 31.0, row.max.x - 68.0, fill_w, outline_w);
+        assert!(f >= 31.0 && o >= f + Indicator::MIN_W, "{f} {o}");
+    }
+
     #[test]
     fn every_tool_has_its_own_hint() {
         crate::i18n::set_language("en");
@@ -664,6 +1126,27 @@ mod tests {
             let key = format!("status_hint.{}", t.id());
             assert_ne!(tr(&key), key, "missing status hint for {t:?}");
         }
+    }
+
+    /// The hints share one style: parts joined by " · ", no "Dbl-click"
+    /// abbreviation, no semicolons, no trailing full stop.
+    #[test]
+    fn hints_share_one_style() {
+        crate::i18n::set_language("en");
+        let mut keys: Vec<String> = Tool::ALL
+            .iter()
+            .map(|t| format!("status_hint.{}", t.id()))
+            .collect();
+        keys.push("status_hint.pick_selected".into());
+        for key in keys {
+            let hint = tr(&key);
+            assert!(!hint.contains(';'), "{key}: {hint}");
+            assert!(!hint.to_lowercase().contains("dbl"), "{key}: {hint}");
+            assert!(!hint.ends_with('.'), "{key}: {hint}");
+            assert!(hint.chars().next().is_some_and(char::is_uppercase), "{key}");
+        }
+        assert!(tool_hint_for(Tool::Pick, true).contains(" · "));
+        assert!(tool_hint_for(Tool::Pick, false).contains("again"));
     }
 
     #[test]
@@ -697,7 +1180,31 @@ mod tests {
         app.tool = Tool::Pick;
         app.select(vec![a, b]);
         assert_eq!(object_info(&app), "2 Objects Selected on Layer 1");
-        assert!(tool_hint(&app).contains("twice"));
+        // A bitmap names its colour mode (#1254).
+        let png = {
+            let mut pm = tiny_skia::Pixmap::new(1, 1).expect("pixmap");
+            pm.fill(tiny_skia::Color::WHITE);
+            pm.encode_png().expect("png")
+        };
+        let c = app
+            .new_shape(ShapeKind::Bitmap {
+                rect: PRect::new(0.0, 0.0, 10.0, 10.0),
+                width_px: 1,
+                height_px: 1,
+                png: png.into(),
+                fx: None,
+            })
+            .expect("bitmap");
+        app.select(vec![c]);
+        assert_eq!(object_info(&app), "Bitmap 1 x 1 px (RGB) on Layer 1");
+        app.run(tracedraw_core::Command::ConvertColors {
+            shapes: vec![c],
+            to: tracedraw_core::color_convert::ColorTarget::Cmyk,
+            spots: false,
+        });
+        assert_eq!(object_info(&app), "Bitmap 1 x 1 px (CMYK) on Layer 1");
+        app.select(vec![a, b]);
+        assert!(tool_hint(&app).contains("again"));
     }
 
     #[test]

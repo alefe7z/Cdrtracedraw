@@ -11,6 +11,7 @@ use crate::ui::options::{combo, grid, row_label};
 use crate::ui::options_pages::{
     heading, note, off_button, off_check, off_combo, off_radio, sep, tabbed,
 };
+use crate::ui::tips::RichTip;
 use egui::Ui;
 
 fn hint(ui: &mut Ui, key: &str) {
@@ -196,53 +197,100 @@ pub fn file_formats_page(app: &mut App, ui: &mut Ui) {
     grid("formats_export").show(ui, |ui| {
         row_label(ui, &tr("dialog.format"));
         let formats: Vec<usize> = (0..EXPORT_FORMATS.len()).collect();
-        combo(
+        crate::ui::tips::tip_over(
             ui,
-            "opt_export_format",
-            &mut f.export_format,
-            &formats,
-            |i| EXPORT_FORMATS[i].0.to_string(),
-            130.0,
+            crate::ui::tips::pair("dialog.format", "options.export_format_tip"),
+            |ui| {
+                combo(
+                    ui,
+                    "opt_export_format",
+                    &mut f.export_format,
+                    &formats,
+                    |i| EXPORT_FORMATS[i].0.to_string(),
+                    130.0,
+                )
+            },
         );
         ui.end_row();
         row_label(ui, &tr("dialog.resolution"));
-        ui.add(
-            egui::DragValue::new(&mut f.export_dpi)
-                .range(crate::ui::dialogs::MIN_EXPORT_DPI..=2400.0)
-                .suffix(" dpi"),
+        crate::ui::tips::tip_over(
+            ui,
+            crate::ui::tips::pair("dialog.resolution", "dialog.resolution_tip"),
+            |ui| {
+                ui.add(
+                    crate::ui::field::NumField::new(&mut f.export_dpi)
+                        .range(crate::ui::dialogs::MIN_EXPORT_DPI..=2400.0)
+                        .suffix(" dpi"),
+                );
+            },
         );
+
         ui.end_row();
         row_label(ui, &tr("dialog.quality"));
-        ui.add(egui::DragValue::new(&mut f.export_quality).range(1..=100));
+        crate::ui::tips::tip_over(ui, crate::ui::tips::keyed("dialog.quality"), |ui| {
+            ui.add(crate::ui::field::NumField::new(&mut f.export_quality).range(1..=100));
+        });
+
         ui.end_row();
         row_label(ui, &tr("dialog.pdf_standard"));
         let standards: Vec<usize> = (0..PDF_STANDARDS.len()).collect();
-        combo(
-            ui,
-            "opt_pdf_standard",
-            &mut f.pdf_standard,
-            &standards,
-            |i| PDF_STANDARDS[i].to_string(),
-            130.0,
-        );
+        crate::ui::tips::tip_over(ui, crate::ui::tips::keyed("dialog.pdf_standard"), |ui| {
+            combo(
+                ui,
+                "opt_pdf_standard",
+                &mut f.pdf_standard,
+                &standards,
+                |i| PDF_STANDARDS[i].to_string(),
+                130.0,
+            )
+        });
         ui.end_row();
         row_label(ui, &tr("dialog.output_condition"));
-        ui.add(egui::TextEdit::singleline(&mut f.output_condition).desired_width(130.0));
+        crate::ui::tips::tip_over(
+            ui,
+            crate::ui::tips::keyed("dialog.output_condition"),
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut f.output_condition)
+                        .hint_text(tr("dialog.output_condition_drawing"))
+                        .desired_width(130.0),
+                );
+            },
+        );
+
         ui.end_row();
         row_label(ui, &tr("dialog.bleed"));
-        ui.add(
-            egui::DragValue::new(&mut f.pdf_bleed_mm)
-                .range(0.0..=50.0)
-                .speed(0.5)
-                .suffix(" mm"),
-        );
+        crate::ui::tips::tip_over(ui, crate::ui::tips::keyed("dialog.bleed"), |ui| {
+            ui.add(
+                crate::ui::field::NumField::new(&mut f.pdf_bleed_mm)
+                    .range(0.0..=50.0)
+                    .speed(0.5)
+                    .suffix(" mm"),
+            );
+        });
+
         ui.end_row();
     });
     ui.checkbox(
         &mut f.export_transparent,
         tr("dialog.transparent_background"),
-    );
-    ui.checkbox(&mut f.remember_last, tr("options.export_remember"));
+    )
+    .rich_tip(crate::ui::tips::pair(
+        "dialog.transparent_background",
+        "dialog.transparent_background_tip",
+    ));
+    ui.checkbox(&mut f.remember_last, tr("options.export_remember"))
+        .rich_tip(crate::ui::tips::pair(
+            "options.export_remember",
+            "options.export_remember_tip",
+        ));
+    // The Export dialog's "Do not show this dialog again", where it can
+    // be found again once the dialog no longer shows.
+    ui.checkbox(&mut f.skip_export_dialog, tr("options.skip_export_dialog"))
+        .rich_tip(crate::ui::tips::pair(
+            "options.skip_export_dialog",
+            "options.skip_export_dialog_tip",
+        ));
     hint(ui, "options.export_presets_hint");
     sep(ui);
     heading(ui, &tr("options.import_section"));
@@ -265,16 +313,28 @@ pub fn file_formats_page(app: &mut App, ui: &mut Ui) {
     );
     grid("formats_cdr").show(ui, |ui| {
         row_label(ui, &tr("dialog.cdr_version"));
-        combo(
+        crate::ui::tips::tip_over(
             ui,
-            "opt_cdr_version",
-            &mut f.cdr_version,
-            &crate::ui::save_as::version_choices(),
-            crate::ui::save_as::version_label,
-            130.0,
+            crate::ui::tips::pair("dialog.cdr_version", "dialog.cdr_version_tip"),
+            |ui| {
+                combo(
+                    ui,
+                    "opt_cdr_version",
+                    &mut f.cdr_version,
+                    &crate::ui::save_as::version_choices(),
+                    crate::ui::save_as::version_label,
+                    130.0,
+                );
+            },
         );
+
         ui.end_row();
     });
+    ui.checkbox(&mut f.save_new_as_cdr, tr("options.save_new_as_cdr"))
+        .rich_tip(crate::ui::tips::pair(
+            "options.save_new_as_cdr",
+            "options.save_new_as_cdr_tip",
+        ));
     hint(ui, "options.cdr_version_hint");
 }
 
@@ -284,20 +344,27 @@ pub fn bitmap_tracing_page(app: &mut App, ui: &mut Ui) {
     let t = &mut app.settings.tracing;
     grid("tracing").show(ui, |ui| {
         row_label(ui, &tr("opt.quick_trace_method"));
-        combo(
+        crate::ui::tips::tip_over(
             ui,
-            "opt_quick_trace",
-            &mut t.quick_preset,
-            &crate::trace::Preset::ALL,
-            // The menu's names, without the dots of a menu item.
-            |p| {
-                tr(p.key())
-                    .trim_end_matches("...")
-                    .trim_end_matches('\u{2026}')
-                    .to_string()
+            crate::ui::tips::pair("options.quick_trace_with", "options.quick_trace_with_tip"),
+            |ui| {
+                combo(
+                    ui,
+                    "opt_quick_trace",
+                    &mut t.quick_preset,
+                    &crate::trace::Preset::ALL,
+                    // The menu's names, without the dots of a menu item.
+                    |p| {
+                        tr(p.key())
+                            .trim_end_matches("...")
+                            .trim_end_matches('\u{2026}')
+                            .to_string()
+                    },
+                    170.0,
+                );
             },
-            170.0,
         );
+
         ui.end_row();
         row_label(ui, &tr("opt.merge_colors"));
         ui.vertical(|ui| {

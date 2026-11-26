@@ -8,6 +8,7 @@ use crate::app::App;
 use crate::i18n::tr;
 use crate::theme::Tokens;
 use crate::ui::dialogs::window;
+use crate::ui::tips::RichTip;
 use egui::{Context, Sense, Ui};
 
 /// The most cells a pattern has.
@@ -85,6 +86,22 @@ impl Default for State {
     }
 }
 
+impl State {
+    /// The dialog opened on the dash pattern `dash` in use (#4288): its
+    /// cells, and the saved pattern it is when it is one of `custom`. A
+    /// solid line, which has no gap, opens on the usual dash and gap.
+    pub fn for_dash(dash: &[f64], custom: &[Vec<f64>]) -> Self {
+        let cells = cells_from_dash(dash, MAX_CELLS);
+        if dash.is_empty() || dash_from_cells(&cells).is_empty() {
+            return State::default();
+        }
+        State {
+            cells,
+            editing: custom.iter().position(|d| d.as_slice() == dash),
+        }
+    }
+}
+
 fn request_id() -> egui::Id {
     egui::Id::new("open_line_style_editor")
 }
@@ -156,23 +173,34 @@ pub fn cells_from_dash(dash: &[f64], max: usize) -> Vec<bool> {
 /// A short drawing of a pattern, for lists.
 pub fn preview(ui: &mut Ui, dash: &[f64], width: f32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 10.0), Sense::click());
+    paint_dash(ui.painter(), rect, dash);
+    resp
+}
+
+/// Draw a line with the dash pattern `dash` along the middle of `rect`
+/// (an empty pattern is a solid line, a dash of no length a round dot).
+pub fn paint_dash(painter: &egui::Painter, rect: egui::Rect, dash: &[f64]) {
     let y = rect.center().y;
     let unit = 2.0f32;
     let color = Tokens::text();
     if dash.is_empty() {
-        ui.painter().line_segment(
+        painter.line_segment(
             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
             egui::Stroke::new(unit, color),
         );
-        return resp;
+        return;
     }
     let mut x = rect.left();
     let mut i = 0usize;
     while x < rect.right() && i < 400 {
-        let len = (dash[i % dash.len()].max(0.0) as f32 * unit).max(0.5);
-        if i.is_multiple_of(2) {
+        let raw = dash[i % dash.len()].max(0.0) as f32 * unit;
+        let len = raw.max(0.5);
+        if i.is_multiple_of(2) && raw <= 0.0 {
+            // A dash of no length: a round dot (#3404).
+            painter.circle_filled(egui::pos2(x, y), unit * 0.75, color);
+        } else if i.is_multiple_of(2) {
             let x1 = (x + len).min(rect.right());
-            ui.painter().line_segment(
+            painter.line_segment(
                 [egui::pos2(x, y), egui::pos2(x1, y)],
                 egui::Stroke::new(unit, color),
             );
@@ -180,7 +208,6 @@ pub fn preview(ui: &mut Ui, dash: &[f64], width: f32) -> egui::Response {
         x += len;
         i += 1;
     }
-    resp
 }
 
 /// Edit Line Style.
@@ -215,7 +242,10 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut State, close: &mut bool) {
         let mut n = st.cells.len();
         ui.horizontal(|ui| {
             ui.label(tr("line_style.length"));
-            if ui.add(egui::Slider::new(&mut n, 2..=MAX_CELLS)).changed() {
+            if ui
+                .add(crate::ui::Slider::new(&mut n, 2..=MAX_CELLS))
+                .changed()
+            {
                 st.cells.resize(n, false);
             }
         });
@@ -232,9 +262,25 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut State, close: &mut bool) {
         ui.separator();
         ui.label(tr("line_style.saved"));
         let mut pick = None;
+        let mut preset = None;
         egui::ScrollArea::vertical()
             .max_height(140.0)
             .show(ui, |ui| {
+                // The built-in styles first, as the style lists show
+                // them (#4288): a start for a new pattern, not changed or
+                // deleted themselves.
+                for d in crate::ui::outline_pen::preset_dashes() {
+                    if d.is_empty() {
+                        continue;
+                    }
+                    ui.horizontal(|ui| {
+                        let sel = st.editing.is_none() && dash == d;
+                        let r = ui.selectable_label(sel, "\u{2022}");
+                        if r.clicked() | preview(ui, &d, 200.0).clicked() {
+                            preset = Some(d.clone());
+                        }
+                    });
+                }
                 for (i, d) in app.settings.custom_dashes.iter().enumerate() {
                     ui.horizontal(|ui| {
                         let sel = st.editing == Some(i);
@@ -247,6 +293,10 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut State, close: &mut bool) {
                     });
                 }
             });
+        if let Some(d) = preset {
+            st.cells = cells_from_dash(&d, MAX_CELLS);
+            st.editing = None;
+        }
         if let Some(i) = pick {
             if let Some(d) = app.settings.custom_dashes.get(i) {
                 st.cells = cells_from_dash(d, MAX_CELLS);
@@ -259,7 +309,7 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut State, close: &mut bool) {
             if ui
                 .add_enabled(
                     !dash.is_empty() && !full,
-                    egui::Button::new(tr("line_style.add")),
+                    crate::ui::btn_icons::Ib::new("line_style.add"),
                 )
                 .clicked()
             {
@@ -269,7 +319,7 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut State, close: &mut bool) {
             if ui
                 .add_enabled(
                     !dash.is_empty() && st.editing.is_some(),
-                    egui::Button::new(tr("line_style.replace")),
+                    crate::ui::btn_icons::Ib::new("line_style.replace"),
                 )
                 .clicked()
             {
@@ -280,7 +330,7 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut State, close: &mut bool) {
             if ui
                 .add_enabled(
                     st.editing.is_some(),
-                    egui::Button::new(tr("line_style.delete")),
+                    crate::ui::btn_icons::Ib::new("line_style.delete"),
                 )
                 .clicked()
             {
@@ -288,7 +338,11 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut State, close: &mut bool) {
                     app.delete_custom_dash(i);
                 }
             }
-            if ui.button(tr("dialog.close")).clicked() {
+            if ui
+                .button(tr("dialog.close"))
+                .rich_tip(crate::ui::tips::keyed("dialog.close"))
+                .clicked()
+            {
                 *close = true;
             }
         });
@@ -379,6 +433,61 @@ mod tests {
         app.delete_custom_dash(3);
         app.delete_custom_dash(0);
         assert!(app.settings.custom_dashes.is_empty());
+    }
+
+    /// #4288 and #4289: from the Outline Pen dialog, Edit Line Style
+    /// opens on the style picked there, and Esc takes back to the Outline
+    /// Pen dialog as Close does.
+    #[test]
+    fn the_editor_opens_on_the_pen_style_and_esc_goes_back() {
+        use crate::ui::dialogs::Dialog;
+        let mut app = App::headless();
+        let ctx = crate::theme::ui_context();
+        let raw = |events: Vec<egui::Event>| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let run = |app: &mut App, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(raw(events), |ui| crate::ui::root(app, ui));
+            out.textures_delta.clear();
+        };
+        app.show_welcome = false;
+        run(&mut app, Vec::new());
+        app.open_outline_pen();
+        let dash = vec![6.0, 2.0, 1.0, 2.0];
+        if let Dialog::OutlinePen(pen) = &mut app.dialog {
+            pen.stroke.dash = dash.clone();
+        } else {
+            panic!("the Outline Pen dialog");
+        }
+        run(&mut app, Vec::new());
+        ctx.data_mut(|d| d.insert_temp(request_id(), true));
+        run(&mut app, Vec::new());
+        match &app.dialog {
+            Dialog::LineStyle(st) => assert_eq!(dash_from_cells(&st.cells), dash),
+            _ => panic!("Edit Line Style"),
+        }
+        let esc = |pressed| egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(&mut app, vec![esc(true)]);
+        run(&mut app, vec![esc(false)]);
+        run(&mut app, Vec::new());
+        assert!(matches!(app.dialog, Dialog::OutlinePen(_)), "back to the pen");
+        // A saved pattern is the one being changed.
+        assert_eq!(
+            State::for_dash(&[5.0, 1.0], &[vec![1.0, 1.0], vec![5.0, 1.0]]).editing,
+            Some(1)
+        );
+        assert_eq!(State::for_dash(&[], &[]), State::default());
     }
 
     #[test]

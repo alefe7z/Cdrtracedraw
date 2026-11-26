@@ -5,21 +5,79 @@ has none (new, or opened from a format CD Draw only reads or converts,
 `.cdr` included), and File > Save As (Ctrl+Shift+S), open the Save
 Drawing dialog.
 
+A save never loses the file it replaces (`files::replace_with`): the new
+file is written whole under a `.part` name beside it first, and only
+then copied over the old one in place (keeping its permissions, links
+and an open drawing's hold on it) and the `.part` file removed. When the
+write fails half way (a full disk, an error while the drawing is
+written, the program stopped), the old file is as it was; it was
+written over from the start and left cut short, so both the old and the
+new drawing were lost. Should the copy into place fail, the `.part` file
+keeps the whole new file and the error on the status line names it. A
+new file is the `.part` file renamed. Exports and every other file the
+desktop writes go the same way (`files::tests::a_failed_write_keeps_the_file_it_was_replacing`).
+
+A large `.tdraw` drawing saved from the File menu, the toolbar, Ctrl+S,
+Ctrl+Shift+S or the Save Drawing dialog is written off the interface's
+thread (`saving::Saving`, #4011): one whose file is already 2 MB or
+more, or with 10 000 objects or more on its layers
+(`saving::is_large`). The status line says "Saving <file>…" and, when it
+takes more than 0.4 seconds, a window "Saving <name>" shows how many
+megabytes are written with a moving bar, so the program never stands
+still with nothing on screen during a long save. Until the file is
+written the drawing counts as unsaved and what is typed, clicked or
+dropped is held back (`saving::hold_input`; the window can be moved and
+closed: closing waits for the file). Then it is saved as after any
+save: the status line, the recent files, the thumbnail. A drawing
+changed meanwhile (a macro, an agent) keeps its unsaved changes. Small
+drawings, `.cdr` files, the browser, and saves that something waits for
+(the question on closing a drawing, macros, packages) are written at
+once, as before (`documents::tests::a_large_drawing_is_saved_off_the_interfaces_thread`,
+`saving::tests::a_drawing_is_written_on_a_worker_with_its_bytes_counted`).
+
 ## Save Drawing
 
 One window, 760 px wide, the same on every system:
 
 - **Folder** (desktop): an Up button, the path bar (a folder typed there
-  opens with Enter; one that does not exist says so) and New folder
-  (makes "New folder", "New folder (2)" ... and opens it). Down the left,
+  opens with Enter, and Save writes into it without Enter; one that does
+  not exist says so) and New folder
+  (makes "New folder", "New folder (2)" ... in the folder shown, picks it
+  and starts renaming it: Enter keeps the name typed, Esc the one it
+  has). Down the left,
   shortcuts to the folders that exist: Home, Desktop, Documents,
   Downloads and Pictures (on Linux the names in
-  `~/.config/user-dirs.dirs`), then the drives (Windows) or `/`. On the
+  `~/.config/user-dirs.dirs`), then the drives (Windows: every drive
+  letter from C:) or `/`. Under them, each section only when it has
+  folders and the column scrolling when they are many (#1391):
+  **Drives**, the mounted drives, memory cards and network shares
+  (Linux: the folders mounted in or found under `/media/$USER`,
+  `/run/media/$USER`, `/media` and `/mnt`, then the desktop's shares and
+  phones in `$XDG_RUNTIME_DIR/gvfs`, a share shown as "photos (nas)";
+  macOS: `/Volumes` without the start-up disk; hidden folders left
+  out); **Bookmarks**, the folders bookmarked in the desktop's file
+  manager (`~/.config/gtk-3.0/bookmarks`, else `~/.gtk-bookmarks`, with
+  their names; addresses that are no folders here, like `sftp://`, are
+  left out), then those bookmarked here: a right click on a folder of
+  the list offers Add to bookmarks, a right click on such a bookmark
+  Remove bookmark, and they are kept in the preferences; **Recent**, up
+  to six folders used lately, the last folder a dialog used first, then
+  the folders of the recent drawings. They are read when the dialog
+  opens (`files::drives_in`, `files::parse_bookmarks`,
+  `files::recent_dirs`; `files::tests::mounted_drives_memory_cards_and_shares_are_listed`,
+  `ui::save_as::tests::drives_bookmarks_and_recent_folders_are_listed`). On the
   right, 250 px high and scrolling, the folder's contents: folders, then
   the files of the chosen type, by name ignoring case (hidden ones left
   out), with Name, Date modified (local time), Type ("File folder",
-  "CDR file") and Size (KB, MB from 1 MB). A click on a file takes its
-  name; a double click on a folder opens it.
+  "CDR file") and Size (KB, MB from 1 MB). A click picks an entry
+  (a file's name becomes the name); a double click on a folder opens it;
+  a right click offers Open (folders), Rename and Add to bookmarks
+  (folders). With the list picked,
+  letters jump to the first entry starting with them (letters a second
+  apart start again; one letter typed again goes on to the next entry
+  with it), F2 renames the entry picked, Enter opens the folder picked
+  and the arrow keys move. A name that is empty, holds `/` or `\` or is
+  taken leaves the entry as it was and says so.
 - **File name**: the drawing's file name, else its title, else
   "Graphic1", with the type's extension; a name typed with either
   extension, or none, gets the chosen type's.
@@ -29,18 +87,51 @@ One window, 760 px wide, the same on every system:
 - **Version**: for CD Draw files the `.tdraw` format version, shown
   as "v0" with nothing to choose while it is the only one
   (`docs/tdraw-format.md`); for `.cdr` 27 down to 14, each with its
+  drawing that came from or was saved to a `.cdr` file, and for a
+  drawing without a file when Options > Global > File Formats > Save
+  new drawings as .cdr files is on.
+- **Version**: for TraceDraw files the `.tdraw` format version, a
+  choice once there is more than one; while there is only one the row
+  is left empty (`docs/tdraw-format.md`, #613); for `.cdr` 27 down to 14, each with its
   release name ("v14 (X4)", "v27 (2026)").
+- **Selected only**: on, only the selected objects go into the file,
+  each on its page and layer, where it is; an object selected inside a
+  group comes out of it alone, pages left with nothing are dropped, and
+  styles, symbols, palette and properties go along. The drawing open is
+  not changed: it keeps all its objects, its own file and its unsaved
+  state, and the status line says "Saved the selection to ...". Greyed
+  when nothing is selected; Package is greyed while it is on (#2195,
+  `ui::save_as::selection_save_document`,
+  `ui::save_as::tests::save_as_selected_only_writes_just_the_selection`).
 - **Embed colour profile (size)** with "Colour profile: name" (`.cdr`
   only): on, the drawing's CMYK profile is stored in the file; off, it
   is left out. Only version 16 and later store one, so the box is off
   and greyed for older versions and for a drawing without a profile
   ("Colour profile: none"). **Embed fonts (size)** sits beside it: on,
   the faces the text uses go into the file when their licence allows
-  it; every face is listed in the file's font table either way. It is
-  greyed below version 16 and when no face may be embedded. Both
+  it; every face is listed in the file's font table either way. The
+  file embedded for a face is the one that draws its text: found by the
+  family's name or legacy name, or as the family of a name with a weight
+  ("Montserrat SemiBold"), the regular face for a bold or italic the
+  family lacks, a variable font for any weight, each file once; only
+  faces drawn by a stand-in and faces in collection files are left out
+  (before #1009 only a face of exactly that name, weight and slant was
+  embedded, so most text kept no font). It is
+  greyed below version 16 and when no face may be embedded. Under the
+  box a small note names the families the file will not carry and why
+  ("Not embedded: Raj 50 (its licence forbids embedding), Missing Sans
+  (no font file to embed)"): a font whose licence bits (OS/2 `fsType`)
+  are restricted or bitmaps only, a face drawn by a stand-in, a face in
+  a collection file; a family with one face that may be embedded is not
+  listed. No note when every face goes in. Before, the box simply showed
+  no size and the user took the font for lost (#1219;
+  `tracedraw_cdr::write::left_out`, `save_as::fonts_left_out_text`). Both
   choices stay for the next Save As and for Save. Embed fonts starts
   on.
 - **Embed fonts (size)** for CD Draw files: on (as it starts), the
+  off, so that drawings saved one after another do not each carry a copy
+  of the same fonts (#886).
+- **Embed fonts (size)** for TraceDraw files: on (it starts off, #886), the
   installed fonts the text uses go into the `.tdraw` file, one file per
   face (the regular face for a bold or italic the family lacks), where
   the font's licence allows use in documents, so the drawing keeps its
@@ -52,20 +143,46 @@ One window, 760 px wide, the same on every system:
 - Only the versions checked in other programs are offered (14 to 27).
 - **Title**, **Subject** and **Rating** (five stars; clicking the lit
   last star takes it off): the document's properties, also in File >
-  Document Properties; changed ones are set (one undo step each) before
+  Document Info; changed ones are set (one undo step each) before
   the file is written.
 - **Save** (or Enter) writes the file; a file that exists asks "<name>
   already exists. Replace it?" with Replace and Cancel. Cancel closes
   without writing. The dialog starts in the drawing's folder, else the
   last folder saved to, else Documents, else home.
+  without writing. The dialog starts in the drawing's folder (for a
+  drawing read from a `.cdr` or another format, the folder and name of
+  the file it was read from), else the last folder used, else
+  Documents, else home.
+- In the browser, where every save is a download, the dialog keeps the
+  file name, type, version and properties, and says the browser saves
+  the file in its downloads folder.
+- Options > General > Use the system's save dialog (off by default on
+  every system; not in the browser or on Android, #2965): Save
+  As, and Save of a drawing without a file, open the system's own save
+  dialog instead, in the folder and with the name the Save Drawing
+  dialog would offer, with TraceDraw and CorelDRAW as its types (the
+  drawing's own first). The extension chosen there sets the type, the
+  versions are the ones Options sets, the system asks before replacing a
+  file, and Cancel saves nothing
+  (`ui::save_as::tests::the_system_save_dialog_saves_in_the_type_chosen_there`).
+  It was on by default on macOS, where the system's dialog shows no type
+  list, so Save As offered no way to choose `.cdr` or its version
+  (#3811): it is off by default now, and preferences that had it on are
+  set back to the Save Drawing dialog once (upgrade 9); turned on again
+  it stays (`settings::tests::save_as_offers_the_type_and_version_by_default`).
 
 ## `.cdr` versions
 
 A program opens `.cdr` files of its own version and older ones, so the
 version decides who can open a file:
 
-- Save As starts at the newest version, 27, whatever the drawing came
-  from.
+- Save As starts at the drawing's own version when it was opened from
+  (or saved to) a `.cdr` file, as Save keeps it; any other drawing starts
+  at the version set in Options > Global > File Formats (27 at first),
+  a drawing started from a template (`.cdt`, `.cdrt`) too, whatever
+  version the template was written in.
+  The hint under that version says so (#613,
+  `pick_drag_tests::the_cdr_version_chosen_in_options_survives_a_restart_and_starts_save_as`).
 - The version chosen stays with the drawing: Save writes the same
   version again without asking. Each open drawing keeps its own.
 - CD Draw saves only the versions checked in other programs, 14 to 27.
@@ -75,6 +192,12 @@ version decides who can open a file:
   "Older file version": the drawing came from version N, CD Draw does
   not save in it, choose a version from 14 to 27; Choose Version...
   (or Enter) opens Save As on version 14, Cancel saves nothing. Once
+- TraceDraw saves every version from 7 to 27 (#1139).
+  A drawing opened from an older `.cdr` (versions 1 to 6) keeps its
+  which version Save writes ("Save writes version 7."), and Save opens
+  "Older file version": the drawing came from version N, TraceDraw does
+  not save in it, choose a version from 7 to 27; Choose Version...
+  (or Enter) opens Save As on version 7, Cancel saves nothing. Once
   saved in a checked version, Save writes it without asking. A file
   newer than 27 is saved as 27. Options > Global > File Formats (version
   27 at first) is used for a drawing saved to a `.cdr` file without a
@@ -84,10 +207,108 @@ version decides who can open a file:
   refused with exit code 2). Versions 7 to 13 are experimental and are
   written only with `TRACEDRAW_CDR_EXPERIMENTAL=1`, for testing them in
   other programs.
+  version in `TRACEDRAW_CDR_VERSION` (7 to 27; another version is
+  refused with exit code 2). The MCP `save` tool takes an optional
+  `version`, 7 to 27 (`mcp.md`).
 
 What each version's file holds is in `docs/cdr-format.md`, Writing.
 
+Layers keep their state from version 16: a hidden layer is saved
+hidden with its objects, and a locked layer or one kept from printing
+keeps that, as the program's own files hold them. Before version 16 a
+hidden layer is saved empty.
+
+Live effects and drop shadows are saved as what they draw (a distorted
+rectangle as its curve, a contour as its steps, a shadow as a picture
+of it beneath the object), which any program shows. From version 14
+the file also carries the objects themselves, so opened again in
+TraceDraw a distortion, contour, envelope, perspective, extrusion,
+bevel, block shadow, symmetry or drop shadow is live again (#1031), as
+blends are (#986); an object another program moved or changed in
+between opens as it was drawn. The objects themselves are kept whole in
+`tracedraw/effects.json` (each object as TraceDraw stores it, its
+pictures and the end objects of its blends included), so the member grows
+with them; a member that inflates past 64 MB is not read, and its
+objects open as drawn.
+
+What the writer cannot write yet goes out with stand-ins any program
+shows: a pattern, texture, PostScript or mesh fill as one colour, a
+fountain with repeats, inversion, the shaped kind, midpoints or free
+nodes as the nearest plain fountain, a spot or registration colour as
+process colour, an outline fill as the outline colour, and a line's
+arrowheads as curves of their own just above it, filled with the
+outline colour. From version 14 the same member keeps these objects as
+they were, so opened again in TraceDraw the fill, the colours, the
+arrowheads, the outline fill and overprint are all back; files of
+versions 7 to 13 open with the stand-ins.
+
+The document palette (with the names its colours go by), the spot inks,
+the colour styles and the object styles have no record written yet
+either, nor has the object style an object follows. From version 14
+the file carries them in members of its own (`tracedraw/document.json`,
+and the object's style in `tracedraw/data.json`), so opened again in
+TraceDraw they are all back and a spot colour names its ink again;
+other programs do not see them, and files of versions 7 to 13 lose
+them. A palette or ink the file itself gives wins over the member's.
+
+## Open drawings keep their files (Windows, #2130)
+
+On Windows the file of every open drawing (the front tab's and the
+others') is kept open for reading for as long as the drawing is open
+under that name, shared with programs that read or write it but not with
+a delete, a rename or a move (`file_hold.rs`). The Explorer then refuses
+to delete, rename or move the file, or to replace it with another, and
+says it is open in TraceDraw. Save writes the file in place, so it goes
+on as before, and other programs still read the file (the thumbnail in
+the Explorer, a backup, a second TraceDraw window). The hold ends when
+the drawing is closed or saved under another name, and when TraceDraw
+ends. A drawing opened from a file it does not save to (a `.cdr`, an
+SVG, a PDF) holds that file until it is saved under a name of its own.
+A drawing never saved and one opened from a template hold nothing. A
+file that cannot be opened for the hold (it is gone, or its folder went
+away) is not held; it is tried again when the drawing is saved.
+
+On Linux and macOS nothing is kept open: these systems have no such
+hold, a file deleted there only loses its name while a program has it
+open, and Save writes it again.
+
+The open drawings are compared with the holds once a frame (paths only);
+a file is opened only when a drawing was opened, closed or saved under
+another name.
+
+## Combine Files and Save Pages as Files (#3358)
+
+- File > Combine Files... picks one or more drawings (`.tdraw`, `.cdr`,
+  `.cdt`, `.cdrt`, `.cmx`) and adds every page of each, in the order
+  picked, after the last page of the open drawing: the page's name and
+  size, and its objects (the objects of all its layers, in their order, on
+  one layer named as its first). The symbols those objects show come
+  along, carried fonts too, and imported colours follow the colour
+  management policy of File > Import. All of it is one undo step; the
+  first page added becomes the current page and the status bar says how
+  many pages came from how many files. A file that cannot be read is left
+  out and named on the status bar.
+- File > Save Pages as Files... asks for a file name and saves each page
+  as a TraceDraw drawing beside it, named after it with the page number
+  (`Poster-1.tdraw`, `Poster-2.tdraw`). Each holds that page with its
+  layers, guides and background, and what the drawing keeps for all its
+  pages (symbols, styles, colours, inks, fonts). The open drawing stays as
+  it was, unsaved changes and all.
+- `combine_files::tests::pages_saved_as_files_combine_back`
+
 ## Checks
+
+- `files::tests::a_failed_write_keeps_the_file_it_was_replacing`
+- Each open drawing's file is held from the frame after it is opened or
+  saved until it is closed or saved under another name, in the front tab
+  or another, the file a drawing was opened from until it is saved under
+  its own name; an untitled drawing holds nothing
+  (`documents::tests::open_drawings_hold_their_files_until_closed_or_renamed`,
+  `file_hold::tests::holds_follow_the_open_drawings`). On Windows a held
+  file cannot be deleted, renamed or replaced and is still read and
+  written in place
+  (`file_hold::tests::a_held_file_cannot_be_deleted_or_renamed_but_is_saved`,
+  run on the Windows build by `scripts/windows/spell-check`).
 
 - Given a folder with a subfolder, a `.cdr` and a `.txt` file, the
   CD Draw type lists the subfolder only and CDR the subfolder and the
@@ -108,6 +329,10 @@ What each version's file holds is in `docs/cdr-format.md`, Writing.
   14, after which Ctrl+S saves without asking; versions 3 and 99 are
   saved as 14 and 27
   (`ui::save_as::tests::a_drawing_opened_from_a_cdr_file_keeps_its_version`).
+- Options set to version 15 and `.cdr` for new drawings: Ctrl+Shift+S on
+  a new drawing opens Save As at CDR version 15; with the defaults it
+  opens at TraceDraw, version 27 for `.cdr`
+  (`pick_drag_tests::save_as_starts_at_the_cdr_type_and_version_the_options_set`).
 - A drawing with a CMYK profile offers it by name and size; saved with
   the box on, the version 27 file holds the profile, with the box off it
   does not, and the next Save As keeps the box off
@@ -125,5 +350,79 @@ What each version's file holds is in `docs/cdr-format.md`, Writing.
   (`ui::save_as::tests::linux_folder_names_come_from_the_users_settings`).
 - Every version from 7 to 22 reads back with its pages, layers, objects,
   text runs and alignment (`write::tests` in `crates/cdr`).
+- A line of several colours saved as `.cdr` 16 to 27 holds a table of
+  its looks: the plain record (0, 0x04, `{"character":{}}`) for the
+  letters in the line's own look and its end, then one record per other
+  colour, complete (fill, angle, outline, the three fonts, shifts) and
+  marked as applying (0x3fff, 0x14); a colour met twice has one record,
+  and a text of one look keeps the plain record alone, so the program
+  that reads `.cdr` files keeps the colours (#1297, #1379;
+  `write::tests::runs_of_their_own_colour_are_a_table_of_looks_marked_as_applying`).
+  With Embed fonts on, the run styles name the embedded face exactly as
+  the paragraph's style does and the font table is the one a text of one
+  colour gets (`two_colours_name_the_embedded_font_as_one_colour_does`).
+  `tracedraw-cli check` reports a run style marked as applying no member.
+- With Embed fonts on, each embedded font is listed and embedded as the
+  face its file holds: the font table entry, the embedding's face block
+  and its font header carry the font's own weight and slant (a bold
+  file drawing regular text is listed bold, an upright light file
+  drawing bold italic text light and upright), one entry per face file
+  however many styles of the text it draws; the text's own style keeps a
+  font record beside it. The kind of the font (2 TrueType, 4 signed
+  TrueType, 5 PostScript outlines) and its version string go into the
+  table, the embedding and every font style that names it, and the
+  records and entries of underlined faces carry the underline bit, as
+  the files the program that reads `.cdr` files saves have them (#1455,
+  #1484; `write::tests::a_face_is_listed_as_the_face_its_font_file_holds`,
+  `write::tests::bold_text_in_a_light_face_is_written_as_the_family_bold`).
+- Text drawn by another face of its font than the one it asks for, a
+  face TraceDraw draws as it is, is saved to `.cdr` as that face (with
+  or without Embed fonts): regular Khand text whose only installed file
+  is Khand Bold, drawn bold, is saved as Khand bold (style `weight` 4096
+  and the bold face's font record), as the program that reads `.cdr`
+  files saves the same drawing. Saved as regular beside the embedded
+  bold face, that program asked for "Khand-Normal", reported it missing
+  although Khand was installed and dropped the embedded font when saving
+  again. A face told by its style bits within its family (bold, italic)
+  or by its weight within its typographic family ("Khand Medium" drawing
+  "Khand" is saved at 500); bold that TraceDraw makes by thickening a
+  face stays as the text asks. The text reads back as that face (#1733;
+  `write::tests::regular_text_drawn_by_the_bold_file_is_written_bold`,
+  `write::tests::text_is_written_as_the_face_that_draws_it`).
+- Italic text whose font has no italic face, which TraceDraw slants
+  itself, is saved to `.cdr` upright, as the upright face that draws it
+  and that Embed fonts embeds: "RAJ 100" Bold Italic with only the
+  "RAJ 100" Bold file is saved as "RAJ 100" bold (style `italic` 0,
+  `weight` 4096, no italic font record or font table entry); the same
+  for the other weights ("Khand Light" Italic is saved as "Khand" at
+  300). Saved italic, the program that reads `.cdr` files looked for
+  "RAJ 100-Bold-Italic", a face neither the file nor the system has,
+  reported it missing and drew "RAJ 100-Bold"; it offers no italic for
+  such a font itself, so it shows the text upright. From version 14
+  the file's own member (`tracedraw/effects.json`) keeps the text, so
+  TraceDraw opens it italic again; a file saved again elsewhere opens
+  upright (#1733;
+  `write::tests::italic_text_slanted_from_an_upright_file_is_written_upright`,
+  `write::tests::italic_text_of_a_weight_without_an_italic_face_is_written_upright`).
+- A version 16+ `.cdr` that the program reading `.cdr` files saved again
+  from a TraceDraw file, with embedded fonts, opens with its texts: its
+  run records marked as applying nothing still carry a style string,
+  which TraceDraw 0.29.0 did not read, skipping every text (#1467, read
+  since 0.30.0; `write::tests::a_run_record_of_no_marks_is_read_with_its_style_string`).
+- A line of more than 128 colours saved as `.cdr` in any version keeps
+  the colours of its first 128 and gives the letters of the others the
+  line's first colour: a letter names its record in 7 bits
+  (`a_line_of_more_looks_than_records_stays_readable`).
+- A picture saved as `.cdr` has its outline nodes marked as a curve's
+  (0x0c, 0x44, 0x44, 0x44, 0x48), as the files of the program that reads
+  `.cdr` files have them; unmarked, a click on the picture closed that
+  program (#1226; `write::tests::bitmap_objects_carry_their_pixel_size`,
+  `check::tests::bitmap_outlines_need_node_marks`).
+- A picture or shape without an outline saved as `.cdr` 16 to 27 holds,
+  in its style string, the outline the program's own files give such
+  objects (every member, width 0, no type); the outline type 1 TraceDraw
+  wrote is in no file of that program, and the checker reports it (#1226;
+  `write::tests::objects_without_an_outline_write_the_files_outline_of_width_0`,
+  `check::tests::style_strings_hold_no_outline_type_but_0`).
 - Checked on screen: the dialog with its shortcuts, list, type list,
   version and stars; Save as CDR wrote the file in the folder shown.

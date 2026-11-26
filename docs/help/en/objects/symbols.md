@@ -18,10 +18,42 @@ The selection becomes the first instance of the new symbol.
 
 ## Placing instances {#insert}
 
-The panel lists the symbols of the drawing, each with the number of its
-instances. Click [[docker.insert]] beside a symbol to place a new instance, or
+The panel lists the symbols of the drawing, each with a small picture of its
+objects and the number of its instances. Click [[docker.insert]] beside a symbol to place a new instance, or
 choose [[menu.object > menu.object.symbol > menu.object.symbol_insert]].
 Instances can be moved, scaled and turned like any object.
+
+An instance copied in one drawing and pasted in another brings its symbol
+along (and the symbols it shows), so it shows the same objects there.
+Pasting again reuses the symbol already brought.
+
+## Editing a symbol {#edit}
+
+Click [[docker.edit_symbol]] beside a symbol in the panel, choose
+[[menu.object.symbol_edit]] on the right-click menu of an instance or
+[[menu.object > menu.object.symbol > menu.object.symbol_edit]], or
+double-click an instance with the Pick tool. The symbol's objects open
+alone on a clean sheet while the rest of the drawing is hidden:
+move, reshape, recolour, add or delete objects as usual. Click
+[[clip.finish]] on the bar at the top left of the drawing window, choose
+[[menu.object > menu.object.symbol > menu.object.symbol_finish]], or press
+<kbd>Esc</kbd> with nothing selected: every instance shows the change and
+the view returns to the page. Undo steps back through the edit as through
+any other. Click [[docker.cancel_symbol_edit]] beside [[clip.finish]] on
+the bar or in the panel to drop the changes and leave the symbol as it
+was.
+
+Selected instances, and groups holding them, are outlined around the objects
+they show, not around a square.
+
+## Copying a symbol {#duplicate}
+
+Click [[docker.duplicate_symbol]] beside a symbol in the panel to make a new
+symbol with the same objects, named after the first. Edit the copy without
+changing the instances of the first.
+
+A symbol cannot hold an instance of itself; Finish says so and the edit
+goes on until that instance is removed.
 
 ## Turning instances back into objects {#revert}
 

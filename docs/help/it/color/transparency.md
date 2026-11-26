@@ -9,7 +9,7 @@ seguire un motivo o una texture.
 - Con lo strumento [[tool.transparency]]: fai clic su un oggetto, poi scegli
   un tipo di trasparenza nella barra delle proprietà, oppure trascina
   attraverso l'oggetto per una trasparenza sfumata da opaca (dove premi) a
-  trasparente (dove rilasci).
+  trasparente (dove rilasci). I nodi della sfumatura compaiono poi sull'oggetto, come con lo strumento [[tool.interactive_fill]]: trascina l'inizio, la fine o il nodo rotondo di inclinazione; trascina la barra tra due nodi (il punto medio) per spostare dove la fusione è a metà; fai doppio clic sulla linea per aggiungere un nodo, su un nodo per rimuoverlo.
 - Nella sezione [[docker.transparency]] del pannello [[docker.properties]].
 
 ## Impostazioni {#settings}
@@ -30,6 +30,8 @@ seguire un motivo o una texture.
   [[transparency.target_outline]] o a [[transparency.target_all]].
 - **Congela**: mantiene ciò che traspare così com'è ora, anche se gli oggetti
   sottostanti si spostano.
+
+Per toglierla, fate clic su [[toolbar.clear_transparency]] alla fine della barra delle proprietà (oppure scegliete [[transparency.none]] come tipo).
 
 Per copiare la trasparenza di un altro oggetto, usa
 [[menu.object > menu.object.copy_effect > menu.object.copy_transparency_from]].

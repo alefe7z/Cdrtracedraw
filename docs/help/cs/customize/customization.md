@@ -1,5 +1,7 @@
 # Možnosti přizpůsobení
 
+> *Strojový překlad: tato stránka může zaostávat za anglickou verzí.*
+
 [[menu.tools > menu.tools.options > menu.tools.options_customization]]
 nastavuje vzhled rozhraní, vaše vlastní klávesové zkratky, zobrazené lišty a
 chování barevné palety.
@@ -11,7 +13,11 @@ chování barevné palety.
 - [[options.center_dialogs]]: dialogová okna se otevírají uprostřed okna; po
   vypnutí se otevírají tam, kde jste je naposledy nechali.
 - [[options.ui_shadows]] (méně stínů pomůže pomalejší grafice).
+- [[options.translucent_menus]]: open menus let the drawing show through them, at the [[options.menu_opacity]] beside the box (off by default).
 - [[options.colored_icons]]: každá skupina nástrojů dostane vlastní barvu.
+- [[options.docker_tabs_icons_only]]: karty panelů po stranách okna ukazují
+  jen obrázek, název je v tipu. Vypnuto ukazují obrázek i název a sloupec
+  s více kartami, než se vejde, se posouvá.
 - [[options.ui_size]]: jak velké jsou nabídky, lišty, ikony a panely vzhledem
   ke škálování, které systém monitoru dává (výchozí 100 %).
   [[options.reset_to_default]] se vrátí na 100 %. Velikost rozhraní nikdy
@@ -41,6 +47,14 @@ vaši zkratku. **x** vedle zkratky ji odebere a obnovení výchozích hodnot
 odebere všechny. Klávesy nástrojů jsou písmeno nebo <kbd>Shift</kbd> a
 písmeno. Viz [Klávesové zkratky](../reference/keyboard-shortcuts.md).
 
+Příkaz může mít více zkratek: nová klávesa se přidá k těm, které už má
+(vestavěná klávesa funguje dál vedle ní), a každá klávesa má vlastní tlačítko
+pro odstranění. Zkratky přijímají i tlačítka panelů, která spouštějí příkaz
+nabídky (Nový, Otevřít, Uložit, Zpět, Přiblížit a další), se stejnými
+klávesami jako příkaz nabídky, a také řádky, které nabídky ukazují jen někdy.
+Seznam **Tlačítka panelů nástrojů** obsahuje všechna tlačítka panelů Standardní
+a Lupa: tlačítko odebrané z panelu odtud přetáhněte zpět.
+
 ## Příkazové lišty {#command-bars}
 
 ![Stránka Příkazové lišty v možnostech přizpůsobení](../../img/customize-customization-command-bars.png)
@@ -53,14 +67,31 @@ písmeno. Viz [Klávesové zkratky](../reference/keyboard-shortcuts.md).
 [[options.reset]] vrátí lišty na místo. V části [[options.other]]:
 [[bars.lock]] a [[options.show_outline_flyout]].
 
+[[options.toolbar_drag_hint]]
+
 ## Barevná paleta {#color-palette}
 
 ![Stránka Barevná paleta v možnostech přizpůsobení](../../img/customize-customization-color-palette.png)
 
 - [[options.palette_auto_update]] a [[options.palette_show_document]] (obojí
   zapnuto).
+- [[options.palette_position]] (Nahoře, Dole, Vlevo, Vpravo nebo Plovoucí)
+  výchozí palety, jak ji nastavuje její vlastní nabídka; při zamčených
+  panelech nástrojů se nemění.
 - [[options.palette_swatches]]: [[options.palette_no_color]] (zapnuto) a co
   dělá [[options.palette_right_button]]: [[options.palette_set_outline]]
   (výchozí) nebo otevře [[options.palette_context_menu]].
 
 Viz [Barevné palety](../color/palettes.md).
+
+## Kontextové nabídky {#context-menus}
+
+V části Přizpůsobení vyberte [[options.context_menus]] a spravujte 32 umístění kontextových nabídek samostatně. Vyberte umístění pomocí [[options.context_menu_scene]], potom pomocí [[options.context_menu_search]] vyhledejte operaci a zrušením jejího zaškrtnutí ji na tomto místě skryjte. Operace zůstávají v seznamu, i když je aktuální výběr nemůže použít.
+
+Ve výchozím nastavení jsou zobrazeny všechny operace. Každé umístění má vlastní volby: skrytí operace objektu na plátně neovlivní panel Objekty. Dynamické seznamy, například cílové vrstvy a kolekce písem, se spravují jako jedna operace, takže změna názvů volby neobnoví.
+
+[[options.context_menu_reset]] obnoví vybranou nabídku a [[options.context_menu_reset_all]] obnoví všechny nabídky. [[dialog.ok]] uloží volby do nastavení aplikace; [[dialog.cancel]], Escape nebo tlačítko pro zavření obnoví volby z doby otevření Nastavení. Hlavní nabídky, klávesové zkratky a hledání příkazů nadále nabízejí původní příkazy.
+
+Rozbalením podnabídky zobrazíte její odsazené položky. Přetažením úchytu řádku nebo pomocí [[options.context_menu_move_up]] a [[options.context_menu_move_down]] změníte pořadí položek na stejné úrovni. Nadřazená nabídka se přesune i se svými položkami; položky nelze přesouvat pod jiného rodiče. Hledání ponechá viditelnou cestu k odpovídajícím položkám. Obnovení nabídky resetuje viditelnost i pořadí a zrušení Možností vrátí obě nastavení do stavu při otevření dialogu.
+
+Nabídka vzorku palety dokumentu a její položka ve Správci palet mají samostatná nastavení. Dynamické cíle si zachovávají vlastní pořadí; seznam stylů dokumentu ve Stylech objektů zůstává mezi statickými operacemi. Nové operace přidané v pozdější verzi jsou viditelné a následují za uloženými položkami přizpůsobené úrovně.

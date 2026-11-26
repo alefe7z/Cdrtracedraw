@@ -5,6 +5,7 @@
 //! then what to click next. Changes apply to the selected callouts and
 //! to the ones made next.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::callouts::CalloutShape;
 use crate::i18n::tr;
@@ -27,13 +28,13 @@ fn dim(ui: &mut Ui, text: String) {
 /// A head at the start of a line, pointing left.
 fn head_label(a: &Arrowhead) -> String {
     match a {
-        Arrowhead::None => "\u{2500}".into(),
-        Arrowhead::Arrow => "\u{25C0}\u{2500}".into(),
-        Arrowhead::OpenArrow => "<\u{2500}".into(),
-        Arrowhead::Circle => "\u{25CF}\u{2500}".into(),
-        Arrowhead::Square => "\u{25A0}\u{2500}".into(),
-        Arrowhead::Bar => "|\u{2500}".into(),
-        Arrowhead::Diamond => "\u{25C6}\u{2500}".into(),
+        Arrowhead::None => "\u{2015}".into(),
+        Arrowhead::Arrow => "\u{25C0}\u{2015}".into(),
+        Arrowhead::OpenArrow => "<\u{2015}".into(),
+        Arrowhead::Circle => "\u{23FA}\u{2015}".into(),
+        Arrowhead::Square => "\u{25A0}\u{2015}".into(),
+        Arrowhead::Bar => "|\u{2015}".into(),
+        Arrowhead::Diamond => "\u{2666}\u{2015}".into(),
         Arrowhead::Custom { name, .. } => name.clone(),
     }
 }
@@ -43,14 +44,14 @@ pub fn callout_bar(app: &mut App, ui: &mut Ui) {
     let style = app.callout_style_shown();
     label_pic(ui, Pic::Pen, &tr("toolbar.outline_width"));
     let mut width = None;
-    egui::ComboBox::from_id_salt("callout_width")
+    crate::ui::keynav::ComboBox::from_id_salt("callout_width")
         .selected_text(outline_text(app, Some(style.width)))
         .width(88.0)
         .height(400.0)
         .show_ui(ui, |ui| {
             let hair = tracedraw_core::Stroke::HAIRLINE;
             if ui
-                .selectable_label((style.width - hair).abs() < 1e-9, tr("toolbar.hairline"))
+                .iselectable((style.width - hair).abs() < 1e-9, "toolbar.hairline")
                 .clicked()
             {
                 width = Some(hair);
@@ -63,16 +64,22 @@ pub fn callout_bar(app: &mut App, ui: &mut Ui) {
                     width = Some(w);
                 }
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("toolbar.outline_width"));
     if let Some(w) = width {
         app.set_callout_style(|s| s.width = w);
     }
     let mut dash = None;
-    egui::ComboBox::from_id_salt("callout_dash")
+    crate::ui::keynav::ComboBox::from_id_salt("callout_dash")
         .selected_text(dash_label(&style.dash))
         .width(96.0)
         .show_ui(ui, |ui| {
-            for d in DASHES {
+            // A callout's line has no caps to draw dots with.
+            for d in DASHES
+                .iter()
+                .filter(|d| !tracedraw_core::Stroke::dash_has_dots(d))
+            {
                 if ui
                     .selectable_label(style.dash.as_slice() == *d, dash_label(d))
                     .clicked()
@@ -87,7 +94,7 @@ pub fn callout_bar(app: &mut App, ui: &mut Ui) {
         app.set_callout_style(|s| s.dash = d.clone());
     }
     let mut head = None;
-    egui::ComboBox::from_id_salt("callout_head")
+    crate::ui::keynav::ComboBox::from_id_salt("callout_head")
         .selected_text(head_label(&style.head))
         .width(56.0)
         .show_ui(ui, |ui| {
@@ -108,14 +115,16 @@ pub fn callout_bar(app: &mut App, ui: &mut Ui) {
     sep(ui);
     dim(ui, tr("callout.shape"));
     let mut shape = style.shape;
-    egui::ComboBox::from_id_salt("callout_shape")
+    crate::ui::keynav::ComboBox::from_id_salt("callout_shape")
         .selected_text(tr(shape.key()))
         .width(120.0)
         .show_ui(ui, |ui| {
             for s in CalloutShape::ALL {
                 ui.selectable_value(&mut shape, s, tr(s.key()));
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("callout.shape"));
     if shape != style.shape {
         app.set_callout_style(|s| s.shape = shape);
     }
@@ -195,7 +204,7 @@ mod tests {
             });
             out.textures_delta.clear();
         }
-        assert_eq!(head_label(&Arrowhead::Arrow), "\u{25C0}\u{2500}");
+        assert_eq!(head_label(&Arrowhead::Arrow), "\u{25C0}\u{2015}");
         assert_eq!(next_step(&app), tr("callout.text"));
     }
 }

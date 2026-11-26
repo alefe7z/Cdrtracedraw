@@ -7,6 +7,10 @@ se muestran en la barra de propiedades: **seleccionar** (tomar una muestra) y
 aplicar; haga clic en el botón de seleccionar para tomar otra muestra.
 <kbd>Esc</kbd> descarta la muestra y vuelve a la herramienta [[tool.pick]].
 
+El puntero es una pipeta mientras la herramienta toma muestras y un bote de
+pintura mientras aplica. Las imágenes dan su color incluso dentro de un grupo o
+un marco.
+
 ## Cuentagotas de color {#color-eyedropper}
 
 1. Elija la herramienta [[tool.color_eyedropper]].
@@ -21,6 +25,12 @@ aplicar; haga clic en el botón de seleccionar para tomar otra muestra.
    clic dentro de una forma cerrada vacía la rellena.
 
 La barra de propiedades muestra el color tomado.
+
+Mientras mueve el puntero para tomar un color, un pequeño cuadro a su lado
+muestra el color que hay debajo: una muestra, el nombre del color si es un
+color de la paleta o una tinta plana, sus valores en el modo de color del
+dibujo (CMYK o RGB) y su valor hexadecimal. El cuentagotas de un selector de
+color muestra el mismo cuadro.
 
 ## Cuentagotas de atributos {#attributes-eyedropper}
 

@@ -48,6 +48,17 @@ Přechod prolíná dvě nebo více barev. Jeho nastavení v oddílu výplně pan
 
 Pruh pod typem ukazuje celý průběh barev tak, jak se vykreslí.
 
+## Dialog Upravit výplň {#edit-fill}
+
+<kbd>F11</kbd> otevře dialog [[edit_fill.title]] s výplní výběru. U přechodu
+ukazuje náhled, [[edit_fill.fill_picker]], typ, opakování a pás barev:
+klepnutím uzel vyberete, tažením posunete, poklepáním uzel přidáte nebo
+odstraníte. Pod pásem je barva, průhlednost, poloha a [[edit_fill.midpoint]]
+uzlu a [[edit_fill.reverse]]. [[edit_fill.transform]] obsahuje otočení, střed
+a okraj. **OK** použije, co jste změnili, i s [[edit_fill.overprint]]. Dokud je dialogové okno otevřené, výběr ukazuje výplň průběžně při změnách; **Zrušit** nebo <kbd>Esc</kbd> vrátí původní výplň.
+
+![Dialog Upravit výplň](../../img/color-fills-edit-fill.png)
+
 ## Nástroj Interaktivní výplň {#interactive-fill}
 
 Nástroj [[tool.interactive_fill]] (<kbd>G</kbd>) upravuje výplně přímo na
@@ -72,9 +83,9 @@ kterou tvoří několik překrývajících se objektů, tím, že z této oblast
 vytvoří nový objekt. Okolní objekty zůstanou, jak jsou.
 
 1. Zvolte nástroj [[tool.area_fill]].
-2. Na liště vlastností zvolte výplň a obrys: **Použít výchozí** (výplň a
-   obrys nových objektů; je-li to žádná výplň, použije se barva, aby byla
-   oblast vidět), **Určit** (barva a u obrysu vedle ní šířka) nebo **Žádná**.
+2. Na liště vlastností zvolte výplň a obrys: **Určit** (barva a u obrysu
+   vedle ní šířka), **Použít výchozí** (výplň a obrys nových objektů; je-li to
+   žádná výplň, použije se barva, aby byla oblast vidět) nebo **Žádná**.
 3. Klikněte dovnitř oblasti.
 
 Nový objekt se umístí navrch aktivní vrstvy a je vybraný. Kliknutí na obrys
@@ -106,6 +117,9 @@ výplň odebere. Změna řádků a sloupců sítě zachová její barvy.
 - Výplň [[docker.fill_texture]] je generovaná, přirozeně působící textura:
   [[texture.clouds]], [[texture.marble]], [[texture.noise]] nebo
   [[texture.wood]], s vlastními barvami a měřítkem.
+- [[texture.holographic]] a [[texture.holo_glitter]] dávají pevný vzhled holografické fólie: duhové barvy mezi
+  tmavými a světlými místy (barvy A a B), třpytky se zrnky. Nemění se s úhlem
+  pohledu; PDF a SVG je nesou jako obrázek.
 
 ## Více výplní na jednom objektu {#several-fills}
 

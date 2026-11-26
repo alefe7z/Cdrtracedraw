@@ -2,7 +2,9 @@
 
 Symmetry draws live mirrored copies of an object across one or more mirror
 lines. The copies follow every change you make to the original, so you draw
-one half (or one slice) and see the whole. The commands are in
+one half (or one slice) and see the whole. Each copy looks like the
+original: its fill, outline and transparency, and what its other effects
+draw (a contour, a blend, an extrusion), are mirrored with it. The commands are in
 [[menu.object > menu.object.symmetry]].
 
 ## To create a symmetry {#create}
@@ -14,22 +16,40 @@ one half (or one slice) and see the whole. The commands are in
 A vertical mirror line is placed at the right edge of the object, so the copy
 appears next to it, and CD Draw goes straight into editing the symmetry.
 
+You can also start from an empty page: with nothing selected,
+[[menu.object.symmetry_create]] places the mirror line down the middle of the
+page and starts editing an empty symmetry. Everything you draw joins it and is
+mirrored. Finish with nothing drawn and the empty symmetry goes away.
+
 ## Editing a symmetry {#edit}
 
 [[menu.object.symmetry_edit]] (<kbd>Alt+E</kbd>) edits the symmetry of the
-selected object. The original is outlined in red, and a bar at the top left of
-the drawing window sets:
+selected object. A bar at the top left of the drawing window sets:
 
 - the number of mirror lines, 1 to 12, spread evenly around the center. With
   more lines you get a kaleidoscope: with *n* lines there are 2*n* - 1 copies;
 - the center (X and Y);
-- the angle of the first line (0 to 360 degrees).
+- the angle of the first line (0 to 360 degrees);
+- **Rotational** (off): the copies are turned round the center instead of
+  mirrored, as many objects in all as there are lines (two at least), so a
+  shape repeats round a circle the same way up;
+- Show full preview (copies drawn in full, or as red outlines when off) and
+  Show symmetry lines.
 
-Edit the original as usual, with any tool; the copies follow. While an object
-with symmetry is selected, its mirror lines show as dashed lines.
+Edit the originals as usual, with any tool; the copies follow. A click or a
+marquee picks one of the originals inside the symmetry, and objects you draw,
+paste or duplicate join it. Drag a mirror line with the Pick tool to move the
+lines; click a line to show round handles at its ends and drag one to turn
+the lines. While an object with symmetry is selected or edited, its mirror
+lines show as dashed lines.
+
+The [[tool.area_fill]] tool fills an area in every copy at once: click the
+area in any copy.
 
 Click Finish on the bar, or choose [[menu.object.symmetry_finish]]
 (<kbd>Alt+Shift+E</kbd>), to stop editing.
+
+![A rotational symmetry of six copies turned round the centre](../../img/objects-symmetry-rotational.png)
 
 ## Removing or keeping the copies {#remove}
 

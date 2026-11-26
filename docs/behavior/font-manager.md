@@ -36,9 +36,10 @@ dialogs it keeps the rest of the application waiting until it closes.
 - **Right side**: the sample text (empty: each face shows its family's
   name) with a list of presets, and a Search field matching family,
   style or PostScript name. Under them the faces of the library, sorted
-  by family: the family's name large and grey, drawn in its first face,
+  by family: the family's name large and faded, drawn in its first face,
   then a card per face with "Family (Style, Width)" above the sample
-  drawn in that face, a technology mark on the right (O for OpenType and
+  drawn in that face (samples in the theme's text colour, light on the
+  dark themes, #380), a technology mark on the right (O for OpenType and
   variable fonts, TT for TrueType) and a bar at the right edge, green
   when installed and grey when not, with a lock on the system's own
   fonts. The pointer over a card shows the family and its status. Only
@@ -52,25 +53,55 @@ dialogs it keeps the rest of the application waiting until it closes.
   action, or "Loading fonts..."), and a slider for the sample size.
 - **Details** (Show Details): family, style, PostScript name, version,
   file, technology, embedding rights, weight, width, glyph count,
-  scripts, OpenType features and status of the face clicked last.
+  scripts, OpenType features and status of the face clicked last. The
+  pane takes its 270 px from the list: the window keeps its width when it
+  is shown (#381).
 - Fonts the drawing names that are not installed are listed above the
   faces in orange, as in the status bar.
 
 ## Installing
 
 - A folder added is scanned for font files (TTF, OTF, TTC, OTC) three
-  levels down, off the interface thread; its faces show as not
-  installed unless their file is already loaded.
+  levels down, off the interface thread, and its fonts are loaded for
+  TraceDraw at once and at every start while the folder is in the
+  libraries, so they can be used in drawings without Install. Remove
+  Folder takes them out again, except files installed on their own or
+  in another folder still added; the system's fonts are never taken out
+  (#866, `ui::font_manager::tests::the_fonts_of_an_added_folder_are_usable`).
 - Install loads the picked faces' files into the font database for this
   session and keeps their paths in the settings: CD Draw loads them
   again at every start. Add Font installs one file at once.
 - Uninstall takes out files installed for CD Draw; the system's own
+  session and keeps their paths in the settings: TraceDraw loads them
+  again at every start. Add Font installs one file at once and keeps it
+  for the next start on every platform (#1400): a file of the file
+  system is remembered where it is; a font the Android picker returned
+  (a content URI, which the font database cannot open and which is not a
+  file at the next start) is copied into `fonts` in the app's settings
+  folder and installed from the copy (a different font of the same name
+  gets "name (2).ttf"); in the browser it is installed from the upload
+  and kept in the page's IndexedDB (database `tracedraw-fonts`, store
+  `fonts`) under `/fonts/<file name>`, the name the font list shows it
+  by, and installed again when the page opens next. A file that is not a
+  font is not kept. Uninstall removes the copy or the stored font too.
+- Uninstall takes out files installed for TraceDraw; the system's own
   fonts (in the operating system's font folders) are protected and are
   never uninstalled.
 - Folders, installed files, Favorites, collections, the sample text and
   size and Show Details are kept in the settings.
+- In the browser and the Android app, where no folder can be read, Add
+  Folder opens the picker for several font files at once and adds each
+  as Add Font does; its tip says so (#1399).
 
 ## Checks
+
+- Add Font keeps the font for the next start: a picked Android document
+  is copied and installed from the copy, a browser upload is stored
+  under `/fonts/<name>` and listed as installed for TraceDraw, a desktop
+  file stays where it is; the next start installs them; Uninstall
+  removes a copy; a file that is not a font is not kept
+  (`ui::font_manager::tests::an_added_font_is_kept_for_the_next_start_everywhere`,
+  `catalog::tests::named_fonts_are_installed_and_uninstalled_by_their_name`).
 
 - A face is described from its file: family, weight, width class,
   glyph count, Latin script, PostScript name and version; embedding
@@ -92,4 +123,8 @@ dialogs it keeps the rest of the application waiting until it closes.
   (`ui::font_manager::tests::collections_and_favorites_list_the_faces_they_keep`,
   `ui::font_manager::tests::a_folder_lists_its_fonts_installed_or_not`).
 - The window draws with faces and details
-  (`ui::font_manager::tests::the_window_draws_with_faces_and_details`).
+  (`ui::font_manager::tests::the_window_draws_with_faces_and_details`),
+  keeps its width when the details pane is shown
+  (`ui::font_manager::tests::the_details_pane_does_not_widen_the_window`)
+  and draws the samples in the theme's text colour
+  (`ui::font_manager::tests::samples_take_the_theme_text_colour`).

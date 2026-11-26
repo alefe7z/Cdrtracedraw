@@ -21,6 +21,11 @@ writes the AutoCAD 2000 (AC1015) dialect that every CAD reader accepts.
   and MTEXT (height to points, rotation, alignment, formatting codes
   stripped, `%%d`, `%%p`, `%%c` symbols), POINT (0.5 mm dot), INSERT
   (block as a group with position, scale and rotation, nested up to 16).
+  An ARC of any radius is a handful of curves: its tolerance is 0.1 mm,
+  or a millionth of the radius on huge arcs, so a damaged radius of
+  1e300 no longer runs out of memory (#3338). The box of groups nested
+  deep is worked out without copying them, so a million objects of
+  blocks nested 15 deep open in about a second (#3340).
 - Outline width: lineweight 370 in 1/100 mm, or a polyline's constant
   width (43); otherwise a hairline.
 - Not imported: DIMENSION, LEADER, MLINE, IMAGE, 3D solids and regions
@@ -38,7 +43,16 @@ writes the AutoCAD 2000 (AC1015) dialect that every CAD reader accepts.
   and alignment kept); bitmaps are not written; clip frames write their
   frame and contents unclipped; live effects are baked.
 - A LAYER record per document layer (frozen when hidden, locked flag,
-  plot flag); names are made DXF-safe.
+  plot flag); names are made DXF-safe and kept apart when they differ
+  only in case (`walls` after `Walls` becomes `walls_2`).
+- What AutoCAD requires of an AC1015 file to open it (#2394): every
+  table (VPORT, LTYPE, LAYER, STYLE, VIEW, UCS, APPID, DIMSTYLE,
+  BLOCK_RECORD), the `*Model_Space` and `*Paper_Space` blocks, entities
+  owned by the model space (330), unique handles with the next free one
+  in `$HANDSEED`, the root dictionary with `ACAD_GROUP`, lineweights
+  (370) from AutoCAD's standard list. Text past ASCII is written as
+  `\U+XXXX`, which import reads back; a coordinate that is not a number
+  is written as 0.
 
 ## Checks
 
@@ -50,3 +64,7 @@ writes the AutoCAD 2000 (AC1015) dialect that every CAD reader accepts.
 - Export then import of a filled, outlined rectangle and a text gives a
   hatch, a polyline (red, 0.5 mm) and the text.
 - Malformed pairs and unknown entities never panic.
+- An exported page has all nine tables, both space blocks, unique handles
+  below `$HANDSEED`, every entity owned by the model space and only
+  standard lineweights; "Olá, ação €" is written in ASCII and read back
+  whole. The file passes ezdxf's audit with no errors or fixes.

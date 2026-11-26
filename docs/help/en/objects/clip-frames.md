@@ -13,22 +13,68 @@ taken out again. The commands are in [[menu.object > menu.object.clip_frame]].
 
 The objects keep their position. You can also drag the objects onto the frame
 with the right mouse button and choose to place them inside; see
-[Dragging with the right button](selecting.md#right-drag).
+[Dragging with the right button](selecting.md#right-drag), or drag them onto
+the frame with the [[tool.pick]] tool holding <kbd>W</kbd> or <kbd>Alt</kbd>
+before you release.
+
+Holding <kbd>W</kbd> while you drag, any closed object under the pointer can
+take the objects too: it becomes a new clip frame holding them, as a drop on
+its row in the Objects panel makes it. A clip frame inside another one takes
+objects the same way, from the page or from the Objects panel.
+
+To give other objects the same contents as a clip frame, select them, choose
+Object > Clip Frame > Copy Contents From and click the clip frame: each
+selected object becomes a clip frame holding a copy of its contents, placed
+as they sit in the frame clicked.
 
 ## Editing what is inside {#edit-contents}
 
 - [[menu.object.clip_frame_edit]] enters the frame: only the objects inside
   can be edited, the rest of the page is dimmed and the frame shows as an
-  outline. [[menu.object.clip_frame_finish]], or the button on the property
-  bar, leaves it.
+  outline. [[menu.object.clip_frame_finish]], the button on the property
+  bar, or <kbd>Ctrl</kbd>+click off the objects inside leaves it.
 - [[menu.object.clip_frame_extract]] makes the objects inside ordinary
   objects again; the frame stays, empty.
+- Right-click a frame for [[menu.object.clip_frame_edit]] and
+  [[menu.object.clip_frame_extract]]; while you edit, the right-click menu
+  (on the contents or the empty page) has [[menu.object.clip_frame_finish]].
+  <kbd>Ctrl+Shift+F3</kbd> enters the selected frame and leaves it again.
 - [[menu.object.clip_frame_lock]] (on at first): moving, scaling or rotating
   the frame takes the contents along. Turned off, the frame moves alone and
   the contents stay where they are on the page.
+- [[menu.object.clip_frame_fit_center]], [[menu.object.clip_frame_fit_proportional]],
+  [[menu.object.clip_frame_fill_proportional]] and
+  [[menu.object.clip_frame_stretch]] move the contents of each selected frame
+  to its middle, scale them to fit inside it or to cover it keeping their
+  proportions, or stretch them to its box. They are also on the bar shown
+  over a selected frame (Fit Contents) and can take shortcuts in
+  [Customization](../customize/customization.md).
 
-Double-clicking a frame with the [[tool.pick]] tool also enters it; see
+Double-clicking a frame with the [[tool.pick]] tool, or <kbd>Ctrl</kbd>+click
+on it, also enters it, with the object under the pointer selected; see
 [Focus mode](focus-mode.md).
+
+While you edit the contents, the dimmed objects outside the frame cannot be
+picked (by a click, a marquee, Select All or <kbd>Tab</kbd>). Undo stops at
+the start of the edit: undoing past it leaves the edit with the frame as it
+was; redo enters it again, and undoing Finish goes back into it. The frame's
+outline stays in view the whole time, in orange dashes, so the contents can
+be placed where the frame will show them.
+
+## Drawing inside a shape {#draw-inside}
+
+To draw straight into a shape instead of placing objects in it afterwards,
+select one closed shape (a rectangle, ellipse, polygon, closed curve or a
+frame), pick a drawing tool, such as Freehand, Bezier, Brush Strokes or
+Rectangle, and click [[toolbar.draw_inside]] at the end of its property bar.
+Draw as usual; the rest of the page waits out of reach. Click
+[[toolbar.draw_inside]] again, or Finish Editing Contents, and what you drew
+goes inside the shape, clipped by it.
+
+[[toolbar.draw_behind]], beside it, puts what you draw behind the selected
+objects of the layer instead of on top, or at the back of the layer when
+nothing there is selected. What you have just drawn is selected, so the next
+shape goes behind it in turn. Click it again to draw on top.
 
 ## Opacity masks {#opacity-mask}
 

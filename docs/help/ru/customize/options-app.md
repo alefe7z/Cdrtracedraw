@@ -12,6 +12,7 @@
 - [[options.show_new_document_dialog]] (включено): спрашивать параметры
   нового рисунка; см. [Создание рисунка](../get-started/new-document.md).
 - [[options.show_splash]] (включено).
+- [[options.hardware_acceleration]] (вкл.): окно рисуется видеокартой, выбранной рядом (сначала [[options.gpu_automatic]]); выкл. — программным рендерером компьютера. Действует со следующего запуска. Если окно так не открывается, TraceDraw запускается снова с программным рендерером, затем с OpenGL, и запоминает сработавший.
 - [[options.undo_levels]]: сколько шагов можно отменить (по умолчанию 150).
 
 ## Отображение {#display}
@@ -26,6 +27,11 @@
 - [[options.full_screen_preview]]: [[options.show_page_border]].
 - [[options.wheel_default_action]]: [[options.wheel_zoom]] (по умолчанию) или
   [[options.wheel_scroll]].
+- [[options.open_view]]: [[options.open_view_page]] (по умолчанию),
+  [[options.open_view_objects]], [[options.open_view_width]],
+  [[options.open_view_height]], [[options.open_view_actual]], [[options.open_view_percent]] или
+  [[options.open_view_saved]] (страница, место и масштаб, запоминаемые при
+  каждом сохранении файла TraceDraw).
 - [[options.ruler_calibration]]: приложите линейку к экрану и меняйте
   [[options.screen_resolution]], пока деления не совпадут, чтобы масштаб 100%
   показывал реальные размеры. [[options.reset]] возвращает 96.
@@ -49,6 +55,7 @@
 - [[options.node_shape]] для узлов [[options.node_cusp]],
   [[options.node_smooth]] и [[options.node_symmetrical]].
 - [[options.show_curve_direction]].
+- [[options.corner_widgets]].
 - [[options.colors]]: [[options.main_color]] выделенных узлов и маркеров и
   [[options.secondary_color]].
 - [[options.unselected_nodes_filled]].
@@ -93,8 +100,37 @@
 
 ![Страница «Текст» параметров CD Draw](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]: насколько <kbd>Ctrl+8</kbd> и
-  <kbd>Ctrl+2</kbd> увеличивают и уменьшают выделенный текст (1 пункт).
-- [[options.default_font]] и [[options.default_size]] нового текста.
-- [[menu.text.use_hyphenation]], [[menu.text.show_non_printing]] и
-  [[menu.text.show_text_frames]].
+На странице пять вкладок.
+
+- [[options.display]]: [[options.keyboard_text_increment]] (на сколько
+  <kbd>Ctrl+8</kbd> и <kbd>Ctrl+2</kbd> увеличивают и уменьшают выделенный
+  текст, 1 пункт), [[options.default_font]] и [[options.default_size]] нового
+  текста, а также [[menu.text.show_non_printing]].
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]: [[menu.text.show_text_frames]],
+  [[menu.text.use_hyphenation]] и [[options.hyphenation_patterns]]
+  (встроенные или словарь переносов для вашего языка).
+  - [[options.default_tab_spacing]]: куда переходит <kbd>Tab</kbd> в абзаце без собственных позиций табуляции (12,7 мм, полдюйма).
+- [[docker.fonts]]: [[options.show_recent_fonts]] вверху списков шрифтов,
+  [[options.recent_font_count]] (5, до 20) и
+  [[options.font_sample_size]].
+- [[options.spelling]]: [[writing.ignore_digits]], [[writing.ignore_capitals]]
+  и [[options.add_to_autocorrect]], чтобы слово, исправленное при проверке
+  орфографии, в следующий раз исправлялось при вводе; а также
+  [[options.dictionaries]], которые она использует, см.
+  [Словари](../text/writing-tools.md#dictionaries).
+- [[dialog.autocorrect]]: что исправляется при вводе; см.
+  [Автозамена](../text/writing-tools.md#autocorrect).
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

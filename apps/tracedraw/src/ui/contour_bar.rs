@@ -4,6 +4,7 @@
 //! colours; the object and colour accelerations. They show the selected
 //! contour and edit the selected contours live.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::contour_tool::{blend_key, join_key, ContourDirection};
 use crate::i18n::tr;
@@ -25,11 +26,10 @@ fn dim(ui: &mut Ui, text: String) {
 
 /// An acceleration slider, -100 to 100 %.
 fn accel(ui: &mut Ui, key: &str, v: &mut f64) -> bool {
-    dim(ui, tr(key));
     let mut p = (*v * 100.0).round() as i32;
-    let r = ui.add(crate::ui::Rail(
-        egui::Slider::new(&mut p, -100..=100).suffix(" %"),
-    ));
+    let r = crate::ui::toolbar::dim_labelled(ui, key, |ui| {
+        ui.add(crate::ui::Slider::new(&mut p, -100..=100).suffix(" %"))
+    });
     if r.changed() {
         *v = p as f64 / 100.0;
     }
@@ -38,42 +38,74 @@ fn accel(ui: &mut Ui, key: &str, v: &mut f64) -> bool {
 
 /// The controls, a group to a row.
 pub fn contour_controls(app: &mut App, ui: &mut Ui) {
+    contour_controls_in(app, ui, false);
+}
+
+/// A row of the controls: in the docker (`wrap`) it breaks onto further
+/// lines when the panel is narrowed, as the Properties docker's rows do,
+/// instead of running past the panel's edge (#4148); in the bar it stays
+/// one line.
+fn group_row<R>(ui: &mut Ui, wrap: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+    if wrap {
+        ui.horizontal_wrapped(add).inner
+    } else {
+        ui.horizontal(add).inner
+    }
+}
+
+/// [`contour_controls`], its rows wrapped when `wrap` (the docker).
+pub fn contour_controls_in(app: &mut App, ui: &mut Ui, wrap: bool) {
     app.sync_contour_settings();
+    // A box of these controls typed into and left with Enter: the focus
+    // it held before them is gone after them.
+    let focus_before = ui.memory(|m| m.focused());
     let palette = app.palette.clone();
     let mut s = app.contour;
     let mut changed = false;
-    ui.horizontal(|ui| {
+    group_row(ui, wrap, |ui| {
         for d in ContourDirection::ALL {
-            if ui.selectable_label(s.direction == d, tr(d.key())).clicked() && s.direction != d {
+            if ui
+                .iselectable(s.direction == d, d.key())
+                .rich_tip(crate::ui::tips::keyed(d.key()))
+                .clicked()
+                && s.direction != d
+            {
                 s.direction = d;
                 changed = true;
             }
         }
     });
-    ui.horizontal(|ui| {
-        dim(ui, tr("docker.steps"));
-        ui.add_enabled_ui(s.direction != ContourDirection::ToCenter, |ui| {
-            changed |= ui
-                .add(NumField::new(&mut s.steps).range(1..=999).width(44.0))
-                .changed();
+    group_row(ui, wrap, |ui| {
+        crate::ui::toolbar::dim_labelled_as(ui, "docker.steps", "contour.steps_desc", |ui| {
+            // A slider (with its number box), stepped on a logarithmic
+            // scale so the first steps are easy to pick (#1265).
+            ui.add_enabled_ui(s.direction != ContourDirection::ToCenter, |ui| {
+                changed |= ui
+                    .add(
+                        crate::ui::Slider::new(&mut s.steps, 1..=999)
+                            .logarithmic(true)
+                            .width(120.0),
+                    )
+                    .changed();
+            });
         });
-        dim(ui, tr("docker.offset"));
         let mut o = app.units.world_from_mm(s.offset);
-        if ui
-            .add(
+        if crate::ui::toolbar::dim_labelled_as(ui, "docker.offset", "contour.offset_desc", |ui| {
+            ui.add(
                 NumField::new(&mut o)
                     .range(0.0..=app.units.world_from_mm(1000.0))
-                    .fixed_decimals(app.settings.precision.min(10) as usize)
+                    .length_decimals(app.settings.precision.min(10) as usize)
                     .unit_mm(app.units.world_to_mm(1.0))
                     .suffix(format!(" {}", app.units.short()))
                     .width(76.0),
             )
-            .changed()
+        })
+        .changed()
         {
             s.offset = app.units.world_to_mm(o);
             changed = true;
         }
-        egui::ComboBox::from_id_salt("contour_corners")
+        crate::ui::keynav::ComboBox::from_id_salt("contour_corners")
             .selected_text(tr(join_key(s.corners)))
             .width(80.0)
             .show_ui(ui, |ui| {
@@ -91,8 +123,8 @@ pub fn contour_controls(app: &mut App, ui: &mut Ui) {
             .response
             .rich_tip(tr("contour.corners"));
     });
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("contour_blend")
+    group_row(ui, wrap, |ui| {
+        crate::ui::keynav::ComboBox::from_id_salt("contour_blend")
             .selected_text(tr(blend_key(s.color_blend)))
             .width(110.0)
             .show_ui(ui, |ui| {
@@ -125,8 +157,22 @@ pub fn contour_controls(app: &mut App, ui: &mut Ui) {
             &tr("docker.outline_color"),
             true,
         );
+        // The end of a fountain fill (#1265): only fountain-filled
+        // objects use it, their steps keeping the fountain.
+        changed |= color_pick(
+            ui,
+            &palette,
+            "contour_fill_end_to",
+            &mut s.fill_end_to,
+            &format!(
+                "{}\n{}",
+                tr("contour.last_fill_color"),
+                tr("contour.last_fill_color_desc")
+            ),
+            true,
+        );
     });
-    ui.horizontal(|ui| {
+    group_row(ui, wrap, |ui| {
         changed |= accel(ui, "docker.object_acceleration", &mut s.accel_objects);
         changed |= accel(ui, "docker.color_acceleration", &mut s.accel_colors);
     });
@@ -134,36 +180,90 @@ pub fn contour_controls(app: &mut App, ui: &mut Ui) {
         app.contour = s;
         app.apply_contour_settings();
     }
+    let entered = focus_before.is_some()
+        && ui.memory(|m| m.focused()).is_none()
+        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if entered {
+        apply_on_enter(app);
+    }
 }
 
-/// Apply (for selected objects with no contour), Clear Contour and Break
-/// Apart.
-pub fn contour_actions(app: &mut App, ui: &mut Ui) {
-    let has = app.selected_contour().is_some();
-    let bare = app.selected_shapes().iter().any(|s| {
+/// Enter in a box of the controls applies them as the Apply button does:
+/// objects with no contour get one (d#2945; a contour already there
+/// follows every change).
+fn apply_on_enter(app: &mut App) {
+    if app.selected_contour().is_none() && has_bare(app) {
+        app.add_contour();
+    }
+}
+
+/// Selected objects that can take a contour and have none: a group too,
+/// drawn round its objects (#3245); Apply was not offered for one, so a
+/// selected group seemed unable to take a contour (#3667).
+fn has_bare(app: &App) -> bool {
+    app.selected_shapes().iter().any(|s| {
         !s.effects
             .iter()
             .any(|e| matches!(e, tracedraw_core::live::Effect::Contour { .. }))
-            && !matches!(
-                s.kind,
-                tracedraw_core::ShapeKind::Bitmap { .. } | tracedraw_core::ShapeKind::Group { .. }
-            )
-    });
-    ui.horizontal(|ui| {
-        if bare && ui.button(tr("docker.apply")).clicked() {
+            && !matches!(s.kind, tracedraw_core::ShapeKind::Bitmap { .. })
+    })
+}
+
+/// Copy Contour From: the next object clicked gives the selected objects
+/// its contour, as Object > Copy Effect > Contour From does (#3667).
+fn start_copy_contour(app: &mut App) {
+    app.pending_copy_effect = Some(crate::copy_effect::CopyKind::Contour);
+    app.status = tr("status.click_source_object");
+}
+
+/// Apply (for selected objects with no contour), Clear Contour, Break
+/// Apart and Copy Contour From.
+pub fn contour_actions(app: &mut App, ui: &mut Ui) {
+    contour_actions_in(app, ui, false);
+}
+
+/// [`contour_actions`], the buttons wrapped when `wrap` (the docker).
+pub fn contour_actions_in(app: &mut App, ui: &mut Ui, wrap: bool) {
+    let has = app.selected_contour().is_some();
+    let bare = has_bare(app);
+    group_row(ui, wrap, |ui| {
+        if bare
+            && ui
+                .ibutton("docker.apply")
+                .rich_tip(crate::ui::tips::pair("docker.apply", "contour.apply_desc"))
+                .clicked()
+        {
             app.add_contour();
         }
         if ui
-            .add_enabled(has, egui::Button::new(tr("contour.clear")))
+            .add_enabled(has, crate::ui::btn_icons::Ib::new("contour.clear"))
+            .rich_tip(crate::ui::tips::keyed("contour.clear"))
             .clicked()
         {
             app.clear_contour();
         }
         if ui
-            .add_enabled(has, egui::Button::new(tr("docker.break_apart")))
+            .add_enabled(has, crate::ui::btn_icons::Ib::new("docker.break_apart"))
+            .rich_tip(crate::ui::tips::pair(
+                "docker.break_apart",
+                "toolbar.effect_break_apart_desc",
+            ))
             .clicked()
         {
-            app.flatten_effects();
+            app.break_effect_groups();
+        }
+        if ui
+            .add_enabled(
+                !app.selection.is_empty(),
+                crate::ui::btn_icons::Ib::new("contour.copy_from"),
+            )
+            .rich_tip(crate::ui::tips::pair(
+                "contour.copy_from",
+                "contour.copy_from_desc",
+            ))
+            .clicked()
+        {
+            start_copy_contour(app);
         }
     });
 }
@@ -226,5 +326,112 @@ mod tests {
         app.contour.direction = ContourDirection::Outside;
         frame(&mut app, true);
         assert_eq!(app.contour.direction, ContourDirection::Inside);
+    }
+
+    /// A selected group is offered Apply, and Copy Contour From gives
+    /// the selection the contour of the object clicked next (#3667).
+    #[test]
+    fn a_group_is_offered_apply_and_a_contour_can_be_copied() {
+        let mut app = App::headless();
+        app.tool = crate::tools::Tool::Contour;
+        let square = |app: &mut App, x: f64| {
+            app.new_shape(ShapeKind::Rect {
+                rect: Rect::new(x, 0.0, x + 20.0, 20.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("square")
+        };
+        let (a, b) = (square(&mut app, 0.0), square(&mut app, 30.0));
+        app.select(vec![a, b]);
+        app.group_selection();
+        let g = app.selection[0];
+        assert!(has_bare(&app), "a group without a contour is offered Apply");
+        // The source: a third object with a contour of 4 steps.
+        let src = square(&mut app, 100.0);
+        app.select(vec![src]);
+        app.contour.steps = 4;
+        app.add_contour();
+        let contour = |app: &App, id| {
+            app.doc().find_shape(id).and_then(|s| {
+                s.effects
+                    .iter()
+                    .find(|e| matches!(e, tracedraw_core::live::Effect::Contour { .. }))
+                    .cloned()
+            })
+        };
+        let want = contour(&app, src).expect("the source has a contour");
+        app.select(vec![g]);
+        start_copy_contour(&mut app);
+        assert_eq!(
+            app.pending_copy_effect,
+            Some(crate::copy_effect::CopyKind::Contour)
+        );
+        let kind = app.pending_copy_effect.take().expect("waiting");
+        app.copy_effect_from(src, kind);
+        assert_eq!(contour(&app, g), Some(want));
+    }
+
+    #[test]
+    fn enter_in_a_box_of_the_panel_applies_the_contour() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.tool = crate::tools::Tool::Contour;
+        let id = app
+            .new_shape(ShapeKind::Rect {
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("square");
+        app.select(vec![id]);
+        let key = |key: egui::Key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                ui.vertical(|ui| {
+                    contour_controls(app, ui);
+                    contour_actions(app, ui);
+                });
+            });
+            out.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new());
+        // Tab to the first number box (a text field) of the panel.
+        let mut in_box = false;
+        for _ in 0..40 {
+            frame(&mut app, vec![key(egui::Key::Tab)]);
+            frame(&mut app, Vec::new());
+            let focused = ctx.memory(|m| m.focused());
+            if focused.is_some_and(|f| egui::TextEdit::load_state(&ctx, f).is_some()) {
+                in_box = true;
+                break;
+            }
+        }
+        assert!(in_box, "a number box takes the focus");
+        assert!(app.selected_contour().is_none());
+        frame(&mut app, vec![key(egui::Key::Enter)]);
+        assert!(
+            app.selected_contour().is_some(),
+            "Enter applied the contour as Apply does"
+        );
+        // Enter again does not stack a second contour.
+        let effects = |app: &App| app.selected_shapes()[0].effects.len();
+        let n = effects(&app);
+        apply_on_enter(&mut app);
+        assert_eq!(effects(&app), n);
     }
 }

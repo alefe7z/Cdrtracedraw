@@ -17,7 +17,19 @@ It sits at the bottom of the window, or at the top below the menu bar
    - Tool Hints: the active tool's hint (`status_hint.<tool id>` in the
      language files; every tool has one). The Pick tool's hint changes
      when something is selected. A message from the last command comes
-     first when there is one.
+     first when there is one, for 12 seconds (the same message set again
+     shows again); then the hint has the field to itself, so a message
+     with a long file path ("Saved ...") no longer pushes it off the bar
+     for good. The message that links to Options stays. A hint cut off
+     at the right shows whole on hover (#1126,
+     `ui::status::tests::a_status_message_goes_after_a_while`,
+     `ui::status::tests::a_cut_off_hint_shows_whole_on_hover`).
+     Hints are short and share one style: the parts are joined by " · ",
+     keys and modifiers are named as they are pressed (Ctrl+drag,
+     Shift+click, Alt+click), and a hint says what the pointer does
+     ("Double-click the tool to select all"). The Hints docker and the
+     document palette's empty-state text follow the same style
+     (`ui::status::tests::hints_share_one_style`).
    - Object Details: width, height and centre of the selection in the
      drawing units.
    - Cursor Coordinates: the pointer's page position in the drawing units.
@@ -25,7 +37,11 @@ It sits at the bottom of the window, or at the top below the menu bar
 3. The object information: "Rectangle on Layer 1", "Curve on Layer 1",
    "2 Objects Selected on Layer 1" (or "on Multiple Layers"); with the
    Shape tool and a curve selected, "Curve: N Nodes"; while typing,
-   "Editing text". It starts after the first field, never closer than
+   "Editing text". A symmetry reads "Symmetry group: Curve on Layer 1"
+   (#2997), an object clone "Clone: Rectangle on Layer 1" and its master
+   "Clone master: Rectangle (2 clones) on Layer 1" (#2877); the Objects
+   docker names a symmetry and a clone the same way
+   (`object_clone::tests::clones_masters_and_symmetries_say_what_they_are`). It starts after the first field, never closer than
    156 px from it.
 4. The fill: the Interactive Fill icon (20 px), a 26 x 25 px swatch and
    a description (None, the colour values, or the fill type). At 68.5 %
@@ -40,8 +56,16 @@ It sits at the bottom of the window, or at the top below the menu bar
 With nothing selected the fill and outline parts show the defaults for
 new objects: no fill, a 0.2 mm black (C0 M0 Y0 K100) outline. A swatch
 with no colour is a white box crossed by a red line. Double-clicking the
-fill part opens the fill settings (as F11); the outline part, the
-outline settings (as F12).
+fill part opens the Edit Fill dialog box (as F11); the outline part, the
+Outline Pen dialog box (as F12) (#465).
+
+The swatches carry the marks of palette swatches (#2455): a spot colour's
+fill or outline has a small dot in the lower right corner of its swatch,
+and a fill or outline that overprints (every painted object of the
+selection does) a small ring in the lower left corner, each black on a
+light colour and white on a dark one. A mixed selection, a fill that is
+not one colour and no colour carry no mark. Test
+`ui::status::tests::the_status_swatches_carry_the_spot_and_overprint_marks`.
 
 With no drawing open the bar shows the placeholders Tool Hints, Object
 Information, Fill Color and Outline Color.

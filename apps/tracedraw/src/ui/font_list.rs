@@ -8,28 +8,42 @@
 use crate::app::App;
 use crate::i18n::{tr, trf};
 use crate::theme::Tokens;
+use crate::ui::tips::RichTip;
 use egui::{Color32, Key, Rect, Sense, Ui, Vec2};
 use std::collections::HashMap;
 use tracedraw_core::document::TextSpan;
+use tracedraw_text::catalog::{Embedding, Script};
+use tracedraw_text::traits::{
+    embedding_bit, script_bit, FontFilter, FontTrait, Technology, WeightClass, WidthClass,
+    FILTER_FEATURES,
+};
 use tracedraw_text::{FamilyInfo, FontKind};
 
 /// Width of the list.
 const POPUP_W: f32 = 380.0;
 /// Highest the list of families grows.
 const LIST_H: f32 = 300.0;
+/// Width of the filter's choices beside the list (#867).
+const FILTER_W: f32 = 230.0;
 /// Height of the preview under the list.
 const PREVIEW_H: f32 = 104.0;
 /// The preview's sample text and its size in points.
 pub const SAMPLE: &str = "AaBbYyZz";
 const SAMPLE_PX: f32 = 46.0;
-/// How many fonts used last the list keeps at its top.
-pub const RECENT: usize = 5;
+/// The most fonts used last the list may show at its top (Options >
+/// Text > Fonts picks how many, five by default).
+pub const RECENT_MAX: usize = 20;
 /// The sample size's range, in points.
 pub const SAMPLE_SIZES: std::ops::RangeInclusive<f32> = 12.0..=40.0;
 /// The size samples start at.
 pub const DEFAULT_SAMPLE: f32 = 18.0;
 /// Pictures kept before the oldest go.
 const MAX_PICTURES: usize = 1200;
+/// The longest a frame spends reading families for the filter (#867):
+/// with many fonts the rest come in the next frames.
+const FILTER_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+/// Families read together for the filter.
+const FILTER_CHUNK: usize = 24;
 
 /// A family picked in a font list, with the style when one was picked
 /// (bold, italic).
@@ -75,6 +89,10 @@ pub struct FontPreviews {
     generation: u64,
     pictures: HashMap<PictureKey, Option<Picture>>,
     infos: HashMap<String, Option<FamilyInfo>>,
+    /// The folders of the installed font files, read once (#867).
+    folders: Option<Vec<std::path::PathBuf>>,
+    /// Families to download that were asked for, each once.
+    requested: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -94,7 +112,14 @@ impl FontPreviews {
             self.generation = g;
             self.pictures.clear();
             self.infos.clear();
+            self.folders = None;
         }
+    }
+
+    /// The folders the installed font files are in (cached).
+    pub fn folders(&mut self) -> &[std::path::PathBuf] {
+        self.folders
+            .get_or_insert_with(|| tracedraw_text::fonts().font_folders())
     }
 
     /// What the list shows about a family (cached).
@@ -105,6 +130,45 @@ impl FontPreviews {
         let info = tracedraw_text::fonts().family_info(family);
         self.infos.insert(family.to_string(), info.clone());
         info
+    }
+
+    /// The `families` with what `filter` asks, and whether every one of
+    /// them was read: a family is read once (for the fonts as they are
+    /// now), for at most [`FILTER_BUDGET`] a frame, so that the list opens
+    /// as fast with many fonts and fills in over the next frames (#867).
+    /// Nothing checked costs nothing.
+    pub fn filtered(&mut self, families: &[String], filter: &FontFilter) -> (Vec<String>, bool) {
+        if filter.is_empty() {
+            return (families.to_vec(), true);
+        }
+        let missing: Vec<String> = families
+            .iter()
+            .filter(|f| !self.infos.contains_key(f.as_str()))
+            .cloned()
+            .collect();
+        let start = web_time::Instant::now();
+        let mut read = 0;
+        for chunk in missing.chunks(FILTER_CHUNK) {
+            let infos = tracedraw_text::fonts().family_infos(chunk);
+            for (f, info) in chunk.iter().zip(infos) {
+                self.infos.insert(f.clone(), info);
+            }
+            read += chunk.len();
+            if start.elapsed() >= FILTER_BUDGET {
+                break;
+            }
+        }
+        let complete = read == missing.len();
+        let shown = families
+            .iter()
+            .filter(|f| {
+                self.infos
+                    .get(f.as_str())
+                    .is_some_and(|i| filter.matches(i.as_ref()))
+            })
+            .cloned()
+            .collect();
+        (shown, complete)
     }
 
     /// `text` in `family` at `em_px` pixels to the em, as a texture (cached);
@@ -140,8 +204,13 @@ impl FontPreviews {
     }
 }
 
+/// The colour of text pictures shown on a white card (the preview, the
+/// font sampler), as the text would print.
+pub const CARD_INK: Color32 = Color32::from_gray(0x20);
+
 /// `text` set in `family` (bold and italic as `style`) with `em_px`
-/// pixels to the em, black on transparent, and its baseline's distance
+/// pixels to the em, a white mask on transparent (tinted where it is
+/// painted: the theme's text colour in lists, #660), and its baseline's distance
 /// from the top in pixels. `None` when the family is not installed (its
 /// stand-in would show instead) or the text draws nothing.
 pub fn render_text(
@@ -169,13 +238,17 @@ pub fn render_text(
         .copied()
         .unwrap_or(0.0)
         .max(layout.bounds.x1);
+    // Ink left of the pen's start (a vowel sign drawn before the letter
+    // it follows in a legacy font, #3906) widens the picture to the left
+    // instead of being cut off.
+    let left = (-layout.bounds.x0).max(0.0);
     let pad = 1.0;
-    let w = ((advance.max(0.0) * scale).ceil() + 2.0 * pad).clamp(1.0, 2048.0) as u32;
+    let w = (((advance.max(0.0) + left) * scale).ceil() + 2.0 * pad).clamp(1.0, 2048.0) as u32;
     let h = (((ascent + descent) * scale).ceil() + 2.0 * pad).clamp(1.0, 1024.0) as u32;
     let path = tracedraw_render::to_sk_path(&layout.path)?;
     let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
     let mut paint = tiny_skia::Paint::default();
-    paint.set_color_rgba8(0x20, 0x20, 0x20, 0xff);
+    paint.set_color_rgba8(0xff, 0xff, 0xff, 0xff);
     paint.anti_alias = true;
     let baseline = (ascent * scale) as f32 + pad as f32;
     let t = tiny_skia::Transform::from_row(
@@ -183,12 +256,51 @@ pub fn render_text(
         0.0,
         0.0,
         -(scale as f32),
-        pad as f32,
+        (pad + left * scale) as f32,
         baseline,
     );
     pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, t, None);
     let image = egui::ColorImage::from_rgba_premultiplied([w as usize, h as usize], pixmap.data());
     Some((image, baseline))
+}
+
+/// Whether the list's families are needed this frame: while it is open,
+/// its field has the focus or just lost it (Enter picks), or the wheel
+/// turns over it (#665). Closed on a bar it needs none (#616).
+fn list_needed(open: bool, focused: bool, lost_focus: bool, wheeling: bool) -> bool {
+    open || focused || lost_focus || wheeling
+}
+
+/// The families the list holds for `show`; none when they are not
+/// `needed`, so that a closed list on a bar clones no name a frame
+/// (#616: 1332 families on the reporter's PC).
+fn listed_families(app: &App, show: Show, needed: bool) -> Vec<String> {
+    if !needed {
+        return Vec::new();
+    }
+    match show {
+        Show::All => app.font_families.clone(),
+        Show::Installed => {
+            let fonts = tracedraw_text::fonts();
+            app.font_families
+                .iter()
+                .filter(|f| fonts.has_family(f))
+                .cloned()
+                .collect()
+        }
+        Show::Drawing => {
+            let used = if app.has_document() {
+                app.doc().font_families_used()
+            } else {
+                Vec::new()
+            };
+            app.font_families
+                .iter()
+                .filter(|f| used.contains(f))
+                .cloned()
+                .collect()
+        }
+    }
 }
 
 /// The families a list shows for what was typed: all of them when
@@ -219,11 +331,11 @@ pub fn matching(families: &[String], typed: Option<&str>, current: &str) -> Vec<
     exact
 }
 
-/// Put `family` first among the fonts used last, keeping [`RECENT`].
+/// Put `family` first among the fonts used last, keeping [`RECENT_MAX`].
 pub fn remember(recent: &mut Vec<String>, family: &str) {
     recent.retain(|f| f != family);
     recent.insert(0, family.to_string());
-    recent.truncate(RECENT);
+    recent.truncate(RECENT_MAX);
 }
 
 /// One row of the list: a family, or one of its styles under it.
@@ -255,28 +367,103 @@ struct ListState {
     /// The keys or typing moved the highlight since the pointer last
     /// rested on a row: the preview follows the highlight.
     keyed: bool,
+    rest: Option<(String, f64)>,
+    /// What the families must have (#867).
+    filter: FontFilter,
+    /// Families are still being read for the filter.
+    reading: bool,
+    /// The filter's choices show beside the list, in the same popup: egui
+    /// keeps one popup open at a time, so a menu opened from the list
+    /// closed the list (#867).
+    filter_open: bool,
+    /// Where the filter button and its choices were drawn last, with
+    /// their labels, for tests.
+    filter_hits: Vec<(String, Rect)>,
+    /// How tall the list beside the filter's choices was drawn last: the
+    /// choices scroll within it, the popup no taller than the list
+    /// (#867).
+    list_height: f32,
 }
 
 /// A font list showing `current`, `width` points wide. Returns what was
 /// picked; the caller sets it (and keeps it among the fonts used last
 /// through [`remember`], which a pick here already did).
-pub fn font_list(
+///
+/// Also returns the family (and style) the list points at while it is
+/// open: the row under the pointer, or the one the keys moved to (for a
+/// live preview in the drawing, #370).
+pub fn font_list_live(
     app: &mut App,
     ui: &mut Ui,
     id_salt: &str,
     current: &str,
     width: f32,
-) -> Option<FontPick> {
+) -> (Option<FontPick>, Option<FontPick>) {
+    font_list_with(app, ui, id_salt, current, width, true)
+}
+
+/// The family after (`down`) or before `current` in `families`, the
+/// list's order, stopping at the ends; the first when `current` is not
+/// listed. None when that is `current` itself.
+fn step_family(families: &[String], current: &str, down: bool) -> Option<FontPick> {
+    let at = families.iter().position(|f| f == current);
+    let next = match (at, down) {
+        (Some(i), true) => (i + 1).min(families.len().saturating_sub(1)),
+        (Some(i), false) => i.saturating_sub(1),
+        (None, _) => 0,
+    };
+    families
+        .get(next)
+        .filter(|f| *f != current)
+        .map(|f| FontPick {
+            family: f.clone(),
+            style: None,
+        })
+}
+
+/// [`font_list_live`]; `wheel` lets the mouse wheel over the closed list,
+/// and Down and Up in its field, pick the family before or after the
+/// current one (#665, #1754).
+fn font_list_with(
+    app: &mut App,
+    ui: &mut Ui,
+    id_salt: &str,
+    current: &str,
+    width: f32,
+    wheel: bool,
+) -> (Option<FontPick>, Option<FontPick>) {
     let id = ui.make_persistent_id(("font_list", id_salt));
     let popup_id = id.with("popup");
     let ctx = ui.ctx().clone();
     let mut st: ListState = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
+    // The filter's choices show as they were left, in every font list
+    // and the next time TraceDraw starts (#867).
+    st.filter_open = app.settings.font_filter_open;
     app.font_previews.refresh();
     let mut pick: Option<FontPick> = None;
 
     // The field and its arrow.
     let mut text = st.typed.clone().unwrap_or_else(|| current.to_string());
     let field_id = id.with("field");
+    // The list's keys while it is open, taken before the field sees them:
+    // its own Down, Up, Home and End would move the cursor and drop the
+    // selection of the name, so that typing added to it (#1839). Home and
+    // End go to the ends of the list unless a name is being typed.
+    let list_keys = (egui::Popup::is_id_open(&ctx, popup_id)
+        && (ctx.memory(|m| m.has_focus(field_id)) || !ctx.text_edit_focused()))
+    .then(|| {
+        let ends = st.typed.is_none();
+        ctx.input_mut(|i| {
+            [
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, Key::PageDown),
+                i.consume_key(egui::Modifiers::NONE, Key::PageUp),
+                ends && i.consume_key(egui::Modifiers::NONE, Key::Home),
+                ends && i.consume_key(egui::Modifiers::NONE, Key::End),
+            ]
+        })
+    });
     let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let field = ui.add(
@@ -306,6 +493,11 @@ pub fn font_list(
     });
     let (field, arrow) = row.inner;
     let anchor = field.rect.union(arrow.rect);
+    // A family that came with the drawing (embedded in the file, not
+    // installed) says so in the field while it shows that name (#518).
+    if !field.has_focus() && st.typed.is_none() && is_embedded(current) {
+        embedded_tag(ui.painter(), field.rect.shrink2(Vec2::new(3.0, 1.0)), true);
+    }
     let was_open = egui::Popup::is_id_open(&ctx, popup_id);
     if field.gained_focus() {
         // Typing replaces the name.
@@ -335,33 +527,48 @@ pub fn font_list(
         } else {
             egui::Popup::open_id(&ctx, popup_id);
             st.scroll = true;
+            // The field takes the keyboard, its name selected as when it
+            // is clicked: the arrows, Enter, Esc and typing work in a
+            // list opened from its arrow too (#1839).
+            ctx.memory_mut(|m| m.request_focus(field_id));
+            let mut state = egui::TextEdit::load_state(&ctx, field_id).unwrap_or_default();
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(text.chars().count()),
+                )));
+            state.store(&ctx, field_id);
         }
     }
 
-    // What the list holds.
-    let all: Vec<String> = match st.show {
-        Show::All => app.font_families.clone(),
-        Show::Installed => {
-            let fonts = tracedraw_text::fonts();
-            app.font_families
+    // What the list holds: built only while it is open, typed in or
+    // turned with the wheel. Closed on a bar it costs nothing a frame,
+    // where it cloned every family name (#616: 1332 of them).
+    let wheeling = wheel
+        && ui.rect_contains_pointer(anchor)
+        && ui.input(|i| {
+            i.raw
+                .events
                 .iter()
-                .filter(|f| fonts.has_family(f))
-                .cloned()
-                .collect()
+                .any(|e| matches!(e, egui::Event::MouseWheel { .. }))
+        });
+    let needed = list_needed(
+        egui::Popup::is_id_open(&ctx, popup_id),
+        field.has_focus(),
+        field.lost_focus(),
+        wheeling,
+    );
+    let mut all = listed_families(app, st.show, needed);
+    st.reading = false;
+    if needed && !st.filter.is_empty() {
+        let (shown, complete) = app.font_previews.filtered(&all, &st.filter);
+        all = shown;
+        st.reading = !complete;
+        if st.reading {
+            ctx.request_repaint();
         }
-        Show::Drawing => {
-            let used = if app.has_document() {
-                app.doc().font_families_used()
-            } else {
-                Vec::new()
-            };
-            app.font_families
-                .iter()
-                .filter(|f| used.contains(f))
-                .cloned()
-                .collect()
-        }
-    };
+    }
     let families = matching(&all, st.typed.as_deref(), current);
     let mut rows: Vec<Row> = Vec::with_capacity(families.len());
     for f in &families {
@@ -369,11 +576,14 @@ pub fn font_list(
         if st.expanded.as_deref() == Some(f.as_str()) {
             if let Some(info) = app.font_previews.info(f) {
                 for face in info.faces {
+                    // A semibold face is the family with its weight, not
+                    // bold (#892).
+                    let (family, bold, italic) = tracedraw_text::face_family(f, &face);
                     rows.push(Row::Style {
-                        family: f.clone(),
+                        family,
                         name: face.name,
-                        bold: face.weight >= 600,
-                        italic: face.italic,
+                        bold,
+                        italic,
                     });
                 }
             }
@@ -381,30 +591,102 @@ pub fn font_list(
     }
     let typing = st.typed.as_deref().is_some_and(|t| t != current);
     if st.highlight.is_none() || !typing && st.scroll {
+        // A face named with its weight ("Titillium Web SemiBold") that no
+        // family row lists: its family's row.
+        let base = tracedraw_text::split_weight(current).map(|(b, _)| b);
         st.highlight = rows
             .iter()
-            .position(|r| matches!(r, Row::Family(f) if f == current));
+            .position(|r| matches!(r, Row::Family(f) if f == current))
+            .or_else(|| {
+                rows.iter()
+                    .position(|r| matches!(r, Row::Family(f) if Some(f.as_str()) == base))
+            });
     }
 
-    // Keys while the field has the focus.
+    // The wheel over the closed list: the family after (down) or before
+    // (up) the current one, as the list orders them (#665).
     let open = egui::Popup::is_id_open(&ctx, popup_id);
-    if open && field.has_focus() {
-        let (down, up, enter, escape) = ctx.input_mut(|i| {
+    let mut stepped = false;
+    if wheel && !open && ui.rect_contains_pointer(anchor) {
+        let step = ui.input(|i| {
+            i.raw.events.iter().rev().find_map(|e| match e {
+                egui::Event::MouseWheel { delta, .. } if delta.y != 0.0 => Some(delta.y),
+                _ => None,
+            })
+        });
+        if let Some(dy) = step {
+            // The bar under the list does not scroll as well.
+            crate::ui::field::take_wheel(ui);
+            if let Some(p) = step_family(&families, current, dy < 0.0) {
+                pick = Some(p);
+                stepped = true;
+            }
+        }
+    }
+    // Down and Up in the field while the list is closed (as a click in
+    // the field leaves it): the family after or before, at once, the
+    // field keeping the keyboard for the next press. The keys are taken,
+    // so they never nudge the selected text (#1754). Where the wheel does
+    // nothing (no text to change), they open the list instead.
+    if !open && field.has_focus() {
+        let (down, up) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
+            )
+        });
+        if down || up {
+            if wheel {
+                if let Some(p) = step_family(&families, current, down) {
+                    pick = Some(p);
+                    stepped = true;
+                    // Found again on the family stepped to, so that Enter
+                    // keeps it rather than the one the field showed first.
+                    st.highlight = None;
+                }
+            } else {
+                egui::Popup::open_id(&ctx, popup_id);
+                st.scroll = true;
+            }
+        }
+    }
+
+    // The open list reads its own keys (the menus' and lists' keys of
+    // ui/keynav.rs leave it alone): the field takes the typing (#1839).
+    if open {
+        crate::ui::keynav::own_keys(&ctx, popup_id);
+    }
+    // Keys while the field has the focus, or while the list is open and
+    // no other field has it (a filter box of the list was clicked).
+    if open && (field.has_focus() || !ctx.text_edit_focused()) {
+        if !field.has_focus() {
+            ctx.memory_mut(|m| m.request_focus(field_id));
+        }
+        let [down, up, page_down, page_up, home, end] = list_keys.unwrap_or_default();
+        let (enter, escape) = ctx.input_mut(|i| {
+            (
                 i.key_pressed(Key::Enter),
                 i.consume_key(egui::Modifiers::NONE, Key::Escape),
             )
         });
         let last = rows.len().saturating_sub(1);
-        if down {
-            st.highlight = Some(st.highlight.map_or(0, |h| (h + 1).min(last)));
-            st.scroll = true;
-            st.keyed = true;
-        }
-        if up {
-            st.highlight = Some(st.highlight.map_or(0, |h| h.saturating_sub(1)));
+        // A page: the rows the list shows at once.
+        let sample = app
+            .settings
+            .font_sample_px
+            .clamp(*SAMPLE_SIZES.start(), *SAMPLE_SIZES.end());
+        let page = ((LIST_H / ((sample * 1.35 + 6.0).max(22.0) + 2.0)) as usize).max(1);
+        let to = match (down, up, page_down, page_up, home, end) {
+            (true, ..) => Some(st.highlight.map_or(0, |h| (h + 1).min(last))),
+            (_, true, ..) => Some(st.highlight.map_or(0, |h| h.saturating_sub(1))),
+            (_, _, true, ..) => Some(st.highlight.map_or(0, |h| (h + page).min(last))),
+            (_, _, _, true, ..) => Some(st.highlight.map_or(0, |h| h.saturating_sub(page))),
+            (.., true, _) => Some(0),
+            (.., true) => Some(last),
+            _ => None,
+        };
+        if let Some(h) = to.filter(|_| !rows.is_empty()) {
+            st.highlight = Some(h);
             st.scroll = true;
             st.keyed = true;
         }
@@ -425,54 +707,134 @@ pub fn font_list(
     let shown = egui::Popup::new(popup_id, ctx.clone(), anchor, ui.layer_id())
         .open_memory(None)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .width(POPUP_W)
+        .width(if st.filter_open {
+            POPUP_W + FILTER_W + 8.0
+        } else {
+            POPUP_W
+        })
         .show(|ui| {
-            ui.set_width(POPUP_W);
-            list_body(
-                app,
-                ui,
-                &mut st,
-                &rows,
-                &families,
-                current,
-                typing,
-                &mut pick,
-                &mut hovered_now,
-            );
+            ui.horizontal_top(|ui| {
+                let list = ui.vertical(|ui| {
+                    ui.set_width(POPUP_W);
+                    list_body(
+                        app,
+                        ui,
+                        &mut st,
+                        &rows,
+                        &families,
+                        current,
+                        typing,
+                        &mut pick,
+                        &mut hovered_now,
+                    );
+                });
+                st.list_height = list.response.rect.height();
+                // The filter's choices beside the list (#867).
+                if st.filter_open {
+                    ui.separator();
+                    ui.vertical(|ui| {
+                        ui.set_width(FILTER_W);
+                        let folders = app.font_previews.folders().to_vec();
+                        let lib = collections_of(&app.settings.font_manager);
+                        filter_panel(ui, &mut st, &folders, &lib);
+                    });
+                }
+            });
         });
     if shown.is_none() && !field.has_focus() {
         st.typed = None;
+        st.rest = None;
+        st.hovered = None;
     }
     if hovered_now.is_some() {
         st.hovered = hovered_now;
         st.keyed = false;
     }
+    let live = if shown.is_none() {
+        None
+    } else if st.keyed {
+        st.highlight.and_then(|h| rows.get(h)).map(row_pick)
+    } else {
+        st.hovered.as_ref().map(|(f, style)| FontPick {
+            family: f.clone(),
+            style: (*style != (false, false)).then_some(*style),
+        })
+    };
 
-    if let Some(p) = &pick {
+    if let Some(p) = pick.as_ref().filter(|_| !stepped) {
         crate::ui::font_list::remember(&mut app.settings.recent_fonts, &p.family);
         egui::Popup::close_id(&ctx, popup_id);
         st.typed = None;
         st.expanded = None;
         field.surrender_focus();
     }
+    app.settings.font_filter_open = st.filter_open;
     ctx.data_mut(|d| d.insert_temp(id, st));
-    pick
+    (pick, live)
 }
 
 /// A font list for the text settings (`app.text_font`, bold and
-/// italic); true when they changed.
+/// italic); true when they changed. While it is open, the selected text
+/// shows the family under the pointer (#370).
 pub fn text_font_list(app: &mut App, ui: &mut Ui, id_salt: &str, width: f32) -> bool {
-    let current = app.text_font.clone();
-    match font_list(app, ui, id_salt, &current, width) {
+    let current = app.text_settings_shown().0;
+    // The wheel changes the text's font, never asks for the font of new
+    // text (a dialog at every turn of the wheel).
+    let wheel = app.has_text_target() || id_salt == "options_default_font";
+    let (pick, live) = font_list_with(app, ui, id_salt, &current, width, wheel);
+    // Only the lists that set the text's font preview it; the one that
+    // owns the preview ends it when it closes.
+    let owner = id_salt.to_string();
+    // The default font in Options is a setting, not the selection's.
+    let live = live.filter(|_| id_salt != "options_default_font");
+    if pick.is_some() {
+        app.end_font_preview();
+    } else if live.is_some() {
+        app.preview_text(&owner, live.map(LiveText::Font));
+    } else if app.live_font.as_ref().is_some_and(|l| l.owner == owner) {
+        app.end_font_preview();
+    }
+    match pick {
         Some(p) => {
+            // With no text to change, the font picked would be the one of
+            // new text: asked first, as the reference program does.
+            if !app.has_text_target() {
+                app.dialog = crate::ui::dialogs::Dialog::TextDefaults {
+                    font: Some(p.family),
+                    style: p.style,
+                    size: None,
+                };
+                return false;
+            }
             app.text_font = p.family;
+            // A font picked goes to every selected text, also when it is
+            // the one the bar showed (the others may have another).
+            if let Some(t) = app.text_shown.as_mut() {
+                t.font = None;
+            }
             if let Some((bold, italic)) = p.style {
                 app.text_bold = bold;
                 app.text_italic = italic;
+                if let Some(t) = app.text_shown.as_mut() {
+                    (t.bold, t.italic) = (None, None);
+                }
             }
             true
         }
         None => false,
+    }
+}
+
+/// The font of new text (Options > Text > Display): it changes the
+/// default only, never the text selected (#449).
+pub fn default_font_list(app: &mut App, ui: &mut Ui, id_salt: &str, width: f32) {
+    let current = app.text_default_font.clone();
+    let (pick, _) = font_list_live(app, ui, id_salt, &current, width);
+    if let Some(p) = pick {
+        if !app.has_text_target() {
+            app.text_font = p.family.clone();
+        }
+        app.text_default_font = p.family;
     }
 }
 
@@ -519,19 +881,16 @@ fn list_body(
             .color(Tokens::text_dim())
             .size(11.5),
         );
+        if st.reading {
+            ui.label(
+                egui::RichText::new(tr("font_list.reading"))
+                    .color(Tokens::text_dim())
+                    .size(11.5),
+            );
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            egui::ComboBox::from_id_salt(ui.id().with("show"))
-                .selected_text(egui::RichText::new(tr(st.show.key())).size(11.5))
-                .width(150.0)
-                .show_ui(ui, |ui| {
-                    for s in Show::ALL {
-                        if ui.selectable_label(st.show == s, tr(s.key())).clicked() {
-                            st.show = s;
-                            st.highlight = None;
-                            st.scroll = true;
-                        }
-                    }
-                });
+            filter_button(ui, st);
+            english_button(ui, st, &mut app.settings.font_english_names);
         });
     });
     let sample = app
@@ -547,10 +906,14 @@ fn list_body(
         .recent_fonts
         .iter()
         .filter(|f| app.font_families.contains(f))
-        .take(RECENT)
+        .take(if app.settings.show_recent_fonts {
+            app.settings.recent_font_count.clamp(1, RECENT_MAX)
+        } else {
+            0
+        })
         .cloned()
         .collect();
-    if !typing && st.show == Show::All && !recent.is_empty() {
+    if !typing && st.show == Show::All && st.filter.is_empty() && !recent.is_empty() {
         ui.label(
             egui::RichText::new(tr("font_list.recent"))
                 .color(Tokens::text_dim())
@@ -570,8 +933,13 @@ fn list_body(
     }
 
     // Every family.
-    if rows.is_empty() {
-        ui.label(egui::RichText::new(tr("font_list.no_match")).color(Tokens::text_dim()));
+    if rows.is_empty() && !st.reading {
+        let why = if st.filter.is_empty() || typing {
+            "font_list.no_match"
+        } else {
+            "font_list.no_filter_match"
+        };
+        ui.label(egui::RichText::new(tr(why)).color(Tokens::text_dim()));
     }
     let mut scroll = egui::ScrollArea::vertical()
         .id_salt(ui.id().with("families"))
@@ -632,11 +1000,11 @@ fn list_body(
         // The slider fills the row between the small and the large A.
         ui.spacing_mut().slider_width = (ui.available_width() - 24.0).max(60.0);
         ui.add(
-            egui::Slider::new(&mut s, SAMPLE_SIZES)
+            crate::ui::Slider::new(&mut s, SAMPLE_SIZES)
                 .show_value(false)
-                .clamping(egui::SliderClamping::Always),
+                .reserve(24.0),
         )
-        .on_hover_text(tr("font_list.sample_size"));
+        .rich_tip(tr("font_list.sample_size"));
         app.settings.font_sample_px = s;
         ui.label(
             egui::RichText::new("A")
@@ -662,6 +1030,338 @@ fn list_body(
         .or(keyed)
         .unwrap_or_else(|| (current.to_string(), (false, false)));
     preview(app, ui, &family, style, ppp);
+}
+
+/// The i18n key of a style the filter offers.
+fn trait_key(t: FontTrait) -> &'static str {
+    match t {
+        FontTrait::Serif => "font_list.trait_serif",
+        FontTrait::SansSerif => "font_list.trait_sans",
+        FontTrait::Script => "font_list.trait_script",
+        FontTrait::Decorative => "font_list.trait_decorative",
+        FontTrait::Monospace => "font_list.trait_monospace",
+        FontTrait::Symbol => "font_list.trait_symbol",
+    }
+}
+
+fn tech_key(t: Technology) -> &'static str {
+    match t {
+        Technology::TrueType => "font_manager.tech_truetype",
+        Technology::OpenType => "font_manager.tech_opentype",
+        Technology::Variable => "font_manager.tech_variable",
+    }
+}
+
+fn weight_key(w: WeightClass) -> &'static str {
+    match w {
+        WeightClass::Light => "font_manager.w_light",
+        WeightClass::Normal => "font_manager.w_regular",
+        WeightClass::Bold => "font_manager.w_bold",
+    }
+}
+
+fn width_key(w: WidthClass) -> &'static str {
+    match w {
+        WidthClass::Condensed => "font_manager.width_condensed",
+        WidthClass::Normal => "font_manager.width_normal",
+        WidthClass::Expanded => "font_manager.width_expanded",
+    }
+}
+
+fn embedding_key(e: Embedding) -> &'static str {
+    match e {
+        Embedding::Installable => "font_manager.emb_installable",
+        Embedding::Editable => "font_manager.emb_editable",
+        Embedding::PreviewPrint => "font_manager.emb_preview",
+        Embedding::Restricted => "font_manager.emb_restricted",
+        Embedding::BitmapOnly => "font_manager.emb_bitmap",
+    }
+}
+
+fn script_key(s: Script) -> &'static str {
+    match s {
+        Script::Latin => "font_manager.s_latin",
+        Script::Greek => "font_manager.s_greek",
+        Script::Cyrillic => "font_manager.s_cyrillic",
+        Script::Hebrew => "font_manager.s_hebrew",
+        Script::Arabic => "font_manager.s_arabic",
+        Script::Devanagari => "font_manager.s_devanagari",
+        Script::Bengali => "font_manager.s_bengali",
+        Script::Thai => "font_manager.s_thai",
+        Script::Korean => "font_manager.s_korean",
+        Script::Japanese => "font_manager.s_japanese",
+        Script::Chinese => "font_manager.s_chinese",
+        Script::Symbols => "font_manager.s_symbols",
+    }
+}
+
+/// The name of an OpenType feature the filter offers, with its tag.
+fn feature_label(tag: &[u8; 4]) -> String {
+    let key = match tag {
+        b"liga" => "font_manager.f_liga",
+        b"dlig" => "font_list.f_dlig",
+        b"kern" => "font_manager.f_kern",
+        b"smcp" => "font_manager.f_smcp",
+        b"c2sc" => "font_list.f_c2sc",
+        b"onum" => "font_manager.f_onum",
+        b"lnum" => "font_manager.f_lnum",
+        b"pnum" => "font_list.f_pnum",
+        b"tnum" => "font_manager.f_tnum",
+        b"frac" => "font_manager.f_frac",
+        b"sups" => "font_list.f_sups",
+        b"subs" => "font_list.f_subs",
+        b"ordn" => "font_list.f_ordn",
+        b"zero" => "font_list.f_zero",
+        b"swsh" => "font_manager.f_swsh",
+        b"salt" => "font_manager.f_salt",
+        b"calt" => "font_list.f_calt",
+        _ => "font_list.f_ss",
+    };
+    let shown = if tag == b"ss01" {
+        "ss01-ss20".to_string()
+    } else {
+        String::from_utf8_lossy(tag).into_owned()
+    };
+    format!("{} ({shown})", tr(key))
+}
+
+/// How many of the filter's choices are not the default: the choices
+/// checked, and which fonts show when not all of them.
+fn filter_count(st: &ListState) -> u32 {
+    st.filter.count() + u32::from(st.show != Show::All)
+}
+
+/// The filter's button: it shows or hides the choices beside the list
+/// (#867) and says how many are made.
+fn filter_button(ui: &mut Ui, st: &mut ListState) {
+    let n = filter_count(st);
+    let label = if n == 0 {
+        tr("font_list.filter")
+    } else {
+        trf("font_list.filter_n", &[("n", &n.to_string())])
+    };
+    let mut text = egui::RichText::new(label.clone()).size(11.5);
+    if n > 0 {
+        text = text.strong();
+    }
+    let r = ui
+        .add(egui::Button::selectable(st.filter_open, text))
+        .rich_tip(tr("font_list.filter_tip"));
+    st.filter_hits.clear();
+    st.filter_hits.push((label, r.rect));
+    if r.clicked() {
+        st.filter_open = !st.filter_open;
+    }
+}
+
+/// The EN button beside Filter: the families' English names beside
+/// names in other languages, on or off (#1249).
+fn english_button(ui: &mut Ui, st: &mut ListState, on: &mut bool) {
+    let label = tr("font_list.english");
+    let r = ui
+        .add(egui::Button::selectable(
+            *on,
+            egui::RichText::new(label.clone()).size(11.5),
+        ))
+        .rich_tip(tr("font_list.english_tip"));
+    st.filter_hits.push((label, r.rect));
+    if r.clicked() {
+        *on = !*on;
+    }
+}
+
+/// A check box of the filter: `on` as it is, the new value when clicked.
+fn filter_box(ui: &mut Ui, st: &mut ListState, label: String, on: bool) -> Option<bool> {
+    let mut v = on;
+    let r = ui.checkbox(&mut v, egui::RichText::new(label.clone()).size(11.5));
+    st.filter_hits.push((label, r.rect));
+    r.changed().then_some(v)
+}
+
+/// A section of the filter, open to start with.
+fn filter_section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    egui::CollapsingHeader::new(egui::RichText::new(title).strong().size(11.5))
+        .id_salt(("font_filter", title))
+        .default_open(true)
+        .show(ui, add);
+}
+
+/// Flip bit `bit` of `field` to `on`.
+fn set_bit<T>(field: &mut T, bit: T, on: bool)
+where
+    T: Copy
+        + std::ops::BitOr<Output = T>
+        + std::ops::BitAnd<Output = T>
+        + std::ops::Not<Output = T>,
+{
+    *field = if on { *field | bit } else { *field & !bit };
+}
+
+/// The Font Manager's Favorites and collections, each by its name with
+/// the keys of its faces, for the filter (#867).
+fn collections_of(prefs: &crate::ui::font_manager::FontManagerPrefs) -> Vec<(String, Vec<String>)> {
+    std::iter::once((tr("font_manager.favorites"), prefs.favorites.clone()))
+        .chain(
+            prefs
+                .collections
+                .iter()
+                .map(|c| (c.name.clone(), c.fonts.clone())),
+        )
+        .collect()
+}
+
+/// The filter's choices, beside the list: which fonts show (and the
+/// protected system fonts alone), the Font Manager's folders, its
+/// Favorites and collections, then a section each for the style,
+/// weight, width, technology, scripts, OpenType features and embedding
+/// rights, every value read from the font files (#867). Ticking a box
+/// filters at once and leaves the list open.
+fn filter_panel(
+    ui: &mut Ui,
+    st: &mut ListState,
+    folders: &[std::path::PathBuf],
+    collections: &[(String, Vec<String>)],
+) {
+    let before = (st.filter.clone(), st.show);
+    if ui
+        .add_enabled(
+            filter_count(st) > 0,
+            crate::ui::btn_icons::Ib::new("font_list.filter_clear"),
+        )
+        .clicked()
+    {
+        st.filter = FontFilter::default();
+        st.show = Show::All;
+    }
+    ui.label(
+        egui::RichText::new(tr("font_list.filter_note"))
+            .color(Tokens::text_dim())
+            .size(10.5),
+    );
+    // The choices scroll in the height the list beside them takes, so the
+    // popup has no empty space under the list (#867).
+    let top = ui.min_rect().top();
+    let used = ui.cursor().top() - top;
+    let height = if st.list_height > 0.0 {
+        (st.list_height - used).max(120.0)
+    } else {
+        LIST_H + PREVIEW_H
+    };
+    egui::ScrollArea::vertical()
+        .id_salt("font_filter_scroll")
+        .max_height(height)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            filter_section(ui, &tr("font_list.section_show"), |ui| {
+                for s in Show::ALL {
+                    let label = tr(s.key());
+                    let r = ui.selectable_label(
+                        st.show == s,
+                        egui::RichText::new(label.clone()).size(11.5),
+                    );
+                    st.filter_hits.push((label, r.rect));
+                    if r.clicked() {
+                        st.show = s;
+                    }
+                }
+                let on = st.filter.system;
+                if let Some(v) = filter_box(ui, st, tr("font_manager.protected"), on) {
+                    st.filter.system = v;
+                }
+            });
+            filter_section(ui, &tr("font_manager.folders"), |ui| {
+                if folders.is_empty() {
+                    ui.label(
+                        egui::RichText::new(tr("font_list.no_folders"))
+                            .color(Tokens::text_dim())
+                            .size(11.0),
+                    );
+                }
+                for dir in folders {
+                    let name = dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| dir.display().to_string());
+                    let on = st.filter.folders.contains(dir);
+                    let mut v = on;
+                    let r = ui
+                        .checkbox(&mut v, egui::RichText::new(name.clone()).size(11.5))
+                        .on_hover_text(dir.display().to_string());
+                    st.filter_hits.push((name, r.rect));
+                    if r.changed() {
+                        st.filter.set_folder(dir, v);
+                    }
+                }
+            });
+            filter_section(ui, &tr("font_manager.my_collections"), |ui| {
+                for (name, keys) in collections {
+                    let on = st.filter.has_collection(name);
+                    if let Some(v) = filter_box(ui, st, name.clone(), on) {
+                        st.filter.set_collection(name, keys, v);
+                    }
+                }
+            });
+            filter_section(ui, &tr("font_manager.style"), |ui| {
+                for t in FontTrait::ALL {
+                    let on = st.filter.has(t);
+                    if let Some(v) = filter_box(ui, st, tr(trait_key(t)), on) {
+                        st.filter.set(t, v);
+                    }
+                }
+            });
+            filter_section(ui, &tr("font_manager.weight"), |ui| {
+                for w in WeightClass::ALL {
+                    let on = st.filter.weights & w.bit() != 0;
+                    if let Some(v) = filter_box(ui, st, tr(weight_key(w)), on) {
+                        set_bit(&mut st.filter.weights, w.bit(), v);
+                    }
+                }
+            });
+            filter_section(ui, &tr("font_manager.width"), |ui| {
+                for w in WidthClass::ALL {
+                    let on = st.filter.widths & w.bit() != 0;
+                    if let Some(v) = filter_box(ui, st, tr(width_key(w)), on) {
+                        set_bit(&mut st.filter.widths, w.bit(), v);
+                    }
+                }
+            });
+            filter_section(ui, &tr("font_manager.technology"), |ui| {
+                for t in Technology::ALL {
+                    let on = st.filter.tech & t.bit() != 0;
+                    if let Some(v) = filter_box(ui, st, tr(tech_key(t)), on) {
+                        set_bit(&mut st.filter.tech, t.bit(), v);
+                    }
+                }
+            });
+            filter_section(ui, &tr("font_manager.d_scripts"), |ui| {
+                for s in Script::ALL {
+                    let on = st.filter.scripts & script_bit(s) != 0;
+                    if let Some(v) = filter_box(ui, st, tr(script_key(s)), on) {
+                        set_bit(&mut st.filter.scripts, script_bit(s), v);
+                    }
+                }
+            });
+            filter_section(ui, &tr("font_list.trait_features"), |ui| {
+                for tag in FILTER_FEATURES {
+                    let on = st.filter.features.contains(tag);
+                    if let Some(v) = filter_box(ui, st, feature_label(tag), on) {
+                        st.filter.set_feature(*tag, v);
+                    }
+                }
+            });
+            filter_section(ui, &tr("font_manager.embedding_rights"), |ui| {
+                for e in Embedding::ALL {
+                    let on = st.filter.embedding & embedding_bit(e) != 0;
+                    if let Some(v) = filter_box(ui, st, tr(embedding_key(e)), on) {
+                        set_bit(&mut st.filter.embedding, embedding_bit(e), v);
+                    }
+                }
+            });
+        });
+    if (st.filter.clone(), st.show) != before {
+        st.highlight = None;
+        st.scroll = true;
+    }
 }
 
 /// What happened to a row this frame.
@@ -723,7 +1423,7 @@ fn draw_row(
         let icon = Rect::from_min_size(egui::pos2(left, rect.center().y - 8.0), Vec2::splat(16.0));
         let tip = kind_icon(&painter, icon, info.as_ref());
         if ui.rect_contains_pointer(icon) {
-            resp.clone().on_hover_text(tip);
+            resp.clone().rich_tip(tip);
         }
         left = icon.right() + 8.0;
     }
@@ -758,7 +1458,7 @@ fn draw_row(
         ));
         if hot {
             resp.clone()
-                .on_hover_text(trf("font_list.styles", &[("n", &faces.to_string())]));
+                .rich_tip(trf("font_list.styles", &[("n", &faces.to_string())]));
         }
         if resp.clicked() && hot {
             out.toggled = true;
@@ -767,6 +1467,37 @@ fn draw_row(
     }
     if resp.clicked() && !out.toggled {
         out.clicked = true;
+    }
+    // "Embedded" at the end of a family that came with the drawing.
+    if matches!(row, Row::Family(_)) && info.as_ref().is_some_and(|i| i.embedded) {
+        let tag = embedded_tag(
+            &painter,
+            Rect::from_min_max(
+                egui::pos2(left, rect.top()),
+                egui::pos2(right, rect.bottom()),
+            ),
+            false,
+        );
+        right = tag.left() - 6.0;
+    }
+    // The English name, light, at the end of a family listed by a name
+    // in another language (#1249).
+    if matches!(row, Row::Family(_)) && app.settings.font_english_names {
+        if let Some(en) = info.as_ref().and_then(|i| i.english.as_deref()) {
+            let font = egui::FontId::proportional(11.0);
+            let galley = painter.layout_no_wrap(en.to_string(), font, Tokens::text_dim());
+            let room = (right - left) * 0.5;
+            let w = galley.size().x.min(room);
+            let at = egui::pos2(right - w, rect.center().y - galley.size().y / 2.0);
+            let clip = Rect::from_min_max(
+                egui::pos2(right - w, rect.top()),
+                egui::pos2(right, rect.bottom()),
+            );
+            painter
+                .with_clip_rect(clip)
+                .galley(at, galley, Tokens::text_dim());
+            right -= w + 6.0;
+        }
     }
     // The name in its own font; symbol fonts, families to download and
     // names it cannot draw in the interface font.
@@ -798,7 +1529,7 @@ fn draw_row(
                     (clip.bottom() - shown.top()) / size.y.max(1.0),
                 ),
             );
-            painter.image(p.texture.id(), clip, uv, Color32::WHITE);
+            painter.image(p.texture.id(), clip, uv, Tokens::text());
         }
         None => {
             let font = egui::FontId::proportional((sample * 0.8).clamp(12.0, 22.0));
@@ -812,6 +1543,27 @@ fn draw_row(
         }
     }
     out
+}
+
+/// Whether `family` came with a drawing and is not installed.
+fn is_embedded(family: &str) -> bool {
+    !family.is_empty() && tracedraw_text::fonts().is_document_family(family)
+}
+
+/// The word "Embedded" at the right end of `r`, on the field's colour
+/// when `field` (over the end of a long name); the room it took.
+fn embedded_tag(painter: &egui::Painter, r: Rect, field: bool) -> Rect {
+    let text = tr("font_list.embedded_tag");
+    let font = egui::FontId::proportional(11.0);
+    let galley = painter.layout_no_wrap(text, font, Color32::from_rgb(0xC0, 0x6A, 0x12));
+    let size = galley.size();
+    let at = egui::pos2(r.right() - size.x, r.center().y - size.y / 2.0);
+    let room = Rect::from_min_size(at, size).expand2(Vec2::new(3.0, 0.0));
+    if field {
+        painter.rect_filled(room, 0.0, Tokens::field());
+    }
+    painter.galley(at, galley, Color32::from_rgb(0xC0, 0x6A, 0x12));
+    room
 }
 
 /// The small picture of how a family is built; returns its description.
@@ -912,7 +1664,7 @@ fn preview(app: &mut App, ui: &mut Ui, family: &str, style: (bool, bool), ppp: f
                 p.texture.id(),
                 shown,
                 Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                Color32::WHITE,
+                CARD_INK,
             );
         }
         None => {
@@ -921,7 +1673,7 @@ fn preview(app: &mut App, ui: &mut Ui, family: &str, style: (bool, bool), ppp: f
                 egui::Align2::CENTER_CENTER,
                 tr("font_list.no_preview"),
                 egui::FontId::proportional(12.0),
-                Tokens::text_dim(),
+                Color32::from_gray(0x80),
             );
         }
     }
@@ -936,7 +1688,7 @@ fn preview(app: &mut App, ui: &mut Ui, family: &str, style: (bool, bool), ppp: f
         egui::Align2::LEFT_BOTTOM,
         format!("{family} ({style_name})"),
         egui::FontId::proportional(11.5),
-        Tokens::text(),
+        CARD_INK,
     );
 }
 
@@ -973,13 +1725,39 @@ mod tests {
         assert_eq!(matching(&all, Some("  "), "Arial"), all);
     }
 
+    /// A closed list on a bar clones no family name a frame; open, typed
+    /// in, just left with Enter or turned with the wheel it holds them
+    /// all (#616, #665).
+    #[test]
+    fn a_closed_list_builds_no_family_list() {
+        let mut app = App::headless();
+        app.font_families = (0..1332).map(|i| format!("Family {i}")).collect();
+        let closed = list_needed(false, false, false, false);
+        assert!(listed_families(&app, Show::All, closed).is_empty());
+        for (open, focused, lost, wheel) in [
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, true, false),
+            (false, false, false, true),
+        ] {
+            let needed = list_needed(open, focused, lost, wheel);
+            assert_eq!(listed_families(&app, Show::All, needed).len(), 1332);
+        }
+    }
+
     #[test]
     fn the_fonts_used_last_keep_the_newest_first() {
         let mut recent = Vec::new();
         for f in ["A", "B", "C", "A", "D", "E", "F"] {
             remember(&mut recent, f);
         }
-        assert_eq!(recent, names(&["F", "E", "D", "A", "C"]));
+        assert_eq!(recent, names(&["F", "E", "D", "A", "C", "B"]));
+        // The list keeps up to the most Options > Text > Fonts can show.
+        for i in 0..30 {
+            remember(&mut recent, &format!("Font {i}"));
+        }
+        assert_eq!(recent.len(), RECENT_MAX);
+        assert_eq!(recent[0], "Font 29");
     }
 
     #[test]
@@ -1000,8 +1778,10 @@ mod tests {
             image.size
         );
         assert!(baseline > 10.0 && baseline < image.size[1] as f32);
-        // Ink, and transparent paper.
+        // Ink, and transparent paper. The ink is a white mask, tinted
+        // where it is painted (#660).
         assert!(image.pixels.iter().any(|p| p.a() > 200));
+        assert!(image.pixels.iter().any(|p| p.r() == 255 && p.a() == 255));
         assert!(image.pixels.iter().any(|p| p.a() == 0));
         // A family that is not installed draws nothing (its stand-in would
         // be a lie), and so does no text.
@@ -1009,9 +1789,167 @@ mod tests {
         assert!(render_text(&family, "", (false, false), 24.0).is_none());
     }
 
+    /// The names in the list are drawn in the theme's text colour, light
+    /// on the dark themes, not dark on the dark popup (#660).
+    #[test]
+    fn names_take_the_theme_text_colour() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let fonts = tracedraw_text::fonts();
+        let Some(family) = app
+            .font_families
+            .iter()
+            .find(|f| fonts.family_info(f).is_some_and(|i| !i.symbol))
+            .cloned()
+        else {
+            return;
+        };
+        let mut st = ListState::default();
+        let rows = vec![Row::Family(family.clone())];
+        let families = vec![family.clone()];
+        let mut tints = Vec::new();
+        // Twice: the picture is made on the first frame.
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1200.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let (mut pick, mut hovered) = (None, None);
+            let mut out = ctx.run_ui(input, |ui| {
+                list_body(
+                    &mut app,
+                    ui,
+                    &mut st,
+                    &rows,
+                    &families,
+                    &family,
+                    false,
+                    &mut pick,
+                    &mut hovered,
+                );
+            });
+            out.textures_delta.clear();
+            tints.clear();
+            for s in &out.shapes {
+                if let egui::Shape::Mesh(m) = &s.shape {
+                    if m.texture_id != egui::TextureId::default() {
+                        tints.extend(m.vertices.iter().map(|v| v.color));
+                    }
+                }
+            }
+        }
+        assert!(!tints.is_empty());
+        assert!(tints.iter().all(|c| *c != Color32::WHITE), "{tints:?}");
+        assert!(tints.iter().all(|c| c.r() == c.g() && c.g() == c.b()));
+    }
+
     /// The list draws open, with every filter, styles shown, a long list
     /// and typed text; picking returns the family and keeps it among the
     /// fonts used last.
+    /// A family that came with a drawing and is not installed says
+    /// "Embedded" in the font box and at the end of its row in the list;
+    /// installed families do not (#518).
+    #[test]
+    fn fonts_embedded_in_the_drawing_say_so() {
+        let mut app = App::headless();
+        app.add_carried_fonts(&[tracedraw_core::DocumentFont::new(
+            "Selawik",
+            include_bytes!("../../assets/fonts/Selawik-Regular.ttf").to_vec(),
+        )]);
+        if !tracedraw_text::fonts().is_document_family("Selawik") {
+            return; // installed on this machine
+        }
+        let installed = app
+            .font_families
+            .iter()
+            .find(|f| !is_embedded(f))
+            .cloned()
+            .expect("an installed family");
+        let tag = tr("font_list.embedded_tag");
+        let ctx = crate::theme::ui_context();
+        let texts = |out: &egui::FullOutput| -> Vec<String> {
+            out.shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1200.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        // The closed font box.
+        for (family, tagged) in [("Selawik", true), (installed.as_str(), false)] {
+            let mut out = ctx.run_ui(input(), |ui| {
+                font_list_live(&mut app, ui, "embedded_test", family, 220.0);
+            });
+            out.textures_delta.clear();
+            assert_eq!(texts(&out).contains(&tag), tagged, "{family}");
+        }
+        // The rows of the list.
+        for (family, tagged) in [("Selawik", true), (installed.as_str(), false)] {
+            let mut st = ListState::default();
+            let rows = vec![Row::Family(family.to_string())];
+            let families = vec![family.to_string()];
+            let (mut pick, mut hovered) = (None, None);
+            let mut out = ctx.run_ui(input(), |ui| {
+                list_body(
+                    &mut app,
+                    ui,
+                    &mut st,
+                    &rows,
+                    &families,
+                    "",
+                    false,
+                    &mut pick,
+                    &mut hovered,
+                );
+            });
+            out.textures_delta.clear();
+            assert_eq!(texts(&out).contains(&tag), tagged, "row {family}");
+        }
+    }
+
+    /// The filter (#867) reads each family once, a little a frame, and
+    /// keeps the families with what it asks; nothing checked keeps all.
+    #[test]
+    fn the_filter_keeps_the_families_with_what_it_asks() {
+        let fonts = tracedraw_text::fonts();
+        let mut families = fonts.families();
+        families.push("Not Installed Anywhere".to_string());
+        let mut previews = FontPreviews::default();
+        let (all, done) = previews.filtered(&families, &FontFilter::default());
+        assert!(done);
+        assert_eq!(all, families);
+        for t in FontTrait::ALL {
+            let mut filter = FontFilter::default();
+            filter.set(t, true);
+            let shown = loop {
+                let (shown, done) = previews.filtered(&families, &filter);
+                if done {
+                    break shown;
+                }
+            };
+            assert!(!shown.iter().any(|f| f == "Not Installed Anywhere"));
+            for f in &families {
+                let info = fonts.family_info(f);
+                assert_eq!(
+                    shown.contains(f),
+                    filter.matches(info.as_ref()),
+                    "{f} {t:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_list_draws_in_every_state() {
         let ctx = crate::theme::ui_context();
@@ -1030,16 +1968,25 @@ mod tests {
         };
         let mut out = ctx.run_ui(input, |ui| {
             let current = app.text_font.clone();
-            ui.push_id(id, |ui| font_list(&mut app, ui, "t", &current, 180.0));
+            ui.push_id(id, |ui| font_list_live(&mut app, ui, "t", &current, 180.0));
         });
         out.textures_delta.clear();
         // Every filter and an expanded family draw.
-        for show in Show::ALL {
+        for (i, show) in Show::ALL.into_iter().enumerate() {
+            // With and without a filter, still reading or read (#867).
+            let mut filter = FontFilter::default();
+            if i % 2 == 1 {
+                filter.set(FontTrait::Serif, true);
+                filter.tech = Technology::Variable.bit();
+                filter.set_feature(*b"smcp", true);
+            }
             let mut st = ListState {
                 show,
                 expanded: Some(first.clone()),
                 typed: Some(first.chars().take(2).collect()),
                 scroll: true,
+                filter,
+                reading: i == 1,
                 ..Default::default()
             };
             st.hovered = Some((first.clone(), (true, false)));
@@ -1077,6 +2024,42 @@ mod tests {
             });
             out.textures_delta.clear();
             assert!(pick.is_none());
+            // The filter's choices beside it, with and without folders.
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1200.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let folders = if i % 2 == 0 {
+                Vec::new()
+            } else {
+                vec![std::path::PathBuf::from("/usr/share/fonts/truetype")]
+            };
+            // The Font Manager's Favorites and a collection (#867).
+            let mut prefs = crate::ui::font_manager::FontManagerPrefs::default();
+            prefs.favorites = vec!["Sans-Bold".into()];
+            prefs
+                .collections
+                .push(crate::ui::font_manager::FontCollection {
+                    name: "Book".into(),
+                    fonts: vec!["Serif-Regular".into()],
+                });
+            let lib = collections_of(&prefs);
+            let mut out = ctx.run_ui(input, |ui| filter_panel(ui, &mut st, &folders, &lib));
+            out.textures_delta.clear();
+            for label in [
+                tr("font_manager.w_bold"),
+                tr("font_manager.favorites"),
+                "Book".to_string(),
+                tr("font_manager.protected"),
+            ] {
+                assert!(
+                    st.filter_hits.iter().any(|(l, _)| *l == label),
+                    "{label} in the filter"
+                );
+            }
         }
         // A pick keeps the family first among the fonts used last.
         remember(&mut app.settings.recent_fonts, "Picked");
@@ -1084,5 +2067,636 @@ mod tests {
             app.settings.recent_fonts.first().map(String::as_str),
             Some("Picked")
         );
+    }
+}
+
+/// What the drawing shows while a list points at it (#370).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LiveText {
+    /// A family (and style) from a font list.
+    Font(FontPick),
+    /// A size, in points, from the size list.
+    Size(f64),
+}
+
+/// A font or size shown in the drawing while a list points at it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveFont {
+    /// The list showing it.
+    pub owner: String,
+    pub shown: LiveText,
+    /// The text settings before (family, bold, italic, size).
+    pub saved: (String, bool, bool, f64),
+}
+
+impl App {
+    /// What a font change would act on: text being edited, table cells or
+    /// a selected text object.
+    pub fn has_text_target(&self) -> bool {
+        self.text_edit.is_some()
+            || self.table_edit.is_some()
+            || self
+                .selected_shapes()
+                .iter()
+                .any(|s| matches!(s.kind, tracedraw_core::ShapeKind::Text { .. }))
+    }
+
+    /// The unit font sizes are shown and typed in (#529).
+    pub fn text_units(&self) -> crate::app::Units {
+        crate::app::Units::from_id(&self.settings.text_units)
+    }
+
+    /// The answer OK to "make it the default of new text?": the font
+    /// (with its style) and the size new text gets.
+    pub fn set_text_defaults(
+        &mut self,
+        font: Option<String>,
+        style: Option<(bool, bool)>,
+        size: Option<f64>,
+    ) {
+        if let Some(f) = font {
+            self.text_default_font = f.clone();
+            self.text_font = f;
+        }
+        if let Some((bold, italic)) = style {
+            self.text_default_bold = bold;
+            self.text_default_italic = italic;
+            self.text_bold = bold;
+            self.text_italic = italic;
+        }
+        if let Some(s) = size.filter(|s| s.is_finite() && *s > 0.0) {
+            self.text_default_size = s;
+            self.text_size_pt = s;
+        }
+    }
+
+    /// The text settings as they are, not as a preview shows them.
+    pub fn text_settings_shown(&self) -> (String, bool, bool, f64) {
+        self.live_font.as_ref().map_or_else(
+            || {
+                (
+                    self.text_font.clone(),
+                    self.text_bold,
+                    self.text_italic,
+                    self.text_size_pt,
+                )
+            },
+            |l| l.saved.clone(),
+        )
+    }
+
+    /// Show the selected text in `want` while the list `owner` points at
+    /// it, as a preview the history does not keep; `None` (or what is in
+    /// use already) shows the text as it is.
+    pub fn preview_text(&mut self, owner: &str, want: Option<LiveText>) {
+        if self.live_font.as_ref().map(|l| &l.shown) == want.as_ref() {
+            return;
+        }
+        self.end_font_preview();
+        let Some(w) = want else {
+            return;
+        };
+        let same = match &w {
+            LiveText::Font(p) => p.family == self.text_font && p.style.is_none(),
+            LiveText::Size(s) => (s - self.text_size_pt).abs() < 1e-6,
+        };
+        if same || !self.has_text_target() {
+            return;
+        }
+        let saved = self.text_settings_shown();
+        self.engine.begin_preview();
+        match &w {
+            LiveText::Font(p) => {
+                self.text_font = p.family.clone();
+                if let Some((bold, italic)) = p.style {
+                    self.text_bold = bold;
+                    self.text_italic = italic;
+                }
+            }
+            LiveText::Size(s) => self.text_size_pt = *s,
+        }
+        self.apply_text_style();
+        (
+            self.text_font,
+            self.text_bold,
+            self.text_italic,
+            self.text_size_pt,
+        ) = saved.clone();
+        self.live_font = Some(LiveFont {
+            owner: owner.to_string(),
+            shown: w,
+            saved,
+        });
+    }
+
+    /// End a preview: the text as it was, the history untouched.
+    pub fn end_font_preview(&mut self) {
+        if let Some(l) = self.live_font.take() {
+            self.engine.withdraw_preview();
+            (
+                self.text_font,
+                self.text_bold,
+                self.text_italic,
+                self.text_size_pt,
+            ) = l.saved;
+        }
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use tracedraw_core::geometry::Point;
+
+    /// The list opened with a click on its arrow takes the keys, as one
+    /// opened from its field does (#1839): Down and Up, End, Enter picks,
+    /// Esc closes with nothing picked, letters typed find a name.
+    #[test]
+    fn the_list_opened_from_its_arrow_takes_the_keys() {
+        let mut app = App::headless();
+        let ctx = crate::theme::ui_context();
+        let current = app.text_font.clone();
+        let base = egui::Id::new("font_bar").with(("font_list", "keys"));
+        let popup = base.with("popup");
+        let t = std::cell::Cell::new(0.0);
+        let run = |app: &mut App, events: Vec<egui::Event>| -> Option<FontPick> {
+            let mut picked = None;
+            let mut events = Some(events);
+            for _ in 0..4 {
+                t.set(t.get() + 0.1);
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 700.0),
+                        )),
+                        events: events.take().unwrap_or_default(),
+                        time: Some(t.get()),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        crate::ui::keynav::frame(ui.ctx(), false);
+                        egui::Area::new(egui::Id::new("font_bar"))
+                            .fixed_pos(egui::pos2(100.0, 100.0))
+                            .show(ui.ctx(), |ui| {
+                                let (p, _) = font_list_live(app, ui, "keys", &current, 180.0);
+                                picked = picked.take().or(p);
+                            });
+                        crate::ui::keynav::end_frame(ui.ctx());
+                    },
+                );
+                out.textures_delta.clear();
+            }
+            picked
+        };
+        let key = |k: Key| {
+            vec![egui::Event::Key {
+                key: k,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]
+        };
+        let click_arrow = |app: &mut App| {
+            let arrow = ctx
+                .viewport(|v| {
+                    v.this_pass
+                        .widgets
+                        .get_layer(egui::LayerId::new(
+                            egui::Order::Middle,
+                            egui::Id::new("font_bar"),
+                        ))
+                        .find(|w| {
+                            (w.rect.width() - 18.0).abs() < 0.5
+                                && w.sense.senses_click()
+                                && !w.sense.senses_drag()
+                        })
+                        .map(|w| w.rect.center())
+                })
+                .expect("the arrow");
+            let button = |pressed| egui::Event::PointerButton {
+                pos: arrow,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            run(app, vec![egui::Event::PointerMoved(arrow), button(true)]);
+            run(app, vec![button(false), egui::Event::PointerGone]);
+        };
+        run(&mut app, Vec::new());
+        let families = matching(&listed_families(&app, Show::All, true), None, &current);
+        assert!(families.len() >= 2, "{families:?}");
+        click_arrow(&mut app);
+        assert!(egui::Popup::is_id_open(&ctx, popup));
+        assert_eq!(ctx.memory(|m| m.focused()), Some(base.with("field")));
+        // Down and Esc: closed, nothing picked.
+        assert_eq!(run(&mut app, key(Key::ArrowDown)), None);
+        assert_eq!(run(&mut app, key(Key::Escape)), None);
+        assert!(!egui::Popup::is_id_open(&ctx, popup));
+        // End and Enter: the last family.
+        click_arrow(&mut app);
+        assert!(egui::Popup::is_id_open(&ctx, popup));
+        assert_eq!(run(&mut app, key(Key::End)), None);
+        let picked = run(&mut app, key(Key::Enter)).expect("picked with Enter");
+        assert_eq!(Some(&picked.family), families.last());
+        assert!(!egui::Popup::is_id_open(&ctx, popup));
+        // Down from the current family, Enter: the next one.
+        click_arrow(&mut app);
+        let picked = run(&mut app, key(Key::ArrowDown))
+            .or_else(|| run(&mut app, key(Key::Enter)))
+            .expect("picked with Enter");
+        let at = families.iter().position(|f| *f == current);
+        let next = at.map_or(0, |i| (i + 1).min(families.len() - 1));
+        assert_eq!(picked.family, families[next]);
+        // Letters typed find the family starting with them.
+        let other = families.iter().find(|f| **f != current).expect("another");
+        click_arrow(&mut app);
+        let first: String = other.chars().take(3).collect();
+        assert_eq!(run(&mut app, vec![egui::Event::Text(first.clone())]), None);
+        let picked = run(&mut app, key(Key::Enter)).expect("picked with Enter");
+        assert!(
+            picked.family.to_lowercase().contains(&first.to_lowercase()),
+            "{} for {first}",
+            picked.family
+        );
+    }
+
+    /// Selecting a text shows its font and size, but the font and size of
+    /// new text (Options > Text > Display) stay as set, can be changed
+    /// with the text selected, and are what is kept for the next session
+    /// (#449).
+    #[test]
+    fn the_default_text_font_does_not_follow_the_selection() {
+        let mut app = App::headless();
+        app.text_default_font = "Arial".into();
+        app.text_default_size = 24.0;
+        let id = app
+            .new_shape(tracedraw_core::ShapeKind::Text {
+                spans: vec![tracedraw_core::TextSpan::new("Text", "Impact", 130.0)],
+                origin: Point::new(10.0, 10.0),
+                frame: None,
+                align: Default::default(),
+                para: Default::default(),
+                on_path: None,
+            })
+            .expect("text");
+        app.select(vec![id]);
+        app.sync_text_defaults_from(id);
+        assert_eq!(app.text_font, "Impact");
+        assert_eq!(app.text_default_font, "Arial");
+        // Options sets a default while the text is selected: the text is
+        // left alone.
+        app.text_default_size = 48.0;
+        assert_eq!(text_of(&app, id), ("Impact".to_string(), 130.0));
+        let prefs = app.tool_prefs();
+        assert_eq!(
+            (prefs.text_font.as_str(), prefs.text_size_pt),
+            ("Arial", 48.0)
+        );
+        // Nothing selected: the Text tool's bar shows the defaults again.
+        app.select(Vec::new());
+        app.tool = crate::tools::Tool::Text;
+        let ctx = crate::theme::ui_context();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| crate::ui::root(&mut app, ui));
+        out.textures_delta.clear();
+        assert_eq!((app.text_font.as_str(), app.text_size_pt), ("Arial", 48.0));
+    }
+
+    /// The wheel over the closed font list of the bar picks the family
+    /// after (down) or before (up) the current one, for the selected text;
+    /// it does not open the list, keep the families as used last, or ask
+    /// for the font of new text when nothing is selected (#665).
+    #[test]
+    fn the_wheel_over_the_font_list_steps_the_font() {
+        let mut app = App::headless();
+        let families = app.font_families.clone();
+        if families.len() < 3 {
+            return;
+        }
+        let id = app
+            .new_shape(tracedraw_core::ShapeKind::Text {
+                spans: vec![tracedraw_core::TextSpan::new("Text", &families[1], 24.0)],
+                origin: Point::new(10.0, 10.0),
+                frame: None,
+                align: Default::default(),
+                para: Default::default(),
+                on_path: None,
+            })
+            .expect("text");
+        app.select(vec![id]);
+        app.sync_text_defaults_from(id);
+        let recent = app.settings.recent_fonts.clone();
+        let ctx = crate::theme::ui_context();
+        let origin = egui::pos2(100.0, 100.0);
+        let run = |app: &mut App, events: Vec<egui::Event>| -> bool {
+            let mut changed = false;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Area::new(egui::Id::new("font_bar"))
+                        .fixed_pos(origin)
+                        .show(ui.ctx(), |ui| {
+                            changed = text_font_list(app, ui, "propbar_font", 180.0);
+                        });
+                },
+            );
+            out.textures_delta.clear();
+            changed
+        };
+        let wheel = |app: &mut App, dy: f32| {
+            run(
+                app,
+                vec![egui::Event::PointerMoved(origin + egui::vec2(40.0, 8.0))],
+            );
+            run(
+                app,
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, dy),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            )
+        };
+        run(&mut app, Vec::new());
+        // Down: the next family; up twice: back past it to the first.
+        assert!(wheel(&mut app, -1.0));
+        assert_eq!(app.text_font, families[2]);
+        assert!(wheel(&mut app, 1.0));
+        assert_eq!(app.text_font, families[1]);
+        assert!(wheel(&mut app, 1.0));
+        assert_eq!(app.text_font, families[0]);
+        // At the top it stays.
+        assert!(!wheel(&mut app, 1.0));
+        assert_eq!(app.text_font, families[0]);
+        assert_eq!(app.settings.recent_fonts, recent);
+        let popup = egui::Id::new("font_bar")
+            .with(("font_list", "propbar_font"))
+            .with("popup");
+        assert!(!egui::Popup::is_id_open(&ctx, popup));
+        // Nothing selected: the wheel leaves the font of new text alone
+        // and asks nothing.
+        app.select(Vec::new());
+        app.dialog = crate::ui::dialogs::Dialog::None;
+        assert!(!wheel(&mut app, -1.0));
+        assert!(matches!(app.dialog, crate::ui::dialogs::Dialog::None));
+    }
+
+    /// Down in the focused field of the closed list with no text to
+    /// change opens the list rather than ask for the font of new text
+    /// (#1754); with text selected it steps the font (see
+    /// `pick_drag_tests::arrows_in_the_font_field_step_the_selected_texts_font`).
+    #[test]
+    fn arrows_in_the_font_field_with_no_text_open_the_list() {
+        let mut app = App::headless();
+        let ctx = crate::theme::ui_context();
+        let origin = egui::pos2(100.0, 100.0);
+        let font = app.text_font.clone();
+        let base = egui::Id::new("font_bar").with(("font_list", "propbar_font"));
+        let run = |app: &mut App, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Area::new(egui::Id::new("font_bar"))
+                        .fixed_pos(origin)
+                        .show(ui.ctx(), |ui| {
+                            text_font_list(app, ui, "propbar_font", 180.0);
+                        });
+                },
+            );
+            out.textures_delta.clear();
+        };
+        run(&mut app, Vec::new());
+        ctx.memory_mut(|m| m.request_focus(base.with("field")));
+        run(&mut app, Vec::new());
+        egui::Popup::close_id(&ctx, base.with("popup"));
+        run(&mut app, Vec::new());
+        assert!(!egui::Popup::is_id_open(&ctx, base.with("popup")));
+        run(
+            &mut app,
+            vec![egui::Event::Key {
+                key: Key::ArrowDown,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(egui::Popup::is_id_open(&ctx, base.with("popup")));
+        assert!(matches!(app.dialog, crate::ui::dialogs::Dialog::None));
+        assert_eq!(app.text_font, font);
+    }
+
+    /// The filter opens inside the font list and leaves it open: its
+    /// button, a box ticked and a choice of which fonts show each keep
+    /// the list up and filter it at once, in every list (#867). A menu
+    /// of its own used to replace the list (egui keeps one popup open).
+    #[test]
+    fn the_filter_opens_inside_the_font_list() {
+        let mut app = App::headless();
+        let ctx = crate::theme::ui_context();
+        let origin = egui::pos2(100.0, 100.0);
+        for salt in [
+            "propbar_font",
+            "docker_text_font",
+            "glyphs_font",
+            "options_default_font",
+        ] {
+            let run = |app: &mut App, events: Vec<egui::Event>| {
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::Area::new(egui::Id::new("font_host"))
+                            .fixed_pos(origin)
+                            .show(ui.ctx(), |ui| {
+                                if salt == "options_default_font" {
+                                    default_font_list(app, ui, salt, 180.0);
+                                } else {
+                                    text_font_list(app, ui, salt, 180.0);
+                                }
+                            });
+                    },
+                );
+                out.textures_delta.clear();
+            };
+            let click = |app: &mut App, at: egui::Pos2| {
+                let press = |pressed| egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                run(app, vec![egui::Event::PointerMoved(at)]);
+                run(app, vec![press(true)]);
+                run(app, vec![press(false)]);
+                run(app, Vec::new());
+            };
+            let id = egui::Id::new("font_host").with(("font_list", salt));
+            let popup = id.with("popup");
+            let state = || -> ListState { ctx.data(|d| d.get_temp(id)).unwrap_or_default() };
+            app.settings.font_filter_open = false;
+            run(&mut app, Vec::new());
+            // The arrow at the right of the field opens the list.
+            click(&mut app, origin + egui::vec2(180.0 - 9.0, 9.0));
+            assert!(egui::Popup::is_id_open(&ctx, popup), "{salt}: list opens");
+            // The filter's button shows its choices; the list stays.
+            let button = state()
+                .filter_hits
+                .first()
+                .map(|(_, r)| *r)
+                .expect("filter button");
+            click(&mut app, button.center());
+            assert!(egui::Popup::is_id_open(&ctx, popup), "{salt}: list stays");
+            let st = state();
+            assert!(st.filter_open, "{salt}: choices show");
+            // Every section's choices show beside the list.
+            let hit = |st: &ListState, label: &str| {
+                st.filter_hits
+                    .iter()
+                    .find(|(l, _)| l == label)
+                    .map(|(_, r)| *r)
+                    .unwrap_or_else(|| panic!("{salt}: {label} shown"))
+            };
+            for key in [
+                "font_list.show_installed",
+                "font_manager.emb_installable",
+                "font_manager.tech_variable",
+                "font_manager.w_bold",
+                "font_manager.width_condensed",
+                "font_list.trait_serif",
+                "font_manager.s_cyrillic",
+            ] {
+                hit(&st, &tr(key));
+            }
+            hit(&st, &feature_label(b"smcp"));
+            let tick = hit(&st, &tr("font_list.trait_serif"));
+            assert!(
+                tick.left() >= origin.x + POPUP_W - 1.0,
+                "{salt}: beside the list, {tick:?}"
+            );
+            click(&mut app, tick.center());
+            assert!(egui::Popup::is_id_open(&ctx, popup), "{salt}: list stays");
+            assert!(state().filter.has(FontTrait::Serif), "{salt}: box ticked");
+            // Which fonts show is a choice there too.
+            let installed = hit(&state(), &tr("font_list.show_installed"));
+            click(&mut app, installed.center());
+            assert!(egui::Popup::is_id_open(&ctx, popup), "{salt}: list stays");
+            let st = state();
+            assert_eq!(st.show, Show::Installed);
+            assert_eq!(filter_count(&st), 2);
+            // The list filters what it lists.
+            let listed = listed_families(&app, st.show, true);
+            let (shown, _) = app.font_previews.filtered(&listed, &st.filter);
+            assert!(shown.len() <= listed.len());
+            // A click outside still closes the list.
+            click(&mut app, egui::pos2(900.0, 880.0));
+            assert!(
+                !egui::Popup::is_id_open(&ctx, popup),
+                "{salt}: closes outside"
+            );
+            // The filter is kept for the next time the list opens, and its
+            // choices show again there, in a popup no taller than the
+            // list: they scroll beside it (#867).
+            assert!(state().filter.has(FontTrait::Serif));
+            assert!(app.settings.font_filter_open, "{salt}: left open");
+            click(&mut app, origin + egui::vec2(180.0 - 9.0, 9.0));
+            assert!(egui::Popup::is_id_open(&ctx, popup), "{salt}: opens again");
+            let st = state();
+            assert!(st.filter_open, "{salt}: choices show again");
+            assert!(st.list_height > 0.0);
+            let area = ctx.memory(|m| m.area_rect(popup)).expect("popup drawn");
+            assert!(
+                area.height() <= st.list_height + 30.0,
+                "{salt}: {area:?} for a list {} tall",
+                st.list_height
+            );
+            click(&mut app, egui::pos2(900.0, 880.0));
+        }
+    }
+
+    fn text_of(app: &App, id: tracedraw_core::ShapeId) -> (String, f64) {
+        match app.doc().find_shape(id).map(|s| s.kind.clone()) {
+            Some(tracedraw_core::ShapeKind::Text { spans, .. }) => {
+                (spans[0].font_family.clone(), spans[0].size_pt)
+            }
+            _ => panic!("text"),
+        }
+    }
+
+    /// While a list points at a family or size, the selected text shows
+    /// it; when it stops, the text, the settings and the history are as
+    /// they were (#370).
+    #[test]
+    fn the_text_shows_the_font_a_list_points_at() {
+        let mut app = App::headless();
+        app.start_text(Point::new(20.0, 50.0), None);
+        app.text_insert("Preview");
+        app.finish_text();
+        let id = *app.selection.first().expect("text");
+        let (font, size) = text_of(&app, id);
+        app.undo();
+        app.redo();
+        app.select(vec![id]);
+        let history = app.engine.history_labels();
+        let pick = FontPick {
+            family: "Preview Family".into(),
+            style: None,
+        };
+        app.preview_text("propbar_font", Some(LiveText::Font(pick.clone())));
+        assert_eq!(text_of(&app, id).0, "Preview Family");
+        // The settings stay as they were.
+        assert_eq!(app.text_font, font);
+        assert_eq!(app.text_settings_shown().0, font);
+        // Another family: the preview follows.
+        let other = FontPick {
+            family: "Other Family".into(),
+            style: None,
+        };
+        app.preview_text("propbar_font", Some(LiveText::Font(other)));
+        assert_eq!(text_of(&app, id).0, "Other Family");
+        app.end_font_preview();
+        assert_eq!(text_of(&app, id), (font.clone(), size));
+        assert_eq!(app.engine.history_labels(), history);
+        assert!(app.live_font.is_none());
+        // Sizes too.
+        app.preview_text("size", Some(LiveText::Size(size * 2.0)));
+        assert!((text_of(&app, id).1 - size * 2.0).abs() < 1e-6);
+        app.preview_text("size", None);
+        assert_eq!(text_of(&app, id), (font.clone(), size));
+        assert_eq!(app.engine.history_labels(), history);
+        // Nothing selected: no preview.
+        app.select(Vec::new());
+        app.preview_text("propbar_font", Some(LiveText::Font(pick)));
+        assert!(app.live_font.is_none());
+        assert_eq!(text_of(&app, id).0, font);
     }
 }

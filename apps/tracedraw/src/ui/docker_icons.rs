@@ -406,6 +406,10 @@ pub(super) fn draw(p: &Painter, r: Rect, tab: DockerTab) {
             i.line((12.0, 0.5), (12.0, 7.5));
             i.line((8.5, 4.0), (15.5, 4.0));
         }
+        // Panels the reference shows no picture for: a plain sheet.
+        _ => {
+            i.rect(2.0, 1.0, 14.0, 15.0);
+        }
     }
 }
 

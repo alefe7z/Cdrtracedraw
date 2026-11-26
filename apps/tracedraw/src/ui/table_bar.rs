@@ -3,6 +3,7 @@
 //! and text) and the dialog asking how many rows or columns to insert or
 //! split into.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::i18n::tr;
 use crate::theme::Tokens;
@@ -33,19 +34,17 @@ fn length(ui: &mut Ui, app: &App, mm: f64, min_mm: f64) -> Option<f64> {
     let r = ui.add(
         crate::ui::field::NumField::new(&mut v)
             .range(units.from_mm(min_mm)..=units.from_mm(5000.0))
-            .fixed_decimals(app.settings.precision.min(10) as usize)
+            .length_decimals(app.settings.precision.min(10) as usize)
             .suffix(format!(" {}", units.short()))
             .width(64.0),
     );
     r.changed().then(|| units.to_mm(v))
 }
 
-/// The Table tool's bar.
-pub fn table_bar(app: &mut App, ui: &mut Ui) {
-    dim(ui, "toolbar.rows");
-    ui.add(crate::ui::field::NumField::new(&mut app.table_rows).range(1..=100));
-    dim(ui, "toolbar.columns");
-    ui.add(crate::ui::field::NumField::new(&mut app.table_cols).range(1..=100));
+/// The Table tool's bar, also shown for a table selected with the Pick
+/// tool (`drawing` false: without the drawing hint, #1680).
+pub fn table_bar(app: &mut App, ui: &mut Ui, drawing: bool) {
+    counts(app, ui);
     vsep(ui);
     let target = app.table_target();
     let cells = app.table_edit.is_some() && target.is_some();
@@ -58,14 +57,56 @@ pub fn table_bar(app: &mut App, ui: &mut Ui) {
     borders(app, ui, cells);
     if target.is_some() {
         vsep(ui);
-        ui.menu_button(tr("table.options"), |ui| table_options(app, ui));
+        ui.imenu_button("table.options", |ui| table_options(app, ui))
+            .response
+            .rich_tip(crate::ui::tips::keyed("table.options"));
+        // The cells in the spreadsheet program (#4145).
+        if !crate::files::WEB
+            && ui
+                .add(crate::ui::btn_icons::Ib::with_text(
+                    "table.edit_in_spreadsheet",
+                    app.edit_in_spreadsheet_label(),
+                ))
+                .rich_tip(crate::ui::tips::pair(
+                    "table.edit_in_spreadsheet",
+                    "table.edit_in_spreadsheet_tip",
+                ))
+                .clicked()
+        {
+            app.edit_table_externally();
+        }
     }
     if cells {
         vsep(ui);
         cell_text(app, ui);
     }
-    vsep(ui);
-    dim(ui, "toolbar.drag_to_draw_table");
+    if drawing {
+        vsep(ui);
+        dim(ui, "toolbar.drag_to_draw_table");
+    }
+}
+
+/// Rows and Columns: of the selected table, which they change (rows at
+/// the bottom, columns at the right, #1680), else of the next table.
+fn counts(app: &mut App, ui: &mut Ui) {
+    let selected = app.selected_table_counts();
+    let (mut rows, mut cols) = selected.unwrap_or((app.table_rows, app.table_cols));
+    let r = crate::ui::toolbar::dim_labelled_as(ui, "toolbar.rows", "table.rows_desc", |ui| {
+        ui.add(crate::ui::field::NumField::new(&mut rows).range(1..=100))
+    });
+    let c =
+        crate::ui::toolbar::dim_labelled_as(ui, "toolbar.columns", "table.columns_desc", |ui| {
+            ui.add(crate::ui::field::NumField::new(&mut cols).range(1..=100))
+        });
+    if !(r.changed() || c.changed()) {
+        return;
+    }
+    if selected.is_some() {
+        app.table_set_counts(rows, cols);
+    } else {
+        app.table_rows = rows;
+        app.table_cols = cols;
+    }
 }
 
 /// Width and height of the selected cells.
@@ -73,12 +114,18 @@ fn cell_size(app: &mut App, ui: &mut Ui) {
     let Some((w, h)) = app.table_cell_size() else {
         return;
     };
-    dim(ui, "table.cell_width");
-    if let Some(v) = length(ui, app, w, 1.0) {
+    let tip = crate::ui::tips::pair("table.cell_width_tip", "table.cell_width_desc");
+    if let Some(v) = crate::ui::tips::tip_over(ui, tip, |ui| {
+        dim(ui, "table.cell_width");
+        length(ui, app, w, 1.0)
+    }) {
         app.table_set_cell_size(Some(v), None);
     }
-    dim(ui, "table.cell_height");
-    if let Some(v) = length(ui, app, h, 1.0) {
+    let tip = crate::ui::tips::pair("table.cell_height_tip", "table.cell_height_desc");
+    if let Some(v) = crate::ui::tips::tip_over(ui, tip, |ui| {
+        dim(ui, "table.cell_height");
+        length(ui, app, h, 1.0)
+    }) {
         app.table_set_cell_size(None, Some(v));
     }
 }
@@ -105,7 +152,11 @@ fn background(app: &mut App, ui: &mut Ui, cells: bool) {
     );
     let mut new = None;
     let mut has_fill = !matches!(fill, Fill::None);
-    if ui.checkbox(&mut has_fill, "").changed() {
+    if ui
+        .checkbox(&mut has_fill, "")
+        .rich_tip(crate::ui::tips::keyed("table.has_background"))
+        .changed()
+    {
         new = Some(if has_fill {
             Fill::Solid(Color::WHITE)
         } else {
@@ -113,9 +164,9 @@ fn background(app: &mut App, ui: &mut Ui, cells: bool) {
         });
     }
     if let Fill::Solid(c) = &fill {
-        let mut rgb = c.to_rgb8();
-        if ui.color_edit_button_srgb(&mut rgb).changed() {
-            new = Some(Fill::Solid(Color::rgb8(rgb[0], rgb[1], rgb[2])));
+        let mut c = *c;
+        if crate::ui::color_picker::color_button(ui, &mut c) {
+            new = Some(Fill::Solid(c));
         }
     }
     let Some(f) = new else {
@@ -143,7 +194,7 @@ fn borders(app: &mut App, ui: &mut Ui, cells: bool) {
     dim(ui, "toolbar.border");
     if cells || selected.is_some() {
         let current = app.table_ui.border_set;
-        egui::ComboBox::from_id_salt("table_border_set")
+        crate::ui::keynav::ComboBox::from_id_salt("table_border_set")
             .width(130.0)
             .selected_text(tr(current.key()))
             .show_ui(ui, |ui| {
@@ -170,6 +221,7 @@ fn borders(app: &mut App, ui: &mut Ui, cells: bool) {
             .fixed_decimals(3)
             .suffix(" mm"),
     );
+    let r = r.rich_tip(crate::ui::tips::keyed("table.border_width"));
     if r.changed() {
         border = if width <= 0.0 {
             None
@@ -182,15 +234,12 @@ fn borders(app: &mut App, ui: &mut Ui, cells: bool) {
         };
     }
     if let Some(b) = &mut border {
-        let mut rgb = b.color.to_rgb8();
-        if ui.color_edit_button_srgb(&mut rgb).changed() {
-            b.color = Color::rgb8(rgb[0], rgb[1], rgb[2]);
-        }
+        crate::ui::color_picker::color_button(ui, &mut b.color);
         let idx = crate::table_tool::BORDER_DASHES
             .iter()
             .position(|(_, d)| *d == b.dash.as_slice())
             .unwrap_or(0);
-        egui::ComboBox::from_id_salt("table_border_style")
+        crate::ui::keynav::ComboBox::from_id_salt("table_border_style")
             .width(90.0)
             .selected_text(tr(crate::table_tool::BORDER_DASHES[idx].0))
             .show_ui(ui, |ui| {
@@ -199,7 +248,9 @@ fn borders(app: &mut App, ui: &mut Ui, cells: bool) {
                         b.dash = dash.to_vec();
                     }
                 }
-            });
+            })
+            .response
+            .rich_tip(crate::ui::tips::keyed("table.border_style"));
     }
     if border == shown {
         return;
@@ -291,10 +342,15 @@ fn cell_text(app: &mut App, ui: &mut Ui) {
         ("toolbar.bold", egui::RichText::new("B").strong()),
         ("toolbar.italic", egui::RichText::new("I").italics()),
         ("toolbar.underline", egui::RichText::new("U").underline()),
+        (
+            "toolbar.strikethrough",
+            egui::RichText::new("S").strikethrough(),
+        ),
     ] {
         let on = match key {
             "toolbar.bold" => app.text_bold,
             "toolbar.italic" => app.text_italic,
+            "toolbar.strikethrough" => app.text_strikethrough,
             _ => app.text_underline,
         };
         if ui
@@ -305,6 +361,7 @@ fn cell_text(app: &mut App, ui: &mut Ui) {
             match key {
                 "toolbar.bold" => app.text_bold = !on,
                 "toolbar.italic" => app.text_italic = !on,
+                "toolbar.strikethrough" => app.text_strikethrough = !on,
                 _ => app.text_underline = !on,
             }
             changed = true;
@@ -373,13 +430,16 @@ pub fn count_dialog(app: &mut App, ctx: &Context, st: &mut TableCountState, clos
             ui.label(tr(label));
             ui.add_sized(
                 [90.0, 22.0],
-                egui::DragValue::new(&mut st.count).range(min..=100),
-            );
+                crate::ui::field::NumField::new(&mut st.count).range(min..=100),
+            )
+            .rich_tip(crate::ui::tips::pair(label, &format!("{title}_count_desc")));
         });
         if let Some((before, after)) = sides {
             ui.add_space(4.0);
-            ui.radio_value(&mut st.after, false, tr(before));
-            ui.radio_value(&mut st.after, true, tr(after));
+            ui.radio_value(&mut st.after, false, tr(before))
+                .rich_tip(crate::ui::tips::keyed(before));
+            ui.radio_value(&mut st.after, true, tr(after))
+                .rich_tip(crate::ui::tips::keyed(after));
         }
         ui.add_space(8.0);
         if ok_cancel(ui, close) {
@@ -425,6 +485,87 @@ mod tests {
         app.selected_table().unwrap().1
     }
 
+    /// The texts the property bar draws.
+    fn bar_texts(app: &mut App) -> Vec<String> {
+        let ctx = crate::theme::ui_context();
+        let mut texts = Vec::new();
+        // Twice: the first frame only lays out the bar.
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(6000.0, 60.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| crate::ui::toolbar::property_bar(app, ui),
+            );
+            out.textures_delta.clear();
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::epaint::Shape::Text(t) => Some(t.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect();
+        }
+        texts
+    }
+
+    /// A table selected with the Pick tool gets the Table tool's fields
+    /// on the property bar (rows, columns, the border), without the
+    /// drawing hint; a rectangle does not. The Rows and Columns fields
+    /// show the selected table's counts, not the next table's (#1680).
+    #[test]
+    fn a_table_selected_with_the_pick_tool_shows_the_table_fields() {
+        let mut app = App::headless();
+        app.tool = crate::tools::Tool::Pick;
+        app.table_rows = 8;
+        app.table_cols = 3;
+        let t = Table::new(Rect::new(0.0, 0.0, 40.0, 20.0), 2, 5, None);
+        let id = app.new_shape(ShapeKind::Table(t)).unwrap();
+        let r = app
+            .new_shape(ShapeKind::Rect {
+                rect: Rect::new(50.0, 0.0, 60.0, 10.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .unwrap();
+        app.select(vec![id]);
+        let rows = crate::i18n::tr("toolbar.rows");
+        let texts = bar_texts(&mut app);
+        assert!(texts.contains(&rows), "{texts:?}");
+        assert!(
+            texts.contains(&crate::i18n::tr("toolbar.border")),
+            "{texts:?}"
+        );
+        assert!(
+            !texts.contains(&crate::i18n::tr("toolbar.drag_to_draw_table")),
+            "{texts:?}"
+        );
+        // The fields hold the table's 2 and 5, not the defaults 8 and 3.
+        assert!(
+            texts.contains(&"2".to_string()) && texts.contains(&"5".to_string()),
+            "{texts:?}"
+        );
+        assert!(!texts.contains(&"8".to_string()), "{texts:?}");
+        app.select(vec![r]);
+        let texts = bar_texts(&mut app);
+        assert!(!texts.contains(&rows), "{texts:?}");
+        // The Table tool with that table selected shows its counts too,
+        // with the drawing hint.
+        app.select(vec![id]);
+        app.tool = crate::tools::Tool::Table;
+        let texts = bar_texts(&mut app);
+        assert!(texts.contains(&"5".to_string()), "{texts:?}");
+        assert!(
+            texts.contains(&crate::i18n::tr("toolbar.drag_to_draw_table")),
+            "{texts:?}"
+        );
+    }
+
     #[test]
     fn the_count_dialog_inserts_and_splits() {
         let mut app = App::headless();
@@ -460,7 +601,7 @@ mod tests {
         let ctx = crate::theme::ui_context();
         let draw = |app: &mut App| {
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                ui.horizontal(|ui| table_bar(app, ui));
+                ui.horizontal(|ui| table_bar(app, ui, true));
             });
             out.textures_delta.clear();
         };

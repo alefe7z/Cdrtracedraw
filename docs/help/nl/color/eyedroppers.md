@@ -8,6 +8,10 @@ naar toepassen; klik op de selectieknop om opnieuw een monster te nemen.
 <kbd>Esc</kbd> laat het monster los en gaat terug naar het gereedschap
 [[tool.pick]].
 
+De aanwijzer is een pipet terwijl het gereedschap een monster neemt en een
+verfemmer terwijl het toepast. Afbeeldingen geven hun kleur ook in een groep of
+een kader.
+
 ## Kleurenpipet {#color-eyedropper}
 
 1. Kies het gereedschap [[tool.color_eyedropper]].
@@ -21,6 +25,11 @@ naar toepassen; klik op de selectieknop om opnieuw een monster te nemen.
    binnen een lege gesloten vorm vult die.
 
 De eigenschappenbalk toont de opgenomen kleur.
+
+Terwijl u de aanwijzer beweegt om een kleur te nemen, toont een klein vak
+ernaast de kleur eronder: een staal, de naam van de kleur als het een
+paletkleur of steunkleur is, de waarden in de kleurmodus van de tekening (CMYK
+of RGB) en de hexwaarde. De pipet van een kleurkiezer toont hetzelfde vak.
 
 ## Kenmerkenpipet {#attributes-eyedropper}
 

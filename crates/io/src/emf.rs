@@ -59,6 +59,50 @@ pub fn parse(bytes: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
     }
 }
 
+/// Register this player as the core's metafile player (call once at
+/// startup), so pictures embedded in other files as metafiles are drawn.
+pub fn install() {
+    tracedraw_core::document::metafile::set(|bytes, ids| {
+        let imp = parse(bytes, ids).ok()?;
+        (!imp.shapes.is_empty()).then_some((imp.shapes, imp.size))
+    });
+}
+
+/// Pick a Windows GDI `(charset, Encoding)` that encodes every character of
+/// `spans` without loss; `None` when the text mixes scripts no single
+/// 8-bit/DBCS code page covers (it then exports to WMF as exact curves
+/// instead of turning letters into `?`).
+fn pick_wmf_charset(spans: &[TextSpan]) -> Option<(u8, &'static encoding_rs::Encoding)> {
+    use encoding_rs::*;
+    let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+    if text.is_ascii() {
+        return Some((0, WINDOWS_1252));
+    }
+    const CANDIDATES: &[(u8, &Encoding)] = &[
+        (0, WINDOWS_1252),
+        (204, WINDOWS_1251),
+        (238, WINDOWS_1250),
+        (161, WINDOWS_1253),
+        (162, WINDOWS_1254),
+        (163, WINDOWS_1258),
+        (177, WINDOWS_1255),
+        (178, WINDOWS_1256),
+        (186, WINDOWS_1257),
+        (222, WINDOWS_874),
+        (134, GBK),
+        (128, SHIFT_JIS),
+        (136, BIG5),
+        (129, EUC_KR),
+    ];
+    for &(cs, enc) in CANDIDATES {
+        let (_, _, unmappable) = enc.encode(&text);
+        if !unmappable {
+            return Some((cs, enc));
+        }
+    }
+    None
+}
+
 /// Build a document with every imported object on one layer.
 pub fn to_document(imp: Imported, title: &str) -> tracedraw_core::Document {
     let mut doc = tracedraw_core::Document::new(title, imp.size);
@@ -140,6 +184,10 @@ struct Font {
     italic: bool,
     underline: bool,
     strikeout: bool,
+    /// Windows GDI `lfCharSet` (0 ANSI, 1 default, 128 Shift-JIS, 129 Hangul,
+    /// 134 GBK, 136 Big5, 161 Greek, 162 Turkish, 163 Vietnamese, 177 Hebrew,
+    /// 178 Arabic, 186 Baltic, 204 Russian, 222 Thai, 238 East Europe).
+    charset: u8,
     /// Tenths of a degree, counter-clockwise.
     escapement: f64,
 }
@@ -153,9 +201,77 @@ impl Default for Font {
             italic: false,
             underline: false,
             strikeout: false,
+            charset: 1,
             escapement: 0.0,
         }
     }
+}
+
+fn charset_encoding(charset: u8) -> Option<&'static encoding_rs::Encoding> {
+    use encoding_rs::*;
+    Some(match charset {
+        128 => SHIFT_JIS,
+        129 | 130 => EUC_KR,
+        134 => GBK,
+        136 => BIG5,
+        161 => WINDOWS_1253,
+        162 => WINDOWS_1254,
+        163 => WINDOWS_1258,
+        177 => WINDOWS_1255,
+        178 => WINDOWS_1256,
+        186 => WINDOWS_1257,
+        204 => WINDOWS_1251,
+        222 => WINDOWS_874,
+        238 => WINDOWS_1250,
+        _ => return None,
+    })
+}
+
+/// Heuristic for single-byte GDI strings marked `DEFAULT_CHARSET` (1) or
+/// `ANSI_CHARSET` (0) on Cyrillic systems: Cyrillic words are runs of
+/// `0xC0..=0xFF` (plus `0xA8`/`0xB8`) without ASCII Latin letters inside
+/// the same word, whereas Western CP1252 words mix ASCII letters with a
+/// few accented high bytes (`João`).
+fn looks_like_cp1251(bytes: &[u8]) -> bool {
+    let is_cyr_byte = |b: u8| b >= 0xC0 || b == 0xA8 || b == 0xB8;
+    let cp1252_hole = |b: u8| matches!(b, 0x81 | 0x8D | 0x8F | 0x90 | 0x9D);
+    if bytes.iter().any(|&b| cp1252_hole(b)) && bytes.iter().any(|&b| is_cyr_byte(b)) {
+        return true;
+    }
+    let mut pure_cyr_words = 0usize;
+    let mut mixed_words = 0usize;
+    for word in bytes.split(|&b| b.is_ascii_whitespace() || b.is_ascii_punctuation()) {
+        let cyr = word.iter().filter(|&&b| is_cyr_byte(b)).count();
+        if cyr == 0 {
+            continue;
+        }
+        let asc = word.iter().filter(|&&b| b.is_ascii_alphabetic()).count();
+        if asc > 0 {
+            mixed_words += 1;
+        } else if cyr >= 2 {
+            pure_cyr_words += 1;
+        }
+    }
+    pure_cyr_words > 0 && pure_cyr_words > mixed_words
+}
+
+/// Decode an 8-bit GDI string according to its `LOGFONT.lfCharSet`.
+fn decode_gdi_bytes(bytes: &[u8], charset: u8) -> String {
+    if charset == 2 {
+        return bytes.iter().map(|&b| b as char).collect();
+    }
+    if let Some(enc) = charset_encoding(charset) {
+        return enc.decode_without_bom_handling(bytes).0.into_owned();
+    }
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    let enc = if looks_like_cp1251(bytes) {
+        encoding_rs::WINDOWS_1251
+    } else {
+        encoding_rs::WINDOWS_1252
+    };
+    enc.decode_without_bom_handling(bytes).0.into_owned()
 }
 
 #[derive(Clone, Debug)]
@@ -378,6 +494,7 @@ impl<'a> Player<'a> {
         if matches!(fill_v, Fill::None) && stroke_v.is_none() {
             return;
         }
+        let nonzero = crate::nonzero_matters(&path);
         let closed = path
             .elements()
             .iter()
@@ -390,6 +507,9 @@ impl<'a> Player<'a> {
         s.stroke = stroke_v;
         if fill && self.dc.polyfill_even_odd {
             s.data.push(("fill.rule".into(), "evenodd".into()));
+        } else if fill && nonzero {
+            // WINDING polygon fill mode is the nonzero rule (#3224).
+            s.fill_rule = tracedraw_core::shaping::FillRule::NonZero;
         }
         self.emit(s);
     }
@@ -400,7 +520,10 @@ impl<'a> Player<'a> {
         if let Some(clip) = self.dc.clip.clone() {
             let cb = clip.bounding_box();
             let sb = shape.bounds();
-            if cb.width() <= 0.0 || cb.height() <= 0.0 || sb.intersect(cb).area() <= 0.0 {
+            // Overlap by extent, not area: a level or plumb line has
+            // bounds of no area and is still inside the clip (#3104).
+            let overlaps = sb.x0 <= cb.x1 && sb.x1 >= cb.x0 && sb.y0 <= cb.y1 && sb.y1 >= cb.y0;
+            if cb.width() <= 0.0 || cb.height() <= 0.0 || !overlaps {
                 return;
             }
             let inside = cb.x0 <= sb.x0 + 1e-6
@@ -701,8 +824,8 @@ impl<'a> Player<'a> {
         let mut span = TextSpan::new(text, f.face.clone(), size_pt);
         span.bold = f.bold;
         span.italic = f.italic;
-        span.underline = f.underline;
-        span.strikethrough = f.strikeout;
+        span.underline = f.underline.into();
+        span.strikethrough = f.strikeout.into();
         let mut s = self.new_shape(ShapeKind::Text {
             spans: vec![span],
             origin: Point::ZERO,
@@ -720,6 +843,57 @@ impl<'a> Player<'a> {
         self.emit(s);
     }
 
+    /// Emit a run of raw glyph indices (`ETO_GLYPH_INDEX`): resolves back
+    /// to editable Unicode text when the font's `cmap` covers every glyph,
+    /// else emits exact vector outlines so shaped non-Latin runs never
+    /// turn into `.notdef` question marks.
+    fn glyph_run(&mut self, x: f64, y: f64, gids: &[u16], adv_logical: &[f64]) {
+        if gids.is_empty() || self.shapes.len() >= MAX_SHAPES {
+            return;
+        }
+        let f = self.dc.font.clone();
+        let scale = self.scale();
+        let em_mm = if f.height < 0.0 {
+            -f.height * scale
+        } else if f.height > 0.0 {
+            f.height * scale * 0.85
+        } else {
+            12.0 * scale
+        };
+        let adv_mm: Vec<f64> = adv_logical.iter().map(|d| d * scale).collect();
+        match tracedraw_core::document::text_outline::resolve_glyph_indices(
+            &tracedraw_core::document::text_outline::GlyphRunRequest {
+                family: &f.face,
+                bold: f.bold,
+                italic: f.italic,
+                em_mm,
+                gids,
+                advances_mm: &adv_mm,
+            },
+        ) {
+            Some(tracedraw_core::document::text_outline::ResolvedGlyphRun::Text(s)) => {
+                self.text(x, y, s);
+            }
+            Some(tracedraw_core::document::text_outline::ResolvedGlyphRun::Path(path)) => {
+                let origin = self.to_page(x, y);
+                let dy = match self.dc.text_align & 24 {
+                    24 => 0.0,
+                    8 => 0.2 * em_mm,
+                    _ => -0.8 * em_mm,
+                };
+                let rot = (f.escapement / 10.0).to_radians();
+                let mut s = self.new_shape(ShapeKind::Path { path, closed: true });
+                s.transform = Affine::translate(origin.to_vec2())
+                    * Affine::rotate(rot)
+                    * Affine::translate(Vec2::new(0.0, dy));
+                s.fill = Fill::Solid(self.dc.text_color);
+                s.stroke = None;
+                self.emit(s);
+            }
+            None => {}
+        }
+    }
+
     /// A DIB (BITMAPINFOHEADER + pixels) placed in the logical rectangle.
     fn dib(&mut self, bmi: &[u8], bits: &[u8], x: f64, y: f64, w: f64, h: f64) {
         let Some((pw, ph, rgba)) = decode_dib(bmi, bits) else {
@@ -728,12 +902,44 @@ impl<'a> Player<'a> {
         };
         let a = self.to_page(x, y);
         let b = self.to_page(x + w, y + h);
-        let rect = Rect::from_points(a, b);
-        if rect.width() <= 0.0 || rect.height() <= 0.0 {
-            return;
-        }
+        // The other two corners: the picture turned or slanted by the
+        // world transform keeps its turn, not the box round it.
+        let right = self.to_page(x + w, y);
+        let below = self.to_page(x, y + h);
         let png = crate::svg::encode_png(pw, ph, &rgba);
         if png.is_empty() {
+            return;
+        }
+        let tol = 1e-6 * (1.0 + (b - a).hypot());
+        if (right.y - a.y).abs() > tol || (below.x - a.x).abs() > tol {
+            let (across, down) = (right - a, a - below);
+            let (bw, bh) = (across.hypot(), down.hypot());
+            if bw <= 0.0 || bh <= 0.0 {
+                return;
+            }
+            // Local box (bw x bh, y up); its top-left corner goes to `a`.
+            let mut s = self.new_shape(ShapeKind::Bitmap {
+                rect: Rect::new(0.0, 0.0, bw, bh),
+                width_px: pw,
+                height_px: ph,
+                png: png.into(),
+                fx: None,
+            });
+            s.transform = Affine::new([
+                across.x / bw,
+                across.y / bw,
+                down.x / bh,
+                down.y / bh,
+                below.x,
+                below.y,
+            ]);
+            s.fill = Fill::None;
+            s.stroke = None;
+            self.emit(s);
+            return;
+        }
+        let rect = Rect::from_points(a, b);
+        if rect.width() <= 0.0 || rect.height() <= 0.0 {
             return;
         }
         // The image's top-left corner is at `a`; when the mapping puts it
@@ -744,7 +950,7 @@ impl<'a> Player<'a> {
             rect,
             width_px: pw,
             height_px: ph,
-            png,
+            png: png.into(),
             fx: None,
         });
         let c = rect.center();
@@ -991,10 +1197,14 @@ fn parse_emf(b: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
     } else {
         96.0
     };
-    let bw = (bounds[2] - bounds[0] + 1).max(1) as f64;
-    let bh = (bounds[3] - bounds[1] + 1).max(1) as f64;
-    let fw = (frame[2] - frame[0]).max(1) as f64 / 100.0;
-    let fh = (frame[3] - frame[1]).max(1) as f64 / 100.0;
+    // The bounds and frame are i32 each way: a damaged header with the
+    // extremes of the range overflows their difference in i32, so it is
+    // taken in i64.
+    let span = |lo: i32, hi: i32| (i64::from(hi) - i64::from(lo)).max(0) as f64;
+    let bw = (span(bounds[0], bounds[2]) + 1.0).max(1.0);
+    let bh = (span(bounds[1], bounds[3]) + 1.0).max(1.0);
+    let fw = span(frame[0], frame[2]).max(1.0) / 100.0;
+    let fh = span(frame[1], frame[3]).max(1.0) / 100.0;
     let (page_w, page_h) = if fw > 0.0 && fh > 0.0 {
         (fw, fh)
     } else {
@@ -1036,8 +1246,11 @@ fn parse_emf(b: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
     })
 }
 
+/// The points a record claims, no more than it holds: a damaged count
+/// of millions in a short record would otherwise be walked in full for
+/// every record of the file (#3339).
 fn points32(r: &[u8], off: usize, n: usize) -> Vec<(f64, f64)> {
-    (0..n)
+    (0..n.min(r.len().saturating_sub(off) / 8))
         .filter(|i| off + i * 8 + 8 <= r.len())
         .map(|i| {
             (
@@ -1049,7 +1262,7 @@ fn points32(r: &[u8], off: usize, n: usize) -> Vec<(f64, f64)> {
 }
 
 fn points16(r: &[u8], off: usize, n: usize) -> Vec<(f64, f64)> {
-    (0..n)
+    (0..n.min(r.len().saturating_sub(off) / 4))
         .filter(|i| off + i * 4 + 4 <= r.len())
         .map(|i| {
             (
@@ -1061,7 +1274,7 @@ fn points16(r: &[u8], off: usize, n: usize) -> Vec<(f64, f64)> {
 }
 
 fn utf16_at(r: &[u8], off: usize, chars: usize) -> String {
-    let units: Vec<u16> = (0..chars)
+    let units: Vec<u16> = (0..chars.min(r.len().saturating_sub(off) / 2))
         .filter(|i| off + i * 2 + 2 <= r.len())
         .map(|i| u16_at(r, off + i * 2))
         .take_while(|u| *u != 0)
@@ -1101,7 +1314,7 @@ impl Player<'_> {
             }
             // POLYPOLYLINE / POLYPOLYGON: bounds, nPolys, cpts, counts, points.
             7 | 8 | 90 | 91 => {
-                let npolys = count(24).min(100_000);
+                let npolys = count(24).min(r.len().saturating_sub(32) / 4);
                 let total = count(28);
                 let counts: Vec<usize> = (0..npolys).map(|i| count(32 + i * 4)).collect();
                 let pts_off = 32 + npolys * 4;
@@ -1403,6 +1616,7 @@ impl Player<'_> {
                     italic: u8_at(r, 32) != 0,
                     underline: u8_at(r, 33) != 0,
                     strikeout: u8_at(r, 34) != 0,
+                    charset: u8_at(r, 35),
                     face: {
                         let f = utf16_at(r, 40, 32);
                         if f.is_empty() {
@@ -1419,14 +1633,40 @@ impl Player<'_> {
                 let (x, y) = (i32_at(r, 36) as f64, i32_at(r, 40) as f64);
                 let n = (u32_at(r, 44) as usize).min(100_000);
                 let off_s = u32_at(r, 48) as usize;
-                let text = if ty == 84 {
-                    utf16_at(r, off_s, n)
+                let opts = u32_at(r, 52);
+                let off_dx = u32_at(r, 72) as usize;
+                if opts & 0x0010 != 0 {
+                    // ETO_GLYPH_INDEX: 16-bit font glyph indices at `off_s`,
+                    // not UTF-16 code units.
+                    let gids: Vec<u16> = (0..n)
+                        .filter_map(|i| {
+                            let at = off_s.checked_add(i.checked_mul(2)?)?;
+                            (at + 2 <= r.len()).then(|| u16_at(r, at))
+                        })
+                        .collect();
+                    let dx_step = if opts & 0x2000 != 0 { 8usize } else { 4usize };
+                    let adv: Vec<f64> = if off_dx > 0 {
+                        (0..n)
+                            .filter_map(|i| {
+                                let at = off_dx.checked_add(i.checked_mul(dx_step)?)?;
+                                (at + 4 <= r.len()).then(|| i32_at(r, at) as f64)
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    self.glyph_run(x, y, &gids, &adv);
                 } else {
-                    r.get(off_s..off_s.saturating_add(n))
-                        .map(|s| s.iter().map(|b| *b as char).collect())
-                        .unwrap_or_default()
-                };
-                self.text(x, y, text);
+                    let text = if ty == 84 {
+                        utf16_at(r, off_s, n)
+                    } else {
+                        let charset = self.dc.font.charset;
+                        r.get(off_s..off_s.saturating_add(n))
+                            .map(|s| decode_gdi_bytes(s, charset))
+                            .unwrap_or_default()
+                    };
+                    self.text(x, y, text);
+                }
             }
             // Records with no effect on the geometry.
             1 | 13 | 15 | 16 | 20 | 21 | 23 | 26 | 28 | 29 | 31 | 32 | 41 | 48 | 49 | 50 | 51
@@ -1541,8 +1781,42 @@ impl Player<'_> {
 
 // ---------------------------------------------------------------- WMF
 
+/// The slots of a WMF object table. A new object takes the lowest free
+/// slot, as GDI does; the free slots are kept in a heap, as looking for
+/// the lowest one along the table made a file of many objects take
+/// seconds per megabyte (#3339). WMF numbers its objects in 16 bits.
+#[derive(Default)]
+struct WmfTable {
+    used: Vec<bool>,
+    free: std::collections::BinaryHeap<std::cmp::Reverse<usize>>,
+}
+
+impl WmfTable {
+    fn take(&mut self) -> Option<usize> {
+        while let Some(std::cmp::Reverse(i)) = self.free.pop() {
+            if !self.used[i] {
+                self.used[i] = true;
+                return Some(i);
+            }
+        }
+        if self.used.len() > usize::from(u16::MAX) {
+            return None;
+        }
+        self.used.push(true);
+        Some(self.used.len() - 1)
+    }
+
+    fn release(&mut self, i: usize) {
+        if self.used.get(i) == Some(&true) {
+            self.used[i] = false;
+            self.free.push(std::cmp::Reverse(i));
+        }
+    }
+}
+
 fn parse_wmf(b: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
     let mut off = 0;
+    let (mut window, mut viewport_set) = ((0.0, 0.0), false);
     // Placeable header: key, handle, bbox (4 x i16), inch, reserved, checksum.
     let placeable = if u32_at(b, 0) == 0x9AC6_CDD7 {
         let bbox = [i16_at(b, 6), i16_at(b, 8), i16_at(b, 10), i16_at(b, 12)];
@@ -1556,8 +1830,29 @@ fn parse_wmf(b: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
         return Err("bad WMF header".into());
     }
     off += 18;
-    // Without a placeable header the window extent (first records) gives the
-    // size; scan ahead for it.
+    // The first records: the window extent (the size of a metafile
+    // without a placeable header), whether a viewport is set, and the
+    // map mode.
+    let mut scaled = false;
+    {
+        let mut o = off;
+        let mut n = 0;
+        while o + 6 <= b.len() && n < 64 {
+            n += 1;
+            let size = u32_at(b, o) as usize * 2;
+            let fnc = u16_at(b, o + 4);
+            if size < 6 {
+                break;
+            }
+            match fnc {
+                0x020C => window = (i16_at(b, o + 8) as f64, i16_at(b, o + 6) as f64),
+                0x020E => viewport_set = true,
+                0x0103 => scaled = matches!(u16_at(b, o + 6), 7 | 8),
+                _ => {}
+            }
+            o += size;
+        }
+    }
     let (page_w, page_h, dev) = match placeable {
         Some((bbox, inch)) => {
             let w_units = (bbox[2] as f64 - bbox[0] as f64).abs().max(1.0);
@@ -1578,33 +1873,17 @@ fn parse_wmf(b: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
             )
         }
         None => {
-            let (mut ext, mut org) = ((0i16, 0i16), (0i16, 0i16));
-            let mut o = off;
-            let mut n = 0;
-            while o + 6 <= b.len() && n < 64 {
-                n += 1;
-                let size = u32_at(b, o) as usize * 2;
-                let fnc = u16_at(b, o + 4);
-                if size < 6 {
-                    break;
-                }
-                if fnc == 0x020C {
-                    ext = (i16_at(b, o + 8), i16_at(b, o + 6));
-                }
-                if fnc == 0x020B {
-                    org = (i16_at(b, o + 8), i16_at(b, o + 6));
-                }
-                o += size;
-            }
-            let (w, h) = ((ext.0 as f64).abs().max(1.0), (ext.1 as f64).abs().max(1.0));
-            // Assume 96 dpi logical pixels.
+            let (w, h) = (window.0.abs().max(1.0), window.1.abs().max(1.0));
+            // Assume 96 dpi logical pixels. The window origin is taken
+            // off when logical units become device pixels, so the device
+            // starts at 0 (it was taken off twice).
             let k = 25.4 / 96.0;
             (
                 w * k,
                 h * k,
                 Device {
-                    left: org.0 as f64,
-                    top: org.1 as f64,
+                    left: 0.0,
+                    top: 0.0,
                     sx: k,
                     sy: k,
                     page_h: h * k,
@@ -1614,10 +1893,27 @@ fn parse_wmf(b: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
         }
     };
     let mut pl = Player::new(ids, dev);
+    // A metafile without a frame that scales its window but sets no
+    // viewport (the pictures objects embedded in other files keep, #1131)
+    // is drawn the size of its window, as the program showing it would
+    // stretch it over the object; the default viewport of one pixel made
+    // it a speck.
+    if placeable.is_none() && !viewport_set && window.0 != 0.0 && window.1 != 0.0 {
+        pl.dc.viewport_ext = window;
+    }
+    // A placeable metafile in a scaling map mode without a viewport of
+    // its own maps its window onto its frame, as Windows plays it.
+    if let (Some((bbox, _)), false, true) = (placeable, viewport_set, scaled) {
+        pl.dc.viewport_org = (bbox[0] as f64, bbox[1] as f64);
+        pl.dc.viewport_ext = (
+            bbox[2] as f64 - bbox[0] as f64,
+            bbox[3] as f64 - bbox[1] as f64,
+        );
+    }
     // WMF logical units map straight to the placeable units: the window
     // transform is applied by SETWINDOWORG/EXT when present.
     let mut n = 0;
-    let mut wmf_objects: Vec<Option<Obj>> = Vec::new();
+    let mut wmf_objects = WmfTable::default();
     while off + 6 <= b.len() && n < MAX_RECORDS {
         n += 1;
         let size = u32_at(b, off) as usize * 2;
@@ -1640,22 +1936,16 @@ fn parse_wmf(b: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
 }
 
 impl Player<'_> {
-    fn wmf_add_object(&mut self, objs: &mut Vec<Option<Obj>>, o: Obj) {
-        // The lowest free slot is reused, as GDI does.
-        let idx = match objs.iter().position(|x| x.is_none()) {
-            Some(i) => {
-                objs[i] = Some(o.clone());
-                i
+    fn wmf_add_object(&mut self, objs: &mut WmfTable, o: Obj) {
+        match objs.take() {
+            Some(idx) => {
+                self.objects.insert(idx as u32, o);
             }
-            None => {
-                objs.push(Some(o.clone()));
-                objs.len() - 1
-            }
-        };
-        self.objects.insert(idx as u32, o);
+            None => self.warn("more objects than a metafile can number; the rest skipped"),
+        }
     }
 
-    fn wmf_record(&mut self, fnc: u16, r: &[u8], objs: &mut Vec<Option<Obj>>) {
+    fn wmf_record(&mut self, fnc: u16, r: &[u8], objs: &mut WmfTable) {
         let p = 6; // parameters start after size(4) and function(2)
         let w = |i: usize| i16_at(r, p + i * 2) as f64;
         match fnc {
@@ -1682,9 +1972,7 @@ impl Player<'_> {
             0x012D => self.select_object(u16_at(r, p) as u32),
             0x01F0 => {
                 let i = u16_at(r, p) as usize;
-                if i < objs.len() {
-                    objs[i] = None;
-                }
+                objs.release(i);
                 self.objects.remove(&(i as u32));
             }
             0x02FA => {
@@ -1712,14 +2000,17 @@ impl Player<'_> {
             }
             0x02FB => {
                 // CREATEFONTINDIRECT: LOGFONT with 8-bit face name.
+                let charset = u8_at(r, p + 13);
                 let face: String = r
                     .get(p + 18..)
                     .map(|s| {
-                        s.iter()
+                        let raw: Vec<u8> = s
+                            .iter()
+                            .copied()
                             .take(32)
-                            .take_while(|b| **b != 0)
-                            .map(|b| *b as char)
-                            .collect()
+                            .take_while(|b| *b != 0)
+                            .collect();
+                        decode_gdi_bytes(&raw, charset)
                     })
                     .unwrap_or_default();
                 let font = Font {
@@ -1729,6 +2020,7 @@ impl Player<'_> {
                     italic: u8_at(r, p + 10) != 0,
                     underline: u8_at(r, p + 11) != 0,
                     strikeout: u8_at(r, p + 12) != 0,
+                    charset,
                     face: if face.is_empty() {
                         "Arial".into()
                     } else {
@@ -1745,7 +2037,7 @@ impl Player<'_> {
             0x0214 => self.move_to(w(1), w(0)),
             0x0213 => self.line_to(w(1), w(0)),
             0x0324 | 0x0325 => {
-                let n = (u16_at(r, p) as usize).min(MAX_POINTS);
+                let n = (u16_at(r, p) as usize).min(r.len().saturating_sub(p + 2) / 4);
                 let pts: Vec<(f64, f64)> = (0..n)
                     .filter(|i| p + 2 + i * 4 + 4 <= r.len())
                     .map(|i| {
@@ -1763,13 +2055,14 @@ impl Player<'_> {
                 }
             }
             0x0538 => {
-                let npolys = (u16_at(r, p) as usize).min(100_000);
+                let npolys = (u16_at(r, p) as usize).min(r.len().saturating_sub(p + 2) / 2);
                 let counts: Vec<usize> = (0..npolys)
                     .map(|i| u16_at(r, p + 2 + i * 2) as usize)
                     .collect();
                 let mut o = p + 2 + npolys * 2;
                 let mut polys = Vec::new();
                 for c in counts {
+                    let c = c.min(r.len().saturating_sub(o) / 4);
                     let pts: Vec<(f64, f64)> = (0..c)
                         .filter(|i| o + i * 4 + 4 <= r.len())
                         .map(|i| (i16_at(r, o + i * 4) as f64, i16_at(r, o + 2 + i * 4) as f64))
@@ -1798,9 +2091,10 @@ impl Player<'_> {
             0x0521 => {
                 // TEXTOUT: count, string, y, x.
                 let n = u16_at(r, p) as usize;
+                let charset = self.dc.font.charset;
                 let text: String = r
                     .get(p + 2..p + 2 + n)
-                    .map(|s| s.iter().map(|b| *b as char).collect())
+                    .map(|s| decode_gdi_bytes(s, charset))
                     .unwrap_or_default();
                 let o = p + 2 + n.div_ceil(2) * 2;
                 let (y, x) = (i16_at(r, o) as f64, i16_at(r, o + 2) as f64);
@@ -1815,11 +2109,29 @@ impl Player<'_> {
                 if opts & 0x6 != 0 {
                     o += 8;
                 }
-                let text: String = r
-                    .get(o..o + n)
-                    .map(|s| s.iter().map(|b| *b as char).collect())
-                    .unwrap_or_default();
-                self.text(x, y, text);
+                if opts & 0x0010 != 0 {
+                    let gids: Vec<u16> = (0..n)
+                        .filter_map(|i| {
+                            let at = o.checked_add(i.checked_mul(2)?)?;
+                            (at + 2 <= r.len()).then(|| u16_at(r, at))
+                        })
+                        .collect();
+                    let dx_at = o.saturating_add(n.saturating_mul(2));
+                    let adv: Vec<f64> = (0..n)
+                        .filter_map(|i| {
+                            let at = dx_at.checked_add(i.checked_mul(2)?)?;
+                            (at + 2 <= r.len()).then(|| i16_at(r, at) as f64)
+                        })
+                        .collect();
+                    self.glyph_run(x, y, &gids, &adv);
+                } else {
+                    let charset = self.dc.font.charset;
+                    let text: String = r
+                        .get(o..o + n)
+                        .map(|s| decode_gdi_bytes(s, charset))
+                        .unwrap_or_default();
+                    self.text(x, y, text);
+                }
             }
             0x0F43 | 0x0B41 | 0x0940 => {
                 // STRETCHDIB: rop(4) usage(2) srcH srcW srcY srcX dstH dstW dstY dstX, DIB.
@@ -2183,6 +2495,81 @@ mod tests {
         }
     }
 
+    /// A placeable metafile in MM_ANISOTROPIC whose window (100 x 50
+    /// units from 10, 10) is not its frame (1 x 0.5 inch) is drawn over
+    /// the whole frame, as Windows plays it (#3246).
+    #[test]
+    fn a_placeable_anisotropic_wmf_maps_its_window_onto_its_frame() {
+        let mut ids = IdSource::default();
+        let mut f = Vec::new();
+        le32(&mut f, 0x9AC6_CDD7u32 as i32);
+        le16(&mut f, 0);
+        for v in [0i16, 0, 1440, 720] {
+            le16(&mut f, v);
+        }
+        le16(&mut f, 1440);
+        le32(&mut f, 0);
+        le16(&mut f, 0);
+        le16(&mut f, 1);
+        le16(&mut f, 9);
+        le16(&mut f, 0x300);
+        le32(&mut f, 0);
+        le16(&mut f, 2);
+        le32(&mut f, 0);
+        le16(&mut f, 0);
+        f.extend_from_slice(&wmf_rec(0x0103, &[8]));
+        f.extend_from_slice(&wmf_rec(0x020B, &[10, 10]));
+        f.extend_from_slice(&wmf_rec(0x020C, &[50, 100]));
+        f.extend_from_slice(&wmf_rec(0x02FC, &[0, (0x8000u16 as i16), 0, 0]));
+        f.extend_from_slice(&wmf_rec(0x012D, &[0]));
+        // The whole window: bottom, right, top, left.
+        f.extend_from_slice(&wmf_rec(0x041B, &[60, 110, 10, 10]));
+        f.extend_from_slice(&wmf_rec(0, &[]));
+        let imp = parse(&f, &mut ids).expect("parse");
+        assert_eq!(imp.shapes.len(), 1, "{:?}", imp.warnings);
+        let b = imp.shapes[0].bounds();
+        assert!(
+            b.x0.abs() < 1e-6
+                && b.y0.abs() < 1e-6
+                && (b.x1 - 25.4).abs() < 1e-6
+                && (b.y1 - 12.7).abs() < 1e-6,
+            "{b:?}"
+        );
+    }
+
+    /// The picture an embedded object keeps (#1131): no placeable
+    /// header, MM_ANISOTROPIC with a window of 1500 by 1092 units at
+    /// origin (100, 50) and no viewport.
+    #[test]
+    fn a_wmf_without_a_viewport_is_drawn_the_size_of_its_window() {
+        let mut ids = IdSource::default();
+        let mut f = Vec::new();
+        le16(&mut f, 1);
+        le16(&mut f, 9);
+        le16(&mut f, 0x300);
+        le32(&mut f, 0);
+        le16(&mut f, 1);
+        le32(&mut f, 0);
+        le16(&mut f, 0);
+        f.extend_from_slice(&wmf_rec(0x0103, &[8]));
+        f.extend_from_slice(&wmf_rec(0x020B, &[50, 100]));
+        f.extend_from_slice(&wmf_rec(0x020C, &[1092, 1500]));
+        f.extend_from_slice(&wmf_rec(0x02FC, &[0, 0, 0, 0]));
+        f.extend_from_slice(&wmf_rec(0x012D, &[0]));
+        // The left half of the window, its top 546 units.
+        f.extend_from_slice(&wmf_rec(0x041B, &[50 + 546, 100 + 750, 50, 100]));
+        f.extend_from_slice(&wmf_rec(0, &[]));
+        let imp = parse(&f, &mut ids).expect("parse");
+        let k = 25.4 / 96.0;
+        let (w, h) = (1500.0 * k, 1092.0 * k);
+        assert!((imp.size.width - w).abs() < 1e-6 && (imp.size.height - h).abs() < 1e-6);
+        assert_eq!(imp.shapes.len(), 1, "{:?}", imp.warnings);
+        let b = imp.shapes[0].bounds();
+        for (got, want) in [(b.x0, 0.0), (b.x1, w / 2.0), (b.y0, h / 2.0), (b.y1, h)] {
+            assert!((got - want).abs() < 1e-6, "{b:?}");
+        }
+    }
+
     #[test]
     fn garbage_is_rejected_and_truncation_does_not_panic() {
         let mut ids = IdSource::default();
@@ -2192,9 +2579,214 @@ mod tests {
             let _ = parse(&file[..cut], &mut ids);
         }
     }
+
+    /// A header whose bounds and frame span the whole i32 range (a
+    /// damaged file) opens: their width and height overflowed in i32
+    /// and the reader panicked, which took the program down. The record
+    /// after it, claiming a thousand million points, is bounded by its
+    /// size as before.
+    #[test]
+    fn extreme_header_bounds_do_not_overflow() {
+        let mut file = emf_file(&[
+            rec(2, &[0, 0, 1, 1, 1_000_000_000, 0, 0, 0, 0]),
+            rec(43, &[0, 0, 10, 10]),
+        ]);
+        for (at, v) in [i32::MIN, i32::MIN, i32::MAX, i32::MAX]
+            .iter()
+            .chain([i32::MIN, i32::MIN, i32::MAX, i32::MAX].iter())
+            .enumerate()
+        {
+            file[8 + at * 4..12 + at * 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let mut ids = IdSource::default();
+        let imp = parse(&file, &mut ids).expect("a header of extremes still opens");
+        assert!(imp.size.width.is_finite() && imp.size.height.is_finite());
+        assert!(imp.size.width > 0.0 && imp.size.height > 0.0);
+        // The frame of such a file is a quarter of a kilometre wide.
+        assert!(
+            (imp.size.width - 42_949_672.95).abs() < 0.01,
+            "{:?}",
+            imp.size
+        );
+    }
+
+    /// #3104: AutoCAD's copy is a metafile of straight lines drawn with a
+    /// clip rectangle set. A level or plumb line has bounds of no area,
+    /// and the clip test took that as "outside the clip", so every line
+    /// was dropped, the metafile read as empty and the paste fell back
+    /// to the settings text copied beside it.
+    #[test]
+    fn level_and_plumb_lines_inside_a_clip_are_kept() {
+        let mut ids = IdSource::default();
+        let poly16 = |pts: &[(i16, i16)]| {
+            let mut r = Vec::new();
+            le32(&mut r, 87);
+            le32(&mut r, (8 + 16 + 4 + pts.len() * 4) as i32);
+            for v in [0, 0, 0, 0] {
+                le32(&mut r, v);
+            }
+            le32(&mut r, pts.len() as i32);
+            for (x, y) in pts {
+                le16(&mut r, *x);
+                le16(&mut r, *y);
+            }
+            r
+        };
+        let f = emf_file(&[
+            // MM_ANISOTROPIC, window flipped as a CAD drawing's y axis.
+            rec(17, &[8]),
+            rec(9, &[10_000, -5_000]),
+            rec(10, &[0, 5_000]),
+            rec(11, &[1000, 500]),
+            rec(12, &[0, 0]),
+            // Clip to the whole drawing.
+            rec(30, &[0, 0, 10_000, 5_000]),
+            // Geometric pen of no width, black.
+            rec(95, &[1, 0, 0, 0, 0, 0x10000, 0, 0, 0, 0]),
+            rec(37, &[1]),
+            rec(37, &[0x8000_0005u32 as i32]),
+            // A rectangle drawn as four lines, and one diagonal.
+            poly16(&[(1000, 1000), (9000, 1000)]),
+            poly16(&[(9000, 1000), (9000, 4000)]),
+            poly16(&[(9000, 4000), (1000, 4000)]),
+            poly16(&[(1000, 4000), (1000, 1000)]),
+            poly16(&[(1000, 1000), (9000, 4000)]),
+        ]);
+        let imp = parse(&f, &mut ids).unwrap();
+        assert_eq!(imp.shapes.len(), 5, "{:?}", imp.warnings);
+        for s in &imp.shapes {
+            assert!(s.stroke.is_some(), "each line is stroked");
+        }
+    }
+
+    /// A damaged file of short records that each claim millions of
+    /// points opens at once: a record gives no more points than it holds.
+    /// Each of these records was walked two million points long.
+    #[test]
+    fn huge_point_counts_in_short_records_open_at_once() {
+        let mut records = vec![rec(3, &[0, 0, 0, 0, -1]); 20_000];
+        records.extend(vec![rec(8, &[0, 0, 0, 0, -1, -1]); 20_000]);
+        records.extend(vec![rec(87, &[0, 0, 0, 0, -1]); 20_000]);
+        let file = emf_file(&records);
+        let t = std::time::Instant::now();
+        let imp = parse(&file, &mut IdSource::default()).expect("parse");
+        assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+        assert!(imp.shapes.is_empty());
+        // A record that holds its points still gives all of them.
+        let tri = rec(3, &[0, 0, 0, 0, 3, 100, 100, 300, 100, 200, 300]);
+        let imp = parse(&emf_file(&[tri]), &mut IdSource::default()).expect("parse");
+        assert_eq!(imp.shapes.len(), 1);
+        let b = imp.shapes[0].bounds();
+        assert!((b.width() - 20.0).abs() < 1e-6, "{b:?}");
+    }
+
+    /// A placeable WMF of one by half an inch holding `records`.
+    fn wmf_file(records: &[Vec<u8>]) -> Vec<u8> {
+        let mut f = Vec::new();
+        le32(&mut f, 0x9AC6_CDD7u32 as i32);
+        le16(&mut f, 0);
+        for v in [0i16, 0, 1440, 720] {
+            le16(&mut f, v);
+        }
+        le16(&mut f, 1440);
+        le32(&mut f, 0);
+        le16(&mut f, 0);
+        for v in [1i16, 9, 0x300, 0, 0, 2, 0, 0, 0] {
+            le16(&mut f, v);
+        }
+        for r in records {
+            f.extend_from_slice(r);
+        }
+        f.extend_from_slice(&wmf_rec(0, &[]));
+        f
+    }
+
+    /// Objects take the lowest free slot of the table, and a file of tens
+    /// of thousands of them opens at once: looking for the free slot along
+    /// the table took seconds per megabyte. Short records claiming the
+    /// most points a WMF can number open at once too.
+    #[test]
+    fn a_metafile_of_many_objects_and_huge_counts_opens_at_once() {
+        let brush = |lo: u16, hi: u16| wmf_rec(0x02FC, &[0, lo as i16, hi as i16, 0]);
+        let mut records = vec![
+            brush(0x00ff, 0), // 0: red
+            brush(0xff00, 0), // 1: green
+            wmf_rec(0x01F0, &[0]),
+            brush(0, 0x00ff), // 0 again: blue
+            wmf_rec(0x012D, &[0]),
+            wmf_rec(0x041B, &[360, 720, 0, 0]),
+        ];
+        records.extend(vec![brush(0, 0); 70_000]);
+        records.extend(vec![wmf_rec(0x0324, &[-1]); 20_000]);
+        records.extend(vec![wmf_rec(0x0538, &[-1, -1, -1]); 20_000]);
+        let file = wmf_file(&records);
+        let t = std::time::Instant::now();
+        let imp = parse(&file, &mut IdSource::default()).expect("parse");
+        assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+        assert_eq!(imp.shapes.len(), 1, "{:?}", imp.warnings);
+        assert_eq!(imp.shapes[0].fill, Fill::Solid(Color::rgb8(0, 0, 255)));
+        assert!(
+            imp.warnings.iter().any(|w| w.contains("more objects")),
+            "{:?}",
+            imp.warnings
+        );
+    }
 }
 
 // ---------------------------------------------------------------- EMF export
+
+/// Whether a text goes into a metafile as text records (a font and
+/// EXTTEXTOUT): one line of artistic text in one look, filled with one
+/// colour and not outlined, turned and scaled alike both ways at most.
+/// A text records cannot show (a paragraph laid out in its frame, text
+/// on a path, mirrored or slanted, outlined, unfilled or filled with a
+/// gradient, characters of several looks, spaced, shifted, turned or in
+/// capitals made up) goes in as the curves the drawing shows.
+fn text_as_records(shape: &Shape, transform: Affine) -> bool {
+    let ShapeKind::Text {
+        spans,
+        frame: None,
+        on_path: None,
+        para,
+        ..
+    } = &shape.kind
+    else {
+        return false;
+    };
+    let Some(first) = spans.first() else {
+        return false;
+    };
+    let c = transform.as_coeffs();
+    let det = c[0] * c[3] - c[1] * c[2];
+    let (a, b) = (c[0].hypot(c[1]), c[2].hypot(c[3]));
+    let upright = det > 0.0
+        && (c[0] * c[2] + c[1] * c[3]).abs() <= 1e-6 * a * b
+        && (a - b).abs() <= 1e-6 * a.max(b);
+    upright
+        && !para.vertical
+        && matches!(shape.fill, Fill::Solid(_))
+        && shape.stroke.as_ref().is_none_or(|st| st.width <= 0.0)
+        && spans.iter().all(|s| {
+            !s.text.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+                && !s.layout_only
+                && s.fill.is_none()
+                && s.outline.is_none()
+                && s.background.is_none()
+                && s.font_family == first.font_family
+                && s.size_pt == first.size_pt
+                && s.bold == first.bold
+                && s.italic == first.italic
+                && s.underline == first.underline
+                && s.strikethrough == first.strikethrough
+                && s.tracking_pct == 0.0
+                && s.baseline_shift_pt == 0.0
+                && s.offset_x_pct == 0.0
+                && s.width_pct == 100.0
+                && s.angle_deg == 0.0
+                && !s.all_caps
+                && !s.enclosed
+        })
+}
 
 /// Write one page as an enhanced metafile. One logical unit is 0.01 mm
 /// (MM_TEXT on a 2540 dpi device), paths are written as GDI paths with
@@ -2202,7 +2794,7 @@ mod tests {
 /// text as EXTTEXTOUTW with a LOGFONT, bitmaps as 32-bit DIBs, and
 /// clip frames as clip paths. Live effects are expanded first.
 pub fn page_to_emf(doc: &tracedraw_core::Document, page_index: usize) -> Vec<u8> {
-    let doc = &*crate::resolve_open_fills(doc);
+    let doc = &*crate::for_export(doc, Some(page_index));
     let Some(page) = doc.pages.get(page_index) else {
         return Vec::new();
     };
@@ -2417,6 +3009,16 @@ impl EmfWriter<'_> {
         self.record(60, &[]);
     }
 
+    /// A path's box in logical units, left, top, right, bottom: the
+    /// bounds EMR_FILLPATH and EMR_STROKEPATH carry. Without them the
+    /// records are 8 bytes short and some readers drop the whole file.
+    fn bounds(&self, path: &BezPath) -> [i32; 4] {
+        let b = path.bounding_box();
+        let (x0, y0) = self.lg(Point::new(b.x0, b.y1));
+        let (x1, y1) = self.lg(Point::new(b.x1, b.y0));
+        [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]
+    }
+
     fn bezier_to(&mut self, pts: &[Point; 3]) {
         let mut body = vec![0, 0, -1, -1, 3];
         for p in pts {
@@ -2446,7 +3048,8 @@ impl EmfWriter<'_> {
                 let b = self.brush(*c);
                 self.select(b);
                 self.path(path);
-                self.record(62, &[]);
+                let r = self.bounds(path);
+                self.record(62, &r);
                 self.delete(b);
             }
             Fill::Fountain(f) => self.fountain(path, f),
@@ -2455,14 +3058,16 @@ impl EmfWriter<'_> {
                 let b = self.brush(c);
                 self.select(b);
                 self.path(path);
-                self.record(62, &[]);
+                let r = self.bounds(path);
+                self.record(62, &r);
                 self.delete(b);
             }
         }
         if let Some(p) = pen {
             self.select(p);
             self.path(path);
-            self.record(64, &[]);
+            let r = self.bounds(path);
+            self.record(64, &r);
             self.select(0x8000_0008u32);
             self.delete(p);
         }
@@ -2572,14 +3177,17 @@ impl EmfWriter<'_> {
         let h = self.handle();
         let mut body = Vec::new();
         push_i32(&mut body, h as i32);
-        push_i32(&mut body, -((em_mm * 100.0).round() as i32));
+        // The height is the em negated; a size that is not a number (or
+        // past what a record holds) is clamped first, so the negation
+        // cannot overflow.
+        push_i32(&mut body, -((em_mm * 100.0).round().clamp(0.0, 1e9) as i32));
         push_i32(&mut body, 0);
         push_i32(&mut body, (rot_deg * 10.0).round() as i32);
         push_i32(&mut body, (rot_deg * 10.0).round() as i32);
         push_i32(&mut body, if first.bold { 700 } else { 400 });
         body.push(first.italic as u8);
-        body.push(first.underline as u8);
-        body.push(first.strikethrough as u8);
+        body.push(u8::from(first.underline.is_on()));
+        body.push(u8::from(first.strikethrough.is_on()));
         body.extend_from_slice(&[1, 0, 0, 0, 0]);
         let mut face: Vec<u16> = first.font_family.encode_utf16().take(31).collect();
         face.resize(32, 0);
@@ -2641,9 +3249,20 @@ impl EmfWriter<'_> {
         if w == 0 || h == 0 {
             return;
         }
-        // World transform: local mm to logical units.
+        // World transform: the picture's pixels (y down) to its box, to
+        // the page, to logical units. The box goes in the transform, not
+        // in the record's whole-number destination, which held it to the
+        // nearest millimetre.
         let dev = Affine::new([100.0, 0.0, 0.0, -100.0, 0.0, self.page_h * 100.0]);
-        let m = dev * transform;
+        let px = Affine::new([
+            rect.width() / w as f64,
+            0.0,
+            0.0,
+            -rect.height() / h as f64,
+            rect.x0,
+            rect.y1,
+        ]);
+        let m = dev * transform * px;
         let c = m.as_coeffs();
         self.record(33, &[]);
         let mut body = Vec::new();
@@ -2670,14 +3289,13 @@ impl EmfWriter<'_> {
                 bits.extend_from_slice(&[p.blue(), p.green(), p.red(), p.alpha()]);
             }
         }
-        // Destination in local (world) units: the rect, y flipped by the
-        // world transform itself, so pass the rect in mm with y up as is.
+        // Destination in world units: the picture's own pixels.
         let mut body = Vec::new();
         for v in [0, 0, -1, -1] {
             push_i32(&mut body, v);
         }
-        push_i32(&mut body, rect.x0.round() as i32);
-        push_i32(&mut body, rect.y1.round() as i32);
+        push_i32(&mut body, 0);
+        push_i32(&mut body, 0);
         push_i32(&mut body, 0);
         push_i32(&mut body, 0);
         push_i32(&mut body, w as i32);
@@ -2690,8 +3308,8 @@ impl EmfWriter<'_> {
         push_i32(&mut body, bits.len() as i32);
         push_i32(&mut body, 0);
         push_i32(&mut body, 0x00CC0020);
-        push_i32(&mut body, rect.width().round().max(1.0) as i32);
-        push_i32(&mut body, -(rect.height().round().max(1.0) as i32));
+        push_i32(&mut body, w as i32);
+        push_i32(&mut body, h as i32);
         body.extend_from_slice(&bmi);
         body.extend_from_slice(&bits);
         self.record_bytes(81, &body);
@@ -2735,6 +3353,12 @@ impl EmfWriter<'_> {
                 }
             }
             ShapeKind::ClipFrame { frame, contents } => {
+                // The frame's own fill, beneath the contents.
+                if !matches!(frame.fill, Fill::None) {
+                    let mut fill_only = (**frame).clone();
+                    fill_only.stroke = None;
+                    self.shape(&fill_only, transform);
+                }
                 let clip = transform * frame.local_path();
                 self.record(33, &[]);
                 self.path(&clip);
@@ -2743,7 +3367,7 @@ impl EmfWriter<'_> {
                     self.shape(ch, transform);
                 }
                 self.record(34, &[-1]);
-                // The frame's own fill and outline, over the contents.
+                // The frame's own outline, over the contents.
                 let mut f = (**frame).clone();
                 f.fill = Fill::None;
                 self.shape(&f, transform);
@@ -2753,7 +3377,9 @@ impl EmfWriter<'_> {
                 origin,
                 align,
                 ..
-            } => self.text(shape, transform, spans, *origin, *align),
+            } if text_as_records(shape, transform) => {
+                self.text(shape, transform, spans, *origin, *align)
+            }
             ShapeKind::Bitmap { rect, png, .. } => {
                 self.bitmap(transform, *rect, png);
                 if let Some(st) = &shape.stroke {
@@ -2762,12 +3388,29 @@ impl EmfWriter<'_> {
                 }
             }
             _ => {
+                // Text whose characters have looks of their own: each
+                // look drawn as curves.
+                if let Some(parts) = shape.text_parts() {
+                    for part in &parts {
+                        self.shape(part, parent);
+                    }
+                    return;
+                }
                 let path = transform * shape.local_path();
-                let even_odd = shape
-                    .data
-                    .iter()
-                    .any(|(k, v)| k == "fill.rule" && v == "evenodd")
-                    || !matches!(shape.kind, ShapeKind::Text { .. });
+                let even_odd = shape.fill_rule != tracedraw_core::shaping::FillRule::NonZero
+                    && (shape
+                        .data
+                        .iter()
+                        .any(|(k, v)| k == "fill.rule" && v == "evenodd")
+                        || !matches!(shape.kind, ShapeKind::Text { .. }));
+                // An unfilled line with arrowheads ends under them (#2981).
+                let path = shape
+                    .stroke
+                    .as_ref()
+                    .filter(|_| matches!(shape.fill, Fill::None))
+                    .and_then(|s| tracedraw_core::arrowhead_stroke_path(&shape.page_path(), s))
+                    .map(|cut| parent * cut)
+                    .unwrap_or(path);
                 self.fill_and_stroke(&path, &shape.fill, shape.stroke.as_ref(), scale, even_odd);
                 if let Some(st) = &shape.stroke {
                     for head in tracedraw_core::style::arrowhead_paths(&shape.page_path(), st) {
@@ -2790,6 +3433,126 @@ mod export_tests {
     use super::*;
     use tracedraw_core::{geometry::Rect, Document};
 
+    /// #3743: EMR_FILLPATH and EMR_STROKEPATH carry the path's bounds.
+    /// They were written 8 bytes long, without the bounds, and a word
+    /// processor showed the whole picture empty.
+    #[test]
+    fn fill_and_stroke_path_records_carry_their_bounds() {
+        let mut doc = Document::new("t", Size::new(100.0, 50.0));
+        let mut ids = doc.ids().clone();
+        let mut r = Shape::new(
+            ids.shape(),
+            ShapeKind::Rect {
+                rect: Rect::new(10.0, 20.0, 30.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        r.fill = Fill::Solid(Color::rgb8(0, 0, 255));
+        r.stroke = Some(Stroke::new(Color::BLACK, 1.0));
+        doc.pages[0].layers[0].shapes.push(r);
+        doc.set_ids(ids);
+        let bytes = page_to_emf(&doc, 0);
+        let u32_at =
+            |o: usize| u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+        let i32_at = |o: usize| u32_at(o) as i32;
+        let mut seen = Vec::new();
+        let mut o = 0;
+        while o + 8 <= bytes.len() {
+            let (ty, size) = (u32_at(o), u32_at(o + 4) as usize);
+            assert!(size >= 8 && o + size <= bytes.len(), "record {ty} at {o}");
+            if ty == 62 || ty == 64 {
+                assert_eq!(size, 24, "record {ty} without bounds");
+                let b = [
+                    i32_at(o + 8),
+                    i32_at(o + 12),
+                    i32_at(o + 16),
+                    i32_at(o + 20),
+                ];
+                // 10..30 mm across; 20..40 mm up, so 10..30 mm down a 50 mm page.
+                assert_eq!(b, [1000, 1000, 3000, 3000], "record {ty}");
+                seen.push(ty);
+            }
+            o += size;
+        }
+        assert_eq!(o, bytes.len());
+        assert_eq!(seen, [62, 64]);
+        // The file still reads back.
+        let mut ids2 = IdSource::default();
+        let imp = parse(&bytes, &mut ids2).expect("re-read");
+        assert!(!imp.shapes.is_empty());
+    }
+
+    /// Only text a font record can show goes in as text: a paragraph in
+    /// its frame went in as one long line, mirrored text upside down,
+    /// and an outlined, unfilled or gradient-filled text lost its look.
+    /// Those go in as the curves the drawing shows.
+    #[test]
+    fn text_records_cannot_show_goes_in_as_curves() {
+        let text = |f: &dyn Fn(&mut Shape)| {
+            let mut doc = Document::new("t", Size::new(100.0, 50.0));
+            let mut ids = doc.ids().clone();
+            let mut t = Shape::new(
+                ids.shape(),
+                ShapeKind::Text {
+                    spans: vec![TextSpan::new("Hello world", "Arial", 24.0)],
+                    origin: Point::new(10.0, 30.0),
+                    frame: None,
+                    align: TextAlign::Left,
+                    para: ParagraphStyle::default(),
+                    on_path: None,
+                },
+            );
+            t.fill = Fill::Solid(Color::rgb8(200, 0, 0));
+            t.stroke = None;
+            f(&mut t);
+            doc.pages[0].layers[0].shapes.push(t);
+            doc.set_ids(ids);
+            let mut ids2 = IdSource::default();
+            let emf = parse(&page_to_emf(&doc, 0), &mut ids2).expect("emf");
+            let wmf = parse(&page_to_wmf(&doc, 0), &mut ids2).expect("wmf");
+            [emf, wmf].map(|imp| {
+                imp.shapes
+                    .iter()
+                    .any(|s| matches!(s.kind, ShapeKind::Text { .. }))
+            })
+        };
+        assert_eq!(text(&|_| {}), [true, true], "plain text stays text");
+        assert_eq!(
+            text(&|t| t.transform = Affine::rotate(0.5)),
+            [true, true],
+            "turned text stays text"
+        );
+        let curves: [(&str, &dyn Fn(&mut Shape)); 6] = [
+            ("paragraph", &|t| {
+                if let ShapeKind::Text { frame, .. } = &mut t.kind {
+                    *frame = Some(Size::new(30.0, 20.0));
+                }
+            }),
+            ("mirrored", &|t| {
+                t.transform = Affine::new([-1.0, 0.0, 0.0, 1.0, 100.0, 0.0])
+            }),
+            ("slanted", &|t| {
+                t.transform = Affine::new([1.0, 0.0, 0.4, 1.0, 0.0, 0.0])
+            }),
+            ("outlined", &|t| {
+                t.stroke = Some(Stroke::new(Color::BLACK, 0.5))
+            }),
+            ("unfilled", &|t| {
+                t.fill = Fill::None;
+                t.stroke = Some(Stroke::new(Color::BLACK, 0.5));
+            }),
+            ("two lines", &|t| {
+                if let ShapeKind::Text { spans, .. } = &mut t.kind {
+                    spans[0].text = "Hello\nworld".into();
+                }
+            }),
+        ];
+        for (name, f) in curves {
+            assert_eq!(text(f), [false, false], "{name}");
+        }
+    }
+
     #[test]
     fn bitmaps_round_trip_with_their_placement() {
         let mut doc = Document::new("t", Size::new(100.0, 50.0));
@@ -2808,7 +3571,7 @@ mod export_tests {
                 rect: Rect::new(10.0, 20.0, 50.0, 40.0),
                 width_px: 2,
                 height_px: 2,
-                png,
+                png: png.into(),
                 fx: None,
             },
         );
@@ -2848,6 +3611,62 @@ mod export_tests {
         assert!(tl.x < br.x && tl.y > br.y, "{tl:?} {br:?}");
     }
 
+    /// A turned or slanted picture keeps its turn, and a picture off the
+    /// whole millimetre keeps its place and size: the picture came back
+    /// upright, squeezed into a strip, and every picture's box was held
+    /// to the nearest millimetre.
+    #[test]
+    fn pictures_keep_their_turn_and_their_place() {
+        let png = crate::svg::encode_png(
+            2,
+            2,
+            &[
+                255, 0, 0, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255,
+            ],
+        );
+        for place in [
+            Affine::IDENTITY,
+            Affine::rotate_about(0.4, Point::new(40.0, 40.0)),
+            Affine::new([1.0, 0.0, 0.5, 1.0, -10.0, 0.0]),
+            Affine::new([-1.0, 0.0, 0.0, 1.0, 100.0, 0.0]),
+        ] {
+            let mut doc = Document::new("t", Size::new(100.0, 80.0));
+            let mut b = Shape::new(
+                doc.ids_mut().shape(),
+                ShapeKind::Bitmap {
+                    rect: Rect::new(20.4, 20.3, 60.7, 50.6),
+                    width_px: 2,
+                    height_px: 2,
+                    png: png.clone().into(),
+                    fx: None,
+                },
+            );
+            b.fill = Fill::None;
+            b.stroke = None;
+            b.transform = place;
+            // The picture's top-left, top-right and bottom-left corners.
+            let corners = |s: &Shape| {
+                let ShapeKind::Bitmap { rect, .. } = &s.kind else {
+                    panic!("{:?}", s.kind)
+                };
+                [
+                    s.transform * Point::new(rect.x0, rect.y1),
+                    s.transform * Point::new(rect.x1, rect.y1),
+                    s.transform * Point::new(rect.x0, rect.y0),
+                ]
+            };
+            let want = corners(&b);
+            doc.pages[0].layers[0].shapes.push(b);
+            let mut ids = IdSource::default();
+            let imp = parse(&page_to_emf(&doc, 0), &mut ids).expect("re-read");
+            assert_eq!(imp.shapes.len(), 1);
+            let got = corners(&imp.shapes[0]);
+            for (w, g) in want.iter().zip(&got) {
+                assert!((*w - *g).hypot() < 0.02, "{place:?}: {want:?} vs {got:?}");
+            }
+        }
+    }
+
     #[test]
     fn export_round_trips_through_the_reader() {
         let mut doc = Document::new("t", Size::new(100.0, 50.0));
@@ -2874,6 +3693,8 @@ mod export_tests {
             },
         );
         t.fill = Fill::Solid(Color::rgb8(0, 128, 0));
+        // Not outlined: an outlined text goes in as curves.
+        t.stroke = None;
         let mut e = Shape::new(
             ids.shape(),
             ShapeKind::Ellipse {
@@ -2950,7 +3771,16 @@ mod export_tests {
 /// LOGFONT; bitmaps are 32-bit DIBs through STRETCHDIB. Live effects are
 /// expanded, clip frames are drawn unclipped (contents then frame).
 pub fn page_to_wmf(doc: &tracedraw_core::Document, page_index: usize) -> Vec<u8> {
-    let doc = &*crate::resolve_open_fills(doc);
+    page_to_wmf_with(doc, page_index, &WmfOptions::default())
+}
+
+/// [`page_to_wmf`] with the export's choices.
+pub fn page_to_wmf_with(
+    doc: &tracedraw_core::Document,
+    page_index: usize,
+    opts: &WmfOptions,
+) -> Vec<u8> {
+    let doc = &*crate::for_export(doc, Some(page_index));
     let Some(page) = doc.pages.get(page_index) else {
         return Vec::new();
     };
@@ -2962,8 +3792,12 @@ pub fn page_to_wmf(doc: &tracedraw_core::Document, page_index: usize) -> Vec<u8>
         max_record: 0,
         page_h: h,
         symbols: &doc.symbols,
+        solid_dashes: opts.solid_dashes,
     };
-    wr.rec(0x0103, &[1]); // SETMAPMODE MM_TEXT
+    // MM_ANISOTROPIC: the window below maps onto the frame of the
+    // placeable header. In MM_TEXT programs such as Word took the twips
+    // for screen pixels and showed only a corner of the page (#3246).
+    wr.rec(0x0103, &[8]); // SETMAPMODE MM_ANISOTROPIC
     wr.rec(0x0102, &[1]); // SETBKMODE TRANSPARENT
     wr.rec(0x020B, &[0, 0]); // SETWINDOWORG
     wr.rec(0x020C, &[wr.tw(h), wr.tw(w)]); // SETWINDOWEXT (y, x)
@@ -3005,6 +3839,42 @@ pub fn page_to_wmf(doc: &tracedraw_core::Document, page_index: usize) -> Vec<u8>
     out
 }
 
+/// The dashes of a dashed outline along `path` (page space) as open
+/// subpaths, to be drawn with a solid pen; None for a solid outline.
+/// The lengths are the pattern's multiples of the outline width (at
+/// least a hairline); dashes fitted to the corners stay fitted.
+fn wmf_dashes(path: &BezPath, s: &Stroke, scale: f64) -> Option<BezPath> {
+    let w = if s.scale_with_object {
+        s.width * scale
+    } else {
+        s.width
+    };
+    let w = if w.is_finite() {
+        w.max(Stroke::HAIRLINE)
+    } else {
+        Stroke::HAIRLINE
+    };
+    let mut dashes: Vec<f64> = s.dash.iter().map(|d| (d * w).max(0.0)).collect();
+    if dashes.is_empty()
+        || !dashes.iter().all(|d| d.is_finite())
+        || dashes.iter().sum::<f64>() <= 1e-9
+    {
+        return None;
+    }
+    if s.align_dashes {
+        return Some(tracedraw_core::shaping::aligned_dashes(path, &dashes));
+    }
+    if dashes.len() % 2 == 1 {
+        dashes = [dashes.clone(), dashes].concat();
+    }
+    // A dot (a dash of no length) is drawn by the pen's round cap; the
+    // flattened polyline needs two points, so it gets a tiny length.
+    for d in dashes.iter_mut().step_by(2) {
+        *d = d.max(1e-3);
+    }
+    Some(kurbo::dash(path.iter(), 0.0, &dashes).collect())
+}
+
 struct WmfWriter<'a> {
     recs: Vec<Vec<u8>>,
     /// Object slots in use; GDI gives a new object the lowest free slot.
@@ -3013,6 +3883,15 @@ struct WmfWriter<'a> {
     max_record: usize,
     page_h: f64,
     symbols: &'a [tracedraw_core::document::Symbol],
+    /// Dashed outlines go out as solid lines (#3819).
+    solid_dashes: bool,
+}
+
+/// Choices of the WMF export.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WmfOptions {
+    /// Dashed and dotted outlines are written as solid lines (#3819).
+    pub solid_dashes: bool,
 }
 
 impl WmfWriter<'_> {
@@ -3087,12 +3966,19 @@ impl WmfWriter<'_> {
                 } else {
                     self.tw(w).max(1)
                 };
-                let style: i16 = match s.dash.len() {
-                    0 => 0,
-                    2 if s.dash[0] <= 1.5 => 2,
-                    2 => 1,
-                    4 => 3,
-                    _ => 4,
+                // A dashed outline is written as its dashes, each a line
+                // of its own with a solid pen (see `wmf_dashes`): a dashed
+                // pen style is drawn solid once the pen is wider than a
+                // pixel, and has no lengths of its own (#3741). The pen
+                // takes the outline's caps so each dash ends as drawn.
+                let style: i16 = if s.dash.is_empty() {
+                    0
+                } else {
+                    match s.cap {
+                        LineCap::Butt => 0x200,
+                        LineCap::Square => 0x100,
+                        LineCap::Round => 0,
+                    }
                 };
                 let [c0, c1] = Self::color_words(s.color);
                 self.rec(0x02FA, &[style, wt, wt, c0, c1]);
@@ -3187,6 +4073,22 @@ impl WmfWriter<'_> {
             self.delete(b);
         }
         if let Some(s) = stroke {
+            // Dashes written as one solid line when the export asks so.
+            let solid;
+            let s = if self.solid_dashes && !s.dash.is_empty() {
+                solid = Stroke {
+                    dash: Vec::new(),
+                    ..s.clone()
+                };
+                &solid
+            } else {
+                s
+            };
+            let dashed = wmf_dashes(path, s, scale);
+            let polys = match &dashed {
+                Some(d) => Self::polylines(d),
+                None => polys,
+            };
             let p = self.create_pen(Some(s), scale);
             self.select(p);
             for (pts, closed) in &polys {
@@ -3228,25 +4130,27 @@ impl WmfWriter<'_> {
             Fill::Fountain(f) => f.first_color(),
             _ => Color::BLACK,
         };
+        let Some((charset, enc)) = pick_wmf_charset(spans) else {
+            return;
+        };
         // LOGFONT: height, width, escapement, orientation, weight, italic,
         // underline, strikeout, charset, out/clip precision, quality,
         // pitch, face name (32 bytes).
         let mut lf = Vec::new();
-        lf.extend_from_slice(&(-self.tw(em_mm)).to_le_bytes());
+        // The height is the em negated; `tw` clamps a size that is not
+        // a number to the ends of the range, and the smallest value has
+        // no negation, so the em is clamped to the positive half first.
+        lf.extend_from_slice(&(-self.tw(em_mm.clamp(0.0, 1e6))).to_le_bytes());
         lf.extend_from_slice(&0i16.to_le_bytes());
         lf.extend_from_slice(&((rot_deg * 10.0).round() as i16).to_le_bytes());
         lf.extend_from_slice(&((rot_deg * 10.0).round() as i16).to_le_bytes());
         lf.extend_from_slice(&(if first.bold { 700i16 } else { 400 }).to_le_bytes());
         lf.push(first.italic as u8);
-        lf.push(first.underline as u8);
-        lf.push(first.strikethrough as u8);
-        lf.extend_from_slice(&[1, 0, 0, 0, 0]);
-        let mut face: Vec<u8> = first
-            .font_family
-            .chars()
-            .map(|ch| if ch.is_ascii() { ch as u8 } else { b'?' })
-            .take(31)
-            .collect();
+        lf.push(u8::from(first.underline.is_on()));
+        lf.push(u8::from(first.strikethrough.is_on()));
+        lf.extend_from_slice(&[charset, 0, 0, 0, 0]);
+        let (face_cow, _, _) = enc.encode(&first.font_family);
+        let mut face: Vec<u8> = face_cow.iter().copied().take(31).collect();
         face.resize(32, 0);
         lf.extend_from_slice(&face);
         let f = self.alloc();
@@ -3268,16 +4172,8 @@ impl WmfWriter<'_> {
             }
             let local = Point::new(origin.x, origin.y - i as f64 * line_h / scale.max(1e-9));
             let (x, y) = self.pt(transform * local);
-            let bytes: Vec<u8> = line
-                .chars()
-                .map(|ch| {
-                    if (ch as u32) < 256 {
-                        ch as u32 as u8
-                    } else {
-                        b'?'
-                    }
-                })
-                .collect();
+            let (encoded, _, _) = enc.encode(line);
+            let bytes: Vec<u8> = encoded.into_owned();
             let mut body = Vec::new();
             body.extend_from_slice(&y.to_le_bytes());
             body.extend_from_slice(&x.to_le_bytes());
@@ -3365,6 +4261,13 @@ impl WmfWriter<'_> {
                 }
             }
             ShapeKind::ClipFrame { frame, contents } => {
+                // The frame's own fill beneath the contents, its outline
+                // over them.
+                if !matches!(frame.fill, Fill::None) {
+                    let mut fill_only = (**frame).clone();
+                    fill_only.stroke = None;
+                    self.shape(&fill_only, transform);
+                }
                 for ch in contents {
                     self.shape(ch, transform);
                 }
@@ -3377,7 +4280,9 @@ impl WmfWriter<'_> {
                 origin,
                 align,
                 ..
-            } => self.text(shape, transform, spans, *origin, *align),
+            } if text_as_records(shape, transform) && pick_wmf_charset(spans).is_some() => {
+                self.text(shape, transform, spans, *origin, *align)
+            }
             ShapeKind::Bitmap { rect, png, .. } => {
                 self.bitmap(transform, *rect, png);
                 if let Some(st) = &shape.stroke {
@@ -3386,15 +4291,35 @@ impl WmfWriter<'_> {
                 }
             }
             _ => {
+                // Text whose characters have looks of their own: each
+                // look drawn as curves.
+                if let Some(parts) = shape.text_parts() {
+                    for part in &parts {
+                        self.shape(part, parent);
+                    }
+                    return;
+                }
                 let path = transform * shape.local_path();
-                let even_odd = shape
-                    .data
-                    .iter()
-                    .any(|(k, v)| k == "fill.rule" && v == "evenodd");
+                // As drawn: curves even-odd, text and nonzero curves
+                // nonzero (#3224).
+                let even_odd = shape.fill_rule != tracedraw_core::shaping::FillRule::NonZero
+                    && (shape
+                        .data
+                        .iter()
+                        .any(|(k, v)| k == "fill.rule" && v == "evenodd")
+                        || !matches!(shape.kind, ShapeKind::Text { .. }));
                 let fill = match &shape.fill {
                     Fill::None => None,
                     other => other.preview_color().or(Some(Color::Gray { v: 0.5 })),
                 };
+                // An unfilled line with arrowheads ends under them (#2981).
+                let path = shape
+                    .stroke
+                    .as_ref()
+                    .filter(|_| fill.is_none())
+                    .and_then(|s| tracedraw_core::arrowhead_stroke_path(&shape.page_path(), s))
+                    .map(|cut| parent * cut)
+                    .unwrap_or(path);
                 self.fill_and_stroke(&path, fill, shape.stroke.as_ref(), scale, even_odd);
                 if let Some(st) = &shape.stroke {
                     for head in tracedraw_core::style::arrowhead_paths(&shape.page_path(), st) {
@@ -3410,6 +4335,260 @@ impl WmfWriter<'_> {
 mod wmf_export_tests {
     use super::*;
     use tracedraw_core::{geometry::Rect, Document};
+
+    /// The records of a WMF body (after the two headers): function and
+    /// parameter words.
+    fn wmf_records(wmf: &[u8]) -> Vec<(u16, Vec<i16>)> {
+        let mut out = Vec::new();
+        let mut i = 40;
+        while i + 6 <= wmf.len() {
+            let words = u32::from_le_bytes([wmf[i], wmf[i + 1], wmf[i + 2], wmf[i + 3]]) as usize;
+            let func = u16::from_le_bytes([wmf[i + 4], wmf[i + 5]]);
+            let params = (0..words.saturating_sub(3))
+                .map(|k| i16::from_le_bytes([wmf[i + 6 + 2 * k], wmf[i + 7 + 2 * k]]))
+                .collect();
+            out.push((func, params));
+            if words < 3 {
+                break;
+            }
+            i += words * 2;
+        }
+        out
+    }
+
+    /// A dashed outline goes out as its dashes, each a line drawn with a
+    /// solid pen: a dashed pen style is drawn solid once the pen is
+    /// wider than a pixel, so placed in a document the line came out
+    /// continuous (#3741).
+    #[test]
+    fn a_dashed_outline_is_written_as_its_dashes() {
+        let mut doc = Document::new("t", Size::new(120.0, 50.0));
+        let mut ids = doc.ids().clone();
+        let mut path = tracedraw_core::geometry::BezPath::new();
+        path.move_to((10.0, 25.0));
+        path.line_to((110.0, 25.0));
+        let mut line = Shape::new(
+            ids.shape(),
+            ShapeKind::Path {
+                path,
+                closed: false,
+            },
+        );
+        let mut st = Stroke::new(Color::BLACK, 1.0);
+        st.cap = LineCap::Butt;
+        st.dash = vec![4.0, 2.0];
+        line.stroke = Some(st);
+        line.fill = Fill::None;
+        doc.pages[0].layers[0].shapes.push(line);
+        doc.set_ids(ids);
+        let recs = wmf_records(&page_to_wmf(&doc, 0));
+        let pens: Vec<&Vec<i16>> = recs
+            .iter()
+            .filter(|(f, _)| *f == 0x02FA)
+            .map(|(_, p)| p)
+            .collect();
+        assert_eq!(pens.len(), 1, "{pens:?}");
+        // Solid, flat ends, 1 mm wide (57 twips).
+        assert_eq!(pens[0][0], 0x200);
+        assert_eq!(pens[0][1], 57);
+        let mut lines: Vec<&Vec<i16>> = recs
+            .iter()
+            .filter(|(f, _)| *f == 0x0325)
+            .map(|(_, p)| p)
+            .collect();
+        lines.sort_by_key(|p| p[1]);
+        // 100 mm at 4 mm on and 2 mm off: 17 dashes.
+        assert_eq!(lines.len(), 17);
+        let tw = |mm: f64| (mm / 25.4 * 1440.0).round() as i16;
+        let first = lines[0];
+        assert_eq!((first[1], first[first.len() - 2]), (tw(10.0), tw(14.0)));
+        let second = lines[1];
+        assert_eq!(second[1], tw(16.0));
+    }
+
+    /// With Dashes as Solid Lines, the dashed outline goes out as one
+    /// line with a solid pen (#3819).
+    #[test]
+    fn dashes_can_be_written_as_solid_lines() {
+        let mut doc = Document::new("t", Size::new(120.0, 50.0));
+        let mut ids = doc.ids().clone();
+        let mut path = tracedraw_core::geometry::BezPath::new();
+        path.move_to((10.0, 25.0));
+        path.line_to((110.0, 25.0));
+        let mut line = Shape::new(
+            ids.shape(),
+            ShapeKind::Path {
+                path,
+                closed: false,
+            },
+        );
+        let mut st = Stroke::new(Color::BLACK, 1.0);
+        st.cap = LineCap::Butt;
+        st.dash = vec![4.0, 2.0];
+        line.stroke = Some(st);
+        line.fill = Fill::None;
+        doc.pages[0].layers[0].shapes.push(line);
+        doc.set_ids(ids);
+        let opts = WmfOptions { solid_dashes: true };
+        let recs = wmf_records(&page_to_wmf_with(&doc, 0, &opts));
+        let lines = recs.iter().filter(|(f, _)| *f == 0x0325).count();
+        assert_eq!(lines, 1);
+        let pen = recs.iter().find(|(f, _)| *f == 0x02FA).map(|(_, p)| p[0]);
+        assert_eq!(pen, Some(0), "a solid pen");
+    }
+
+    /// A solid outline stays one line with a solid pen.
+    #[test]
+    fn a_solid_outline_stays_one_line() {
+        let mut doc = Document::new("t", Size::new(120.0, 50.0));
+        let mut ids = doc.ids().clone();
+        let mut path = tracedraw_core::geometry::BezPath::new();
+        path.move_to((10.0, 25.0));
+        path.line_to((110.0, 25.0));
+        let mut line = Shape::new(
+            ids.shape(),
+            ShapeKind::Path {
+                path,
+                closed: false,
+            },
+        );
+        line.stroke = Some(Stroke::new(Color::BLACK, 1.0));
+        line.fill = Fill::None;
+        doc.pages[0].layers[0].shapes.push(line);
+        doc.set_ids(ids);
+        let recs = wmf_records(&page_to_wmf(&doc, 0));
+        assert_eq!(recs.iter().filter(|(f, _)| *f == 0x0325).count(), 1);
+        let pen = recs.iter().find(|(f, _)| *f == 0x02FA).map(|(_, p)| p[0]);
+        assert_eq!(pen, Some(0));
+    }
+
+    /// The export maps its twips onto the frame (MM_ANISOTROPIC), so
+    /// programs that place it (Word, PowerPoint) show the whole page
+    /// rather than its top left corner at one twip a pixel (#3246).
+    #[test]
+    fn wmf_export_is_anisotropic() {
+        let doc = Document::new("t", Size::new(100.0, 50.0));
+        let wmf = page_to_wmf(&doc, 0);
+        // The first record after the placeable (22) and standard (18)
+        // headers: SETMAPMODE MM_ANISOTROPIC.
+        assert_eq!(&wmf[40..48], &[4, 0, 0, 0, 0x03, 0x01, 8, 0]);
+    }
+
+    /// A drawing with coordinates that are not numbers (a division by
+    /// zero somewhere, an import with a number too large to hold) still
+    /// exports as a metafile: the text height, page size, places,
+    /// outline widths and sizes are clamped to what the records hold.
+    /// The LOGFONT height is the em negated, and a text size of minus
+    /// infinity clamped to the smallest value a record holds overflowed
+    /// when negated, so the export panicked.
+    #[test]
+    fn export_of_a_drawing_with_infinite_coordinates_does_not_panic() {
+        for bad in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let mut doc = Document::new("t", Size::new(bad, 50.0));
+            let mut ids = doc.ids().clone();
+            let mut r = Shape::new(
+                ids.shape(),
+                ShapeKind::Rect {
+                    rect: Rect::new(10.0, 10.0, bad, 20.0),
+                    radius: bad,
+                    corners: None,
+                },
+            );
+            r.fill = Fill::Solid(Color::rgb8(0, 0, 255));
+            r.stroke = Some(Stroke::new(Color::rgb8(255, 0, 0), bad));
+            r.transform = Affine::new([1.0, 0.0, 0.0, 1.0, bad, 0.0]);
+            let mut t = Shape::new(
+                ids.shape(),
+                ShapeKind::Text {
+                    spans: vec![TextSpan::new("Hi", "Arial", bad)],
+                    origin: Point::new(bad, 40.0),
+                    frame: None,
+                    align: TextAlign::Left,
+                    para: ParagraphStyle::default(),
+                    on_path: None,
+                },
+            );
+            t.fill = Fill::Solid(Color::rgb8(0, 128, 0));
+            // Not outlined: an outlined text goes in as curves.
+            t.stroke = None;
+            let mut e = Shape::new(
+                ids.shape(),
+                ShapeKind::Ellipse {
+                    rect: Rect::new(60.0, 5.0, 90.0, bad),
+                    arc: None,
+                },
+            );
+            e.fill = Fill::Fountain(tracedraw_core::Fountain::two(
+                tracedraw_core::style::FountainKind::Radial,
+                Color::BLACK,
+                Color::WHITE,
+                0.0,
+            ));
+            let mut path = tracedraw_core::geometry::BezPath::new();
+            path.move_to((0.0, 0.0));
+            path.line_to((bad, 10.0));
+            path.curve_to((5.0, bad), (bad, bad), (20.0, 20.0));
+            path.close_path();
+            let mut p = Shape::new(ids.shape(), ShapeKind::Path { path, closed: true });
+            p.stroke = Some(Stroke::new(Color::BLACK, 1.0));
+            doc.pages[0].layers[0].shapes.extend([r, t, e, p]);
+            doc.set_ids(ids);
+            let emf = page_to_emf(&doc, 0);
+            assert!(is_emf(&emf));
+            let wmf = page_to_wmf(&doc, 0);
+            assert!(is_wmf(&wmf));
+        }
+    }
+
+    /// A curve fills even-odd and a nonzero curve nonzero, in the WMF
+    /// as on screen, and the reader takes WINDING mode back as the
+    /// nonzero rule (#3224).
+    #[test]
+    fn wmf_fill_rule_round_trips() {
+        use tracedraw_core::shaping::FillRule;
+        let mut doc = Document::new("t", Size::new(100.0, 50.0));
+        let mut ids = doc.ids().clone();
+        let two_squares = || {
+            let mut path = tracedraw_core::geometry::BezPath::new();
+            for (x, y) in [(10.0, 10.0), (20.0, 20.0)] {
+                path.move_to((x, y));
+                path.line_to((x + 20.0, y));
+                path.line_to((x + 20.0, y + 20.0));
+                path.line_to((x, y + 20.0));
+                path.close_path();
+            }
+            path
+        };
+        let mut even = Shape::new(
+            ids.shape(),
+            ShapeKind::Path {
+                path: two_squares(),
+                closed: true,
+            },
+        );
+        even.fill = Fill::Solid(Color::BLACK);
+        even.stroke = None;
+        let mut nonzero = even.clone();
+        nonzero.id = ids.shape();
+        nonzero.fill_rule = FillRule::NonZero;
+        doc.pages[0].layers[0].shapes.extend([even, nonzero]);
+        doc.set_ids(ids);
+        let wmf = page_to_wmf(&doc, 0);
+        let mut ids = IdSource::default();
+        let back = parse(&wmf, &mut ids).expect("parse");
+        let filled: Vec<&Shape> = back
+            .shapes
+            .iter()
+            .filter(|s| !matches!(s.fill, Fill::None))
+            .collect();
+        assert_eq!(filled.len(), 2, "{:?}", back.warnings);
+        assert_eq!(filled[0].fill_rule, FillRule::EvenOdd);
+        assert!(filled[0]
+            .data
+            .iter()
+            .any(|(k, v)| k == "fill.rule" && v == "evenodd"));
+        assert_eq!(filled[1].fill_rule, FillRule::NonZero);
+    }
 
     #[test]
     fn wmf_export_round_trips_through_the_reader() {
@@ -3437,6 +4616,8 @@ mod wmf_export_tests {
             },
         );
         t.fill = Fill::Solid(Color::rgb8(0, 128, 0));
+        // Not outlined: an outlined text goes in as curves.
+        t.stroke = None;
         let png = crate::svg::encode_png(2, 1, &[255, 0, 0, 255, 0, 0, 255, 255]);
         let mut b = Shape::new(
             ids.shape(),
@@ -3444,7 +4625,7 @@ mod wmf_export_tests {
                 rect: Rect::new(60.0, 5.0, 90.0, 25.0),
                 width_px: 2,
                 height_px: 1,
-                png,
+                png: png.into(),
                 fx: None,
             },
         );
@@ -3502,6 +4683,125 @@ mod wmf_export_tests {
                 assert_eq!(pm.pixels()[1].blue(), 255);
             }
             k => panic!("{k:?}"),
+        }
+    }
+
+    #[test]
+    fn wmf_and_gdi_text_preserve_non_latin_scripts_without_question_marks() {
+        let samples = [
+            "Позиция: Бумага А4, чёрная",
+            "Zażółć gęślą jaźń",
+            "Příliš žluťoučký kůň",
+            "Καλημέρα κόσμε",
+            "İstanbul Boğazı",
+            "Đà Nă\u{0303}ng, Viê\u{0323}t Nam",
+            "שלום עולם",
+            "مرحبا بالعالم",
+            "สวัสดีชาวโลก",
+            "表格数据：纸张",
+            "日本語の表",
+            "한국어 표 데이터",
+        ];
+        for sample in samples {
+            let mut doc = Document::new("t", Size::new(120.0, 40.0));
+            let mut ids = doc.ids().clone();
+            let mut t = Shape::new(
+                ids.shape(),
+                ShapeKind::Text {
+                    spans: vec![TextSpan::new(sample, "Arial", 12.0)],
+                    origin: Point::new(10.0, 20.0),
+                    frame: None,
+                    align: TextAlign::Left,
+                    para: ParagraphStyle::default(),
+                    on_path: None,
+                },
+            );
+            t.fill = Fill::Solid(Color::BLACK);
+            t.stroke = None;
+            doc.pages[0].layers[0].shapes.push(t);
+            doc.set_ids(ids);
+            let wmf = page_to_wmf(&doc, 0);
+            let mut ids2 = IdSource::default();
+            let imp = parse(&wmf, &mut ids2).expect("wmf parses");
+            assert_eq!(imp.shapes.len(), 1, "{sample}");
+            match &imp.shapes[0].kind {
+                ShapeKind::Text { spans, .. } => {
+                    assert_eq!(spans[0].text, sample, "round-trip for {sample}");
+                    assert!(!spans[0].text.contains('?'));
+                }
+                other => panic!("expected text for {sample}, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod clip_frame_export_tests {
+    use super::*;
+    use tracedraw_core::{geometry::Rect, Document};
+
+    /// A clip frame's own fill goes in beneath its contents, as the
+    /// drawing shows it; it was left out, so the frame showed empty
+    /// round its contents.
+    #[test]
+    fn a_clip_frames_fill_goes_in_beneath_its_contents() {
+        let mut doc = Document::new("t", Size::new(100.0, 100.0));
+        let mut ids = doc.ids().clone();
+        let mut frame = Shape::new(
+            ids.shape(),
+            ShapeKind::Ellipse {
+                rect: Rect::new(10.0, 10.0, 90.0, 90.0),
+                arc: None,
+            },
+        );
+        frame.fill = Fill::Solid(Color::rgb8(255, 255, 0));
+        frame.stroke = Some(Stroke::new(Color::BLACK, 0.5));
+        let mut inside = Shape::new(
+            ids.shape(),
+            ShapeKind::Rect {
+                rect: Rect::new(50.0, 0.0, 100.0, 100.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        inside.fill = Fill::Solid(Color::rgb8(255, 0, 0));
+        inside.stroke = None;
+        let mut clip = Shape::new(
+            ids.shape(),
+            ShapeKind::ClipFrame {
+                frame: Box::new(frame),
+                contents: vec![inside],
+            },
+        );
+        clip.fill = Fill::None;
+        clip.stroke = None;
+        doc.pages[0].layers[0].shapes.push(clip);
+        doc.set_ids(ids);
+        fn fills(shapes: &[Shape], out: &mut Vec<Fill>) {
+            for s in shapes {
+                match &s.kind {
+                    ShapeKind::Group { children } => fills(children, out),
+                    ShapeKind::ClipFrame { contents, .. } => fills(contents, out),
+                    _ if s.fill != Fill::None => out.push(s.fill.clone()),
+                    _ => {}
+                }
+            }
+        }
+        for bytes in [page_to_emf(&doc, 0), page_to_wmf(&doc, 0)] {
+            let mut ids2 = IdSource::default();
+            let imp = parse(&bytes, &mut ids2).expect("re-read");
+            let mut got = Vec::new();
+            fills(&imp.shapes, &mut got);
+            let yellow = got
+                .iter()
+                .position(|f| *f == Fill::Solid(Color::rgb8(255, 255, 0)));
+            let red = got
+                .iter()
+                .position(|f| *f == Fill::Solid(Color::rgb8(255, 0, 0)));
+            assert!(
+                matches!((yellow, red), (Some(y), Some(r)) if y < r),
+                "{got:?}"
+            );
         }
     }
 }

@@ -13,7 +13,7 @@
 | [[docker.hints]] |  | [→](../get-started/hints.md) |
 | [[docker.transformations]] | <kbd>Alt+F7</kbd> | [→](../objects/transforming.md#transformations-docker) |
 | [[docker.undo]] |  | [→](../get-started/undo-and-views.md#undo-docker) |
-| [[docker.align_distribute]] | <kbd>Ctrl+Shift+A</kbd> | [→](../objects/align-distribute.md) |
+| [[docker.align_distribute]] |  | [→](../objects/align-distribute.md) |
 | [[docker.shaping]] |  | [→](../lines-shapes/shaping.md) |
 | [[docker.step_and_repeat]] | <kbd>Ctrl+Shift+D</kbd> | [→](../objects/step-and-repeat.md) |
 | [[docker.text]] | <kbd>Ctrl+T</kbd> | [→](../text/adding-text.md#text-docker) |
@@ -56,5 +56,8 @@
 - パネルのタイトルバーの閉じるボタンはタブから外し、折りたたみボタンは
   パネル領域を折りたたみます。
 - 開いたままにしたパネルは、次に CD Draw を起動したときに戻ります。
+  パネル領域を折りたたみます。ボタンの矢印は、たたまれる側のウィンドウの端を
+  指します (左側にドッキングしたパネルでは左向き)。
+- 開いたままにしたパネルは、次に TraceDraw を起動したときに戻ります。
 - パネルのショートカットは切り替え式で、そのパネルが前面にあるときに押すと
   パネルが隠れます。

@@ -7,8 +7,20 @@ section of the [[docker.properties]] panel.
 ## Opening the outline settings {#open}
 
 - The [[tool.outline_pen]] tool (<kbd>F12</kbd>) opens the
-  [[docker.properties]] panel at the [[docker.outline]] section, then goes back
-  to the [[tool.pick]] tool.
+  [[outline_pen.title]] dialog box with every outline setting: color, width
+  and its unit, style, miter limit, dashes, corners, line caps, position,
+  arrowheads, calligraphy, [[docker.behind_fill]], [[docker.scale_with_object]],
+  the variable outline's width nodes and [[outline_pen.overprint]]. The
+  selected objects show each change live while the dialog box is open.
+  It opens with the width selected: type a number and press <kbd>Enter</kbd>.
+  **OK** keeps only what you changed, on every selected object, as one undo
+  step; **Cancel** or <kbd>Esc</kbd> puts the outlines back. With nothing
+  selected it sets the outline of new objects. The width list offers the same
+  round widths as the property bar, in the outline unit (0.1, 0.2, 0.25 mm and
+  so on).
+
+![The Outline Pen dialog box](../../img/lines-shapes-outlines-outline-pen.png)
+
 - Double-click the outline part of the status bar.
 - Right-click a color of the palette to color the outline of the selection.
 
@@ -19,11 +31,15 @@ section of the [[docker.properties]] panel.
 - [[docker.outline_fill]]: the outline can be painted like a fill: none,
   uniform color, gradient, pattern, texture or mesh. See
   [Fills](../color/fills.md). Hairlines and arrowheads keep the plain
-  outline color.
+  outline color. With a gradient, [[docker.outline_fill_along]] runs it along
+  the line, from its start to its end and round every turn, instead of across
+  the drawing; such an outline is drawn solid, without dashes.
 - [[docker.caps]], the ends of open lines: [[docker.cap_butt]] (at first),
   [[docker.cap_round]] or [[docker.cap_square]].
 - [[docker.corners]]: [[docker.join_miter]] (at first), [[docker.join_round]]
-  or [[docker.join_bevel]].
+  or [[docker.join_bevel]]. The [[docker.miter_limit]] (45 degrees for new
+  outlines) bevels corners sharper than it, so a thick outline on text or
+  narrow turns does not grow long spikes.
 - [[docker.dash]]: [[docker.dash_solid]], [[docker.dash_dashed]],
   [[docker.dash_dotted]] or [[docker.dash_dash_dot]]. The dashes grow with the
   width.
@@ -32,6 +48,9 @@ section of the [[docker.properties]] panel.
   it and choose [[menu.object > menu.object.create > menu.object.create_arrowhead]].
 - The [[docker.nib_stretch]] (0.1 to 1) and [[docker.nib_angle_lc]] make a
   calligraphic outline: thinner across the nib than along it, like a flat pen.
+  In the [[docker.properties]] panel they sit under the
+  [[docker.outline_advanced]] header after the common settings, closed at
+  first unless one of them is set.
 - [[docker.behind_fill]] draws the outline under the fill, so only its outer
   half shows.
 - [[docker.scale_with_object]]: the width grows and shrinks when you resize
@@ -39,8 +58,12 @@ section of the [[docker.properties]] panel.
 
 To turn an outline into an object you can fill, choose
 [[menu.object > menu.object.convert_outline_to_object]] (<kbd>Ctrl+Shift+Q</kbd>).
+Curves stay curves: the new object has about as many nodes as the path the
+outline was drawn along, and round ends and corners become arcs.
 The settings of new objects are explained in
 [Object styles and defaults](../templates-styles/object-styles.md#document-defaults).
+
+![An outline whose gradient runs along the line](../../img/lines-shapes-outlines-along-the-line.png)
 
 ## Outline Color {#outline-color}
 
@@ -50,15 +73,18 @@ The [[tool.outline_color]] tool (<kbd>Shift+F12</kbd>) opens the
 
 ## Variable Outline {#variable-outline}
 
-The [[tool.variable_outline]] tool, in the Shape flyout, makes an outline
-thicker or thinner along its length with width nodes.
+The [[tool.variable_outline]] tool, whose button sits under the brush
+tools in the toolbox, makes an outline thicker or thinner along its length
+with width nodes.
 
 1. Select an object with an outline, such as a curve, a rectangle or an
    ellipse. An object with no outline gets a thin one.
 2. Choose the [[tool.variable_outline]] tool.
 3. Drag across the outline: a width node is added where you start, and the
-   outline reaches to the pointer on both sides. Hold <kbd>Alt</kbd> as you
-   start dragging to change only the side the pointer is on.
+   outline reaches to the pointer on both sides. Hold <kbd>Shift</kbd> (or
+   <kbd>Alt</kbd>) as you start dragging to change only the side the pointer
+   is on. <kbd>Shift</kbd>+click picks a run of nodes and
+   <kbd>Ctrl</kbd>+click adds one; a drag then changes all the picked nodes.
 4. Add more nodes the same way. Between nodes the width changes smoothly.
 
 To change a node, click it and type the **Left width** and **Right width** on

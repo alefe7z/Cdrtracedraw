@@ -57,18 +57,144 @@ impl PdfStandard {
     }
 }
 
+/// How bitmaps and page content go into the file (#550): pictures
+/// above a resolution are downsampled to it, colour and gray ones can be
+/// JPEG compressed, and the pages' text and line art compressed or not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PdfImages {
+    /// Downsample colour, gray and black-and-white pictures to these
+    /// resolutions (dots per inch, as placed) when they have more;
+    /// `None` keeps every pixel.
+    pub color_dpi: Option<f64>,
+    pub gray_dpi: Option<f64>,
+    pub mono_dpi: Option<f64>,
+    /// JPEG for colour and gray pictures (lossy), else ZIP (lossless).
+    /// Black-and-white pictures, transparency masks and PDF/X-1a files
+    /// stay ZIP.
+    pub jpeg: bool,
+    /// JPEG quality, 1 to 100.
+    pub jpeg_quality: u8,
+    /// Compress the pages' text and line art.
+    pub compress_content: bool,
+}
+
+impl Default for PdfImages {
+    fn default() -> Self {
+        PdfImages {
+            color_dpi: None,
+            gray_dpi: None,
+            mono_dpi: None,
+            jpeg: false,
+            jpeg_quality: 85,
+            compress_content: true,
+        }
+    }
+}
+
+/// What a picture holds, for its resolution and how it is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageKind {
+    Color,
+    Gray,
+    Mono,
+}
+
+fn image_kind(rgb: &[u8]) -> ImageKind {
+    let mut mono = true;
+    for px in rgb.chunks_exact(3) {
+        if px[0] != px[1] || px[1] != px[2] {
+            return ImageKind::Color;
+        }
+        if px[0] != 0 && px[0] != 255 {
+            mono = false;
+        }
+    }
+    if mono {
+        ImageKind::Mono
+    } else {
+        ImageKind::Gray
+    }
+}
+
+/// True when `b` and `area` share no point. Bounds that are not finite
+/// count as reaching it.
+fn misses(b: Rect, area: Rect) -> bool {
+    [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite())
+        && (b.x1 < area.x0 || b.x0 > area.x1 || b.y1 < area.y0 || b.y0 > area.y1)
+}
+
+/// `data` (`channels` bytes a pixel, `w` x `h`) resized to `nw` x `nh`.
+fn resample(data: &[u8], channels: u8, w: u32, h: u32, nw: u32, nh: u32) -> Option<Vec<u8>> {
+    use image::imageops::{resize, FilterType};
+    let out = match channels {
+        1 => resize(
+            &image::GrayImage::from_raw(w, h, data.to_vec())?,
+            nw,
+            nh,
+            FilterType::Triangle,
+        )
+        .into_raw(),
+        3 => resize(
+            &image::RgbImage::from_raw(w, h, data.to_vec())?,
+            nw,
+            nh,
+            FilterType::Triangle,
+        )
+        .into_raw(),
+        // CMYK: each ink on its own.
+        4 => {
+            let planes = (0..4)
+                .map(|c| {
+                    let plane: Vec<u8> = data.iter().skip(c).step_by(4).copied().collect();
+                    resample(&plane, 1, w, h, nw, nh)
+                })
+                .collect::<Option<Vec<_>>>()?;
+            (0..(nw * nh) as usize)
+                .flat_map(|i| planes.iter().map(move |p| p[i]))
+                .collect()
+        }
+        _ => return None,
+    };
+    Some(out)
+}
+
+/// `data` as a JPEG file (gray with one channel, else RGB).
+fn jpeg_bytes(data: &[u8], channels: u8, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut enc =
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
+    let color = if channels == 1 {
+        image::ExtendedColorType::L8
+    } else {
+        image::ExtendedColorType::Rgb8
+    };
+    enc.encode(data, w, h, color).ok()?;
+    Some(out)
+}
+
 /// Options for `document_to_pdf_with`.
 #[derive(Debug, Clone, Default)]
 pub struct PdfOptions {
     pub standard: PdfStandard,
     /// ICC profile embedded as the output intent's destination profile
-    /// (a CMYK press profile for X-1a). Without one, a registered
+    /// (a CMYK press profile for X-1a). Without one, the CMYK profile the
+    /// drawing carries is embedded; without either, a registered
     /// characterisation name is used instead.
     pub output_profile: Option<Vec<u8>>,
     /// Output condition identifier, e.g. "FOGRA39" or "CGATS TR 001".
+    /// Empty: the embedded profile's description, else "CGATS TR 001".
     pub output_condition: String,
-    /// Bleed added around every page (TrimBox = page, MediaBox = page + bleed).
+    /// Bleed added around every page (TrimBox = page, BleedBox = page +
+    /// bleed, MediaBox = page + bleed + `marks_margin_mm`).
     pub bleed_mm: f64,
+    /// Room beyond the bleed for printers' marks, in mm on every side (0
+    /// for none). The page and its bleed are clipped to the BleedBox so
+    /// nothing of the drawing reaches the marks.
+    pub marks_margin_mm: f64,
+    /// Printers' marks of each page (index as in the document), drawn on
+    /// top in page coordinates: they sit outside the page, in the bleed
+    /// and the marks margin.
+    pub page_marks: Vec<Vec<Shape>>,
     pub title: Option<String>,
     /// Flattening resolution for X-1a/X-3 transparency.
     pub flatten_dpi: f64,
@@ -85,6 +211,8 @@ pub struct PdfOptions {
     pub security: Option<crate::pdf_crypt::Security>,
     /// Text as text with fonts, or as curves.
     pub text: PdfText,
+    /// Bitmap resolution and compression (#550).
+    pub images: PdfImages,
 }
 
 /// What went into a file besides the drawing: its fonts.
@@ -99,6 +227,9 @@ pub struct PdfReport {
     pub restricted: Vec<String>,
 }
 
+/// The key of the registration colour's colour space among the spot inks'.
+const REGISTRATION_SPACE: u32 = u32::MAX;
+
 struct Pdf {
     objects: Vec<Vec<u8>>,
     /// Separation colour space objects, by spot ink number.
@@ -112,6 +243,7 @@ struct Pdf {
     /// Fonts that cannot go in a given way: (data address, index, kind).
     bad_fonts: Vec<(usize, u32, fonts::SlotKind)>,
     report: PdfReport,
+    images: PdfImages,
 }
 
 impl Pdf {
@@ -122,18 +254,38 @@ impl Pdf {
     fn add_str(&mut self, s: String) -> usize {
         self.add(s.into_bytes())
     }
-    fn add_image(&mut self, w: u32, h: u32, rgb: &[u8]) -> usize {
+    /// An image with a soft mask (`alpha`, one byte per pixel) for its
+    /// transparent pixels, when it has any.
+    fn add_image_masked(&mut self, w: u32, h: u32, rgb: &[u8], alpha: Option<&[u8]>) -> usize {
+        let smask = alpha
+            .map(|a| {
+                let adata = flate(a);
+                let id = self.stream(
+                    &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode"),
+                    &adata,
+                );
+                format!(" /SMask {id} 0 R")
+            })
+            .unwrap_or_default();
         if self.cmyk_only {
             let cmyk = rgb_to_cmyk_bytes(rgb);
             let data = flate(&cmyk);
             return self.stream(
-                &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /FlateDecode"),
+                &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Filter /FlateDecode{smask}"),
                 &data,
             );
         }
+        if self.images.jpeg {
+            if let Some(data) = jpeg_bytes(rgb, 3, w, h, self.images.jpeg_quality) {
+                return self.stream(
+                    &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode{smask}"),
+                    &data,
+                );
+            }
+        }
         let data = flate(rgb);
         self.stream(
-            &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode"),
+            &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode{smask}"),
             &data,
         )
     }
@@ -305,7 +457,10 @@ fn color_op_in(c: Color, fill: bool, cmyk_only: bool) -> String {
         c
     };
     match c {
-        Color::Gray { v } if cmyk_only => {
+        // Gray as gray in every file, not only CMYK ones: written as RGB
+        // it printed on all four plates (a rich gray) instead of black
+        // only.
+        Color::Gray { v } => {
             format!("{} {}", f(v as f64), if fill { "g" } else { "G" })
         }
         Color::Cmyk { c, m, y, k } => format!(
@@ -354,6 +509,14 @@ struct PageWriter<'a> {
     content: String,
     pdf: &'a mut Pdf,
     shadings: Vec<(String, usize)>,
+    /// The tiling patterns this page uses (resource name, object).
+    patterns: Vec<(String, usize)>,
+    /// Which procedural fill each tiling pattern holds (resource name,
+    /// the fill's debug text), so a fill used twice is written once.
+    pattern_keys: Vec<(String, String)>,
+    /// Where the page's origin is in the space the shapes are written in
+    /// (the bleed and the marks margin move it), in mm.
+    page_origin: tracedraw_core::geometry::Point,
     gstates: Vec<(String, usize)>,
     images: Vec<(String, usize)>,
     symbols: &'a [tracedraw_core::Symbol],
@@ -364,6 +527,9 @@ struct PageWriter<'a> {
     fonts: Vec<(String, usize)>,
     /// How text is written; `None` writes it as curves.
     text: Option<TextMode>,
+    /// The page's media box (the page and its bleed) in millimetres, in
+    /// the space the shapes are written in.
+    media: Rect,
 }
 
 /// How a writer keeps text as text.
@@ -392,24 +558,51 @@ fn pdf_name(s: &str) -> String {
 }
 
 impl PageWriter<'_> {
+    /// The Separation colour space object of the drawing's spot ink
+    /// `ink` (its name, its process stand-in as the alternate), made the
+    /// first time; `None` for an ink the drawing does not list.
+    fn spot_space(&mut self, ink: u32) -> Option<usize> {
+        if let Some(id) = self.pdf.spot_spaces.get(&ink) {
+            return Some(*id);
+        }
+        let i = self.inks.iter().find(|i| i.id == ink)?;
+        let [cc, m, y, k] = i.cmyk.map(|v| f(v.clamp(0.0, 1.0) as f64));
+        let id = self.pdf.add_str(format!(
+            "[/Separation {} /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [{cc} {m} {y} {k}] /N 1 >>]",
+            pdf_name(&i.name)
+        ));
+        self.pdf.spot_spaces.insert(ink, id);
+        Some(id)
+    }
+
     /// The operator setting colour `c`: a spot ink of the drawing on a
     /// Separation colour space of its own (its name, its process stand-in
     /// as the alternate), the others as before.
     fn color_op(&mut self, c: Color, fill: bool) -> String {
+        if c == Color::Registration {
+            // Registration colour prints on every plate: the All separation.
+            let id = match self.pdf.spot_spaces.get(&REGISTRATION_SPACE) {
+                Some(id) => *id,
+                None => {
+                    let id = self.pdf.add_str(
+                        "[/Separation /All /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [1 1 1 1] /N 1 >>]".into(),
+                    );
+                    self.pdf.spot_spaces.insert(REGISTRATION_SPACE, id);
+                    id
+                }
+            };
+            let name = "CSAll".to_string();
+            if !self.spaces.iter().any(|(n, _)| *n == name) {
+                self.spaces.push((name.clone(), id));
+            }
+            return if fill {
+                format!("/{name} cs 1 scn")
+            } else {
+                format!("/{name} CS 1 SCN")
+            };
+        }
         if let Color::Spot { ink, tint, .. } = c {
-            if let Some(i) = self.inks.iter().find(|i| i.id == ink) {
-                let id = match self.pdf.spot_spaces.get(&ink) {
-                    Some(id) => *id,
-                    None => {
-                        let [cc, m, y, k] = i.cmyk.map(|v| f(v.clamp(0.0, 1.0) as f64));
-                        let id = self.pdf.add_str(format!(
-                            "[/Separation {} /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [{cc} {m} {y} {k}] /N 1 >>]",
-                            pdf_name(&i.name)
-                        ));
-                        self.pdf.spot_spaces.insert(ink, id);
-                        id
-                    }
-                };
+            if let Some(id) = self.spot_space(ink) {
                 let name = format!("CS{ink}");
                 if !self.spaces.iter().any(|(n, _)| *n == name) {
                     self.spaces.push((name.clone(), id));
@@ -483,18 +676,43 @@ impl PageWriter<'_> {
         }
     }
 
+    /// The colour function of a fountain's shading, as the shading
+    /// dictionary names it: a sampled function (type 0, a stream of
+    /// [`SAMPLED_FUNCTION_SIZE`] colours) when the colours follow a hue
+    /// path, a smooth transition or an acceleration, otherwise the
+    /// stitching function over the stops, inline. A stepped fountain
+    /// takes the stitching function too: its bands are the function's
+    /// constant segments, exact where a sampled function's values would
+    /// be interpolated between.
+    fn fountain_function(&mut self, ft: &tracedraw_core::Fountain, cmyk: bool) -> String {
+        if ft.has_blend_options() && !ft.stepped() {
+            let id = sampled_function_in(ft, self.pdf, cmyk);
+            return format!("{id} 0 R");
+        }
+        stitching_function_in(ft, cmyk)
+    }
+
     /// Paint `path` (page space, mm) with `fill` spread over `bounds`:
-    /// a colour, a shading for a gradient, or the renderer's pixels
-    /// clipped by the path for the rest. `nonzero` fills and clips with
-    /// the non-zero rule (text, outline areas), otherwise even-odd.
+    /// a colour, a shading for a gradient, a tiling pattern for a
+    /// pattern, or the renderer's pixels clipped by the path for the
+    /// rest. `nonzero` fills and clips with the non-zero rule (text,
+    /// outline areas), otherwise even-odd. `object` is the object's
+    /// transform (page space): a pattern set to transform with its
+    /// object follows it.
     fn paint_area(
         &mut self,
         fill: &Fill,
         path: &tracedraw_core::BezPath,
         bounds: tracedraw_core::geometry::Rect,
         nonzero: bool,
+        object: Affine,
     ) {
         let (fill_op, clip) = if nonzero { ("f", "W") } else { ("f*", "W*") };
+        if let Fill::Pattern(p) = fill {
+            if self.tiling_pattern(p, path, fill_op, object) {
+                return;
+            }
+        }
         match fill {
             Fill::None => {}
             Fill::Solid(c) => {
@@ -504,7 +722,53 @@ impl PageWriter<'_> {
                 let _ = writeln!(self.content, "{fill_op}");
             }
             Fill::Fountain(ft) if ft.kind != FountainKind::Shaped => {
-                let func = stitching_function_in(ft, self.pdf.cmyk_only);
+                let cmyk = self.pdf.cmyk_only || print_colours_only(ft);
+                let mut space = if cmyk { "/DeviceCMYK" } else { "/DeviceRGB" }.to_string();
+                let mut func = String::new();
+                // Tints of one spot ink (to white or another tint): a
+                // shading on the ink's own separation, so it prints on
+                // the ink's plate; it went in as its process stand-in.
+                if let Some(ink) = one_spot_ink(ft) {
+                    if let Some(id) = self.spot_space(ink) {
+                        space = format!("{id} 0 R");
+                        func = stitching_function_with(ft, &|c| format!("[{}]", f(spot_tint(c))));
+                    }
+                }
+                if func.is_empty() {
+                    func = self.fountain_function(ft, cmyk);
+                }
+                // Nodes placed freely (Interactive Fill): a unit shading
+                // drawn through the fill's own frame.
+                if let Some(frame) = ft.frame(bounds) {
+                    let m = frame.as_coeffs();
+                    let shading = if ft.kind == FountainKind::Radial {
+                        format!(
+                            "<< /ShadingType 3 /ColorSpace {} /Coords [0 0 0 0 0 1] /Function {} /Extend [true true] >>",
+                            space, func
+                        )
+                    } else {
+                        format!(
+                            "<< /ShadingType 2 /ColorSpace {} /Coords [0 0 1 0] /Function {} /Extend [true true] >>",
+                            space, func
+                        )
+                    };
+                    let name = format!("Sh{}", self.shadings.len());
+                    let id = self.pdf.add_str(shading);
+                    self.shadings.push((name.clone(), id));
+                    self.content.push_str("q\n");
+                    self.path_ops(path);
+                    let _ = writeln!(
+                        self.content,
+                        "{clip} n {} {} {} {} {} {} cm /{name} sh\nQ",
+                        f(m[0] * MM_PT),
+                        f(m[1] * MM_PT),
+                        f(m[2] * MM_PT),
+                        f(m[3] * MM_PT),
+                        f(m[4] * MM_PT),
+                        f(m[5] * MM_PT)
+                    );
+                    return;
+                }
                 let shading = match ft.kind {
                     FountainKind::Radial => {
                         let c = bounds.center();
@@ -515,7 +779,7 @@ impl PageWriter<'_> {
                             * MM_PT;
                         format!(
                             "<< /ShadingType 3 /ColorSpace {} /Coords [{} {} 0 {} {} {}] /Function {} /Extend [true true] >>",
-                            self.pdf.color_space(), f(cx), f(cy), f(cx), f(cy), f(r), func
+                            space, f(cx), f(cy), f(cx), f(cy), f(r), func
                         )
                     }
                     // Conical and square fountains have no PDF shading type;
@@ -536,7 +800,7 @@ impl PageWriter<'_> {
                         );
                         format!(
                             "<< /ShadingType 2 /ColorSpace {} /Coords [{} {} {} {}] /Function {} /Extend [true true] >>",
-                            self.pdf.color_space(), f(x0), f(y0), f(x1), f(y1), func
+                            space, f(x0), f(y0), f(x1), f(y1), func
                         )
                     }
                 };
@@ -546,6 +810,22 @@ impl PageWriter<'_> {
                 self.content.push_str("q\n");
                 self.path_ops(path);
                 let _ = writeln!(self.content, "{clip} n /{name} sh\nQ");
+            }
+            // A procedural fill: a tiling pattern holding the tile's paths
+            // (and its background), the same vectors the screen draws.
+            Fill::Procedural(p) => {
+                let Some(name) = self.procedural_pattern(p) else {
+                    let op = self.color_op(p.foreground, true);
+                    let _ = writeln!(self.content, "{op}");
+                    self.path_ops(path);
+                    let _ = writeln!(self.content, "{fill_op}");
+                    return;
+                };
+                self.content.push_str("q\n/Pattern cs /");
+                self.content.push_str(&name);
+                self.content.push_str(" scn\n");
+                self.path_ops(path);
+                let _ = writeln!(self.content, "{fill_op}\nQ");
             }
             // Patterns, textures, meshes and shaped gradients are
             // rasterised into an image clipped by the path; the renderer
@@ -559,9 +839,14 @@ impl PageWriter<'_> {
                     bounds
                 };
                 if let Some((png, w, h)) = rasterise_fill(fill, path, bounds) {
-                    if let Some(rgb) = decode_png_rgb(&png) {
+                    if let Some((rgb, alpha)) = decode_png_rgb_alpha(&png) {
                         let name = format!("Im{}", self.images.len());
-                        let id = self.pdf.add_image(w, h, &rgb);
+                        // A mesh keeps its nodes' own transparency
+                        // (#2789, #2154) as the picture's soft mask.
+                        let alpha = alpha.filter(|_| {
+                            matches!(fill, Fill::Mesh(m) if m.nodes.iter().any(|n| n.alpha < 1.0))
+                        });
+                        let id = self.pdf.add_image_masked(w, h, &rgb, alpha.as_deref());
                         self.images.push((name.clone(), id));
                         self.content.push_str("q\n");
                         self.path_ops(path);
@@ -584,6 +869,130 @@ impl PageWriter<'_> {
         }
     }
 
+    /// A pattern fill as a PDF tiling pattern: the block of tiles that
+    /// repeats (one tile, or the mirrored and shifted tiles of the
+    /// placement) is one image drawn over the pattern's unit cell, and
+    /// the pattern's `/Matrix` carries the placement (tile size, offset,
+    /// rotation, skew, the row or column lean) into the page, from the
+    /// page origin, or from the object when the pattern transforms with
+    /// it. False when the pattern could not be rasterised.
+    fn tiling_pattern(
+        &mut self,
+        p: &tracedraw_core::Pattern,
+        path: &tracedraw_core::BezPath,
+        fill_op: &str,
+        object: Affine,
+    ) -> bool {
+        let Some((pm, unit_to_page)) = tracedraw_render::render_pattern_cell(p, 150.0) else {
+            return false;
+        };
+        let (w, h) = (pm.width(), pm.height());
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        let mut alpha = Vec::with_capacity((w * h) as usize);
+        let mut clear = false;
+        for px in pm.pixels() {
+            let c = px.demultiply();
+            rgb.extend_from_slice(&[c.red(), c.green(), c.blue()]);
+            alpha.push(c.alpha());
+            clear |= c.alpha() != 255;
+        }
+        let image = self
+            .pdf
+            .add_image_masked(w, h, &rgb, clear.then_some(alpha.as_slice()));
+        let to_page = if p.placement().transform_with_object {
+            object * unit_to_page
+        } else {
+            unit_to_page
+        };
+        // Pattern space is the page's own: from where its origin lies (the
+        // bleed and the marks margin move it).
+        let origin = Affine::translate(self.page_origin.to_vec2());
+        let m = (Affine::scale(MM_PT) * origin * to_page).as_coeffs();
+        if !m.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let n = self.patterns.len();
+        let dict = format!(
+            "/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1 /Resources << /XObject << /Im {image} 0 R >> >> /Matrix [{} {} {} {} {} {}]",
+            f(m[0]),
+            f(m[1]),
+            f(m[2]),
+            f(m[3]),
+            f(m[4]),
+            f(m[5])
+        );
+        let id = self.pdf.stream(&dict, b"/Im Do");
+        let name = format!("P{n}");
+        self.patterns.push((name.clone(), id));
+        let _ = writeln!(self.content, "/Pattern cs /{name} scn");
+        self.path_ops(path);
+        let _ = writeln!(self.content, "{fill_op}");
+        true
+    }
+
+    /// The tiling pattern of a procedural fill, written once per fill on
+    /// this page: a coloured pattern (ISO 32000 section 8.7.3) whose cell
+    /// is the tile, its paths filled with the foreground over a rectangle
+    /// of the background, in points, placed from the page's origin. None
+    /// when the tile is degenerate.
+    fn procedural_pattern(&mut self, p: &tracedraw_core::Procedural) -> Option<String> {
+        let tile = tracedraw_core::procedural::procedural_tile(p);
+        let (w, h) = (tile.size.width * MM_PT, tile.size.height * MM_PT);
+        if !(w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite()) {
+            return None;
+        }
+        let key = format!("{p:?}");
+        if let Some((name, _)) = self.pattern_keys.iter().find(|(_, k)| *k == key) {
+            return Some(name.clone());
+        }
+        // Spot and registration colours need colour spaces the pattern's
+        // own resources would have to carry: their process stand-ins go
+        // in instead.
+        let plain = |c: Color| match c {
+            Color::Spot { .. } | Color::Registration => {
+                let [r, g, b] = c.to_rgb8();
+                Color::rgb8(r, g, b)
+            }
+            c => c,
+        };
+        let cmyk_only = self.pdf.cmyk_only;
+        let mut body = String::new();
+        if let Some(bg) = p.background {
+            let _ = writeln!(
+                body,
+                "{} 0 0 {} {} re f",
+                color_op_in(plain(bg), true, cmyk_only),
+                f(w),
+                f(h)
+            );
+        }
+        let _ = writeln!(
+            body,
+            "{}",
+            color_op_in(plain(p.foreground), true, cmyk_only)
+        );
+        // The tile's paths through `path_ops`, which writes in points.
+        let saved = std::mem::take(&mut self.content);
+        for path in &tile.paths {
+            self.path_ops(path);
+            self.content.push_str("f\n");
+        }
+        body.push_str(&std::mem::replace(&mut self.content, saved));
+        let origin = self.page_origin;
+        let dict = format!(
+            "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 {w} {h}] /XStep {w} /YStep {h} /Resources << >> /Matrix [1 0 0 1 {} {}]",
+            f(origin.x * MM_PT),
+            f(origin.y * MM_PT),
+            w = f(w),
+            h = f(h)
+        );
+        let id = self.pdf.stream(&dict, body.as_bytes());
+        let name = format!("P{}", self.patterns.len());
+        self.patterns.push((name.clone(), id));
+        self.pattern_keys.push((name.clone(), key));
+        Some(name)
+    }
+
     fn shape(&mut self, shape: &Shape, parent: Affine) {
         // Bitmap effects on a vector object: its picture in its place.
         if let Some(pic) = shape.drawn_as() {
@@ -592,19 +1001,71 @@ impl PageWriter<'_> {
         if !shape.visible {
             return;
         }
+        // Overprint: the object's fill (`/op`) and outline (`/OP`) leave
+        // the inks under them, nonzero overprint mode (`/OPM 1`) keeping
+        // the process inks a colour does not use (ISO 32000-1, 8.6.7).
+        // Text whose characters have their own overprint (#1209) is split
+        // into its parts first, below; each part comes back here with the
+        // overprint its characters say.
+        if (shape.overprint_fill || shape.overprint_outline) && shape.text_parts().is_none() {
+            let (op, big) = (shape.overprint_fill, shape.overprint_outline);
+            let name = format!("OP{}{}", u8::from(op), u8::from(big));
+            if !self.gstates.iter().any(|(n, _)| *n == name) {
+                let id = self
+                    .pdf
+                    .add_str(format!("<< /Type /ExtGState /op {op} /OP {big} /OPM 1 >>"));
+                self.gstates.push((name.clone(), id));
+            }
+            let _ = writeln!(self.content, "q\n/{name} gs");
+            let mut inner = shape.clone();
+            inner.overprint_fill = false;
+            inner.overprint_outline = false;
+            self.shape(&inner, parent);
+            self.content.push_str("Q\n");
+            return;
+        }
         if !shape.effects.is_empty() {
             let ev = tracedraw_core::live::evaluate(shape);
+            // An object whose effects draw objects of their own (the body
+            // of an extrusion, a contour's steps) casts the shadow of all
+            // of it, once, beneath all of it, as the drawing window draws
+            // it (#2215). The PDF drew the object's own shadow over what
+            // its effects put behind it (d#2596).
+            let whole = !(ev.below.is_empty() && ev.above.is_empty())
+                && !matches!(ev.main.kind, ShapeKind::Bitmap { .. });
+            if whole {
+                self.drop_shadow(shape, parent);
+            }
             for b in &ev.below {
                 let mut b = b.clone();
                 b.effects.clear();
+                if whole {
+                    b.shadow = None;
+                }
                 self.shape(&b, parent);
             }
             let mut main = ev.main.clone();
             main.effects.clear();
+            if whole {
+                main.shadow = None;
+            }
+            // The merge mode goes out as the PDF blend mode when one
+            // matches it.
+            let mut blend = "Normal";
+            // The transparency's opacity and its target (the fill, the
+            // outline or the whole object, live test of 0.41).
+            let mut fade: Option<(f64, u8)> = None;
+            let mut mask_fill: Option<Fill> = None;
             for e in &shape.effects {
                 match e {
-                    tracedraw_core::live::Effect::Transparency { mask, .. } => {
-                        main.opacity *= crate::svg::average_luminance(mask) as f64;
+                    tracedraw_core::live::Effect::Transparency {
+                        mask,
+                        merge,
+                        target,
+                    } => {
+                        fade = Some((crate::svg::average_luminance(mask) as f64, *target));
+                        mask_fill = Some(mask.clone());
+                        blend = pdf_blend_mode(*merge);
                     }
                     tracedraw_core::live::Effect::Lens(
                         tracedraw_core::live::Lens::Transparency { rate, color },
@@ -612,14 +1073,76 @@ impl PageWriter<'_> {
                         main.fill = Fill::Solid(*color);
                         main.opacity *= rate / 100.0;
                     }
+                    // A Cut lens changes the objects beneath on the screen only:
+                    // the lens itself shows nothing (Frozen bakes what it does).
+                    tracedraw_core::live::Effect::Lens(tracedraw_core::live::Lens::Cut { .. }) => {
+                        main.fill = Fill::None;
+                        main.opacity = 0.0;
+                    }
                     tracedraw_core::live::Effect::Lens(_) => main.opacity *= 0.5,
                     _ => {}
                 }
             }
-            self.shape(&main, parent);
+            let parts = match fade {
+                Some((_, target)) => tracedraw_core::live::transparency_parts(&main, target),
+                None => vec![(main, false)],
+            };
+            for (mut part, faded) in parts {
+                if !faded {
+                    self.shape(&part, parent);
+                    continue;
+                }
+                // A mask that varies (a fountain, a pattern) goes in as a
+                // luminosity soft mask painted with the mask's own fill,
+                // as the drawing window applies it: white keeps the
+                // object, black clears it (#2615: the PDF took one
+                // average opacity for the whole object).
+                if self.pdf.allow_alpha {
+                    if let Some(mask) = mask_fill.as_ref().filter(|m| varies(m)) {
+                        if let Some(name) = self.soft_mask(&part, parent, mask, blend) {
+                            self.faded(&part, parent, &name);
+                            continue;
+                        }
+                    }
+                    // A part with its drop shadow, or with a fill and an
+                    // outline that overlap, fades as one, as the drawing
+                    // window fades it in a layer of its own: the shadow
+                    // stays hidden under the object. Faded apart, the
+                    // shadow showed dark through the see-through object
+                    // (d#2596).
+                    if let Some((opacity, _)) = fade.filter(|_| fades_as_one(&part)) {
+                        let name = format!("GS{}", self.gstates.len());
+                        let id = self.pdf.add_str(format!(
+                            "<< /Type /ExtGState /CA {o} /ca {o} /BM /{blend} >>",
+                            o = f(opacity)
+                        ));
+                        self.gstates.push((name.clone(), id));
+                        self.faded(&part, parent, &name);
+                        continue;
+                    }
+                }
+                if let Some((opacity, _)) = fade {
+                    part.opacity *= opacity;
+                }
+                if blend != "Normal" && self.pdf.allow_alpha {
+                    let name = format!("GS{}", self.gstates.len());
+                    let id = self
+                        .pdf
+                        .add_str(format!("<< /Type /ExtGState /BM /{blend} >>"));
+                    self.gstates.push((name.clone(), id));
+                    let _ = writeln!(self.content, "q\n/{name} gs");
+                    self.shape(&part, parent);
+                    self.content.push_str("Q\n");
+                } else {
+                    self.shape(&part, parent);
+                }
+            }
             for a in &ev.above {
                 let mut a = a.clone();
                 a.effects.clear();
+                if whole {
+                    a.shadow = None;
+                }
                 self.shape(&a, parent);
             }
             return;
@@ -644,14 +1167,42 @@ impl PageWriter<'_> {
             }
             let mut fill = shape.clone();
             fill.stroke = None;
+            // The shadow goes once, beneath the outline drawn first.
+            fill.shadow = None;
             self.shape(&outline, parent);
             self.shape(&fill, parent);
             return;
         }
         let transform = parent * shape.transform;
+        // A group's or a clip frame's own shadow, beneath all it holds (a
+        // clip frame with an opacity mask goes in as a picture, shadow
+        // and all).
+        if matches!(shape.kind, ShapeKind::Group { .. })
+            || matches!(shape.kind, ShapeKind::ClipFrame { .. }) && shape.opacity_mask.is_none()
+        {
+            self.drop_shadow(shape, parent);
+        }
+        if let (ShapeKind::Group { .. }, Some(look)) = (&shape.kind, shape.group_look) {
+            // A knockout, or a see-through group drawn as one, has no
+            // plain PDF form here: it goes in as a picture with its
+            // transparency, as the canvas draws it.
+            if look.knockout || (look.as_one && shape.opacity < 1.0) {
+                if let Some(raster) = raster_of(shape, parent, self.symbols, MASK_DPI) {
+                    self.shape(&raster, Affine::IDENTITY);
+                }
+                return;
+            }
+        }
         if let ShapeKind::Group { children } = &shape.kind {
             for c in children {
-                self.shape(c, transform);
+                // The group's uniform transparency goes on each member.
+                if shape.opacity < 1.0 && self.pdf.allow_alpha {
+                    let mut c = c.clone();
+                    c.absorb_opacity(shape.opacity);
+                    self.shape(&c, transform);
+                } else {
+                    self.shape(c, transform);
+                }
             }
             return;
         }
@@ -673,6 +1224,14 @@ impl PageWriter<'_> {
             return;
         }
         if let ShapeKind::ClipFrame { frame, contents } = &shape.kind {
+            // An outline behind the frame's fill goes beneath the fill and
+            // the contents (#3110); any other over them.
+            let behind = frame.stroke.as_ref().is_some_and(|st| st.behind_fill);
+            let mut outline = (**frame).clone();
+            outline.fill = Fill::None;
+            if behind {
+                self.shape(&outline, transform);
+            }
             let mut fill_only = (**frame).clone();
             fill_only.stroke = None;
             self.shape(&fill_only, transform);
@@ -693,9 +1252,7 @@ impl PageWriter<'_> {
                 self.shape(c, transform);
             }
             self.content.push_str("Q\n");
-            let mut outline = (**frame).clone();
-            outline.fill = Fill::None;
-            if outline.stroke.is_some() {
+            if outline.stroke.is_some() && !behind {
                 self.shape(&outline, transform);
             }
             return;
@@ -713,6 +1270,15 @@ impl PageWriter<'_> {
         }
         use tracedraw_core::geometry::Shape as _;
         let bounds = path.bounding_box();
+        // A bitmap paints inside its placed rectangle only: wholly outside
+        // the media box it cannot show, so its pixels stay out of the file.
+        if let ShapeKind::Bitmap { rect, .. } = &shape.kind {
+            if misses(transform.transform_rect_bbox(*rect), self.media) {
+                return;
+            }
+        }
+        // Drop shadow: the blurred silhouette behind the object.
+        self.drop_shadow(shape, parent);
         self.content.push_str("q\n");
         if shape.opacity < 1.0 && self.pdf.allow_alpha {
             let name = format!("GS{}", self.gstates.len());
@@ -733,8 +1299,13 @@ impl PageWriter<'_> {
             fx: _,
         } = &shape.kind
         {
-            if let Some((mut rgb, alpha)) = decode_png_rgb_alpha(png) {
+            let painted = crate::bitmap_fill_png(shape, parent);
+            let source = painted.as_deref().unwrap_or(png);
+            if let Some((mut rgb, alpha)) = decode_png_rgb_alpha(source) {
                 let name = format!("Im{}", self.images.len());
+                // Composited over white below when the file has no soft
+                // masks: the ink channels would keep the clear parts.
+                let blended = alpha.is_some() && !self.pdf.allow_alpha;
                 let alpha = if self.pdf.allow_alpha {
                     alpha
                 } else {
@@ -749,25 +1320,94 @@ impl PageWriter<'_> {
                     }
                     None
                 };
-                let cs = self.pdf.color_space();
-                let data = if self.pdf.cmyk_only {
-                    flate(&rgb_to_cmyk_bytes(&rgb))
+                let opts = self.pdf.images;
+                // A CMYK picture goes in with the ink bytes it was read
+                // with (#1659): its screen pixels made it RGB, or in a
+                // CMYK file a new mix of inks, so black ink alone came
+                // out on four plates.
+                let inks = (!blended && painted.is_none())
+                    .then(|| process_inks(shape, png, *width_px, *height_px))
+                    .flatten();
+                let kind = if inks.is_some() {
+                    ImageKind::Color
                 } else {
-                    flate(&rgb)
+                    image_kind(&rgb)
                 };
+                // Gray and black-and-white pictures go in with one channel.
+                let (mut data, mut channels): (Vec<u8>, u8) = if let Some(cmyk) = inks {
+                    (cmyk, 4)
+                } else if kind == ImageKind::Color {
+                    (rgb, 3)
+                } else {
+                    (rgb.chunks_exact(3).map(|p| p[0]).collect(), 1)
+                };
+                let (mut w, mut h) = (*width_px, *height_px);
+                let mut alpha = alpha;
+                // Downsampled to the resolution asked for its kind, as
+                // placed on the page.
+                let wide_mm = {
+                    let c = transform.as_coeffs();
+                    (c[0] * rect.width()).hypot(c[1] * rect.width())
+                };
+                let target = match kind {
+                    ImageKind::Color => opts.color_dpi,
+                    ImageKind::Gray => opts.gray_dpi,
+                    ImageKind::Mono => opts.mono_dpi,
+                };
+                if let Some(t) = target.filter(|t| *t >= 1.0) {
+                    let dpi = if wide_mm > 1e-9 {
+                        w as f64 / (wide_mm / 25.4)
+                    } else {
+                        0.0
+                    };
+                    if dpi > t * 1.05 {
+                        let k = t / dpi;
+                        let nw = ((w as f64 * k).round() as u32).max(1);
+                        let nh = ((h as f64 * k).round() as u32).max(1);
+                        if let Some(d) = resample(&data, channels, w, h, nw, nh) {
+                            data = d;
+                            if kind == ImageKind::Mono {
+                                // Back to black and white after the filter.
+                                for v in data.iter_mut() {
+                                    *v = if *v >= 128 { 255 } else { 0 };
+                                }
+                            }
+                            alpha = alpha.and_then(|a| resample(&a, 1, w, h, nw, nh));
+                            (w, h) = (nw, nh);
+                        }
+                    }
+                }
                 // Transparent pixels go to a soft mask.
                 let smask = alpha.map(|a| {
                     let adata = flate(&a);
                     self.pdf.stream(
-                        &format!("/Type /XObject /Subtype /Image /Width {width_px} /Height {height_px} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode"),
+                        &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode"),
                         &adata,
                     )
                 });
                 let smask_ref = smask
                     .map(|id| format!(" /SMask {id} 0 R"))
                     .unwrap_or_default();
+                let cs = if channels == 1 {
+                    "/DeviceGray"
+                } else if channels == 4 {
+                    "/DeviceCMYK"
+                } else {
+                    self.pdf.color_space()
+                };
+                if channels == 3 && self.pdf.cmyk_only {
+                    data = rgb_to_cmyk_bytes(&data);
+                    channels = 4;
+                }
+                let jpeg = (opts.jpeg && kind != ImageKind::Mono && channels != 4)
+                    .then(|| jpeg_bytes(&data, channels, w, h, opts.jpeg_quality))
+                    .flatten();
+                let (data, filter) = match jpeg {
+                    Some(j) => (j, "/DCTDecode"),
+                    None => (flate(&data), "/FlateDecode"),
+                };
                 let id = self.pdf.stream(
-                    &format!("/Type /XObject /Subtype /Image /Width {width_px} /Height {height_px} /ColorSpace {cs} /BitsPerComponent 8 /Filter /FlateDecode{smask_ref}"),
+                    &format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace {cs} /BitsPerComponent 8 /Filter {filter}{smask_ref}"),
                     &data,
                 );
                 self.images.push((name.clone(), id));
@@ -797,8 +1437,18 @@ impl PageWriter<'_> {
         }
 
         // Fill.
-        let text = matches!(shape.kind, ShapeKind::Text { .. });
-        self.paint_area(&shape.fill, &path, bounds, text);
+        // Text, and a curve whose fill rule says so (#1919), fill nonzero.
+        let nonzero = matches!(shape.kind, ShapeKind::Text { .. })
+            || shape.fill_rule == tracedraw_core::shaping::FillRule::NonZero;
+        // A mesh's nodes lie in the object's own space (#1238: the meshes
+        // of an object with a transform went out black, drawn off their
+        // picture).
+        let page_mesh = match &shape.fill {
+            Fill::Mesh(m) => Some(Fill::Mesh(m.transformed(transform))),
+            _ => None,
+        };
+        let fill = page_mesh.as_ref().unwrap_or(&shape.fill);
+        self.paint_area(fill, &path, bounds, nonzero, transform);
 
         // Outline.
         if let Some(s) = &shape.stroke {
@@ -807,7 +1457,176 @@ impl PageWriter<'_> {
         self.content.push_str("Q\n");
     }
 
+    /// `part` drawn under the graphics state `gs` (a soft mask or an
+    /// opacity): as one transparency group when its parts overlap (see
+    /// [`fades_as_one`]), so the state fades the group's result, not each
+    /// paint on its own.
+    fn faded(&mut self, part: &Shape, parent: Affine, gs: &str) {
+        if !fades_as_one(part) {
+            let _ = writeln!(self.content, "q\n/{gs} gs");
+            self.shape(part, parent);
+            self.content.push_str("Q\n");
+            return;
+        }
+        let saved = std::mem::take(&mut self.content);
+        self.shape(part, parent);
+        let body = std::mem::replace(&mut self.content, saved);
+        let res = resource_dict(
+            &self.shadings,
+            &self.patterns,
+            &self.spaces,
+            &self.gstates,
+            &self.fonts,
+            &self.images,
+        );
+        let m = self.media;
+        let dict = format!(
+            "/Type /XObject /Subtype /Form /BBox [{} {} {} {}] /Group << /S /Transparency /I true /CS {} >> /Resources {res}",
+            f(m.x0 * MM_PT),
+            f(m.y0 * MM_PT),
+            f(m.x1 * MM_PT),
+            f(m.y1 * MM_PT),
+            self.pdf.color_space()
+        );
+        let form = if self.pdf.images.compress_content {
+            let data = flate(body.as_bytes());
+            self.pdf
+                .stream(&format!("{dict} /Filter /FlateDecode"), &data)
+        } else {
+            self.pdf.stream(&dict, body.as_bytes())
+        };
+        let name = format!("Fm{}", self.images.len());
+        self.images.push((name.clone(), form));
+        let _ = writeln!(self.content, "q\n/{gs} gs\n/{name} Do\nQ");
+    }
+
+    /// A graphics state whose luminosity soft mask is `mask` painted over
+    /// `part`'s box (page space, as the drawing window spreads it), merged
+    /// by `blend`. Past the box the mask goes on as at its edge (the
+    /// shadings extend), so the outer half of an outline fades with the
+    /// object. `None` when the part has no area.
+    fn soft_mask(
+        &mut self,
+        part: &Shape,
+        parent: Affine,
+        mask: &Fill,
+        blend: &str,
+    ) -> Option<String> {
+        use tracedraw_core::geometry::Shape as _;
+        let transform = parent * part.transform;
+        let page_path = transform * part.local_path();
+        let bounds = if page_path.elements().is_empty() {
+            let mut placed = part.clone();
+            placed.transform = transform;
+            placed.bounds()
+        } else {
+            page_path.bounding_box()
+        };
+        if !(bounds.width() > 0.0 || bounds.height() > 0.0) || !bounds.area().is_finite() {
+            return None;
+        }
+        let grow = bounds.width().max(bounds.height()).max(1.0);
+        let area = bounds.inflate(grow, grow);
+        let saved = std::mem::take(&mut self.content);
+        // A shaped fountain follows the object's own outline.
+        let shaped = matches!(mask, Fill::Fountain(ft) if ft.kind == FountainKind::Shaped)
+            && !page_path.elements().is_empty();
+        let path = if shaped {
+            page_path
+        } else {
+            tracedraw_core::geometry::rect_path(area, 0.0)
+        };
+        self.paint_area(mask, &path, bounds, true, transform);
+        let body = std::mem::replace(&mut self.content, saved);
+        let res = resource_dict(
+            &self.shadings,
+            &self.patterns,
+            &self.spaces,
+            &[],
+            &[],
+            &self.images,
+        );
+        let dict = format!(
+            "/Type /XObject /Subtype /Form /BBox [{} {} {} {}] /Group << /S /Transparency /CS {} >> /Resources {res}",
+            f(area.x0 * MM_PT),
+            f(area.y0 * MM_PT),
+            f(area.x1 * MM_PT),
+            f(area.y1 * MM_PT),
+            self.pdf.color_space()
+        );
+        let form = if self.pdf.images.compress_content {
+            let data = flate(body.as_bytes());
+            self.pdf
+                .stream(&format!("{dict} /Filter /FlateDecode"), &data)
+        } else {
+            self.pdf.stream(&dict, body.as_bytes())
+        };
+        let name = format!("GS{}", self.gstates.len());
+        let id = self.pdf.add_str(format!(
+            "<< /Type /ExtGState /SMask << /S /Luminosity /G {form} 0 R >> /BM /{blend} >>"
+        ));
+        self.gstates.push((name.clone(), id));
+        Some(name)
+    }
+
     /// Set the outline's colour, width, caps, joins and dashes.
+    /// The drop shadow of `shape` (placed by `parent`) as the drawing
+    /// window draws it: the blurred silhouette in the shadow's colour and
+    /// opacity, as a picture with a soft mask at [`SHADOW_DPI`] (PDF has
+    /// no blur of its own), merged by the shadow's merge mode. The object
+    /// itself is drawn over it by the caller. Without transparency in the
+    /// file (PDF/X-1a, X-3) the page flattening has drawn it already.
+    fn drop_shadow(&mut self, shape: &Shape, parent: Affine) {
+        let Some(sh) = shape.shadow.filter(|sh| sh.opacity > 0.0) else {
+            return;
+        };
+        if !self.pdf.allow_alpha || shape.opacity <= 0.0 {
+            return;
+        }
+        let mut placed = shape.clone();
+        placed.transform = parent * shape.transform;
+        let area = sh.bounds(placed.bounds());
+        if misses(area, self.media) {
+            return;
+        }
+        // Within 40 million pixels, as the other pictures drawn here.
+        let area_in2 = (area.width() / 25.4) * (area.height() / 25.4);
+        let dpi = SHADOW_DPI
+            .min((40.0e6 / area_in2.max(1e-9)).sqrt())
+            .max(1.0);
+        let Some((rect, pm)) = tracedraw_render::render_shadow_image(&placed, dpi) else {
+            return;
+        };
+        let Ok(png) = pm.encode_png() else {
+            return;
+        };
+        let mut pic = Shape::new(
+            shape.id,
+            ShapeKind::Bitmap {
+                rect,
+                width_px: pm.width(),
+                height_px: pm.height(),
+                png: png.into(),
+                fx: None,
+            },
+        );
+        pic.fill = Fill::None;
+        pic.stroke = None;
+        let blend = pdf_blend_mode(sh.merge);
+        if blend != "Normal" {
+            let name = format!("GS{}", self.gstates.len());
+            let id = self
+                .pdf
+                .add_str(format!("<< /Type /ExtGState /BM /{blend} >>"));
+            self.gstates.push((name.clone(), id));
+            let _ = writeln!(self.content, "q\n/{name} gs");
+            self.shape(&pic, Affine::IDENTITY);
+            self.content.push_str("Q\n");
+        } else {
+            self.shape(&pic, Affine::IDENTITY);
+        }
+    }
+
     fn stroke_state(&mut self, s: &tracedraw_core::Stroke) {
         let width = if s.width <= tracedraw_core::Stroke::HAIRLINE + 1e-9 {
             0.0
@@ -850,12 +1669,43 @@ impl PageWriter<'_> {
         bounds: Rect,
     ) {
         use tracedraw_core::geometry::Shape as _;
-        self.stroke_state(s);
-        if let Some(brush) = &s.painterly {
+        let (drawn, scale) = crate::svg::drawn_stroke(s, transform);
+        self.stroke_state(&drawn);
+        let along = if s.painterly.is_none()
+            && tracedraw_core::shaping::outline_band(&shape.page_path(), s, scale).is_none()
+        {
+            tracedraw_core::shaping::along_slices(&shape.page_path(), s, drawn.width)
+        } else {
+            None
+        };
+        if let Some(pieces) = along {
+            // A gradient along the line: each piece filled in its colour.
+            for (piece, color, alpha) in pieces {
+                self.content.push_str("q\n");
+                if self.pdf.allow_alpha && alpha < 1.0 {
+                    let a = f64::from(alpha.max(0.0));
+                    let name = format!("GS{}", self.gstates.len());
+                    let id = self
+                        .pdf
+                        .add_str(format!("<< /Type /ExtGState /CA {} /ca {} >>", f(a), f(a)));
+                    self.gstates.push((name.clone(), id));
+                    let _ = writeln!(self.content, "/{name} gs");
+                }
+                let op = self.color_op(color, true);
+                let _ = writeln!(self.content, "{op}");
+                self.path_ops(&(parent * piece));
+                self.content.push_str("f\nQ\n");
+            }
+        } else if let Some(brush) = &s.painterly {
             // Painterly brush: the marks, one filled path per opacity.
-            for (alpha, marks) in
-                tracedraw_core::painterly::marks_by_opacity(&shape.page_path(), s.width, brush, 12)
-            {
+            for (alpha, marks) in tracedraw_core::painterly::marks_by_opacity_along(
+                &shape.page_path(),
+                drawn.width,
+                brush,
+                12,
+                &s.widths,
+                s.width,
+            ) {
                 self.content.push_str("q\n");
                 if self.pdf.allow_alpha {
                     let name = format!("GS{}", self.gstates.len());
@@ -872,13 +1722,14 @@ impl PageWriter<'_> {
                 self.path_ops(&(parent * marks));
                 self.content.push_str("f\nQ\n");
             }
-        } else if let Some(band) = tracedraw_core::shaping::outline_band(&shape.page_path(), s, 1.0)
+        } else if let Some(band) =
+            tracedraw_core::shaping::outline_band(&shape.page_path(), s, scale)
         {
             // Calligraphic nib or variable width: the band, filled.
             let band = parent * band;
             if let Some(paint) = outline_paint(s, transform) {
                 let b = band.bounding_box();
-                self.paint_area(&paint, &band, b, true);
+                self.paint_area(&paint, &band, b, true, transform);
             } else {
                 let op = self.color_op(s.color, true);
                 let _ = writeln!(self.content, "{op}");
@@ -886,15 +1737,19 @@ impl PageWriter<'_> {
                 self.content.push_str("f\n");
             }
         } else if let Some((paint, area)) = outline_paint(s, transform)
-            .map(|p| (p, tracedraw_core::shaping::stroke_area(path, s)))
+            .map(|p| (p, tracedraw_core::shaping::stroke_area(path, &drawn)))
             .filter(|(_, a)| !a.elements().is_empty())
         {
             // The outline's own paint: the area it covers, painted
             // like a fill spread over the outline's bounds.
-            let half = s.width / 2.0;
-            self.paint_area(&paint, &area, bounds.inflate(half, half), true);
+            let half = drawn.width / 2.0;
+            self.paint_area(&paint, &area, bounds.inflate(half, half), true, transform);
         } else {
-            self.path_ops(path);
+            // A line with arrowheads ends under them, as drawn (#2981).
+            match tracedraw_core::arrowhead_stroke_path(&shape.page_path(), s) {
+                Some(cut) => self.path_ops(&(parent * cut)),
+                None => self.path_ops(path),
+            }
             self.content.push_str("S\n");
         }
         // Arrowheads (presets and custom) are filled with the outline
@@ -978,10 +1833,10 @@ impl PageWriter<'_> {
         // else on every outline.
         if solid_fill {
             if !curves.elements().is_empty() {
-                self.paint_area(&shape.fill, &curves, bounds, true);
+                self.paint_area(&shape.fill, &curves, bounds, true, transform);
             }
         } else {
-            self.paint_area(&shape.fill, full, bounds, true);
+            self.paint_area(&shape.fill, full, bounds, true, transform);
         }
         // The text, then the outline of the curves (or of everything).
         let render = match (solid_fill, plain_stroke.is_some()) {
@@ -995,7 +1850,7 @@ impl PageWriter<'_> {
             let _ = writeln!(self.content, "{op}");
         }
         if let Some(s) = plain_stroke {
-            self.stroke_state(s);
+            self.stroke_state(&crate::svg::drawn_stroke(s, transform).0);
         }
         self.show_text(&visible, render);
         self.show_text(&hidden, 3);
@@ -1048,6 +1903,24 @@ impl PageWriter<'_> {
             return;
         }
         let _ = writeln!(self.content, "BT\n{render} Tr");
+        // Clusters whose glyphs do not each stand for their own
+        // characters (a vowel sign drawn before its consonant, a reph
+        // after its syllable, a glyph used for other characters
+        // elsewhere): their text in typed order as marked content, so
+        // readers take the characters from it (#599). (first, last).
+        let mut clusters: Vec<(usize, usize)> = Vec::new();
+        for (i, (_, sh)) in glyphs.iter().enumerate() {
+            match clusters.last_mut() {
+                Some(c) if sh.text.is_empty() => c.1 = i,
+                _ => clusters.push((i, i)),
+            }
+        }
+        clusters.retain(|&(a, b)| {
+            b > a
+                || glyphs
+                    .get(a)
+                    .is_some_and(|(_, sh)| !sh.mapped && !sh.text.is_empty())
+        });
         let mut font: Option<usize> = None;
         // The run: its matrix (points) and the pen along it, ems.
         let mut run: Option<(Affine, f64)> = None;
@@ -1058,71 +1931,165 @@ impl PageWriter<'_> {
                 pending.clear();
             }
         };
-        for (m, sh) in glyphs {
-            let m = Affine::scale(MM_PT) * *m;
-            let c = m.as_coeffs();
-            let det = c[0] * c[3] - c[1] * c[2];
-            if !det.is_finite() || det.abs() < 1e-12 || c.iter().any(|v| !v.is_finite()) {
-                continue;
-            }
-            if font != Some(sh.slot) {
+        let mut marked = clusters.into_iter().peekable();
+        let mut open: Option<usize> = None;
+        for (i, (m, sh)) in glyphs.iter().enumerate() {
+            if let Some((_, last)) = marked.next_if(|c| c.0 == i) {
                 flush(&mut self.content, &mut pending);
-                let Some(slot) = self.pdf.fonts.get(sh.slot) else {
-                    continue;
-                };
-                let (name, id) = (slot.name.clone(), slot.id);
-                if !self.fonts.iter().any(|(n, _)| *n == name) {
-                    self.fonts.push((name.clone(), id));
-                }
-                let _ = writeln!(self.content, "/{name} 1 Tf");
-                font = Some(sh.slot);
-                run = None;
+                let _ = writeln!(
+                    self.content,
+                    "/Span << /ActualText {} >> BDC",
+                    pdf_text_any(&sh.text)
+                );
+                open = Some(last);
             }
-            // Along the run: the glyph's origin in the run's space.
-            let along = run.and_then(|(r, pen)| {
-                let rc = r.as_coeffs();
-                let same = (0..4).all(|i| (rc[i] - c[i]).abs() <= 1e-6 * (1.0 + rc[i].abs()));
-                if !same {
-                    return None;
-                }
-                let p = r.inverse() * tracedraw_core::geometry::Point::new(c[4], c[5]);
-                (p.y.abs() < 1e-3).then_some((p.x, pen))
-            });
-            let x = match along {
-                Some((x, pen)) => {
-                    let adj = (pen - x) * 1000.0;
-                    if adj.abs() > 0.01 {
-                        let _ = write!(pending, "{} ", f(adj));
-                    }
-                    x
-                }
-                None => {
-                    flush(&mut self.content, &mut pending);
-                    let _ = writeln!(
-                        self.content,
-                        "{} {} {} {} {} {} Tm",
-                        f6(c[0]),
-                        f6(c[1]),
-                        f6(c[2]),
-                        f6(c[3]),
-                        f(c[4]),
-                        f(c[5])
-                    );
-                    run = Some((m, 0.0));
-                    0.0
-                }
-            };
-            pending.push('<');
-            for b in &sh.code {
-                let _ = write!(pending, "{b:02X}");
-            }
-            pending.push_str("> ");
-            if let Some((_, pen)) = run.as_mut() {
-                *pen = x + sh.width_em;
+            self.show_one(m, sh, &mut font, &mut run, &mut pending);
+            if open == Some(i) {
+                flush(&mut self.content, &mut pending);
+                self.content.push_str("EMC\n");
+                open = None;
             }
         }
         flush(&mut self.content, &mut pending);
         self.content.push_str("ET\n");
+    }
+
+    /// Show one glyph of [`Self::show_text`]: added to the pending
+    /// adjustments of the current run, or a new run.
+    fn show_one(
+        &mut self,
+        m: &Affine,
+        sh: &fonts::Shown,
+        font: &mut Option<usize>,
+        run: &mut Option<(Affine, f64)>,
+        pending: &mut String,
+    ) {
+        let flush = |content: &mut String, pending: &mut String| {
+            if !pending.is_empty() {
+                let _ = writeln!(content, "[{}] TJ", pending.trim_end());
+                pending.clear();
+            }
+        };
+        let m = Affine::scale(MM_PT) * *m;
+        let c = m.as_coeffs();
+        let det = c[0] * c[3] - c[1] * c[2];
+        if !det.is_finite() || det.abs() < 1e-12 || c.iter().any(|v| !v.is_finite()) {
+            return;
+        }
+        if *font != Some(sh.slot) {
+            flush(&mut self.content, pending);
+            let Some(slot) = self.pdf.fonts.get(sh.slot) else {
+                return;
+            };
+            let (name, id) = (slot.name.clone(), slot.id);
+            if !self.fonts.iter().any(|(n, _)| *n == name) {
+                self.fonts.push((name.clone(), id));
+            }
+            let _ = writeln!(self.content, "/{name} 1 Tf");
+            *font = Some(sh.slot);
+            *run = None;
+        }
+        // Along the run: the glyph's origin in the run's space.
+        let along = run.and_then(|(r, pen)| {
+            let rc = r.as_coeffs();
+            let same = (0..4).all(|i| (rc[i] - c[i]).abs() <= 1e-6 * (1.0 + rc[i].abs()));
+            if !same {
+                return None;
+            }
+            let p = r.inverse() * tracedraw_core::geometry::Point::new(c[4], c[5]);
+            (p.y.abs() < 1e-3).then_some((p.x, pen))
+        });
+        let x = match along {
+            Some((x, pen)) => {
+                let adj = (pen - x) * 1000.0;
+                if adj.abs() > 0.01 {
+                    let _ = write!(pending, "{} ", f(adj));
+                }
+                x
+            }
+            None => {
+                flush(&mut self.content, pending);
+                let _ = writeln!(
+                    self.content,
+                    "{} {} {} {} {} {} Tm",
+                    f6(c[0]),
+                    f6(c[1]),
+                    f6(c[2]),
+                    f6(c[3]),
+                    f(c[4]),
+                    f(c[5])
+                );
+                *run = Some((m, 0.0));
+                0.0
+            }
+        };
+        pending.push('<');
+        for b in &sh.code {
+            let _ = write!(pending, "{b:02X}");
+        }
+        pending.push_str("> ");
+        if let Some((_, pen)) = run.as_mut() {
+            *pen = x + sh.width_em;
+        }
+    }
+}
+
+/// A resource dictionary naming these objects.
+fn resource_dict(
+    shadings: &[(String, usize)],
+    patterns: &[(String, usize)],
+    spaces: &[(String, usize)],
+    gstates: &[(String, usize)],
+    fonts: &[(String, usize)],
+    images: &[(String, usize)],
+) -> String {
+    let mut res = String::from("<< ");
+    for (key, list) in [
+        ("Shading", shadings),
+        ("Pattern", patterns),
+        ("ColorSpace", spaces),
+        ("ExtGState", gstates),
+        ("Font", fonts),
+        ("XObject", images),
+    ] {
+        if list.is_empty() {
+            continue;
+        }
+        let _ = write!(res, "/{key} << ");
+        for (n, id) in list {
+            let _ = write!(res, "/{n} {id} 0 R ");
+        }
+        res.push_str(">> ");
+    }
+    res.push_str(">>");
+    res
+}
+
+/// A see-through part that has to fade as one group: it casts a drop
+/// shadow (hidden under the object until the whole fades), holds several
+/// objects, or has a fill and an outline that overlap.
+fn fades_as_one(part: &Shape) -> bool {
+    part.shadow.is_some_and(|sh| sh.opacity > 0.0)
+        || matches!(
+            part.kind,
+            ShapeKind::Group { .. }
+                | ShapeKind::ClipFrame { .. }
+                | ShapeKind::Table(_)
+                | ShapeKind::SymbolInstance { .. }
+        )
+        || (!matches!(part.fill, Fill::None) && part.stroke.is_some())
+}
+
+/// A transparency mask that is not one level all over (a fountain with
+/// stops of different greys, a pattern, a texture...).
+pub(crate) fn varies(mask: &Fill) -> bool {
+    match mask {
+        Fill::None | Fill::Solid(_) => false,
+        Fill::Fountain(ft) => {
+            let first = ft.stops.first().map(|s| s.color.luminance());
+            ft.stops.iter().any(|s| Some(s.color.luminance()) != first)
+        }
+        _ => true,
     }
 }
 
@@ -1132,10 +2099,103 @@ fn f6(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Colours in a fountain's sampled function (see `sampled_function_in`).
+pub const SAMPLED_FUNCTION_SIZE: usize = 64;
+
+/// A PDF sampled function (type 0) over the fountain's span, as a stream
+/// object: [`SAMPLED_FUNCTION_SIZE`] colours spaced evenly from 0 to 1,
+/// one byte per component, the viewer blending between them. Returns the
+/// object's number.
+fn sampled_function_in(ft: &tracedraw_core::Fountain, pdf: &mut Pdf, cmyk: bool) -> usize {
+    let stops = ft.resolved_stops();
+    let n = SAMPLED_FUNCTION_SIZE;
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let mut data = Vec::with_capacity(n * 4);
+    for i in 0..n {
+        let pos = i as f64 / (n - 1) as f64;
+        let c = tracedraw_core::style::sample_stop(&stops, pos).color;
+        if cmyk {
+            if let Color::Cmyk { c, m, y, k } = c.convert_to("CMYK") {
+                data.extend_from_slice(&[byte(c), byte(m), byte(y), byte(k)]);
+            } else {
+                let [r, g, b] = c.to_rgb8();
+                data.extend_from_slice(&rgb_to_cmyk_bytes(&[r, g, b]));
+            }
+        } else {
+            data.extend_from_slice(&c.to_rgb8());
+        }
+    }
+    let range = if cmyk {
+        "[0 1 0 1 0 1 0 1]"
+    } else {
+        "[0 1 0 1 0 1]"
+    };
+    pdf.stream(
+        &format!("/FunctionType 0 /Domain [0 1] /Range {range} /Size [{n}] /BitsPerSample 8"),
+        &data,
+    )
+}
+
+/// Every colour of the fountain is a print colour (CMYK, gray, a spot
+/// ink or registration): its shading goes in CMYK in every file. In RGB a
+/// CMYK blend, black to white for one, printed on all four plates.
+fn print_colours_only(ft: &tracedraw_core::Fountain) -> bool {
+    !ft.stops.is_empty()
+        && ft.stops.iter().all(|s| {
+            matches!(
+                s.color,
+                Color::Cmyk { .. } | Color::Gray { .. } | Color::Spot { .. } | Color::Registration
+            )
+        })
+}
+
 /// PDF stitching function over the fountain's stops (type 3 wrapping type 2
 /// segments), or a single type 2 function for two stops.
 fn stitching_function_in(ft: &tracedraw_core::Fountain, cmyk_only: bool) -> String {
-    let rgb_array = |c: Color| color_array(c, cmyk_only);
+    stitching_function_with(ft, &|c| color_array(c, cmyk_only))
+}
+
+/// A fountain of tints of one spot ink: every colour is that ink, or a
+/// colour of no ink at all (white). Not one whose colours follow a hue
+/// path or a smooth blend, which a spot tint cannot.
+fn one_spot_ink(ft: &tracedraw_core::Fountain) -> Option<u32> {
+    if ft.has_blend_options() && !ft.stepped() {
+        return None;
+    }
+    let mut ink = None;
+    for s in &ft.stops {
+        match s.color {
+            Color::Spot { ink: i, .. } => match ink {
+                None => ink = Some(i),
+                Some(j) if j == i => {}
+                Some(_) => return None,
+            },
+            c if spot_tint(c) == 0.0 => {}
+            _ => return None,
+        }
+    }
+    ink
+}
+
+/// The tint of a stop in a fountain of one spot ink: the ink's tint, 0
+/// for white (no ink).
+fn spot_tint(c: Color) -> f64 {
+    match c {
+        Color::Spot { tint, .. } if tint.is_finite() => tint.clamp(0.0, 1.0) as f64,
+        Color::Cmyk { c, m, y, k } if c == 0.0 && m == 0.0 && y == 0.0 && k == 0.0 => 0.0,
+        Color::Gray { v } if v >= 1.0 => 0.0,
+        Color::Rgb { r, g, b } if r >= 1.0 && g >= 1.0 && b >= 1.0 => 0.0,
+        _ => -1.0,
+    }
+}
+
+/// The stitching function over the fountain's stops, each colour written
+/// by `array`.
+fn stitching_function_with(
+    ft: &tracedraw_core::Fountain,
+    array: &dyn Fn(Color) -> String,
+) -> String {
+    let rgb_array = array;
     // One run of stops with the edge pad, repeats, mirror and inversion
     // worked in.
     let mut stops: Vec<(f64, Color)> = ft
@@ -1203,13 +2263,7 @@ fn stitching_function_in(ft: &tracedraw_core::Fountain, cmyk_only: bool) -> Stri
 fn outline_paint(s: &tracedraw_core::Stroke, transform: Affine) -> Option<Fill> {
     match s.fill.as_deref()? {
         Fill::None | Fill::Solid(_) => None,
-        Fill::Mesh(m) => {
-            let mut m = m.clone();
-            for n in m.nodes.iter_mut() {
-                n.pos = transform * n.pos;
-            }
-            Some(Fill::Mesh(m))
-        }
+        Fill::Mesh(m) => Some(Fill::Mesh(m.transformed(transform))),
         other => Some(other.clone()),
     }
 }
@@ -1229,8 +2283,31 @@ fn rasterise_fill(
     Some((pm.encode_png().ok()?, w, h))
 }
 
-fn decode_png_rgb(png: &[u8]) -> Option<Vec<u8>> {
-    decode_png_rgb_alpha(png).map(|(rgb, _)| rgb)
+/// The C, M, Y and K bytes of a CMYK picture, interleaved a pixel at a
+/// time, from the ink channels it keeps (`Shape::picture_inks`) while
+/// they still fit its pixels; `None` for other pictures, and for ones
+/// with spot ink channels.
+fn process_inks(shape: &Shape, png: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    use tracedraw_core::picture_inks::PictureInk;
+    let inks = shape.picture_inks.as_deref()?;
+    if !inks.fits(png) || inks.inks != (0..4).map(PictureInk::Process).collect::<Vec<_>>() {
+        return None;
+    }
+    let planes = image::load_from_memory(&inks.png).ok()?.to_luma8();
+    let n = (w as usize).checked_mul(h as usize)?;
+    if planes.width() != w || planes.height() as usize != h as usize * 4 {
+        return None;
+    }
+    let raw = planes.into_raw();
+    if raw.len() < n * 4 {
+        return None;
+    }
+    let raw = &raw;
+    Some(
+        (0..n)
+            .flat_map(|i| (0..4).map(move |c| raw[c * n + i]))
+            .collect(),
+    )
 }
 
 /// RGB samples and, when any pixel is not opaque, the alpha channel.
@@ -1315,6 +2392,10 @@ fn needs_flattening(s: &Shape) -> bool {
     if s.opacity < 1.0 || s.opacity_mask.is_some() {
         return true;
     }
+    // A drop shadow is a soft, see-through picture.
+    if s.shadow.is_some_and(|sh| sh.opacity > 0.0) {
+        return true;
+    }
     if s.effects.iter().any(|e| {
         matches!(
             e,
@@ -1342,13 +2423,29 @@ fn needs_flattening(s: &Shape) -> bool {
 /// Replace every object that needs flattening by a raster of everything
 /// drawn up to and including it, cropped to its bounds, so the composite
 /// is kept without transparency in the file.
-fn flatten_page(doc: &Document, page: &tracedraw_core::document::Page, dpi: f64) -> Vec<Shape> {
-    let layers = doc.layers_for_page(page.id).unwrap_or_default();
-    let ordered: Vec<Shape> = layers
+///
+/// A group that is not see-through itself is opened, so only the objects
+/// in it that need flattening turn into pictures, not the whole group
+/// (#3929). With `inks` (PDF/X-1a) the picture also keeps the process
+/// inks the objects blend to, so it prints in the drawing's own CMYK
+/// colours instead of inks made again from screen colours, which came
+/// out duller and put a rich black on the black plate alone (#3942,
+/// #3929).
+fn flatten_page(
+    doc: &Document,
+    page: &tracedraw_core::document::Page,
+    dpi: f64,
+    inks: bool,
+) -> Vec<Shape> {
+    let layers = doc.layers_drawn_for_page(page.id).unwrap_or_default();
+    let mut ordered: Vec<Shape> = Vec::new();
+    for s in layers
         .iter()
         .filter(|l| l.visible && l.printable)
-        .flat_map(|l| l.shapes.iter().cloned())
-        .collect();
+        .flat_map(|l| l.shapes.iter())
+    {
+        open_for_flattening(s.clone(), &mut ordered);
+    }
     let mut out: Vec<Shape> = Vec::with_capacity(ordered.len());
     let page_rect = page.rect();
     for (i, s) in ordered.iter().enumerate() {
@@ -1356,7 +2453,12 @@ fn flatten_page(doc: &Document, page: &tracedraw_core::document::Page, dpi: f64)
             out.push(s.clone());
             continue;
         }
-        let b = s.bounds().intersect(page_rect);
+        // With the drop shadow, which reaches past the object.
+        let mut b = s.bounds();
+        if let Some(sh) = &s.shadow {
+            b = b.union(sh.bounds(b));
+        }
+        let b = b.intersect(page_rect);
         if b.width() <= 0.0 || b.height() <= 0.0 {
             continue;
         }
@@ -1389,6 +2491,11 @@ fn flatten_page(doc: &Document, page: &tracedraw_core::document::Page, dpi: f64)
             out.push(s.clone());
             continue;
         };
+        let planes = if inks {
+            ink_planes(&tmp, &ordered[..=i], b, dpi, rect)
+        } else {
+            None
+        };
         let mut raster = Shape::new(
             s.id,
             ShapeKind::Bitmap {
@@ -1400,25 +2507,226 @@ fn flatten_page(doc: &Document, page: &tracedraw_core::document::Page, dpi: f64)
                 ),
                 width_px: crop.width(),
                 height_px: crop.height(),
-                png,
+                png: png.into(),
                 fx: None,
             },
         );
         raster.fill = Fill::None;
         raster.stroke = None;
         raster.name = s.name.clone();
+        if let (Some(planes), ShapeKind::Bitmap { png, .. }) = (planes, &raster.kind) {
+            raster.cmyk_bitmap = true;
+            raster.picture_inks = Some(Box::new(tracedraw_core::picture_inks::PictureInks::cmyk(
+                png,
+                planes.into(),
+            )));
+        }
         out.push(raster);
     }
     out
 }
 
+/// The transparency masks of `orig` put back on `mapped`, its copy with
+/// other colours: a mask's greys are how see-through the object is, not
+/// a colour to print.
+fn keep_masks(orig: &Shape, mapped: &mut Shape) {
+    mapped.opacity_mask = orig.opacity_mask;
+    for (e, o) in mapped.effects.iter_mut().zip(&orig.effects) {
+        if let (
+            tracedraw_core::live::Effect::Transparency { mask, .. },
+            tracedraw_core::live::Effect::Transparency { mask: m0, .. },
+        ) = (e, o)
+        {
+            *mask = m0.clone();
+        }
+    }
+    match (&mut mapped.kind, &orig.kind) {
+        (ShapeKind::Group { children }, ShapeKind::Group { children: c0 }) => {
+            for (c, o) in children.iter_mut().zip(c0) {
+                keep_masks(o, c);
+            }
+        }
+        (
+            ShapeKind::ClipFrame { frame, contents },
+            ShapeKind::ClipFrame {
+                frame: f0,
+                contents: k0,
+            },
+        ) => {
+            keep_masks(f0, frame);
+            for (c, o) in contents.iter_mut().zip(k0) {
+                keep_masks(o, c);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `s` into `out` for flattening: a group with no transparency, shadow,
+/// mask or effect of its own that holds objects needing flattening as
+/// its objects one by one, placed as the group placed them.
+fn open_for_flattening(s: Shape, out: &mut Vec<Shape>) {
+    let plain = s.opacity >= 1.0
+        && s.opacity_mask.is_none()
+        && s.shadow.is_none()
+        && s.effects.is_empty()
+        && s.visible;
+    match s.kind {
+        ShapeKind::Group { children } if plain && children.iter().any(needs_flattening) => {
+            for mut c in children {
+                c.absorb(s.transform);
+                open_for_flattening(c, out);
+            }
+        }
+        kind => out.push(Shape { kind, ..s }),
+    }
+}
+
+/// Whether the process inks of `shapes` can be drawn one ink at a time
+/// as grey: only flat colours, fountains and meshes blended normally,
+/// no pictures, patterns, lenses or merge modes, whose look does not
+/// follow from each ink alone.
+fn inks_draw_alone(shapes: &[Shape]) -> bool {
+    fn ok(s: &Shape) -> bool {
+        if !matches!(
+            s.fill,
+            Fill::None | Fill::Solid(_) | Fill::Fountain(_) | Fill::Mesh(_)
+        ) {
+            return false;
+        }
+        if s.effects.iter().any(|e| match e {
+            tracedraw_core::live::Effect::Transparency { merge, .. } => {
+                *merge != tracedraw_core::live::MergeMode::Normal
+            }
+            _ => true,
+        }) {
+            return false;
+        }
+        match &s.kind {
+            ShapeKind::Bitmap { .. } => false,
+            ShapeKind::Group { children } => children.iter().all(ok),
+            ShapeKind::ClipFrame { frame, contents } => ok(frame) && contents.iter().all(ok),
+            _ => true,
+        }
+    }
+    shapes.iter().all(ok)
+}
+
+/// The C, M, Y and K planes of the part `rect` (in pixels at `dpi`, the
+/// page box `b` in mm) of `tmp`'s page, which holds `shapes`: each ink
+/// drawn alone as grey, so normal blending of the objects mixes each ink
+/// as it mixes the screen colours. One 8-bit grey PNG, the four planes
+/// one under the other, 255 full ink; `None` when the objects' inks do
+/// not draw alone.
+fn ink_planes(
+    tmp: &Document,
+    shapes: &[Shape],
+    b: tracedraw_core::geometry::Rect,
+    dpi: f64,
+    rect: tiny_skia::IntRect,
+) -> Option<Vec<u8>> {
+    let near: Vec<&Shape> = shapes
+        .iter()
+        .filter(|s| {
+            let r = s.bounds();
+            r.x1 >= b.x0 && r.x0 <= b.x1 && r.y1 >= b.y0 && r.y0 <= b.y1
+        })
+        .collect();
+    if !inks_draw_alone(&near.into_iter().cloned().collect::<Vec<_>>()) {
+        return None;
+    }
+    if tmp.pages[0].background.is_some() {
+        return None;
+    }
+    let ink_of = |c: Color| -> [f32; 4] {
+        match c {
+            Color::Cmyk { c, m, y, k } => [c, m, y, k],
+            Color::Registration => [1.0; 4],
+            Color::Gray { v } => [0.0, 0.0, 0.0, 1.0 - v.clamp(0.0, 1.0)],
+            Color::Spot {
+                tint, c, m, y, k, ..
+            } => [c * tint, m * tint, y * tint, k * tint],
+            other => match other.convert_to("CMYK") {
+                Color::Cmyk { c, m, y, k } => [c, m, y, k],
+                _ => [0.0, 0.0, 0.0, 1.0],
+            },
+        }
+    };
+    let (w, h) = (rect.width(), rect.height());
+    let n = (w as usize) * (h as usize);
+    let mut planes = vec![0u8; n * 4];
+    for ink in 0..4 {
+        let mut one = tmp.clone();
+        for (s, orig) in one.pages[0].layers[0]
+            .shapes
+            .iter_mut()
+            .zip(&tmp.pages[0].layers[0].shapes)
+        {
+            tracedraw_core::color_convert::map_shape_colors(s, &|c| Color::Gray {
+                v: 1.0 - ink_of(c)[ink].clamp(0.0, 1.0),
+            });
+            keep_masks(orig, s);
+        }
+        let pid = one.pages[0].id;
+        let pm = tracedraw_render::render_page_image(&one, pid, dpi)?;
+        let crop = pm.clone_rect(rect)?;
+        if crop.width() != w || crop.height() != h {
+            return None;
+        }
+        for (i, p) in crop.pixels().iter().enumerate() {
+            // Over white paper: no ink where nothing is drawn.
+            let c = p.demultiply();
+            let a = c.alpha() as u32;
+            let grey = (c.red() as u32 * a + 255 * (255 - a)) / 255;
+            planes[ink * n + i] = 255 - grey as u8;
+        }
+    }
+    let img = image::GrayImage::from_raw(w, h * 4, planes)?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .ok()?;
+    Some(out.into_inner())
+}
+
 /// The resolution opacity masks are drawn at in PDF output.
 const MASK_DPI: f64 = 300.0;
+
+/// The resolution drop shadows are drawn at in PDF output.
+const SHADOW_DPI: f64 = 300.0;
+
+/// The PDF blend mode closest to a merge mode (the drawing window's blend
+/// for it, see `tracedraw_render::merge_blend`), of a shadow or a
+/// transparency. Modes with no PDF blend draw normally.
+fn pdf_blend_mode(merge: tracedraw_core::live::MergeMode) -> &'static str {
+    use tracedraw_core::live::MergeMode as M;
+    match merge {
+        M::Multiply | M::Texturize | M::Subtract => "Multiply",
+        M::Difference => "Difference",
+        // Add has no PDF blend; Screen is the nearest: it lightens too
+        // and black leaves the backdrop as it is (#1238, lamps whose
+        // glints are added over them went out black).
+        M::Add | M::Divide | M::Screen => "Screen",
+        M::IfLighter => "Lighten",
+        M::IfDarker => "Darken",
+        M::Hue => "Hue",
+        M::Saturation => "Saturation",
+        M::Color => "Color",
+        M::Lightness => "Luminosity",
+        M::Invert | M::Exclusion => "Exclusion",
+        M::Overlay => "Overlay",
+        M::SoftLight => "SoftLight",
+        M::HardLight => "HardLight",
+        M::ColorDodge => "ColorDodge",
+        M::ColorBurn => "ColorBurn",
+        M::Normal | M::And | M::Or | M::Xor | M::Red | M::Green | M::Blue | M::Behind => "Normal",
+    }
+}
 
 /// `shape` (placed by `parent`) drawn on its own as a bitmap object with
 /// its transparency, covering its bounds; the resolution drops so the
 /// picture stays within 40 million pixels.
-fn raster_of(
+pub(crate) fn raster_of(
     shape: &Shape,
     parent: Affine,
     symbols: &[tracedraw_core::Symbol],
@@ -1453,6 +2761,7 @@ fn raster_of(
                 zoom,
                 origin_x: 0.0,
                 origin_y: h as f64,
+                stretch_y: 1.0,
             },
             ..Default::default()
         },
@@ -1465,7 +2774,7 @@ fn raster_of(
             rect: Rect::new(b.x0, b.y0, b.x0 + w as f64 / zoom, b.y0 + h as f64 / zoom),
             width_px: pm.width(),
             height_px: pm.height(),
-            png,
+            png: png.into(),
             fx: None,
         },
     );
@@ -1482,7 +2791,7 @@ pub fn document_to_pdf_with(doc: &Document, opts: &PdfOptions) -> Vec<u8> {
 /// [`document_to_pdf_with`], with what went into the file: its fonts and
 /// the fonts whose text became curves.
 pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, PdfReport) {
-    let doc = &*crate::resolve_open_fills(doc);
+    let doc = &*crate::for_export(doc, None);
     let std_ = opts.standard;
     let mut pdf = Pdf {
         objects: Vec::new(),
@@ -1493,6 +2802,7 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
         fonts: Vec::new(),
         bad_fonts: Vec::new(),
         report: PdfReport::default(),
+        images: opts.images,
     };
     // PDF/X wants every font in the file.
     let text_mode = (!opts.text.as_curves).then_some(TextMode {
@@ -1501,7 +2811,18 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
     });
     pdf.add_str(String::new()); // 1: catalog, filled at the end
     pdf.add_str(String::new()); // 2: pages
-    let bleed = opts.bleed_mm.max(0.0);
+    let bleed = if opts.bleed_mm.is_finite() {
+        opts.bleed_mm.max(0.0)
+    } else {
+        0.0
+    };
+    let slug = if opts.marks_margin_mm.is_finite() {
+        opts.marks_margin_mm.clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    // From the media box's edge to the page: the marks margin and the bleed.
+    let edge = slug + bleed;
     let flatten_dpi = if opts.flatten_dpi > 0.0 {
         opts.flatten_dpi
     } else {
@@ -1511,13 +2832,13 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
     // Each page's link areas, made into annotations once every page has
     // its object (a link can go to a later page).
     let mut page_link_areas: Vec<Vec<(Rect, String)>> = Vec::new();
-    for page in &doc.pages {
+    for (page_no, page) in doc.pages.iter().enumerate() {
         let mut areas = Vec::new();
         // PDF/X allows no link annotations on the page.
         if std_ == PdfStandard::None {
-            let offset = Affine::translate((bleed, bleed));
+            let offset = Affine::translate((edge, edge));
             for layer in doc
-                .layers_for_page(page.id)
+                .layers_drawn_for_page(page.id)
                 .unwrap_or_default()
                 .iter()
                 .filter(|l| l.visible && l.printable)
@@ -1527,7 +2848,7 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
         }
         page_link_areas.push(areas);
         let flat = if std_.flatten() {
-            Some(flatten_page(doc, page, flatten_dpi))
+            Some(flatten_page(doc, page, flatten_dpi, std_ == PdfStandard::X1a))
         } else {
             None
         };
@@ -1535,6 +2856,9 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
             content: String::new(),
             pdf: &mut pdf,
             shadings: Vec::new(),
+            patterns: Vec::new(),
+            pattern_keys: Vec::new(),
+            page_origin: tracedraw_core::geometry::Point::new(edge, edge),
             gstates: Vec::new(),
             images: Vec::new(),
             symbols: &doc.symbols,
@@ -1542,21 +2866,40 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
             spaces: Vec::new(),
             fonts: Vec::new(),
             text: text_mode,
+            media: Rect::new(
+                0.0,
+                0.0,
+                page.size.width + 2.0 * edge,
+                page.size.height + 2.0 * edge,
+            ),
         };
+        let marks = opts.page_marks.get(page_no).filter(|m| !m.is_empty());
+        if slug > 0.0 {
+            // The drawing stops at the bleed: the marks margin stays clear.
+            let _ = writeln!(
+                w.content,
+                "q {} {} {} {} re W n",
+                f(slug * MM_PT),
+                f(slug * MM_PT),
+                f((page.size.width + 2.0 * bleed) * MM_PT),
+                f((page.size.height + 2.0 * bleed) * MM_PT)
+            );
+        }
+        let offset = Affine::translate((edge, edge));
         if let Some(bg) = &page.background {
+            // The page's background covers its bleed too.
             let mut bg_shape = Shape::new(
                 tracedraw_core::ShapeId(0),
                 ShapeKind::Rect {
-                    rect: page.rect(),
+                    rect: page.rect().inflate(bleed, bleed),
                     radius: 0.0,
                     corners: None,
                 },
             );
             bg_shape.fill = bg.clone();
             bg_shape.stroke = None;
-            w.shape(&bg_shape, Affine::IDENTITY);
+            w.shape(&bg_shape, offset);
         }
-        let offset = Affine::translate((bleed, bleed));
         match &flat {
             Some(shapes) => {
                 for s in shapes {
@@ -1564,7 +2907,7 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
                 }
             }
             None => {
-                let layers = doc.layers_for_page(page.id).unwrap_or_default();
+                let layers = doc.layers_drawn_for_page(page.id).unwrap_or_default();
                 for layer in layers.iter().filter(|l| l.visible && l.printable) {
                     for s in &layer.shapes {
                         w.shape(s, offset);
@@ -1572,67 +2915,44 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
                 }
             }
         }
+        if slug > 0.0 {
+            w.content.push_str("Q\n");
+        }
+        for s in marks.into_iter().flatten() {
+            w.shape(s, offset);
+        }
         let PageWriter {
             content,
             shadings,
+            patterns,
             gstates,
             images,
             spaces,
             fonts,
             ..
         } = w;
-        let data = flate(content.as_bytes());
-        let content_id = pdf.stream("/Filter /FlateDecode", &data);
-        let mut res = String::from("<< ");
-        if !shadings.is_empty() {
-            res.push_str("/Shading << ");
-            for (n, id) in &shadings {
-                let _ = write!(res, "/{n} {id} 0 R ");
-            }
-            res.push_str(">> ");
-        }
-        if !spaces.is_empty() {
-            res.push_str("/ColorSpace << ");
-            for (n, id) in &spaces {
-                let _ = write!(res, "/{n} {id} 0 R ");
-            }
-            res.push_str(">> ");
-        }
-        if !gstates.is_empty() {
-            res.push_str("/ExtGState << ");
-            for (n, id) in &gstates {
-                let _ = write!(res, "/{n} {id} 0 R ");
-            }
-            res.push_str(">> ");
-        }
-        if !fonts.is_empty() {
-            res.push_str("/Font << ");
-            for (n, id) in &fonts {
-                let _ = write!(res, "/{n} {id} 0 R ");
-            }
-            res.push_str(">> ");
-        }
-        if !images.is_empty() {
-            res.push_str("/XObject << ");
-            for (n, id) in &images {
-                let _ = write!(res, "/{n} {id} 0 R ");
-            }
-            res.push_str(">> ");
-        }
-        res.push_str(">>");
+        let content_id = if pdf.images.compress_content {
+            let data = flate(content.as_bytes());
+            pdf.stream("/Filter /FlateDecode", &data)
+        } else {
+            pdf.stream("", content.as_bytes())
+        };
+        let res = resource_dict(&shadings, &patterns, &spaces, &gstates, &fonts, &images);
         let (mw, mh) = (
-            (page.size.width + 2.0 * bleed) * MM_PT,
-            (page.size.height + 2.0 * bleed) * MM_PT,
+            (page.size.width + 2.0 * edge) * MM_PT,
+            (page.size.height + 2.0 * edge) * MM_PT,
         );
-        let boxes = if std_ != PdfStandard::None || bleed > 0.0 {
+        let boxes = if std_ != PdfStandard::None || edge > 0.0 {
             format!(
-                " /TrimBox [{} {} {} {}] /BleedBox [0 0 {} {}]",
-                f(bleed * MM_PT),
-                f(bleed * MM_PT),
-                f((bleed + page.size.width) * MM_PT),
-                f((bleed + page.size.height) * MM_PT),
-                f(mw),
-                f(mh)
+                " /TrimBox [{} {} {} {}] /BleedBox [{} {} {} {}]",
+                f(edge * MM_PT),
+                f(edge * MM_PT),
+                f((edge + page.size.width) * MM_PT),
+                f((edge + page.size.height) * MM_PT),
+                f(slug * MM_PT),
+                f(slug * MM_PT),
+                f((edge + bleed + page.size.width) * MM_PT),
+                f((edge + bleed + page.size.height) * MM_PT)
             )
         } else {
             String::new()
@@ -1651,7 +2971,7 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
     for (areas, &page_id) in page_link_areas.iter().zip(&page_ids) {
         let mut annots = Vec::new();
         for (rect, link) in areas {
-            let Some(target) = link_target(link, &page_ids, doc, bleed) else {
+            let Some(target) = link_target(link, &page_ids, doc, edge) else {
                 continue;
             };
             let id = pdf.add_str(format!(
@@ -1741,7 +3061,7 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
             } else {
                 name.to_string()
             };
-            let top = (page.size.height + 2.0 * bleed) * MM_PT;
+            let top = (page.size.height + 2.0 * edge) * MM_PT;
             let mut item = format!(
                 "<< /Title {} /Parent {outlines} 0 R /Dest [{page_id} 0 R /XYZ 0 {} null]",
                 pdf_text_any(&title),
@@ -1772,21 +3092,30 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
         catalog.push_str(" /Extensions << /ADBE << /BaseVersion /1.7 /ExtensionLevel 8 >> >>");
     }
     if std_ != PdfStandard::None {
-        let condition = if opts.output_condition.trim().is_empty() {
-            "CGATS TR 001".to_string()
-        } else {
+        let profile = output_profile(opts, doc);
+        let condition = if !opts.output_condition.trim().is_empty() {
             opts.output_condition.trim().to_string()
+        } else if let Some(icc) = profile {
+            // The embedded profile is the condition: a registered name
+            // would describe another press.
+            profile_condition(icc)
+        } else {
+            "CGATS TR 001".to_string()
         };
-        let profile_ref = opts.output_profile.as_ref().map(|icc| {
+        let profile_ref = profile.map(|icc| {
             let n = icc_channels(icc);
             let id = pdf.stream(&format!("/N {n}"), icc);
             format!(" /DestOutputProfile {id} 0 R")
         });
+        // A press the ICC registry names goes by its registered name, the
+        // condition as given (a profile's name, say) staying beside it
+        // (#3829).
+        let identifier = registered_condition(&condition).unwrap_or(&condition);
         let intent = pdf.add_str(format!(
             "<< /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier {} /OutputCondition {} /RegistryName (http://www.color.org) /Info {}{} >>",
-            pdf_text(&condition),
-            pdf_text(&condition),
-            pdf_text(&condition),
+            pdf_text_any(identifier),
+            pdf_text_any(&condition),
+            pdf_text_any(&condition),
             profile_ref.unwrap_or_default()
         ));
         let _ = write!(catalog, " /OutputIntents [{intent} 0 R]");
@@ -1837,6 +3166,73 @@ pub fn document_to_pdf_report(doc: &Document, opts: &PdfOptions) -> (Vec<u8>, Pd
         None => pdf.finish_with(std_.version(), Some(info_id)),
     };
     (bytes, report)
+}
+
+/// The output intent's profile: the one given, else the CMYK profile the
+/// drawing carries, the profile its CMYK values are in.
+fn output_profile<'a>(opts: &'a PdfOptions, doc: &'a Document) -> Option<&'a [u8]> {
+    opts.output_profile.as_deref().or_else(|| {
+        doc.cmyk_profile
+            .as_ref()
+            .map(|p| p.data.as_slice())
+            .filter(|icc| icc_channels(icc) == 4)
+    })
+}
+
+/// The name the ICC characterization data registry gives the printing
+/// condition `name` stands for: a registered name itself, or the name of
+/// a well-known CMYK profile made for one ("U.S. Web Coated (SWOP) v2"
+/// is "CGATS TR 001", "Coated FOGRA39 (ISO 12647-2:2004)" and "ISO Coated
+/// v2" are "FOGRA39"). `None` for others: they go by their own name,
+/// with their profile embedded (#3829).
+pub fn registered_condition(name: &str) -> Option<&'static str> {
+    const FOGRA: [&str; 12] = [
+        "FOGRA27", "FOGRA28", "FOGRA29", "FOGRA30", "FOGRA39", "FOGRA40", "FOGRA45", "FOGRA47",
+        "FOGRA51", "FOGRA52", "FOGRA53", "FOGRA54",
+    ];
+    let n = name.trim().to_ascii_uppercase();
+    let compact: String = n.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    for f in FOGRA {
+        if compact.contains(f) {
+            return Some(f);
+        }
+    }
+    for id in [
+        "CGATS TR 001",
+        "CGATS TR 002",
+        "CGATS TR 003",
+        "CGATS TR 005",
+        "CGATS TR 006",
+    ] {
+        if compact.contains(&id.replace(' ', "")) {
+            return Some(id);
+        }
+    }
+    let by_profile: [(&str, &str); 9] = [
+        ("ISOCOATEDV2", "FOGRA39"),
+        ("PSOCOATEDV3", "FOGRA51"),
+        ("PSOUNCOATEDV3", "FOGRA52"),
+        ("SWOP2006COATED3", "CGATS TR 003"),
+        ("SWOP2006COATED5", "CGATS TR 005"),
+        ("GRACOL2006", "CGATS TR 006"),
+        ("WEBCOATEDSWOPV2", "CGATS TR 001"),
+        ("JAPANCOLOR2001COATED", "JC200103"),
+        ("JC200103", "JC200103"),
+    ];
+    by_profile
+        .iter()
+        .find(|(k, _)| compact.contains(k))
+        .map(|(_, id)| *id)
+}
+
+/// The output condition an embedded profile stands for: its description,
+/// else "Custom".
+fn profile_condition(icc: &[u8]) -> String {
+    tracedraw_core::icc::Profile::parse(icc)
+        .ok()
+        .and_then(|p| p.description().map(|d| d.trim().to_string()))
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "Custom".to_string())
 }
 
 /// Channel count of an ICC profile from its colour space signature.
@@ -1926,6 +3322,227 @@ mod tests {
     use super::*;
     use tracedraw_core::geometry::Rect;
 
+    /// A CMYK picture (a `.cdr`, PSD or TIFF CMYK image keeping its ink
+    /// bytes, #1659) goes in as a DeviceCMYK image of those bytes in
+    /// every PDF: black ink alone stays on the black plate. Its RGB
+    /// screen pixels went in instead (or, in PDF/X-1a, inks made again
+    /// from them).
+    #[test]
+    fn a_cmyk_picture_goes_in_with_its_own_inks() {
+        let (w, h) = (2u32, 2u32);
+        let png = |img: image::DynamicImage| {
+            let mut out = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut out, image::ImageFormat::Png)
+                .expect("png");
+            out.into_inner()
+        };
+        // Screen pixels: a dark gray; inks: black only, at four strengths.
+        let pixels = png(image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            w,
+            h,
+            image::Rgb([60, 60, 60]),
+        )));
+        let k = [255u8, 200, 150, 100];
+        let mut planes = vec![0u8; (w * h * 4) as usize];
+        planes[(w * h * 3) as usize..].copy_from_slice(&k);
+        let planes = png(image::DynamicImage::ImageLuma8(
+            image::GrayImage::from_raw(w, h * 4, planes).expect("planes"),
+        ));
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        let id = doc.ids_mut().shape();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Bitmap {
+                rect: Rect::new(10.0, 10.0, 30.0, 30.0),
+                width_px: w,
+                height_px: h,
+                png: pixels.clone().into(),
+                fx: Default::default(),
+            },
+        );
+        s.cmyk_bitmap = true;
+        s.picture_inks = Some(Box::new(tracedraw_core::picture_inks::PictureInks::cmyk(
+            &pixels,
+            planes.into(),
+        )));
+        doc.layer_mut(layer).unwrap().shapes.push(s);
+        let want: Vec<u8> = k.iter().flat_map(|k| [0, 0, 0, *k]).collect();
+        for standard in [PdfStandard::None, PdfStandard::X1a] {
+            let opts = PdfOptions {
+                standard,
+                ..Default::default()
+            };
+            let bytes = document_to_pdf_with(&doc, &opts);
+            let pdf = lopdf::Document::load_mem(&bytes).expect("parses");
+            let image = pdf
+                .objects
+                .values()
+                .filter_map(|o| o.as_stream().ok())
+                .find(|st| {
+                    st.dict
+                        .get(b"Subtype")
+                        .and_then(|v| v.as_name())
+                        .is_ok_and(|n| n == b"Image")
+                })
+                .expect("image");
+            assert_eq!(
+                image.dict.get(b"ColorSpace").and_then(|v| v.as_name()).ok(),
+                Some(&b"DeviceCMYK"[..]),
+                "{standard:?}"
+            );
+            let data = image.decompressed_content().expect("data");
+            assert_eq!(data, want, "{standard:?}");
+        }
+    }
+
+    /// A 600 x 600 pixel picture placed 25.4 mm wide (600 dpi): kept as
+    /// it is at first; downsampled to 150 dpi (150 x 150) when asked; JPEG
+    /// compressed when asked; a gray picture goes in with one channel; the
+    /// page content can stay uncompressed (#550).
+    #[test]
+    fn pictures_are_downsampled_and_compressed_as_asked() {
+        let picture = |gray: bool| {
+            let img = image::RgbImage::from_fn(600, 600, |x, y| {
+                let v = ((x * 7 + y * 3) % 256) as u8;
+                if gray {
+                    image::Rgb([v, v, v])
+                } else {
+                    image::Rgb([v, 255 - v, (x % 256) as u8])
+                }
+            });
+            let mut png = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut png, image::ImageFormat::Png)
+                .expect("png");
+            let mut doc = Document::default();
+            let layer = doc.pages[0].layers[0].id;
+            let id = doc.ids_mut().shape();
+            let s = Shape::new(
+                id,
+                ShapeKind::Bitmap {
+                    rect: Rect::new(10.0, 10.0, 35.4, 35.4),
+                    width_px: 600,
+                    height_px: 600,
+                    png: png.into_inner().into(),
+                    fx: Default::default(),
+                },
+            );
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+            doc
+        };
+        let text = |doc: &Document, images: PdfImages| {
+            let opts = PdfOptions {
+                images,
+                ..Default::default()
+            };
+            String::from_utf8_lossy(&document_to_pdf_with(doc, &opts)).to_string()
+        };
+        let color = picture(false);
+        let plain = text(&color, PdfImages::default());
+        assert!(plain.contains("/Width 600 /Height 600"));
+        assert!(plain.contains("/DeviceRGB"));
+        let small = text(
+            &color,
+            PdfImages {
+                color_dpi: Some(150.0),
+                ..Default::default()
+            },
+        );
+        assert!(small.contains("/Width 150 /Height 150"), "downsampled");
+        assert!(small.len() < plain.len());
+        let jpeg = text(
+            &color,
+            PdfImages {
+                jpeg: true,
+                jpeg_quality: 60,
+                ..Default::default()
+            },
+        );
+        assert!(jpeg.contains("/DCTDecode"));
+        // Below the resolution asked: left alone.
+        let kept = text(
+            &color,
+            PdfImages {
+                color_dpi: Some(1200.0),
+                ..Default::default()
+            },
+        );
+        assert!(kept.contains("/Width 600 /Height 600"));
+        // Gray: one channel, its own resolution.
+        let gray = picture(true);
+        let g = text(
+            &gray,
+            PdfImages {
+                color_dpi: Some(72.0),
+                gray_dpi: Some(300.0),
+                ..Default::default()
+            },
+        );
+        assert!(
+            g.contains("/Width 300 /Height 300 /ColorSpace /DeviceGray"),
+            "gray"
+        );
+        // The page content uncompressed: its operators readable.
+        let raw = text(
+            &color,
+            PdfImages {
+                compress_content: false,
+                ..Default::default()
+            },
+        );
+        assert!(raw.contains("cm /Im0 Do"));
+        assert!(!plain.contains("cm /Im0 Do"));
+    }
+
+    /// A picture wholly outside the page and its bleed cannot show: it
+    /// stays out of the file. One in the bleed, or partly on the page,
+    /// goes in (#642).
+    #[test]
+    fn pictures_wholly_outside_the_media_box_stay_out_of_the_file() {
+        let mut doc = Document::default();
+        let page = doc.pages[0].size;
+        let layer = doc.pages[0].layers[0].id;
+        let place = |doc: &mut Document, rect: Rect| {
+            let img = image::RgbImage::from_fn(8, 8, |x, y| {
+                image::Rgb([(x * 30) as u8, (y * 30) as u8, 128])
+            });
+            let mut png = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut png, image::ImageFormat::Png)
+                .expect("png");
+            let id = doc.ids_mut().shape();
+            let s = Shape::new(
+                id,
+                ShapeKind::Bitmap {
+                    rect,
+                    width_px: 8,
+                    height_px: 8,
+                    png: png.into_inner().into(),
+                    fx: Default::default(),
+                },
+            );
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+        };
+        let pictures = |doc: &Document, bleed_mm: f64| {
+            let opts = PdfOptions {
+                bleed_mm,
+                ..Default::default()
+            };
+            String::from_utf8_lossy(&document_to_pdf_with(doc, &opts))
+                .matches("/Subtype /Image")
+                .count()
+        };
+        // 2 mm right of the page.
+        place(
+            &mut doc,
+            Rect::new(page.width + 2.0, 10.0, page.width + 30.0, 40.0),
+        );
+        assert_eq!(pictures(&doc, 0.0), 0, "outside the page");
+        assert_eq!(pictures(&doc, 3.0), 1, "in the 3 mm bleed");
+        // Half on the page, across its left edge.
+        place(&mut doc, Rect::new(-10.0, 10.0, 10.0, 30.0));
+        assert_eq!(pictures(&doc, 0.0), 1, "partly on the page");
+    }
+
     #[test]
     fn multi_stop_fountain_uses_stitching_function() {
         let mut doc = Document::default();
@@ -1942,18 +3559,9 @@ mod tests {
         s.fill = Fill::Fountain(tracedraw_core::Fountain {
             kind: FountainKind::Linear,
             stops: vec![
-                tracedraw_core::Stop {
-                    pos: 0.0,
-                    color: Color::rgb8(255, 0, 0),
-                },
-                tracedraw_core::Stop {
-                    pos: 0.3,
-                    color: Color::rgb8(0, 255, 0),
-                },
-                tracedraw_core::Stop {
-                    pos: 1.0,
-                    color: Color::rgb8(0, 0, 255),
-                },
+                tracedraw_core::Stop::new(0.0, Color::rgb8(255, 0, 0)),
+                tracedraw_core::Stop::new(0.3, Color::rgb8(0, 255, 0)),
+                tracedraw_core::Stop::new(1.0, Color::rgb8(0, 0, 255)),
             ],
             angle: 90.0,
             offset: tracedraw_core::geometry::Point::ZERO,
@@ -1964,6 +3572,97 @@ mod tests {
         let text = String::from_utf8_lossy(&document_to_pdf(&doc)).to_string();
         assert!(text.contains("/FunctionType 3"));
         assert!(text.contains("/Bounds [0.3]"));
+    }
+
+    /// A gradient along a hue path or with a smooth transition is a
+    /// sampled function of SAMPLED_FUNCTION_SIZE colours; a stepped one
+    /// keeps the stitching function, one constant segment per band
+    /// (#1208).
+    #[test]
+    fn blend_settings_shade_through_sampled_and_stepped_functions() {
+        let shade = |f: tracedraw_core::Fountain, cmyk: bool| {
+            let mut doc = Document::default();
+            let layer = doc.pages[0].layers[0].id;
+            let id = doc.ids_mut().shape();
+            let mut s = Shape::new(
+                id,
+                ShapeKind::Rect {
+                    rect: Rect::new(10.0, 10.0, 60.0, 40.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            s.fill = Fill::Fountain(f);
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+            let bytes = if cmyk {
+                document_to_pdf_with(
+                    &doc,
+                    &PdfOptions {
+                        standard: PdfStandard::X1a,
+                        ..Default::default()
+                    },
+                )
+            } else {
+                document_to_pdf(&doc)
+            };
+            String::from_utf8_lossy(&bytes).to_string()
+        };
+        let (red, blue) = (Color::rgb8(255, 0, 0), Color::rgb8(0, 0, 255));
+        let mut h = tracedraw_core::Fountain::two(FountainKind::Linear, red, blue, 0.0);
+        h.blend_direction = tracedraw_core::ColorBlend::Clockwise;
+        let text = shade(h.clone(), false);
+        assert!(text.contains("/FunctionType 0"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "/Range [0 1 0 1 0 1] /Size [{SAMPLED_FUNCTION_SIZE}] /BitsPerSample 8 /Length {}",
+                SAMPLED_FUNCTION_SIZE * 3
+            )),
+            "{text}"
+        );
+        assert!(text.contains("/ShadingType 2"), "{text}");
+        // CMYK only: four bytes a colour.
+        let text = shade(h, true);
+        assert!(
+            text.contains(&format!(
+                "/Range [0 1 0 1 0 1 0 1] /Size [{SAMPLED_FUNCTION_SIZE}] /BitsPerSample 8 /Length {}",
+                SAMPLED_FUNCTION_SIZE * 4
+            )),
+            "{text}"
+        );
+        // Stepped: a stitching function with one segment per band, each
+        // from a colour to itself.
+        let mut s =
+            tracedraw_core::Fountain::two(FountainKind::Linear, Color::BLACK, Color::WHITE, 0.0);
+        s.steps = 4;
+        let text = shade(s, false);
+        assert!(!text.contains("/FunctionType 0"), "{text}");
+        assert!(text.contains("/FunctionType 3"), "{text}");
+        assert_eq!(text.matches("/FunctionType 2").count(), 4, "{text}");
+        assert!(
+            text.contains("/C0 [0.3333 0.3333 0.3333] /C1 [0.3333 0.3333 0.3333]"),
+            "{text}"
+        );
+        assert!(text.contains("/Bounds [0.25 0.5 0.75]"), "{text}");
+    }
+
+    /// A fill whose nodes were placed freely is a unit shading drawn
+    /// through its frame (#330).
+    #[test]
+    fn free_fill_nodes_draw_a_unit_shading_through_their_frame() {
+        use tracedraw_core::style::FountainHandles;
+        let mut f =
+            tracedraw_core::Fountain::two(FountainKind::Linear, Color::BLACK, Color::WHITE, 0.0);
+        f.handles = Some(FountainHandles {
+            start: tracedraw_core::geometry::Point::new(-1.0, 0.0),
+            end: tracedraw_core::geometry::Point::new(0.0, 0.0),
+            skew: tracedraw_core::geometry::Point::new(-1.0, 1.0),
+        });
+        let text = one_rect_pdf(Fill::Fountain(f.clone()), None);
+        assert!(text.contains("/Coords [0 0 1 0]"), "{text}");
+        assert!(text.contains(" cm /Sh0 sh"), "{text}");
+        f.kind = FountainKind::Radial;
+        let text = one_rect_pdf(Fill::Fountain(f), None);
+        assert!(text.contains("/Coords [0 0 0 0 0 1]"), "{text}");
     }
 
     fn one_rect_pdf(fill: Fill, stroke: Option<tracedraw_core::Stroke>) -> String {
@@ -2041,6 +3740,63 @@ mod tests {
         assert!(text.contains("\nS\n"), "{text}");
     }
 
+    /// A procedural fill is a tiling pattern holding the tile's paths,
+    /// written once however many objects use it, never a picture (#1212).
+    #[test]
+    fn procedural_fill_is_a_tiling_pattern() {
+        use tracedraw_core::{Procedural, ProceduralPattern};
+        let mut p = Procedural::new(ProceduralPattern::Bricks, Color::rgb8(255, 0, 0));
+        p.params.size_mm = 10.0;
+        let text = one_rect_pdf(Fill::Procedural(p.clone()), None);
+        assert!(
+            text.contains("/PatternType 1 /PaintType 1 /TilingType 1"),
+            "{text}"
+        );
+        // The cell is the tile in points, stepping its own size.
+        let step = f(10.0 * MM_PT);
+        assert!(
+            text.contains(&format!(
+                "/BBox [0 0 {step} {step}] /XStep {step} /YStep {step}"
+            )),
+            "{text}"
+        );
+        assert!(text.contains("/Pattern << /P0 "), "{text}");
+        assert!(text.contains("/Pattern cs /P0 scn"), "{text}");
+        // The background rectangle, then the bricks in the foreground.
+        assert!(
+            text.contains(&format!("1 1 1 rg 0 0 {step} {step} re f")),
+            "{text}"
+        );
+        assert!(text.contains("1 0 0 rg\n"), "{text}");
+        assert!(!text.contains("/Subtype /Image"), "{text}");
+        // Two objects with the same fill share one pattern.
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        for x in [10.0, 80.0] {
+            let id = doc.ids_mut().shape();
+            let mut s = Shape::new(
+                id,
+                ShapeKind::Rect {
+                    rect: Rect::new(x, 10.0, x + 50.0, 40.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            s.fill = Fill::Procedural(p.clone());
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+        }
+        let text = String::from_utf8_lossy(&document_to_pdf(&doc)).to_string();
+        assert_eq!(text.matches("/PatternType 1").count(), 1, "{text}");
+        assert_eq!(text.matches("/Pattern << /P0 ").count(), 1, "{text}");
+        assert!(!text.contains("/P1 "), "{text}");
+        // A procedural outline paint shades the outline's area with it.
+        let mut st = tracedraw_core::Stroke::new(Color::rgb8(0, 255, 0), 2.0);
+        st.fill = Some(Box::new(Fill::Procedural(p)));
+        let text = one_rect_pdf(Fill::None, Some(st));
+        assert!(text.contains("/Pattern cs /P0 scn"), "{text}");
+        assert!(!text.contains("\nS\n"), "{text}");
+    }
+
     #[test]
     fn pattern_fill_becomes_image() {
         let mut doc = Document::default();
@@ -2058,6 +3814,7 @@ mod tests {
             front: Color::BLACK,
             back: Color::WHITE,
             size_mm: 5.0,
+            placement: Default::default(),
         });
         s.stroke = Some(tracedraw_core::Stroke {
             end_arrow: tracedraw_core::Arrowhead::Arrow,
@@ -2065,8 +3822,86 @@ mod tests {
         });
         doc.layer_mut(layer).unwrap().shapes.push(s);
         let text = String::from_utf8_lossy(&document_to_pdf(&doc)).to_string();
+        // A tiling pattern whose cell is the tile's image.
         assert!(text.contains("/Subtype /Image"));
-        assert!(text.contains("/Im0 "));
+        assert!(
+            text.contains("/PatternType 1 /PaintType 1 /TilingType 1"),
+            "{text}"
+        );
+        assert!(text.contains("/Pattern << /P0 "), "{text}");
+        // The default placement: a 5 mm tile from the page origin.
+        let pt = 5.0 * MM_PT;
+        let matrix = format!("/Matrix [{} 0 0 {} 0 0]", f(pt), f(pt));
+        assert!(text.contains(&matrix), "{matrix}\n{text}");
+    }
+
+    /// The pattern's `/Matrix` carries the placement: mirrored tiles make
+    /// the cell two tiles wide, the offset moves it, the rotation turns
+    /// it, and Transform with object puts the object's transform in front.
+    #[test]
+    fn pattern_matrix_carries_the_placement() {
+        use tracedraw_core::style::PatternPlacement;
+        let pattern = |placement| {
+            Fill::Pattern(tracedraw_core::Pattern::TwoColor {
+                tile: tracedraw_core::PatternTile::Checker,
+                front: Color::BLACK,
+                back: Color::WHITE,
+                size_mm: 10.0,
+                placement,
+            })
+        };
+        let text = one_rect_pdf(
+            pattern(PatternPlacement {
+                mirror_horizontal: true,
+                offset_x: 2.0,
+                offset_y: 3.0,
+                ..PatternPlacement::default()
+            }),
+            None,
+        );
+        let matrix = format!(
+            "/Matrix [{} 0 0 {} {} {}]",
+            f(20.0 * MM_PT),
+            f(10.0 * MM_PT),
+            f(2.0 * MM_PT),
+            f(3.0 * MM_PT)
+        );
+        assert!(text.contains(&matrix), "{matrix}\n{text}");
+        assert!(text.contains("/Pattern cs /P0 scn"), "{text}");
+        let text = one_rect_pdf(
+            pattern(PatternPlacement {
+                rotation: 90.0,
+                ..PatternPlacement::default()
+            }),
+            None,
+        );
+        let pt = 10.0 * MM_PT;
+        let matrix = format!("/Matrix [0 {} {} 0 0 0]", f(pt), f(-pt));
+        assert!(text.contains(&matrix), "{matrix}\n{text}");
+
+        // Transform with object: the rectangle is moved 5 mm right, so
+        // its tiles start there.
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        let id = doc.ids_mut().shape();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Rect {
+                rect: Rect::new(10.0, 10.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        s.fill = pattern(PatternPlacement {
+            transform_with_object: true,
+            ..PatternPlacement::default()
+        });
+        s.stroke = None;
+        s.transform = Affine::translate((5.0, 0.0));
+        doc.layer_mut(layer).unwrap().shapes.push(s);
+        let text = String::from_utf8_lossy(&document_to_pdf(&doc)).to_string();
+        let matrix = format!("/Matrix [{} 0 0 {} {} 0]", f(pt), f(pt), f(5.0 * MM_PT));
+        assert!(text.contains(&matrix), "{matrix}\n{text}");
     }
 
     #[test]
@@ -2095,13 +3930,91 @@ mod tests {
         s.fill = Fill::Pattern(tracedraw_core::Pattern::Vector {
             shapes: vec![tile_square],
             tile: tracedraw_core::geometry::Size::new(10.0, 10.0),
+            placement: Default::default(),
         });
         s.stroke = None;
         doc.layer_mut(layer).unwrap().shapes.push(s);
         let text = String::from_utf8_lossy(&document_to_pdf(&doc)).to_string();
-        // The content stream is compressed; the image resource is not.
+        // The content stream is compressed; the image resource is not. The
+        // tile's image is the cell of a tiling pattern, with a soft mask
+        // for the clear part of the tile.
         assert!(text.contains("/Subtype /Image"));
-        assert!(text.contains("/XObject << /Im0 "));
+        assert!(text.contains("/SMask"), "{text}");
+        assert!(text.contains("/XObject << /Im "), "{text}");
+        assert!(text.contains("/PatternType 1"), "{text}");
+    }
+
+    /// A mesh whose nodes fade (#2789, #2154) keeps its see-through
+    /// part in the PDF: its picture carries a soft mask; an opaque mesh
+    /// needs none.
+    #[test]
+    fn a_mesh_with_see_through_nodes_exports_its_transparency() {
+        let pdf_of = |alpha: f32| {
+            let mut doc = Document::default();
+            let layer = doc.pages[0].layers[0].id;
+            let id = doc.ids_mut().shape();
+            let r = Rect::new(10.0, 10.0, 30.0, 30.0);
+            let mut s = Shape::new(
+                id,
+                ShapeKind::Rect {
+                    rect: r,
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            let mut m = tracedraw_core::Mesh::new(r, 1, 1, Color::rgb8(255, 0, 0));
+            m.nodes[0].alpha = alpha;
+            s.fill = Fill::Mesh(m);
+            s.stroke = None;
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+            String::from_utf8_lossy(&document_to_pdf(&doc)).to_string()
+        };
+        let faded = pdf_of(0.0);
+        assert!(faded.contains("/Subtype /Image"), "{faded}");
+        assert!(faded.contains("/SMask"), "{faded}");
+        assert!(!pdf_of(1.0).contains("/SMask"));
+    }
+
+    /// #1238: a mesh's nodes lie in its object's own space, so the mesh
+    /// of an object with a transform (every mesh read from a `.cdr`
+    /// file) went out as a black picture, drawn off its object.
+    #[test]
+    fn a_mesh_on_an_object_with_a_transform_exports_its_colours() {
+        // The picture of a red and blue mesh on a 20 mm square whose
+        // corner the object's transform or its own rectangle puts at
+        // (100, 100).
+        let picture = |at: f64, shift: f64| {
+            let mut doc = Document::default();
+            let layer = doc.pages[0].layers[0].id;
+            let id = doc.ids_mut().shape();
+            let r = Rect::new(at, at, at + 20.0, at + 20.0);
+            let mut s = Shape::new(
+                id,
+                ShapeKind::Rect {
+                    rect: r,
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            s.transform = Affine::translate((shift, shift));
+            let mut m = tracedraw_core::Mesh::new(r, 1, 1, Color::rgb8(255, 0, 0));
+            m.nodes[0].color = Color::rgb8(0, 0, 255);
+            s.fill = Fill::Mesh(m);
+            s.stroke = None;
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+            let bytes = document_to_pdf(&doc);
+            let find = |from: usize, what: &[u8]| {
+                bytes[from..]
+                    .windows(what.len())
+                    .position(|w| w == what)
+                    .map(|i| from + i)
+            };
+            let image = find(0, b"/Subtype /Image").expect("a picture");
+            let start = find(image, b"stream").expect("its data");
+            let end = find(start, b"endstream").expect("its end");
+            bytes[start..end].to_vec()
+        };
+        assert_eq!(picture(100.0, 0.0), picture(0.0, 100.0));
     }
 
     #[test]
@@ -2161,8 +4074,200 @@ mod tests {
         assert!(!content.contains(&format!("{} {} l", f(60.0 * MM_PT), f(250.0 * MM_PT))));
     }
 
+    /// #1210: a head sized to 200 % and moved 5 mm out past the end lands
+    /// where the editor put it: the tip at (65, 150), the base corners
+    /// 16 mm back at x 49 and 6.4 mm either side of the line.
+    #[test]
+    fn a_moved_and_scaled_arrowhead_lands_where_the_editor_put_it() {
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        let mut line = Shape::new(
+            tracedraw_core::ShapeId(1),
+            ShapeKind::Path {
+                path: {
+                    let mut p = tracedraw_core::BezPath::new();
+                    p.move_to((10.0, 50.0));
+                    p.line_to((60.0, 50.0));
+                    p
+                },
+                closed: false,
+            },
+        );
+        line.fill = Fill::None;
+        let mut stroke = tracedraw_core::Stroke {
+            end_arrow: tracedraw_core::Arrowhead::Arrow,
+            ..tracedraw_core::Stroke::new(Color::BLACK, 2.0)
+        };
+        stroke.end_head.size = 200.0;
+        stroke.end_head.offset = 5.0;
+        line.stroke = Some(stroke);
+        line.transform = Affine::translate((0.0, 100.0));
+        doc.layer_mut(layer).unwrap().shapes.push(line);
+        let content = page_content(&document_to_pdf(&doc));
+        let tip = format!("{} {} m", f(65.0 * MM_PT), f(150.0 * MM_PT));
+        assert!(content.contains(&tip), "head tip: {content}");
+        for y in [156.4, 143.6] {
+            let corner = format!("{} {} l", f(49.0 * MM_PT), f(y * MM_PT));
+            assert!(content.contains(&corner), "head base corner {y}: {content}");
+        }
+        // The plain head's base is not there: the head moved.
+        assert!(!content.contains(&format!("{} {} l", f(52.0 * MM_PT), f(146.8 * MM_PT))));
+    }
+
+    /// A live test of 0.41: the transparency's target made no difference.
+    /// The fill alone (0) or the outline alone (1) is painted under a
+    /// see-through graphics state, the other part without one.
+    #[test]
+    fn a_transparency_target_fades_the_fill_or_the_outline() {
+        for target in [0u8, 1] {
+            let doc = crate::svg::tests::doc_with_targeted_transparency(target);
+            let content = page_content(&document_to_pdf(&doc));
+            let at = |s: &str| content.find(s).unwrap_or_else(|| panic!("{s}: {content}"));
+            let (red, blue, gs) = (at("1 0 0 rg"), at("0 0 1 RG"), at(" gs\n"));
+            assert_eq!(content.matches(" gs\n").count(), 1, "{content}");
+            if target == 0 {
+                assert!(gs < red && red < blue, "{content}");
+            } else {
+                assert!(red < gs && gs < blue, "{content}");
+            }
+        }
+    }
+
+    /// #2615: a fountain transparency went into the PDF as one average
+    /// opacity, so the object faded evenly instead of from solid to
+    /// clear. It goes in as a luminosity soft mask whose form paints the
+    /// mask's fountain, and the object is drawn under it.
+    #[test]
+    fn a_fountain_transparency_goes_in_as_a_soft_mask() {
+        let mut doc = crate::svg::tests::doc_with_targeted_transparency(2);
+        let layer = doc.pages[0].layers[0].id;
+        let s = &mut doc.layer_mut(layer).unwrap().shapes[0];
+        s.effects = vec![tracedraw_core::live::Effect::Transparency {
+            mask: Fill::Fountain(tracedraw_core::Fountain::two(
+                FountainKind::Linear,
+                Color::WHITE,
+                Color::BLACK,
+                0.0,
+            )),
+            merge: tracedraw_core::live::MergeMode::Normal,
+            target: 2,
+        }];
+        let bytes = document_to_pdf(&doc);
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("/SMask << /S /Luminosity /G "),
+            "a luminosity soft mask: {text}"
+        );
+        assert!(
+            text.contains("/Subtype /Form") && text.contains("/Group << /S /Transparency"),
+            "its transparency group: {text}"
+        );
+        let content = page_content(&bytes);
+        // The mask's form shades the fountain; the page sets the mask's
+        // state and paints, under it, the group of the red fill and the
+        // blue outline (they overlap: they fade as one), with no average
+        // opacity of its own.
+        assert!(content.contains(" sh\n"), "{content}");
+        assert!(content.contains(" gs\n/Fm"), "{content}");
+        assert!(
+            text.contains("/Group << /S /Transparency /I true"),
+            "{text}"
+        );
+        assert!(content.contains("1 0 0 rg") && content.contains("0 0 1 RG"));
+        assert!(!text.contains("/ca 0.5"), "{text}");
+        // A plain grey mask stays one opacity.
+        let flat = crate::svg::tests::doc_with_targeted_transparency(2);
+        let text = String::from_utf8_lossy(&document_to_pdf(&flat)).into_owned();
+        assert!(!text.contains("/SMask << /S /Luminosity"), "{text}");
+    }
+
+    /// d#2596: a see-through object with a drop shadow fades as one
+    /// group, its shadow hidden under it, as the drawing window draws it
+    /// in a layer of its own. Faded apart, the shadow showed dark through
+    /// the object.
+    #[test]
+    fn a_see_through_object_and_its_shadow_fade_as_one_group() {
+        let mut doc = crate::svg::tests::doc_with_targeted_transparency(2);
+        let layer = doc.pages[0].layers[0].id;
+        let s = &mut doc.layer_mut(layer).unwrap().shapes[0];
+        s.shadow = Some(tracedraw_core::Shadow {
+            offset: tracedraw_core::geometry::Vec2::new(3.0, -3.0),
+            opacity: 0.8,
+            blur: 1.0,
+            color: Color::BLACK,
+            ..Default::default()
+        });
+        let bytes = document_to_pdf(&doc);
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(text.contains("/CA 0.5 /ca 0.5"), "one opacity: {text}");
+        assert!(
+            text.contains("/Group << /S /Transparency /I true"),
+            "{text}"
+        );
+        let content = page_content(&bytes);
+        assert!(
+            content.contains(" gs\n/Fm"),
+            "the group drawn faded: {content}"
+        );
+        // The shadow's picture and the object inside the group, at full
+        // strength: no opacity of their own.
+        assert!(content.contains("/Im0 Do"), "{content}");
+        assert!(!content.contains("/ca 0.5"), "{content}");
+    }
+
+    /// d#2596: an object whose effects draw objects of their own (an
+    /// extrusion's body) casts one shadow, of all of it, beneath all of
+    /// it. The PDF drew the object's own shadow over the body.
+    #[test]
+    fn an_extruded_object_casts_one_shadow_beneath_its_body() {
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        let mut s = Shape::new(
+            doc.ids_mut().shape(),
+            ShapeKind::Rect {
+                rect: Rect::new(20.0, 20.0, 40.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        s.fill = Fill::Solid(Color::rgb8(0, 0, 255));
+        s.stroke = None;
+        s.effects = vec![tracedraw_core::live::Effect::Extrude {
+            depth: tracedraw_core::geometry::Vec2::new(10.0, 10.0),
+            vanishing: None,
+            amount: 0.0,
+            shade_from: None,
+            shade_to: None,
+            light_angle: 135.0,
+            light_intensity: 50.0,
+            bevel: 0.0,
+            kind: None,
+            on_object: false,
+            solid: None,
+            space: Default::default(),
+        }];
+        s.shadow = Some(tracedraw_core::Shadow {
+            offset: tracedraw_core::geometry::Vec2::new(4.0, 0.0),
+            opacity: 1.0,
+            blur: 0.0,
+            color: Color::BLACK,
+            ..Default::default()
+        });
+        doc.layer_mut(layer).unwrap().shapes.push(s);
+        let bytes = document_to_pdf(&doc);
+        let shadows = image_streams(&bytes)
+            .iter()
+            .filter(|(d, _)| d.contains("/SMask"))
+            .count();
+        assert_eq!(shadows, 1, "one shadow");
+        let content = page_content(&bytes);
+        let draw = content.find("/Im0 Do").expect("the shadow");
+        let paint = content.find(" rg\n").expect("the body and the object");
+        assert!(draw < paint, "the shadow beneath all: {content}");
+    }
+
     /// The page's content streams, inflated.
-    fn page_content(bytes: &[u8]) -> String {
+    pub(super) fn page_content(bytes: &[u8]) -> String {
         let mut content = String::new();
         let mut rest: &[u8] = bytes;
         while let Some(i) = rest.windows(6).position(|w| w == b"stream") {
@@ -2223,6 +4328,99 @@ mod tests {
         assert!(f < s, "in front: the fill first ({s} {f})");
     }
 
+    /// A curve whose fill rule is nonzero (overlapping parts of traced
+    /// lettering, #1919) is filled with `f`; others with `f*`.
+    #[test]
+    fn a_curve_fills_by_its_own_fill_rule() {
+        use tracedraw_core::shaping::FillRule;
+        let op = |rule: FillRule| -> String {
+            let mut doc = Document::default();
+            let layer = doc.pages[0].layers[0].id;
+            let mut sq = Shape::new(
+                tracedraw_core::ShapeId(1),
+                ShapeKind::Rect {
+                    rect: tracedraw_core::Rect::new(10.0, 10.0, 60.0, 40.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            sq.fill = Fill::Solid(Color::rgb8(0, 0, 0));
+            sq.stroke = None;
+            sq.fill_rule = rule;
+            doc.layer_mut(layer).unwrap().shapes.push(sq);
+            let content = page_content(&document_to_pdf(&doc));
+            content
+                .lines()
+                .map(str::trim)
+                .find(|l| *l == "f" || *l == "f*")
+                .expect("a fill")
+                .to_string()
+        };
+        assert_eq!(op(FillRule::NonZero), "f");
+        assert_eq!(op(FillRule::EvenOdd), "f*");
+    }
+
+    /// An outline that scales with its object is as wide in the PDF as in
+    /// the drawing window: its width times the object's scale factor.
+    #[test]
+    fn an_outline_that_scales_with_its_object_takes_the_object_scale() {
+        let width = |scale_with_object: bool| -> String {
+            let mut doc = Document::default();
+            let layer = doc.pages[0].layers[0].id;
+            let mut sq = Shape::new(
+                tracedraw_core::ShapeId(1),
+                ShapeKind::Rect {
+                    rect: tracedraw_core::Rect::new(0.0, 0.0, 200.0, 100.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            sq.transform = Affine::translate((20.0, 20.0)) * Affine::scale(0.25);
+            sq.stroke = Some(tracedraw_core::Stroke {
+                scale_with_object,
+                ..tracedraw_core::Stroke::new(Color::rgb8(0, 0, 0), 10.0)
+            });
+            doc.layer_mut(layer).unwrap().shapes.push(sq);
+            let content = page_content(&document_to_pdf(&doc));
+            let line = content
+                .lines()
+                .find(|l| l.contains(" w "))
+                .expect("a line width");
+            let (before, _) = line.split_once(" w ").expect("the width");
+            before.rsplit(' ').next().unwrap_or_default().to_string()
+        };
+        assert_eq!(width(true), f(2.5 * MM_PT));
+        assert_eq!(width(false), f(10.0 * MM_PT));
+    }
+
+    #[test]
+    fn overprinting_objects_get_overprint_graphics_states() {
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        for overprint in [true, false] {
+            let id = doc.ids_mut().shape();
+            let mut s = Shape::new(
+                id,
+                ShapeKind::Rect {
+                    rect: Rect::new(10.0, 10.0, 60.0, 40.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            s.fill = Fill::Solid(Color::cmyk_pct(0.0, 0.0, 0.0, 100.0));
+            s.overprint_fill = overprint;
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+        }
+        let text = String::from_utf8_lossy(&document_to_pdf(&doc)).to_string();
+        assert_eq!(
+            text.matches("/Type /ExtGState /op true /OP false /OPM 1")
+                .count(),
+            1
+        );
+        // One state, named in the page's resources.
+        assert!(text.contains("/ExtGState << /OP10 "), "{text}");
+    }
+
     #[test]
     fn spot_colors_print_on_separation_color_spaces() {
         let mut doc = Document::default();
@@ -2260,6 +4458,40 @@ mod tests {
         assert!(!text.contains("/Separation"));
         assert_eq!(pdf_name("A/B c"), "/A#2FB#20c");
         assert_eq!(pdf_name(""), "/Spot");
+    }
+
+    #[test]
+    fn knockout_groups_go_in_as_pictures() {
+        use tracedraw_core::document::GroupLook;
+        let pdf_of = |look: Option<GroupLook>| {
+            let mut doc = Document::default();
+            let layer = doc.pages[0].layers[0].id;
+            let mut kids = Vec::new();
+            for x in [10.0, 20.0] {
+                let mut r = Shape::new(
+                    doc.ids_mut().shape(),
+                    ShapeKind::Rect {
+                        rect: tracedraw_core::geometry::Rect::new(x, 10.0, x + 20.0, 30.0),
+                        radius: 0.0,
+                        corners: None,
+                    },
+                );
+                r.fill = Fill::Solid(Color::rgb8(200, 0, 0));
+                r.opacity = 0.5;
+                kids.push(r);
+            }
+            let mut g = Shape::new(doc.ids_mut().shape(), ShapeKind::Group { children: kids });
+            g.group_look = look;
+            doc.layer_mut(layer).unwrap().shapes.push(g);
+            String::from_utf8_lossy(&document_to_pdf(&doc)).into_owned()
+        };
+        let ko = pdf_of(Some(GroupLook {
+            as_one: false,
+            knockout: true,
+        }));
+        assert!(ko.contains("/Subtype /Image"), "a picture");
+        let plain = pdf_of(None);
+        assert!(!plain.contains("/Subtype /Image"), "vector members");
     }
 
     #[test]
@@ -2301,6 +4533,214 @@ mod tests {
         );
     }
 
+    /// The image streams of `bytes` with their dictionaries, inflated.
+    fn image_streams(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut rest: &[u8] = bytes;
+        while let Some(i) = rest.windows(7).position(|w| w == b"stream\n") {
+            let dict_start = rest[..i].windows(2).rposition(|w| w == b"<<").unwrap_or(0);
+            let dict = String::from_utf8_lossy(&rest[dict_start..i]).into_owned();
+            let data = &rest[i + 7..];
+            if dict.contains("/Subtype /Image") {
+                use std::io::Read;
+                let mut px = Vec::new();
+                if flate2::read::ZlibDecoder::new(data)
+                    .read_to_end(&mut px)
+                    .is_ok()
+                {
+                    out.push((dict, px));
+                }
+            }
+            rest = data;
+        }
+        out
+    }
+
+    /// A drop shadow reaches the PDF: a blurred picture in the shadow's
+    /// colour with its opacity in a soft mask, under the object, over the
+    /// shadow's area, multiplied (#1029: the shadow showed only once
+    /// broken apart into a bitmap).
+    #[test]
+    fn a_drop_shadow_goes_in_beneath_its_object() {
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        let id = doc.ids_mut().shape();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Rect {
+                rect: Rect::new(20.0, 20.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        s.fill = Fill::Solid(Color::rgb8(255, 0, 0));
+        s.stroke = None;
+        s.shadow = Some(tracedraw_core::Shadow {
+            offset: tracedraw_core::geometry::Vec2::new(3.0, -3.0),
+            opacity: 0.6,
+            blur: 1.0,
+            color: Color::rgb8(0, 0, 255),
+            ..Default::default()
+        });
+        doc.layer_mut(layer).unwrap().shapes.push(s.clone());
+        let bytes = document_to_pdf(&doc);
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(text.contains("/BM /Multiply"), "merged as it asks");
+        let content = page_content(&bytes);
+        let draw = content.find(" cm /Im0 Do").expect("the shadow's picture");
+        let fill = content.find("1 0 0 rg").expect("the object's fill");
+        assert!(draw < fill, "the shadow beneath the object");
+        // Placed over the moved box grown by three times the feathering.
+        let line = content[..draw].lines().last().unwrap_or_default();
+        let m: Vec<f64> = line
+            .split_whitespace()
+            .filter_map(|v| v.parse().ok())
+            .collect();
+        assert_eq!(m.len(), 6, "{line}");
+        let (x0, y0) = (m[4] / MM_PT, m[5] / MM_PT);
+        let (x1, y1) = (x0 + m[0] / MM_PT, y0 + m[3] / MM_PT);
+        for (got, want) in [(x0, 20.0), (y0, 14.0), (x1, 66.0), (y1, 40.0)] {
+            assert!((got - want).abs() < 0.2, "{x0} {y0} {x1} {y1}");
+        }
+        // Blue, at most the shadow's opacity, solid in the middle.
+        let images = image_streams(&bytes);
+        let mask = images
+            .iter()
+            .find(|(d, _)| d.contains("/DeviceGray"))
+            .expect("a soft mask");
+        let picture = images
+            .iter()
+            .find(|(d, _)| d.contains("/SMask"))
+            .expect("the picture");
+        let top = mask.1.iter().copied().max().unwrap_or(0);
+        assert!((150..=156).contains(&top), "opacity 0.6: {top}");
+        let at = mask.1.iter().position(|a| *a == top).unwrap();
+        assert_eq!(&picture.1[at * 3..at * 3 + 3], &[0, 0, 255]);
+        assert!(mask.1.contains(&0), "feathered to nothing");
+
+        // No shadow, no picture.
+        s.shadow = None;
+        doc.layer_mut(layer).unwrap().shapes = vec![s];
+        assert!(!page_content(&document_to_pdf(&doc)).contains("/Im0 Do"));
+    }
+
+    /// Flattened for PDF/X-1a, a see-through object over a rich black
+    /// keeps the inks the two blend to: the black is not put on the
+    /// black plate alone and the colours are not made again from the
+    /// screen (#3942, #3929). The opaque object grouped with it stays a
+    /// vector object.
+    #[test]
+    fn x1a_flattening_keeps_the_drawing_s_inks() {
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        let rect = |doc: &mut Document, r: Rect, c: Color, opacity: f64| {
+            let id = doc.ids_mut().shape();
+            let mut s = Shape::new(
+                id,
+                ShapeKind::Rect {
+                    rect: r,
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            s.fill = Fill::Solid(c);
+            s.opacity = opacity;
+            s
+        };
+        let black = rect(
+            &mut doc,
+            Rect::new(10.0, 10.0, 60.0, 60.0),
+            Color::Cmyk {
+                c: 0.6,
+                m: 0.4,
+                y: 0.4,
+                k: 1.0,
+            },
+            1.0,
+        );
+        let magenta = rect(
+            &mut doc,
+            Rect::new(20.0, 20.0, 40.0, 40.0),
+            Color::Cmyk {
+                c: 0.0,
+                m: 1.0,
+                y: 0.0,
+                k: 0.0,
+            },
+            0.5,
+        );
+        let gid = doc.ids_mut().shape();
+        let group = Shape::new(
+            gid,
+            ShapeKind::Group {
+                children: vec![black, magenta],
+            },
+        );
+        doc.layer_mut(layer).unwrap().shapes.push(group);
+        let page = doc.pages[0].clone();
+        let out = flatten_page(&doc, &page, 72.0, true);
+        assert!(
+            out.iter().any(|s| matches!(s.kind, ShapeKind::Rect { .. })),
+            "the black stays a vector object: {out:?}"
+        );
+        let raster = out
+            .iter()
+            .find(|s| matches!(s.kind, ShapeKind::Bitmap { .. }))
+            .expect("the flattened picture");
+        let inks = raster.picture_inks.as_deref().expect("its inks");
+        let planes = image::load_from_memory(&inks.png).expect("png").to_luma8();
+        let (w, h) = (planes.width(), planes.height() / 4);
+        let at = |ink: u32| planes.get_pixel(w / 2, ink * h + h / 2)[0] as f64 / 255.0;
+        for (ink, want) in [(0, 0.3), (1, 0.7), (2, 0.2), (3, 0.5)] {
+            assert!(
+                (at(ink) - want).abs() < 0.02,
+                "ink {ink}: {} not {want}",
+                at(ink)
+            );
+        }
+        // Without inks (other standards) the picture has none.
+        let out = flatten_page(&doc, &page, 72.0, false);
+        assert!(out.iter().all(|s| s.picture_inks.is_none()));
+    }
+
+    /// PDF/X-1a keeps no transparency: the shadow is flattened into the
+    /// page picture with its object, over the shadow's area too.
+    #[test]
+    fn a_drop_shadow_is_flattened_for_x1a() {
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        let id = doc.ids_mut().shape();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Rect {
+                rect: Rect::new(20.0, 20.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        s.fill = Fill::Solid(Color::rgb8(255, 0, 0));
+        s.shadow = Some(tracedraw_core::Shadow::default());
+        doc.layer_mut(layer).unwrap().shapes.push(s);
+        let opts = PdfOptions {
+            standard: PdfStandard::X1a,
+            flatten_dpi: 72.0,
+            ..Default::default()
+        };
+        let bytes = document_to_pdf_with(&doc, &opts);
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(!text.contains("/SMask") && !text.contains("/BM"));
+        let content = page_content(&bytes);
+        let draw = content.find(" cm /Im0 Do").expect("the flattened picture");
+        let line = content[..draw].lines().last().unwrap_or_default();
+        let m: Vec<f64> = line
+            .split_whitespace()
+            .filter_map(|v| v.parse().ok())
+            .collect();
+        assert_eq!(m.len(), 6, "{line}");
+        // Down to the shadow's lower edge (2 mm down, 4.5 mm feathering).
+        assert!(m[5] / MM_PT < 14.0, "{line}");
+    }
+
     #[test]
     fn writes_a_parseable_pdf() {
         let mut doc = Document::default();
@@ -2329,6 +4769,7 @@ mod tests {
 
 #[cfg(test)]
 mod pdfx_tests {
+    use super::tests::page_content;
     use super::*;
     use tracedraw_core::geometry::Rect;
 
@@ -2359,6 +4800,60 @@ mod pdfx_tests {
         doc.pages[0].layers[0].shapes = vec![base, top];
         doc.set_ids(ids);
         doc
+    }
+
+    /// A transparency's merge mode goes out as the PDF blend mode in a
+    /// graphics state around the object; modes PDF has no blend for draw
+    /// normally, and PDF/X-1a flattens the object instead (#1203).
+    #[test]
+    fn transparency_merge_modes_go_out_as_blend_modes() {
+        use tracedraw_core::live::{Effect, MergeMode};
+        let doc_with = |merge: MergeMode| {
+            let mut doc = doc_with_transparent_rect();
+            let top = &mut doc.pages[0].layers[0].shapes[1];
+            top.opacity = 1.0;
+            top.effects.push(Effect::Transparency {
+                mask: Fill::Solid(Color::WHITE),
+                merge,
+                target: 2,
+            });
+            doc
+        };
+        for (merge, name) in [
+            (MergeMode::Screen, "Screen"),
+            (MergeMode::Overlay, "Overlay"),
+            (MergeMode::SoftLight, "SoftLight"),
+            (MergeMode::HardLight, "HardLight"),
+            (MergeMode::ColorDodge, "ColorDodge"),
+            (MergeMode::ColorBurn, "ColorBurn"),
+            (MergeMode::Exclusion, "Exclusion"),
+            (MergeMode::Multiply, "Multiply"),
+        ] {
+            let bytes = document_to_pdf(&doc_with(merge));
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            assert!(text.contains(&format!("/BM /{name}")), "{merge:?}");
+            let content = page_content(&bytes);
+            let gs = content.find(" gs").expect("the state is set");
+            let fill = content.find("0 0 1 rg").expect("the blue fill");
+            assert!(gs < fill, "{merge:?}: the state before the object");
+        }
+        // #1238: Add goes out as Screen, the nearest blend.
+        let bytes = document_to_pdf(&doc_with(MergeMode::Add));
+        assert!(String::from_utf8_lossy(&bytes).contains("/BM /Screen"));
+        for merge in [MergeMode::Normal, MergeMode::Behind] {
+            let bytes = document_to_pdf(&doc_with(merge));
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains("/BM"),
+                "{merge:?}"
+            );
+        }
+        let opts = PdfOptions {
+            standard: PdfStandard::X1a,
+            flatten_dpi: 72.0,
+            ..Default::default()
+        };
+        let bytes = document_to_pdf_with(&doc_with(MergeMode::Screen), &opts);
+        assert!(!String::from_utf8_lossy(&bytes).contains("/BM"));
     }
 
     #[test]
@@ -2402,6 +4897,176 @@ mod pdfx_tests {
         assert!(text.contains("/Subtype /Image") && text.contains("/ColorSpace /DeviceCMYK"));
     }
 
+    /// Room for printers' marks: the MediaBox grows by it on every side,
+    /// the BleedBox is the page and its bleed, the TrimBox the page; the
+    /// drawing is clipped to the bleed and the marks are drawn after, in
+    /// registration colour on the All separation.
+    #[test]
+    fn marks_margin_grows_the_media_box_and_keeps_trim_and_bleed() {
+        let doc = doc_with_transparent_rect();
+        let mut mark = Shape::new(
+            tracedraw_core::ShapeId(0),
+            ShapeKind::Path {
+                path: {
+                    let mut p = tracedraw_core::BezPath::new();
+                    p.move_to((-8.0, 0.0));
+                    p.line_to((-4.0, 0.0));
+                    p
+                },
+                closed: false,
+            },
+        );
+        mark.fill = Fill::None;
+        mark.stroke = Some(tracedraw_core::Stroke::new(Color::Registration, 0.1));
+        let opts = PdfOptions {
+            bleed_mm: 3.0,
+            marks_margin_mm: 12.0,
+            page_marks: vec![vec![mark]],
+            images: PdfImages {
+                compress_content: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bytes = document_to_pdf_with(&doc, &opts);
+        let text = String::from_utf8_lossy(&bytes);
+        // The page is 100 x 50 mm: 15 mm of bleed and marks per side.
+        assert!(
+            text.contains(&format!(
+                "/MediaBox [0 0 {} {}]",
+                f(130.0 * MM_PT),
+                f(80.0 * MM_PT)
+            )),
+            "{text}"
+        );
+        assert!(text.contains(&format!(
+            "/TrimBox [{} {} {} {}]",
+            f(15.0 * MM_PT),
+            f(15.0 * MM_PT),
+            f(115.0 * MM_PT),
+            f(65.0 * MM_PT)
+        )));
+        assert!(text.contains(&format!(
+            "/BleedBox [{} {} {} {}]",
+            f(12.0 * MM_PT),
+            f(12.0 * MM_PT),
+            f(118.0 * MM_PT),
+            f(68.0 * MM_PT)
+        )));
+        // The clip to the bleed, closed before the marks.
+        let clip = format!(
+            "q {} {} {} {} re W n",
+            f(12.0 * MM_PT),
+            f(12.0 * MM_PT),
+            f(106.0 * MM_PT),
+            f(56.0 * MM_PT)
+        );
+        let at_clip = text.find(&clip).expect("clipped to the bleed");
+        let at_mark = text.find("/CSAll CS 1 SCN").expect("registration stroke");
+        assert!(at_clip < at_mark);
+        assert!(text.contains("/Separation /All /DeviceCMYK"));
+        // The mark at x = -8 mm sits 7 mm from the media box's edge.
+        assert!(text.contains(&format!("{} ", f(7.0 * MM_PT))));
+        // Without marks nothing changes: no clip, the bleed as before.
+        let plain = document_to_pdf_with(
+            &doc,
+            &PdfOptions {
+                bleed_mm: 3.0,
+                ..Default::default()
+            },
+        );
+        let plain = String::from_utf8_lossy(&plain);
+        assert!(plain.contains(&format!(
+            "/BleedBox [0 0 {} {}]",
+            f(106.0 * MM_PT),
+            f(56.0 * MM_PT)
+        )));
+    }
+
+    /// A PDF written with crop marks opens again with its marks in
+    /// registration colour and its spot colours on their inks: a
+    /// Separation colour at full tint is full ink, not white (#1703).
+    #[test]
+    fn crop_marks_and_spot_colors_come_back_from_the_pdf() {
+        let mut doc = doc_with_transparent_rect();
+        doc.inks.push(tracedraw_core::document::Ink {
+            id: 7,
+            name: "Gold 871".into(),
+            cmyk: [0.0, 0.2, 0.8, 0.1],
+        });
+        doc.pages[0].layers[0].shapes[1].fill = Fill::Solid(doc.inks[0].color(0.5));
+        doc.pages[0].layers[0].shapes[1].opacity = 1.0;
+        let mut mark = Shape::new(
+            tracedraw_core::ShapeId(0),
+            ShapeKind::Path {
+                path: {
+                    let mut p = tracedraw_core::BezPath::new();
+                    p.move_to((-8.0, 0.0));
+                    p.line_to((-4.0, 0.0));
+                    p
+                },
+                closed: false,
+            },
+        );
+        mark.fill = Fill::None;
+        mark.stroke = Some(tracedraw_core::Stroke::new(Color::Registration, 0.1));
+        let opts = PdfOptions {
+            bleed_mm: 3.0,
+            marks_margin_mm: 12.0,
+            page_marks: vec![vec![mark]],
+            ..Default::default()
+        };
+        let bytes = document_to_pdf_with(&doc, &opts);
+        let mut ids = tracedraw_core::id::IdSource::default();
+        let imp = crate::pdf_import::parse(&bytes, &mut ids).expect("opens");
+        let back = crate::pdf_import::to_document(imp, "marks");
+        fn all(shapes: &[Shape], out: &mut Vec<Shape>) {
+            for s in shapes {
+                out.push(s.clone());
+                match &s.kind {
+                    ShapeKind::Group { children } => all(children, out),
+                    ShapeKind::ClipFrame { frame, contents } => {
+                        all(std::slice::from_ref(frame.as_ref()), out);
+                        all(contents, out);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut shapes = Vec::new();
+        all(&back.pages[0].layers[0].shapes, &mut shapes);
+        let strokes: Vec<Color> = shapes
+            .iter()
+            .filter_map(|s| s.stroke.as_ref().map(|st| st.color))
+            .collect();
+        assert!(
+            strokes.contains(&Color::Registration),
+            "the crop mark keeps registration colour: {strokes:?}"
+        );
+        assert!(
+            !strokes.iter().any(|c| c.to_rgb8() == [255, 255, 255]),
+            "no white strokes: {strokes:?}"
+        );
+        assert_eq!(back.inks.len(), 1, "{:?}", back.inks);
+        let ink = &back.inks[0];
+        assert_eq!(ink.name, "Gold 871");
+        for (a, b) in ink.cmyk.iter().zip([0.0, 0.2, 0.8, 0.1]) {
+            assert!((a - b).abs() < 1e-3, "{:?}", ink.cmyk);
+        }
+        let spot = shapes
+            .iter()
+            .find_map(|s| match s.fill {
+                Fill::Solid(c @ Color::Spot { .. }) => Some(c),
+                _ => None,
+            })
+            .expect("the spot fill");
+        let Color::Spot { ink: id, tint, .. } = spot else {
+            unreachable!()
+        };
+        assert_eq!(id, ink.id);
+        assert!((tint - 0.5).abs() < 1e-3, "{spot:?}");
+    }
+
     #[test]
     fn x4_keeps_transparency_and_rgb() {
         let doc = doc_with_transparent_rect();
@@ -2429,6 +5094,150 @@ mod pdfx_tests {
         assert!(text.contains("/N 4"));
     }
 
+    fn doc_carrying(icc: Vec<u8>) -> Document {
+        let mut doc = doc_with_transparent_rect();
+        doc.cmyk_profile = Some(tracedraw_core::DocumentProfile::new("carried", icc));
+        doc
+    }
+
+    fn pdfx(doc: &Document, opts: PdfOptions) -> String {
+        String::from_utf8_lossy(&document_to_pdf_with(doc, &opts)).into_owned()
+    }
+
+    #[test]
+    fn pdfx_output_intent_embeds_the_profile_the_drawing_carries() {
+        use tracedraw_core::icc::test_profiles as tp;
+        let doc = doc_carrying(tp::lut16_cmyk_profile());
+        for standard in [PdfStandard::X1a, PdfStandard::X3, PdfStandard::X4] {
+            let text = pdfx(
+                &doc,
+                PdfOptions {
+                    standard,
+                    ..Default::default()
+                },
+            );
+            assert!(text.contains("/DestOutputProfile"), "{standard:?}");
+            assert!(text.contains("/N 4"), "{standard:?}");
+            // The identifier names the embedded profile, not another press.
+            assert!(
+                text.contains("/OutputConditionIdentifier (Synthetic CMYK)"),
+                "{standard:?}"
+            );
+            assert!(!text.contains("CGATS TR 001"), "{standard:?}");
+        }
+        // A plain PDF still has no output intent.
+        let text = pdfx(&doc, PdfOptions::default());
+        assert!(!text.contains("/OutputIntents"));
+    }
+
+    #[test]
+    fn pdfx_given_profile_and_condition_win_over_the_carried_profile() {
+        use tracedraw_core::icc::test_profiles as tp;
+        let doc = doc_carrying(tp::lut16_cmyk_profile());
+        let given = tp::mba_cmyk_profile();
+        let text = pdfx(
+            &doc,
+            PdfOptions {
+                standard: PdfStandard::X1a,
+                output_profile: Some(given.clone()),
+                ..Default::default()
+            },
+        );
+        // The given profile has no description: the condition is custom.
+        assert!(text.contains("/OutputConditionIdentifier (Custom)"));
+        assert!(text.contains(&format!("<< /N 4 /Length {} >>", given.len())));
+        assert!(!text.contains("(Synthetic CMYK)"));
+        let text = pdfx(
+            &doc,
+            PdfOptions {
+                standard: PdfStandard::X4,
+                output_condition: "FOGRA39".into(),
+                ..Default::default()
+            },
+        );
+        assert!(text.contains("/OutputConditionIdentifier (FOGRA39)"));
+        assert!(text.contains("/DestOutputProfile"));
+    }
+
+    /// #3829: a condition named by its profile ("U.S. Web Coated (SWOP)
+    /// v2", the drawing's) goes by the name the ICC registry gives that
+    /// press, the profile's name kept as the condition; a registered name
+    /// is its own identifier, and an unknown one goes by its own name.
+    #[test]
+    fn a_well_known_profile_goes_by_its_registered_condition() {
+        assert_eq!(registered_condition("U.S. Web Coated (SWOP) v2"), Some("CGATS TR 001"));
+        assert_eq!(
+            registered_condition("Coated FOGRA39 (ISO 12647-2:2004)"),
+            Some("FOGRA39")
+        );
+        assert_eq!(registered_condition("ISO Coated v2 (ECI)"), Some("FOGRA39"));
+        assert_eq!(registered_condition("PSO Coated v3"), Some("FOGRA51"));
+        assert_eq!(registered_condition("Japan Color 2001 Coated"), Some("JC200103"));
+        assert_eq!(registered_condition("GRACoL2006_Coated1v2"), Some("CGATS TR 006"));
+        assert_eq!(registered_condition("cgats tr 001"), Some("CGATS TR 001"));
+        assert_eq!(registered_condition("FOGRA39"), Some("FOGRA39"));
+        assert_eq!(registered_condition("Generic CMYK (open)"), None);
+        let doc = doc_with_transparent_rect();
+        let text = pdfx(
+            &doc,
+            PdfOptions {
+                standard: PdfStandard::X1a,
+                output_condition: "U.S. Web Coated (SWOP) v2".into(),
+                ..Default::default()
+            },
+        );
+        assert!(text.contains("/OutputConditionIdentifier (CGATS TR 001)"), "{text}");
+        assert!(text.contains("/OutputCondition (U.S. Web Coated \\(SWOP\\) v2)"), "{text}");
+        let text = pdfx(
+            &doc,
+            PdfOptions {
+                standard: PdfStandard::X1a,
+                output_condition: "House press".into(),
+                ..Default::default()
+            },
+        );
+        assert!(text.contains("/OutputConditionIdentifier (House press)"));
+    }
+
+    #[test]
+    fn pdfx_skips_a_carried_profile_that_is_not_cmyk_or_not_readable() {
+        // An RGB profile in the CMYK slot is not an output intent for CMYK
+        // values: the registered name stays.
+        let mut rgb = vec![0u8; 128];
+        rgb[16..20].copy_from_slice(b"RGB ");
+        let text = pdfx(
+            &doc_carrying(rgb),
+            PdfOptions {
+                standard: PdfStandard::X1a,
+                ..Default::default()
+            },
+        );
+        assert!(!text.contains("/DestOutputProfile"));
+        assert!(text.contains("/OutputConditionIdentifier (CGATS TR 001)"));
+        // A CMYK signature on a profile that does not parse: embedded as
+        // carried, named "Custom", no panic.
+        let mut broken = vec![0xFFu8; 64];
+        broken[16..20].copy_from_slice(b"CMYK");
+        let text = pdfx(
+            &doc_carrying(broken),
+            PdfOptions {
+                standard: PdfStandard::X4,
+                ..Default::default()
+            },
+        );
+        assert!(text.contains("/DestOutputProfile"));
+        assert!(text.contains("/OutputConditionIdentifier (Custom)"));
+        // Truncated before the signature: not used.
+        let text = pdfx(
+            &doc_carrying(vec![0u8; 10]),
+            PdfOptions {
+                standard: PdfStandard::X4,
+                ..Default::default()
+            },
+        );
+        assert!(!text.contains("/DestOutputProfile"));
+    }
+
     fn two_pages() -> Document {
         let mut doc = doc_with_transparent_rect();
         doc.pages[0].name = "Cover".into();
@@ -2446,7 +5255,7 @@ mod pdfx_tests {
         let opts = PdfOptions {
             bookmarks: true,
             show_bookmarks: true,
-            author: Some("Ighor".into()),
+            author: Some("Ada".into()),
             keywords: Some("poster, test".into()),
             ..Default::default()
         };
@@ -2457,7 +5266,7 @@ mod pdfx_tests {
         // Non-Latin names as UTF-16 with a byte order mark.
         assert!(text.contains("/Title <FEFF65E5672C>"));
         assert!(text.contains("/PageMode /UseOutlines"));
-        assert!(text.contains("/Author (Ighor)") && text.contains("/Keywords (poster, test)"));
+        assert!(text.contains("/Author (Ada)") && text.contains("/Keywords (poster, test)"));
         // An independent reader finds two bookmarks.
         let parsed = lopdf::Document::load_mem(&bytes).expect("parse");
         let outlines = parsed
@@ -2501,8 +5310,13 @@ mod pdfx_tests {
         assert!(doc.clone().decrypt("wrong").is_err());
         // With the owner password it decrypts everything: the document
         // information and the page content.
-        let mut d = doc.clone();
-        d.decrypt("owner").expect("decrypt");
+        // (That reader keeps the objects of a file opened without its
+        // password aside, so the password is given when it opens.)
+        let d = lopdf::Document::load_mem_with_options(
+            &bytes,
+            lopdf::LoadOptions::with_password("owner"),
+        )
+        .expect("decrypt");
         let info = d
             .trailer
             .get(b"Info")
@@ -2515,8 +5329,7 @@ mod pdfx_tests {
             .expect("title");
         assert_eq!(title, b"Secret plan");
         let page = *d.get_pages().values().next().expect("page");
-        let content =
-            String::from_utf8_lossy(&d.get_page_content(page).expect("content")).into_owned();
+        let content = String::from_utf8_lossy(&d.get_page_content(page)).into_owned();
         assert!(content.contains(" rg") && content.contains(" l\n"));
         // The user password unwraps the same file key from /UE, and /Perms
         // decrypts with it to the permissions. (That reader's own check of
@@ -2672,7 +5485,7 @@ mod pdfx_tests {
 /// Text written as PDF text, with a stand-in text engine that lays out
 /// one glyph per character of a test font on one line.
 #[cfg(test)]
-mod text_tests {
+pub(crate) mod text_tests {
     use super::*;
     use std::sync::{Arc, OnceLock};
     use tracedraw_core::document::text_outline::{
@@ -2748,6 +5561,7 @@ mod text_tests {
     fn glyphs(req: &TextRequest) -> GlyphLayout {
         let mut out = GlyphLayout::default();
         let mut pen = 0.0;
+        let mut char_idx = 0;
         for (si, span) in req.spans.iter().enumerate() {
             let gf = font(&span.font_family);
             let face = ttf_parser::Face::parse(&gf.data, 0).expect("test font");
@@ -2764,16 +5578,18 @@ mod text_tests {
                     transform: t,
                     text: c.to_string(),
                     span: si,
+                    char_idx,
                     path: t * Affine::scale(1.0 / upem) * sink.0,
                     exact: !span.bold,
                 });
+                char_idx += 1;
                 pen += face
                     .glyph_hor_advance(ttf_parser::GlyphId(gid))
                     .unwrap_or(0) as f64
                     / upem
                     * size;
             }
-            if span.underline {
+            if span.underline.is_on() {
                 out.rest.move_to((0.0, -1.0));
                 out.rest.line_to((pen, -1.0));
                 out.rest.line_to((pen, -1.3));
@@ -2783,7 +5599,7 @@ mod text_tests {
         out
     }
 
-    fn doc_with(spans: Vec<TextSpan>, fill: Fill, stroke: Option<Stroke>) -> Document {
+    pub(crate) fn doc_with(spans: Vec<TextSpan>, fill: Fill, stroke: Option<Stroke>) -> Document {
         text_outline::set_glyphs(glyphs);
         let mut doc = Document::new("t", tracedraw_core::Size::new(100.0, 50.0));
         let layer = doc.pages[0].layers[0].id;
@@ -2809,6 +5625,246 @@ mod text_tests {
         Fill::Solid(Color::BLACK)
     }
 
+    /// A gray fill and outline go to every PDF as gray (`g`, `G`), so
+    /// they print on the black plate only, as in PDF/X-1a: plain PDF and
+    /// PDF/X-4 wrote them as RGB.
+    #[test]
+    fn gray_is_written_as_gray_in_every_pdf() {
+        let doc = doc_with(
+            vec![TextSpan::new("ab", "Quicksand", 24.0)],
+            Fill::Solid(Color::Gray { v: 0.25 }),
+            Some(Stroke {
+                color: Color::Gray { v: 0.5 },
+                width: 1.0,
+                ..Default::default()
+            }),
+        );
+        for standard in [PdfStandard::None, PdfStandard::X4, PdfStandard::X1a] {
+            let opts = PdfOptions {
+                standard,
+                ..Default::default()
+            };
+            let text = inflated(&document_to_pdf_with(&doc, &opts));
+            assert!(text.contains("0.25 g"), "{standard:?}: {text}");
+            assert!(text.contains("0.5 G"), "{standard:?}: {text}");
+            assert!(!text.contains("0.251 0.251 0.251 rg"), "{standard:?}");
+        }
+    }
+
+    /// A fountain of print colours (CMYK, gray, spot) goes in as a CMYK
+    /// shading in plain PDF and PDF/X-4 too, so black to white prints on
+    /// the black plate only; an RGB fountain stays RGB.
+    #[test]
+    fn a_cmyk_fountain_is_a_cmyk_shading_in_every_pdf() {
+        let rect_with = |fill: Fill| {
+            let mut doc = Document::new("t", tracedraw_core::Size::new(100.0, 50.0));
+            let layer = doc.pages[0].layers[0].id;
+            let id = doc.ids_mut().shape();
+            let mut s = Shape::new(
+                id,
+                ShapeKind::Rect {
+                    rect: Rect::new(0.0, 0.0, 100.0, 50.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            s.fill = fill;
+            s.stroke = None;
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+            doc
+        };
+        let k = Color::Cmyk {
+            c: 0.0,
+            m: 0.0,
+            y: 0.0,
+            k: 1.0,
+        };
+        let white = Color::Cmyk {
+            c: 0.0,
+            m: 0.0,
+            y: 0.0,
+            k: 0.0,
+        };
+        let cmyk = rect_with(Fill::linear(k, white, 0.0));
+        let rgb = rect_with(Fill::linear(
+            Color::rgb8(255, 0, 0),
+            Color::rgb8(0, 0, 255),
+            0.0,
+        ));
+        for standard in [PdfStandard::None, PdfStandard::X4] {
+            let opts = PdfOptions {
+                standard,
+                ..Default::default()
+            };
+            let text = inflated(&document_to_pdf_with(&cmyk, &opts));
+            assert!(
+                text.contains("/ShadingType 2 /ColorSpace /DeviceCMYK"),
+                "{standard:?}: {text}"
+            );
+            assert!(text.contains("/C0 [0 0 0 1] /C1 [0 0 0 0]"), "{text}");
+            let text = inflated(&document_to_pdf_with(&rgb, &opts));
+            assert!(
+                text.contains("/ShadingType 2 /ColorSpace /DeviceRGB"),
+                "{standard:?}: {text}"
+            );
+        }
+    }
+
+    /// A fountain of tints of one spot ink (to white) goes in as a
+    /// shading on the ink's Separation, so it prints on the ink's plate:
+    /// it went in as its process stand-in, in PDF/X-1a too.
+    #[test]
+    fn a_spot_tint_fountain_is_a_shading_on_its_separation() {
+        let mut doc = Document::new("t", tracedraw_core::Size::new(100.0, 50.0));
+        doc.inks.push(tracedraw_core::document::Ink {
+            id: 7,
+            name: "PANTONE 485 C".into(),
+            cmyk: [0.0, 0.95, 1.0, 0.0],
+        });
+        let spot = doc.inks[0].color(1.0);
+        let layer = doc.pages[0].layers[0].id;
+        for (i, end) in [doc.inks[0].color(0.2), Color::WHITE]
+            .into_iter()
+            .enumerate()
+        {
+            let id = doc.ids_mut().shape();
+            let x = 50.0 * i as f64;
+            let mut s = Shape::new(
+                id,
+                ShapeKind::Rect {
+                    rect: Rect::new(x, 0.0, x + 40.0, 50.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            s.fill = Fill::linear(spot, end, 0.0);
+            s.stroke = None;
+            doc.layer_mut(layer).unwrap().shapes.push(s);
+        }
+        for standard in [PdfStandard::None, PdfStandard::X1a] {
+            let opts = PdfOptions {
+                standard,
+                ..Default::default()
+            };
+            let text = inflated(&document_to_pdf_with(&doc, &opts));
+            let sep = text
+                .find("[/Separation /PANTONE#20485#20C")
+                .expect("separation");
+            let obj = text[..sep]
+                .rfind(" 0 obj")
+                .map(|e| {
+                    let start = text[..e].rfind('\n').map_or(0, |n| n + 1);
+                    text[start..e].to_string()
+                })
+                .expect("object");
+            assert!(
+                text.contains(&format!("/ShadingType 2 /ColorSpace {obj} 0 R")),
+                "{standard:?}: {text}"
+            );
+            assert!(text.contains("/C0 [1] /C1 [0.2]"), "{text}");
+            assert!(text.contains("/C0 [1] /C1 [0]"), "{text}");
+        }
+    }
+
+    /// The colours of a CMYK fountain's stops go in as chosen: every stop
+    /// after the first was mixed through RGB and turned back to CMYK, so
+    /// 100 % cyan came out as a four-colour mix.
+    #[test]
+    fn a_cmyk_fountain_keeps_its_stop_colours() {
+        let mut doc = Document::new("t", tracedraw_core::Size::new(100.0, 50.0));
+        let layer = doc.pages[0].layers[0].id;
+        let id = doc.ids_mut().shape();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Rect {
+                rect: Rect::new(0.0, 0.0, 100.0, 50.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        let cmyk = |c, m, y, k| Color::Cmyk { c, m, y, k };
+        let mut ft = tracedraw_core::Fountain::two(
+            FountainKind::Linear,
+            cmyk(0.0, 0.0, 0.0, 1.0),
+            cmyk(0.0, 1.0, 0.0, 0.0),
+            0.0,
+        );
+        ft.stops.insert(
+            1,
+            tracedraw_core::style::Stop::new(0.5, cmyk(1.0, 0.0, 0.0, 0.0)),
+        );
+        s.fill = Fill::Fountain(ft);
+        s.stroke = None;
+        doc.layer_mut(layer).unwrap().shapes.push(s);
+        for standard in [PdfStandard::None, PdfStandard::X1a] {
+            let opts = PdfOptions {
+                standard,
+                ..Default::default()
+            };
+            let text = inflated(&document_to_pdf_with(&doc, &opts));
+            assert!(
+                text.contains("/C0 [0 0 0 1] /C1 [1 0 0 0]"),
+                "{standard:?}: {text}"
+            );
+            assert!(text.contains("/C0 [1 0 0 0] /C1 [0 1 0 0]"), "{text}");
+        }
+    }
+
+    /// Overprint goes to the file as a graphics state with `OP` (the
+    /// outline) and `op` (the fill); characters with their own overprint
+    /// (#1209) get one of their own, as the object's where they say
+    /// nothing; text without any gets none.
+    #[test]
+    fn overprint_is_written_for_objects_and_for_characters() {
+        let plain = TextSpan::new("ab", "Quicksand", 24.0);
+        let doc = doc_with(vec![plain.clone()], black(), None);
+        let text = inflated(&document_to_pdf(&doc));
+        assert!(!text.contains("/OPM"), "{text}");
+
+        let mut over = TextSpan::new("cd", "Quicksand", 24.0);
+        over.overprint_fill = Some(true);
+        let doc = doc_with(vec![plain.clone(), over.clone()], black(), None);
+        let text = inflated(&document_to_pdf(&doc));
+        assert!(text.contains("/op true /OP false /OPM 1"), "{text}");
+        assert!(!text.contains("/OP true"), "{text}");
+        // Shown twice: the plain part has no overprint state.
+        assert_eq!(text.matches("/OPM 1").count(), 1, "{text}");
+
+        // The object overprints its outline; the characters that say
+        // nothing take that, the ones that say no do not.
+        let mut doc = doc_with(
+            vec![plain, over],
+            black(),
+            Some(Stroke::new(Color::BLACK, 0.5)),
+        );
+        let shape = &mut doc.pages[0].layers[0].shapes[0];
+        shape.overprint_outline = true;
+        if let ShapeKind::Text { spans, .. } = &mut shape.kind {
+            spans[0].overprint_outline = Some(false);
+        }
+        let text = inflated(&document_to_pdf(&doc));
+        assert!(text.contains("/op true /OP true /OPM 1"), "{text}");
+        assert!(!text.contains("/op false /OP true"), "{text}");
+        assert_eq!(text.matches("/OPM 1").count(), 1, "{text}");
+
+        // A plain object marked to overprint its fill.
+        let mut doc = Document::new("t", tracedraw_core::Size::new(100.0, 50.0));
+        let layer = doc.pages[0].layers[0].id;
+        let id = doc.ids_mut().shape();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Rect {
+                rect: Rect::new(10.0, 10.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        s.overprint_fill = true;
+        doc.layer_mut(layer).unwrap().shapes.push(s);
+        let text = inflated(&document_to_pdf(&doc));
+        assert!(text.contains("/op true /OP false /OPM 1"), "{text}");
+    }
+
     /// The file as text with every zlib stream inflated after it.
     fn inflated(bytes: &[u8]) -> String {
         let mut text = String::from_utf8_lossy(bytes).to_string();
@@ -2831,6 +5887,72 @@ mod text_tests {
     fn extract(bytes: &[u8]) -> String {
         let doc = lopdf::Document::load_mem(bytes).expect("parses");
         doc.extract_text(&[1]).expect("text")
+    }
+
+    /// A PDF's text read back as curves from the font it embeds (#386):
+    /// filled outlines where the letters were, no text left; read as text
+    /// it stays text.
+    #[test]
+    fn embedded_text_reads_back_as_curves() {
+        use tracedraw_core::geometry::Shape as _;
+        let doc = doc_with(
+            vec![TextSpan::new("Hello PDF", "Quicksand", 24.0)],
+            black(),
+            None,
+        );
+        let (bytes, _) = document_to_pdf_report(&doc, &PdfOptions::default());
+        let mut ids = tracedraw_core::id::IdSource::default();
+        let as_text = crate::pdf_import::parse(&bytes, &mut ids).expect("reads");
+        assert!(as_text.pages[0]
+            .shapes
+            .iter()
+            .any(|s| matches!(s.kind, tracedraw_core::ShapeKind::Text { .. })));
+        let curves = crate::pdf_import::parse_with_options(
+            &bytes,
+            &mut ids,
+            "",
+            crate::pdf_import::ImportOptions {
+                text_as_curves: true,
+                ..Default::default()
+            },
+        )
+        .expect("reads");
+        let shapes = &curves.pages[0].shapes;
+        assert!(!shapes
+            .iter()
+            .any(|s| matches!(s.kind, tracedraw_core::ShapeKind::Text { .. })));
+        let paths: Vec<_> = shapes
+            .iter()
+            .filter(|s| matches!(s.kind, tracedraw_core::ShapeKind::Path { .. }))
+            .collect();
+        assert!(!paths.is_empty());
+        // Letters fill by the nonzero rule, so overlapping letters stay
+        // filled where they cross (#3525).
+        // (A one-contour letter is the same under both rules.)
+        let subpaths = |p: &&tracedraw_core::Shape| match &p.kind {
+            tracedraw_core::ShapeKind::Path { path, .. } => path
+                .elements()
+                .iter()
+                .filter(|e| matches!(e, tracedraw_core::geometry::PathEl::MoveTo(_)))
+                .count(),
+            _ => 0,
+        };
+        assert!(paths.iter().any(|p| subpaths(p) > 1));
+        assert!(paths
+            .iter()
+            .filter(|p| subpaths(p) > 1)
+            .all(|p| p.fill_rule == tracedraw_core::shaping::FillRule::NonZero));
+        // The letters stand about as high as 24 pt capitals (8.5 mm em).
+        let b = paths
+            .iter()
+            .map(|p| p.bounds())
+            .reduce(|a, c| a.union(c))
+            .expect("bounds");
+        assert!(b.height() > 4.0 && b.height() < 9.0, "{b:?}");
+        assert!(b.width() > 20.0, "{b:?}");
+        // Where the text was in the file read as text.
+        let t = as_text.pages[0].shapes[0].bounds();
+        assert!((b.x0 - t.x0).abs() < 3.0, "{b:?} {t:?}");
     }
 
     #[test]
@@ -2906,11 +6028,15 @@ mod text_tests {
             fonts: Vec::new(),
             bad_fonts: Vec::new(),
             report: PdfReport::default(),
+            images: PdfImages::default(),
         };
         let mut w = PageWriter {
             content: String::new(),
             pdf: &mut pdf,
             shadings: Vec::new(),
+            patterns: Vec::new(),
+            pattern_keys: Vec::new(),
+            page_origin: tracedraw_core::geometry::Point::ZERO,
             gstates: Vec::new(),
             images: Vec::new(),
             symbols: &[],
@@ -2918,6 +6044,7 @@ mod text_tests {
             spaces: Vec::new(),
             fonts: Vec::new(),
             text: None,
+            media: Rect::new(0.0, 0.0, 210.0, 297.0),
         };
         let k = 25.4 / 72.0;
         let mut p = BezPath::new();
@@ -3140,7 +6267,7 @@ mod text_tests {
         assert!(extract(&all).contains("abc"));
         // Underlines and the like stay curves.
         let mut u = TextSpan::new("u", "Quicksand", 24.0);
-        u.underline = true;
+        u.underline = tracedraw_core::LineStyle::SingleThin;
         let text = inflated(&document_to_pdf(&doc_with(vec![u], black(), None)));
         assert!(text.contains("BT\n0 Tr") && text.contains("\nf\n"));
     }

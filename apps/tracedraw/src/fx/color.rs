@@ -40,6 +40,11 @@ pub const TRANSFORM: &[EffectSpec] = &[
         apply: solarize,
         reach: no_reach,
     },
+    super::glitch::DITHER,
+    super::glitch::GRADIENT_MAP,
+    super::print::RISO,
+    super::print::NEWSPRINT,
+    super::strokes::GRIT_SCREEN,
 ];
 
 pub const CONTOUR: &[EffectSpec] = &[
@@ -71,6 +76,7 @@ pub const CONTOUR: &[EffectSpec] = &[
         apply: trace_contour,
         reach: no_reach,
     },
+    super::strokes::NEON_OUTLINE,
 ];
 
 pub fn bit_planes(img: &RgbaImage, p: &P) -> RgbaImage {

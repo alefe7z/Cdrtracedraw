@@ -59,6 +59,20 @@ surface du panneau [[docker.properties]] :
 Une bande sous le type montre toute la suite de couleurs telle qu'elle sera
 dessinée.
 
+## La boîte de dialogue Modifier le remplissage {#edit-fill}
+
+<kbd>F11</kbd> ouvre la boîte de dialogue [[edit_fill.title]] sur la surface
+de la sélection. Pour un dégradé, elle montre un aperçu, le
+[[edit_fill.fill_picker]], le type, la répétition et la bande de couleurs :
+cliquez sur un nœud pour le choisir, faites-le glisser pour le déplacer,
+double-cliquez pour en ajouter ou en retirer un. Sous la bande : la couleur,
+la transparence, la position et le [[edit_fill.midpoint]] du nœud, et
+[[edit_fill.reverse]]. [[edit_fill.transform]] contient la rotation, le centre
+et la marge du bord. **OK** applique ce que vous avez changé, avec
+[[edit_fill.overprint]]. Tant que la boîte de dialogue est ouverte, la sélection montre le remplissage au fur et à mesure que vous le modifiez ; **Annuler** ou <kbd>Échap</kbd> rétablit l'ancien remplissage.
+
+![La boîte de dialogue Modifier le remplissage](../../img/color-fills-edit-fill.png)
+
 ## L'outil Surface interactive {#interactive-fill}
 
 L'outil [[tool.interactive_fill]] (<kbd>G</kbd>) modifie les surfaces
@@ -86,10 +100,10 @@ zone. Les objets qui l'entourent restent tels quels.
 
 1. Choisissez l'outil [[tool.area_fill]].
 2. Choisissez la surface et le contour dans la barre de propriétés :
+   **Spécifier** (la couleur, et pour le contour l'épaisseur, à côté),
    **Utiliser la valeur par défaut** (la surface et le contour des nouveaux
    objets ; une couleur quand ce serait aucune surface, afin que la zone soit
-   visible), **Spécifier** (la couleur, et pour le contour l'épaisseur, à
-   côté) ou **Aucun**.
+   visible) ou **Aucun**.
 3. Cliquez à l'intérieur de la zone.
 
 Le nouvel objet est placé au-dessus du calque actif et sélectionné. Un clic
@@ -125,6 +139,10 @@ lignes et de colonnes d'une maille conserve ses couleurs.
 - Une surface [[docker.fill_texture]] est une texture générée, d'aspect
   naturel : [[texture.clouds]], [[texture.marble]], [[texture.noise]] ou
   [[texture.wood]], avec ses couleurs et son échelle.
+- [[texture.holographic]] et [[texture.holo_glitter]] donnent un aspect fixe de film holographique : couleurs de
+  l'arc-en-ciel entre zones sombres et claires (couleurs A et B), les
+  paillettes avec des grains brillants. Il ne change pas avec l'angle de vue ;
+  PDF et SVG le portent comme image.
 
 ## Plusieurs surfaces sur un objet {#several-fills}
 

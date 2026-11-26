@@ -32,6 +32,11 @@ opens them from the app. Nothing is fetched online.
   `../Resources/help` (the macOS bundle) and `../share/tracedraw/help`
   (the AppImage and the `.deb`). Without one the status bar says the
   Help is not installed and nothing opens.
+- Pages open in the browser (a new tab in the browser version), at
+  `https://tracedraw.github.io/tracedraw/help/<language>/<page>.html#<anchor>`
+  in the interface language (Options > Global > General > Language). Every
+  page exists in every language: a page not translated yet is published
+  from the English page with a notice at the top, so a link never breaks.
 
 ## The site
 
@@ -101,6 +106,18 @@ opens them from the app. Nothing is fetched online.
   the bundled interface font, paints egui's triangles in software and
   crops to the window (a panel to its used height). Nothing of the
   user's is read. A PNG optimizer is used when one is installed.
+- Tools and commands that work on the canvas are shown at work, as
+  scenes (`src/help_scenes.rs`, listed in `src/help_scene_list.rs`): the
+  whole window drawn headlessly with a small drawing made for the page,
+  the tool chosen and the pointer taken through the steps a person takes
+  (rest, press, drag, let go), one frame each, then cropped to the menus,
+  bars, toolbox and drawing window (or the drawing window alone, or the
+  whole window with its panels). A scene is named after its Help topic,
+  with `-1`, `-2` for the steps of one section
+  (`lines-shapes-cut-and-erase-shape-builder-2.png`). `web/help_shots.sh`
+  draws them after the dialogs; `HELP_SHOTS_ONLY=name,name` draws only
+  the pictures whose names start so. A test checks that every scene's
+  picture is in `docs/help/img`.
 - A page refers to its picture as `![Alt text](../../img/<name>.png)`;
   the generator stops on a picture that does not exist.
 

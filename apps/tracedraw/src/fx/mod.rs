@@ -12,7 +12,14 @@ pub mod camera;
 pub mod color;
 pub mod creative;
 pub mod distort;
+pub mod glitch;
+pub mod light;
 pub mod noise;
+pub mod paint;
+pub mod preview;
+pub mod print;
+pub mod sketch;
+pub mod strokes;
 pub mod texture;
 pub mod util;
 
@@ -199,6 +206,8 @@ pub fn catalog() -> impl Iterator<Item = &'static EffectSpec> {
         .chain(creative::EFFECTS.iter())
         .chain(texture::CUSTOM.iter())
         .chain(distort::EFFECTS.iter())
+        .chain(glitch::EFFECTS.iter())
+        .chain(light::EFFECTS.iter())
         .chain(noise::NOISE.iter())
         .chain(noise::SHARPEN.iter())
         .chain(texture::TEXTURE.iter())
@@ -219,6 +228,8 @@ pub fn groups() -> Vec<(&'static str, &'static [EffectSpec])> {
         ("menu.effects.creative", creative::EFFECTS),
         ("menu.effects.custom", texture::CUSTOM),
         ("menu.effects.distort", distort::EFFECTS),
+        ("menu.effects.glitch", glitch::EFFECTS),
+        ("menu.effects.light", light::EFFECTS),
         ("menu.effects.noise", noise::NOISE),
         ("menu.effects.sharpen", noise::SHARPEN),
         ("menu.effects.texture", texture::TEXTURE),
@@ -326,10 +337,14 @@ pub fn reach(e: &BitmapEffect, w: u32, h: u32) -> u32 {
 
 /// The result of a bitmap's effects: the image and its place. With
 /// `inflate` the original grows by what the visible effects reach first.
+/// With `cancel` raised it stops before the next effect and gives
+/// `None`, so a dropped live preview ends soon.
 pub fn render_stack(
     stack: &BitmapFxStack,
     inflate: bool,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Option<(RgbaImage, tracedraw_core::Rect)> {
+    let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
     let mut img = crate::bitmap_fx::decode(&stack.png)?;
     let (w, h) = img.dimensions();
     let pad: u32 = if inflate {
@@ -351,15 +366,51 @@ pub fn render_stack(
         rect = tracedraw_core::Rect::new(rect.x0 - mx, rect.y0 - my, rect.x1 + mx, rect.y1 + my);
     }
     for e in stack.effects.iter().filter(|e| e.visible) {
+        if cancelled() {
+            return None;
+        }
         img = apply_effect(&img, e);
     }
     Some((img, rect))
 }
 
-/// Resolution of the pictures bitmap effects make of vector objects.
+/// Resolution of the pictures bitmap effects make of vector objects when
+/// the drawing sets none.
 pub const VECTOR_FX_DPI: f64 = 300.0;
 /// The most pixels such a picture has (the resolution drops to stay under).
-const VECTOR_FX_MAX_PIXELS: f64 = 4_000_000.0;
+const VECTOR_FX_MAX_PIXELS: f64 = 16_000_000.0;
+
+/// The resolution bitmap effects draw vector objects at: the drawing's
+/// rendering resolution (Page > Page Setup, 72 to 1200 dpi), else
+/// [`VECTOR_FX_DPI`] (#382).
+pub fn vector_fx_dpi(meta: &tracedraw_core::document::Metadata) -> f64 {
+    if meta.resolution_dpi.is_finite() && meta.resolution_dpi > 0.0 {
+        meta.resolution_dpi.clamp(72.0, 1200.0)
+    } else {
+        VECTOR_FX_DPI
+    }
+}
+
+/// The resolution on the page of the picture `fx` holds for `shape`.
+fn fx_picture_dpi(shape: &tracedraw_core::Shape, fx: &tracedraw_core::document::RasterFx) -> f64 {
+    let (sx, _) = tracedraw_core::document::transform_scale(shape.transform);
+    let mm = fx.rect.width() * sx;
+    if mm > 1e-9 {
+        f64::from(fx.width_px) * 25.4 / mm
+    } else {
+        0.0
+    }
+}
+
+/// A picture made at `have` dpi with `pixels` pixels is to be made again
+/// at `want` dpi: off by more than 5 % and not held down by the pixel
+/// limit.
+fn needs_new_resolution(have: f64, want: f64, pixels: f64) -> bool {
+    if !(have > 0.0 && want > 0.0) || (have - want).abs() <= 0.05 * want {
+        return false;
+    }
+    pixels * (want / have).powi(2) <= VECTOR_FX_MAX_PIXELS
+}
 
 /// A vector object drawn alone, without its bitmap effects, as a picture
 /// for them: in its own space scaled as its transform scales it (so the
@@ -378,7 +429,15 @@ pub fn vector_base(
     }
     let mut c = shape.clone();
     c.raster_fx = None;
-    c.transform = Affine::scale_non_uniform(sx, sy);
+    // A blend's steps are drawn beside the picture, not in it.
+    c.effects
+        .retain(|e| !tracedraw_core::document::beside_picture(e));
+    // Fountain fills lie on the page box, so they are turned and mirrored
+    // the way the picture will be turned back on the page, or a turned or
+    // mirrored object's gradient ran the wrong way in its picture (#3983).
+    let local = Affine::scale_non_uniform(sx, sy);
+    c.carry_fills(local * shape.transform.inverse(), Affine::IDENTITY);
+    c.transform = local;
     let b = c.bounds();
     if !(b.width().is_finite() && b.height().is_finite()) || b.width() <= 0.0 && b.height() <= 0.0 {
         return None;
@@ -409,6 +468,7 @@ pub fn vector_base(
                 zoom,
                 origin_x: 0.0,
                 origin_y: h as f64,
+                stretch_y: 1.0,
             },
             preview: None,
             wireframe: false,
@@ -427,6 +487,20 @@ pub fn vector_raster_fx(
     symbols: &[tracedraw_core::Symbol],
     effects: Vec<BitmapEffect>,
     auto_inflate: bool,
+    dpi: f64,
+) -> Option<Box<tracedraw_core::document::RasterFx>> {
+    vector_raster_fx_until(shape, symbols, effects, auto_inflate, dpi, None)
+}
+
+/// [`vector_raster_fx`] that gives up (`None`) once `cancel` is raised,
+/// checked between the picture and each effect.
+pub fn vector_raster_fx_until(
+    shape: &tracedraw_core::Shape,
+    symbols: &[tracedraw_core::Symbol],
+    effects: Vec<BitmapEffect>,
+    auto_inflate: bool,
+    dpi: f64,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Option<Box<tracedraw_core::document::RasterFx>> {
     use tracedraw_core::document::RasterFx;
     let mut target = shape.clone();
@@ -435,26 +509,26 @@ pub fn vector_raster_fx(
         rect: tracedraw_core::Rect::ZERO,
         width_px: 0,
         height_px: 0,
-        png: Vec::new(),
+        png: Vec::new().into(),
         source: 0,
     }));
     let source = target.raster_source();
-    let (png, w, h, rect) = vector_base(shape, symbols, VECTOR_FX_DPI)?;
+    let (png, w, h, rect) = vector_base(shape, symbols, dpi)?;
     let stack = BitmapFxStack {
         rect,
         width_px: w,
         height_px: h,
-        png,
+        png: png.into(),
         effects: effects.clone(),
     };
-    let (img, rect) = render_stack(&stack, auto_inflate)?;
+    let (img, rect) = render_stack(&stack, auto_inflate, cancel)?;
     let png = crate::bitmap_fx::encode(&img)?;
     Some(Box::new(RasterFx {
         effects,
         rect,
         width_px: img.width(),
         height_px: img.height(),
-        png,
+        png: png.into(),
         source,
     }))
 }
@@ -473,68 +547,14 @@ impl crate::app::App {
         id: tracedraw_core::ShapeId,
         f: impl FnOnce(&mut Vec<BitmapEffect>),
     ) -> Option<tracedraw_core::Command> {
-        use tracedraw_core::document::ShapeKind;
-        let s = self.doc().find_shape(id)?;
-        if takes_vector_fx(&s.kind) {
-            let mut effects = s
-                .raster_fx
-                .as_ref()
-                .map(|fx| fx.effects.clone())
-                .unwrap_or_default();
-            f(&mut effects);
-            let fx = if effects.is_empty() {
-                None
-            } else {
-                Some(vector_raster_fx(
-                    s,
-                    &self.doc().symbols,
-                    effects,
-                    self.doc().metadata.auto_inflate_bitmaps(),
-                )?)
-            };
-            return Some(tracedraw_core::Command::SetRasterFx { shape: id, fx });
-        }
-        let ShapeKind::Bitmap {
-            rect,
-            width_px,
-            height_px,
-            png,
-            fx,
-        } = &s.kind
-        else {
-            return None;
-        };
-        let mut stack = match fx {
-            Some(st) => (**st).clone(),
-            None => BitmapFxStack {
-                rect: *rect,
-                width_px: *width_px,
-                height_px: *height_px,
-                png: png.clone(),
-                effects: Vec::new(),
-            },
-        };
-        f(&mut stack.effects);
-        let kind = if stack.effects.is_empty() {
-            ShapeKind::Bitmap {
-                rect: stack.rect,
-                width_px: stack.width_px,
-                height_px: stack.height_px,
-                png: stack.png,
-                fx: None,
-            }
-        } else {
-            let (img, r) = render_stack(&stack, self.doc().metadata.auto_inflate_bitmaps())?;
-            let png = crate::bitmap_fx::encode(&img)?;
-            ShapeKind::Bitmap {
-                rect: r,
-                width_px: img.width(),
-                height_px: img.height(),
-                png,
-                fx: Some(Box::new(stack)),
-            }
-        };
-        Some(tracedraw_core::Command::SetShapeKind { shape: id, kind })
+        // The same making as the dialogs' live preview (`fx::preview`).
+        self.fx_target(id)?.command(
+            f,
+            &self.doc().symbols,
+            self.doc().metadata.auto_inflate_bitmaps(),
+            vector_fx_dpi(&self.doc().metadata),
+            None,
+        )
     }
 
     /// Add an effect to every selected bitmap, in one undo step.
@@ -553,6 +573,134 @@ impl crate::app::App {
         }
     }
 
+    /// A picture (bitmap object) is selected.
+    pub fn selection_has_picture(&self) -> bool {
+        self.selection.iter().any(|id| {
+            self.doc().find_shape(*id).is_some_and(|s| {
+                matches!(s.kind, tracedraw_core::document::ShapeKind::Bitmap { .. })
+            })
+        })
+    }
+
+    /// The pictures (bitmap objects) on every page and master layer, in
+    /// groups and clip frames too, leaving out `skip`, locked objects and
+    /// objects on locked layers, in the drawing's order.
+    pub fn pictures_on_all_pages(
+        &self,
+        skip: &[tracedraw_core::ShapeId],
+    ) -> Vec<tracedraw_core::ShapeId> {
+        use tracedraw_core::document::ShapeKind;
+        fn walk(
+            s: &tracedraw_core::Shape,
+            skip: &[tracedraw_core::ShapeId],
+            out: &mut Vec<tracedraw_core::ShapeId>,
+        ) {
+            if s.locked {
+                return;
+            }
+            match &s.kind {
+                ShapeKind::Bitmap { .. } if !skip.contains(&s.id) => out.push(s.id),
+                ShapeKind::Group { children } => {
+                    for c in children {
+                        walk(c, skip, out);
+                    }
+                }
+                ShapeKind::ClipFrame { contents, .. } => {
+                    for c in contents {
+                        walk(c, skip, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for layer in self.doc().all_layers().filter(|l| !l.locked) {
+            for s in &layer.shapes {
+                walk(s, skip, &mut out);
+            }
+        }
+        out
+    }
+
+    /// The effect `e` added to the pictures on every page that the
+    /// selection left out (the effect dialogs' All pages, #1551): joined to
+    /// the step just recorded for the selection when `join`, otherwise a
+    /// step of its own ("Add Effect").
+    pub fn add_bitmap_effect_on_all_pages(&mut self, e: BitmapEffect, join: bool) {
+        let skip = self.selection.clone();
+        let cmds: Vec<_> = self
+            .pictures_on_all_pages(&skip)
+            .into_iter()
+            .filter_map(|id| self.bitmap_fx_command(id, |list| list.push(e.clone())))
+            .collect();
+        if cmds.is_empty() {
+            return;
+        }
+        let done = if join {
+            self.engine.amend_batch("Add Effect", &cmds)
+        } else {
+            self.engine.run_batch("Add Effect", &cmds)
+        };
+        match done {
+            Ok(()) => {
+                self.status =
+                    crate::i18n::trf("status.fx_all_pages", &[("n", &cmds.len().to_string())]);
+            }
+            Err(err) => self.status = err.to_string(),
+        }
+    }
+
+    /// The selected picture's effects can go to the other pictures:
+    /// a selected picture has effects.
+    pub fn can_apply_effects_to_all_pages(&self) -> bool {
+        self.first_picture_with_effects().is_some()
+    }
+
+    fn first_picture_with_effects(&self) -> Option<tracedraw_core::ShapeId> {
+        self.selection.iter().copied().find(|id| {
+            self.doc().find_shape(*id).is_some_and(|s| {
+                matches!(
+                    &s.kind,
+                    tracedraw_core::document::ShapeKind::Bitmap { fx: Some(st), .. }
+                        if !st.effects.is_empty()
+                )
+            })
+        })
+    }
+
+    /// Effects > Apply to Pictures on All Pages: every other picture on
+    /// every page takes the effects of the first selected picture that has
+    /// some (its own list replaced by them, the original pixels kept), as
+    /// one undo step (#1551).
+    pub fn apply_effects_to_all_pages(&mut self) {
+        let Some(from) = self.first_picture_with_effects() else {
+            return;
+        };
+        let effects = self.bitmap_effects(from);
+        let cmds: Vec<_> = self
+            .pictures_on_all_pages(&[from])
+            .into_iter()
+            .filter_map(|id| {
+                if self.bitmap_effects(id) == effects {
+                    return None;
+                }
+                let list = effects.clone();
+                self.bitmap_fx_command(id, move |l| *l = list)
+            })
+            .collect();
+        if cmds.is_empty() {
+            self.status = crate::i18n::trf("status.fx_all_pages", &[("n", "0")]);
+            return;
+        }
+        match self.engine.run_batch("Effects on All Pages", &cmds) {
+            Ok(()) => {
+                self.status =
+                    crate::i18n::trf("status.fx_all_pages", &[("n", &cmds.len().to_string())]);
+            }
+            Err(err) => self.status = err.to_string(),
+        }
+    }
+
     /// Change the effect list of one bitmap, in one undo step.
     pub fn edit_bitmap_effects(
         &mut self,
@@ -567,8 +715,8 @@ impl crate::app::App {
         }
     }
 
-    /// Bitmaps > Inflate Bitmap > Auto Inflate Bitmap, the same switch as
-    /// Document Options > General: effects rendered from now on that
+    /// Image > Bitmap Padding > Automatic, the same switch as
+    /// Document Setup > General: effects rendered from now on that
     /// spread past the edges grow the bitmap first.
     pub fn set_auto_inflate_bitmaps(&mut self, on: bool) {
         let mut metadata = self.doc().metadata.clone();
@@ -609,18 +757,31 @@ impl crate::app::App {
     }
 
     /// [`vector_base`] of `s`, kept for the last object asked about until
-    /// it changes (the effect dialogs ask every frame).
+    /// it changes (the effect dialogs ask every frame). The picture is the
+    /// object without its effects, so a change of the effects alone (the
+    /// dialogs' live preview) keeps it.
     pub fn vector_base_cached(
         &self,
         s: &tracedraw_core::Shape,
-    ) -> Option<(Vec<u8>, u32, u32, tracedraw_core::Rect)> {
-        let key = (s.id, s.raster_source());
+    ) -> Option<(tracedraw_core::SharedBytes, u32, u32, tracedraw_core::Rect)> {
+        let source = match &s.raster_fx {
+            Some(_) => {
+                let mut bare = s.clone();
+                bare.raster_fx = None;
+                bare.raster_source()
+            }
+            None => s.raster_source(),
+        };
+        let key = (s.id, source);
         if let Some((k, v)) = self.vector_fx_base.borrow().as_ref() {
             if *k == key {
                 return Some(v.clone());
             }
         }
-        let v = vector_base(s, &self.doc().symbols, VECTOR_FX_DPI)?;
+        let (png, w, h, rect) =
+            vector_base(s, &self.doc().symbols, vector_fx_dpi(&self.doc().metadata))?;
+        // Shared from here on: every frame that asks takes a pointer.
+        let v = (png.into(), w, h, rect);
         *self.vector_fx_base.borrow_mut() = Some((key, v.clone()));
         Some(v)
     }
@@ -629,25 +790,43 @@ impl crate::app::App {
     /// were made from an earlier state of it (moved nodes, a new colour,
     /// a scale), as part of the step that changed it.
     pub fn sync_raster_fx(&mut self) {
-        fn walk(s: &tracedraw_core::Shape, out: &mut Vec<tracedraw_core::Shape>) {
+        fn walk(s: &tracedraw_core::Shape, dpi: f64, out: &mut Vec<tracedraw_core::Shape>) {
             if let Some(fx) = &s.raster_fx {
-                if fx.source != s.raster_source() {
+                // Made from an earlier state, or at another resolution than
+                // the drawing's (it changed in Document Info).
+                let pixels = f64::from(fx.width_px) * f64::from(fx.height_px);
+                if fx.source != s.raster_source()
+                    || (!fx.png.is_empty()
+                        && needs_new_resolution(fx_picture_dpi(s, fx), dpi, pixels))
+                {
                     out.push(s.clone());
                 }
             }
-            if let tracedraw_core::document::ShapeKind::Group { children } = &s.kind {
-                for c in children {
-                    walk(c, out);
+            // Inside groups and clip frames too: a picture inside a clip
+            // frame made from an earlier state was never made again (#4105).
+            match &s.kind {
+                tracedraw_core::document::ShapeKind::Group { children } => {
+                    for c in children {
+                        walk(c, dpi, out);
+                    }
                 }
+                tracedraw_core::document::ShapeKind::ClipFrame { frame, contents } => {
+                    walk(frame, dpi, out);
+                    for c in contents {
+                        walk(c, dpi, out);
+                    }
+                }
+                _ => {}
             }
         }
         if !self.has_document() {
             return;
         }
+        let dpi = vector_fx_dpi(&self.doc().metadata);
         let mut stale = Vec::new();
         for layer in self.doc().all_layers() {
             for s in &layer.shapes {
-                walk(s, &mut stale);
+                walk(s, dpi, &mut stale);
             }
         }
         for s in stale {
@@ -657,13 +836,14 @@ impl crate::app::App {
                 &self.doc().symbols,
                 fx.effects.clone(),
                 self.doc().metadata.auto_inflate_bitmaps(),
+                dpi,
             );
             let cmd = tracedraw_core::Command::SetRasterFx {
                 shape: s.id,
                 fx: made.or_else(|| {
                     // Not drawable now: keep the effects, mark as made.
                     let mut f = fx.clone();
-                    f.png.clear();
+                    f.png = Default::default();
                     let mut t = s.clone();
                     t.raster_fx = Some(f.clone());
                     f.source = t.raster_source();
@@ -1008,18 +1188,122 @@ mod tests {
             rect: tracedraw_core::Rect::new(0.0, 0.0, 24.0, 20.0),
             width_px: 24,
             height_px: 20,
-            png,
+            png: png.into(),
             effects: vec![blur.clone()],
         };
-        let (out, rect) = render_stack(&stack, true).expect("renders");
+        let (out, rect) = render_stack(&stack, true, None).expect("renders");
         assert!(out.width() > 24 && rect.x0 < 0.0, "{:?}", rect);
-        let (flat, r2) = render_stack(&stack, false).expect("renders");
+        let (flat, r2) = render_stack(&stack, false, None).expect("renders");
         assert_eq!((flat.dimensions(), r2), ((24, 20), stack.rect));
         // Hidden effects do nothing.
         let mut hidden = stack.clone();
         hidden.effects[0].visible = false;
-        let (same, _) = render_stack(&hidden, true).expect("renders");
+        let (same, _) = render_stack(&hidden, true, None).expect("renders");
         assert_eq!(same, src);
+    }
+
+    /// A blurred object inside a clip frame whose picture was made from an
+    /// earlier state of it gets a new picture, as one on the layer does
+    /// (#4105: the picture of the object as it was stayed).
+    #[test]
+    fn a_stale_picture_inside_a_clip_frame_is_made_again() {
+        use tracedraw_core::document::ShapeKind;
+        use tracedraw_core::Rect;
+        let mut app = crate::app::App::headless();
+        let sq = app
+            .new_shape(ShapeKind::Rect {
+                rect: Rect::new(40.0, 40.0, 60.0, 60.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("square");
+        let cmd = app
+            .bitmap_fx_command(sq, |v| {
+                let mut blur = new_effect("gaussian_blur");
+                blur.params.insert("radius".into(), 10.0);
+                v.push(blur);
+            })
+            .expect("blur");
+        app.run(cmd);
+        let fr = app
+            .new_shape(ShapeKind::Rect {
+                rect: Rect::new(0.0, 0.0, 150.0, 150.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("frame");
+        app.place_inside(vec![sq], fr);
+        let mut clip = app.doc().find_shape(fr).expect("clip").clone();
+        let ShapeKind::ClipFrame { contents, .. } = &mut clip.kind else {
+            panic!("a clip frame");
+        };
+        // Its state changes under the picture (scaled to half).
+        contents[0].transform = tracedraw_core::geometry::Affine::scale(0.5);
+        let _ = app.engine.amend(&tracedraw_core::Command::ReplaceShapes {
+            replacements: vec![(fr, clip)],
+        });
+        let stale = app.doc().find_shape(sq).expect("square").clone();
+        assert_ne!(stale.raster_fx.as_ref().unwrap().source, stale.raster_source());
+        app.sync_raster_fx();
+        let s = app.doc().find_shape(sq).expect("square");
+        assert_eq!(s.raster_fx.as_ref().unwrap().source, s.raster_source());
+    }
+
+    /// A Gaussian blur on a vector object spreads past the object's box
+    /// on the page: a view of only the blurred rim shows it as the whole
+    /// page does (#4082: the picture was cut at the object's box, a hard
+    /// edge round the blur).
+    #[test]
+    fn a_blurred_vector_object_is_not_cut_at_its_box() {
+        use tracedraw_core::document::{Shape, ShapeKind};
+        use tracedraw_core::geometry::{Rect, Size};
+        let mut doc = tracedraw_core::Document::new("t", Size::new(100.0, 100.0));
+        let mut sq = Shape::new(
+            tracedraw_core::ShapeId(7),
+            ShapeKind::Rect {
+                rect: Rect::new(40.0, 40.0, 60.0, 60.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        sq.fill = tracedraw_core::Fill::Solid(tracedraw_core::Color::BLACK);
+        sq.stroke = None;
+        let mut blur = new_effect("gaussian_blur");
+        blur.params.insert("radius".into(), 40.0);
+        sq.raster_fx = vector_raster_fx(&sq, &[], vec![blur], true, 150.0);
+        let rect = sq.raster_fx.as_ref().expect("picture").rect;
+        assert!(rect.x1 > 62.0, "the picture grows past the object: {rect:?}");
+        let page = doc.pages[0].id;
+        let layer = doc.pages[0].layers[0].id;
+        doc.layer_mut(layer).unwrap().shapes.push(sq);
+        let zoom = 4.0;
+        let alpha_at = |x0: f64, w: u32, x: f64, y: f64| {
+            let pm = tracedraw_render::render_page(
+                &doc,
+                page,
+                &tracedraw_render::RenderOptions {
+                    width: w,
+                    height: 400,
+                    view: tracedraw_render::ViewTransform {
+                        zoom,
+                        origin_x: -x0 * zoom,
+                        origin_y: 400.0,
+                        stretch_y: 1.0,
+                    },
+                    preview: None,
+                    wireframe: false,
+                    ..tracedraw_render::RenderOptions::default()
+                },
+            )
+            .expect("renders");
+            let px = ((x - x0) * zoom) as u32;
+            let py = (400.0 - y * zoom) as u32;
+            pm.pixel(px, py).expect("inside").alpha()
+        };
+        let whole = alpha_at(0.0, 400, 63.5, 50.0);
+        assert!(whole > 0, "the blur reaches past the box");
+        let rim = alpha_at(63.0, 36, 63.5, 50.0);
+        assert_eq!(rim, whole, "a view of the rim alone shows it too");
     }
 
     #[test]
@@ -1033,7 +1317,7 @@ mod tests {
                 rect: tracedraw_core::Rect::new(0.0, 0.0, 24.0, 20.0),
                 width_px: 24,
                 height_px: 20,
-                png: png.clone(),
+                png: png.clone().into(),
                 fx: None,
             })
             .expect("bitmap");
@@ -1071,7 +1355,7 @@ mod tests {
                 rect: tracedraw_core::Rect::new(0.0, 0.0, 24.0, 20.0),
                 width_px: 24,
                 height_px: 20,
-                png,
+                png: png.into(),
                 fx: None,
             })
             .expect("bitmap");
@@ -1128,6 +1412,39 @@ mod tests {
             .expect("in the page")
             .demultiply();
         [px.red(), px.green(), px.blue(), px.alpha()]
+    }
+
+    #[test]
+    fn imported_gaussian_blur_is_listed_editable_and_cached() {
+        let (doc, _) = tracedraw_cdr::open_bytes(
+            include_bytes!("../../../../crates/cdr/tests/fixtures/gaussian-blur.cdr"),
+            "Gaussian control",
+        )
+        .unwrap();
+        let id = doc
+            .all_layers()
+            .flat_map(|l| &l.shapes)
+            .find(|s| s.raster_fx.is_some())
+            .unwrap()
+            .id;
+        let mut app = crate::app::App::headless();
+        app.engine.replace(doc);
+        app.select(vec![id]);
+        assert_eq!(app.bitmap_effects(id)[0].params["radius"], 15.0);
+        app.sync_raster_fx();
+        let before = app.doc().find_shape(id).unwrap().raster_fx.clone().unwrap();
+        assert!(!before.png.is_empty());
+        app.sync_raster_fx();
+        assert_eq!(
+            app.doc().find_shape(id).unwrap().raster_fx.as_ref(),
+            Some(&before)
+        );
+        app.edit_bitmap_effects(id, "Edit Effect", |effects| {
+            effects[0].params.insert("radius".into(), 5.0);
+        });
+        assert_eq!(app.bitmap_effects(id)[0].params["radius"], 5.0);
+        app.undo();
+        assert_eq!(app.bitmap_effects(id)[0].params["radius"], 15.0);
     }
 
     #[test]
@@ -1213,5 +1530,96 @@ mod tests {
         // Exports draw the picture too.
         let svg = tracedraw_io::svg::page_to_svg(app.doc(), 0);
         assert!(svg.contains("<image"));
+    }
+
+    /// A bitmap effect on the start of a blend leaves the blend drawn: its
+    /// steps stay vector objects around the picture (#1043).
+    #[test]
+    fn a_blend_keeps_its_steps_when_its_start_gets_a_bitmap_effect() {
+        use tracedraw_core::live::{BlendOptions, Effect};
+        use tracedraw_core::{geometry::Affine, Color, Command, Fill};
+        let (mut app, id) = red_rect_app();
+        let mut end = app.doc().find_shape(id).unwrap().clone();
+        end.transform = Affine::translate((100.0, 0.0));
+        end.fill = Fill::Solid(Color::rgb8(20, 20, 220));
+        let blend = |end: &tracedraw_core::Shape| Effect::Blend {
+            end: Box::new(end.clone()),
+            steps: 2,
+            accel_objects: 0.0,
+            accel_colors: 0.0,
+            rotation: 0.0,
+            path: None,
+            rotate_on_path: false,
+            end_id: None,
+            options: BlendOptions::default(),
+        };
+        app.run(Command::SetEffectStack {
+            shape: id,
+            effects: vec![blend(&end)],
+            parked: Vec::new(),
+        });
+        let step = pixel_at(&app, 75.0, 30.0);
+        assert!(step[2] > 60 && step[1] < 60, "a step between: {step:?}");
+        app.add_bitmap_effect(new_effect("invert_colors"));
+        // The start is its inverted picture, the step and the end as they were.
+        let p = pixel_at(&app, 30.0, 30.0);
+        assert!(p[0] < 60 && p[1] > 200 && p[2] > 200, "{p:?}");
+        assert_eq!(pixel_at(&app, 75.0, 30.0), step);
+        assert_eq!(pixel_at(&app, 140.0, 30.0)[..3], [20, 20, 220]);
+        // The picture holds the start alone: a new end does not make it again.
+        let made = app.doc().find_shape(id).unwrap().raster_fx.clone().unwrap();
+        end.transform = Affine::translate((120.0, 0.0));
+        app.run(Command::SetEffectStack {
+            shape: id,
+            effects: vec![blend(&end)],
+            parked: Vec::new(),
+        });
+        app.sync_raster_fx();
+        let s = app.doc().find_shape(id).unwrap().clone();
+        assert_eq!(s.raster_fx.as_ref(), Some(&made));
+        assert_eq!(pixel_at(&app, 170.0, 30.0)[..3], [20, 20, 220]);
+        // Exports draw the steps too.
+        let svg = tracedraw_io::svg::page_to_svg(app.doc(), 0);
+        assert!(svg.contains("<image"));
+        assert!(svg.matches("<path").count() + svg.matches("<rect").count() >= 3);
+    }
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    /// Effects on vector objects are drawn at the drawing's rendering
+    /// resolution, and made again when it changes (#382).
+    #[test]
+    fn vector_effects_follow_the_rendering_resolution() {
+        use tracedraw_core::geometry::Rect;
+        let mut app = crate::app::App::headless();
+        let id = app
+            .new_shape(tracedraw_core::ShapeKind::Rect {
+                rect: Rect::new(10.0, 10.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rect");
+        app.select(vec![id]);
+        app.apply_fill(tracedraw_core::Fill::Solid(tracedraw_core::Color::BLACK));
+        app.add_bitmap_effect(super::new_effect("rotate_3d"));
+        let dpi_of = |app: &crate::app::App| {
+            let s = app.doc().find_shape(id).cloned().expect("shape");
+            let fx = s.raster_fx.clone().expect("fx");
+            super::fx_picture_dpi(&s, &fx)
+        };
+        assert!((dpi_of(&app) - 300.0).abs() < 15.0, "{}", dpi_of(&app));
+        let mut md = app.doc().metadata.clone();
+        md.resolution_dpi = 600.0;
+        app.run(tracedraw_core::Command::SetMetadata { metadata: md });
+        app.sync_raster_fx();
+        assert!((dpi_of(&app) - 600.0).abs() < 30.0, "{}", dpi_of(&app));
+        // Nothing more to make at that resolution.
+        let rev = app.engine.revision();
+        app.sync_raster_fx();
+        assert_eq!(app.engine.revision(), rev);
+        assert!(super::needs_new_resolution(300.0, 600.0, 1e6));
+        assert!(!super::needs_new_resolution(300.0, 1200.0, 2e6));
+        assert!(!super::needs_new_resolution(590.0, 600.0, 1e6));
     }
 }

@@ -25,8 +25,22 @@ Open the [[docker.vector_mosaic]] panel with
    - **Merge adjacent**: combine up to that many neighbouring tiles of one
      color; **Weld adjacent overlap**: one curve per color instead of one
      object per tile.
-   - **Shape**: circle (at first), square or custom. For a custom tile,
-     select a closed curve and click **Select**.
+   - **Shape**: circle (at first), square, custom, **Glyphs** or
+     **Characters**. For a custom tile, select a closed curve and click
+     **Select**. **Glyphs** draws a built-in symbol in each tile, from a dot
+     where the picture is light to a full square where it is dark, or at
+     random with **Random symbols** and its seed. **Characters** draws a
+     letter of the **Character set** (lightest first, a space leaves a
+     cell empty) for a picture made of text. **Invert tones** swaps the
+     ends, for a light mosaic on a dark background.
+   - **One color**: every tile in the color beside it instead of the
+     picture's colors.
+   - **Remove background**: leaves out the tiles of the background's
+     color, so a logo on a solid ground becomes tiles only where the logo
+     is. **Auto** finds the background along the selection's edges; turn it
+     off to pick the color. The percentage is how close a tile's color
+     must be to go. Pick a curve of your own (such as a plus sign) under
+     **Shape** > **Custom** and **Select** to fill the logo with it.
 3. Click [[docker.apply]].
 
 The mosaic is one group placed on top of the selection, and is selected.
@@ -53,3 +67,6 @@ Open the [[docker.picture_mosaic]] panel with
      or remove it; **Output priority** and the resolution: how large the
      mosaic is in pixels. The panel shows the resulting size.
 4. Click [[docker.apply]].
+
+> **Note:** The browser and Android versions cannot read folders: there,
+> **Browse** lets you choose the pictures themselves, several at once.

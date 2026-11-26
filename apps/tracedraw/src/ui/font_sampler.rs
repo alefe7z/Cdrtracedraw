@@ -7,6 +7,7 @@
 use crate::app::App;
 use crate::i18n::tr;
 use crate::theme::Tokens;
+use crate::ui::tips::RichTip;
 use egui::{Sense, Ui, Vec2};
 
 /// The docker's choices.
@@ -79,16 +80,19 @@ pub fn font_sampler(app: &mut App, ui: &mut Ui) {
             .hint_text(tr("font_sampler.default_text"))
             .desired_rows(2)
             .desired_width(f32::INFINITY),
-    );
+    )
+    .rich_tip(crate::ui::tips::keyed("font_sampler.text"));
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(tr("font_sampler.size"))
                 .color(Tokens::text_dim())
                 .size(11.0),
         );
-        ui.add(crate::ui::Rail(
-            egui::Slider::new(&mut app.font_sampler.size, 10.0..=96.0).suffix(" px"),
-        ));
+        ui.add(crate::ui::Slider::new(&mut app.font_sampler.size, 10.0..=96.0).suffix(" px"))
+            .rich_tip(crate::ui::tips::pair(
+                "font_sampler.size",
+                "font_sampler.size_desc",
+            ));
     });
     // Add a font: type to narrow the list, click to add.
     ui.horizontal(|ui| {
@@ -101,7 +105,11 @@ pub fn font_sampler(app: &mut App, ui: &mut Ui) {
             egui::TextEdit::singleline(&mut app.font_sampler.filter)
                 .hint_text(tr("font_sampler.find"))
                 .desired_width(150.0),
-        );
+        )
+        .rich_tip(crate::ui::tips::pair(
+            "font_sampler.add",
+            "font_sampler.add_desc",
+        ));
     });
     let q = app.font_sampler.filter.trim().to_lowercase();
     if !q.is_empty() {
@@ -113,7 +121,11 @@ pub fn font_sampler(app: &mut App, ui: &mut Ui) {
             .cloned()
             .collect();
         for f in matches {
-            if ui.selectable_label(false, format!("+ {f}")).clicked() {
+            if ui
+                .selectable_label(false, format!("+ {f}"))
+                .rich_tip_with(|| format!("{f}\n{}", tr("font_sampler.add_one_desc")))
+                .clicked()
+            {
                 app.font_sampler.add(&f);
                 app.font_sampler.filter.clear();
             }
@@ -135,12 +147,12 @@ pub fn font_sampler(app: &mut App, ui: &mut Ui) {
                             .size(11.0),
                     );
                     if app.text_font == *family {
-                        ui.label(egui::RichText::new("\u{2713}").size(11.0));
+                        ui.label(egui::RichText::new("\u{2714}").size(11.0));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button("\u{2715}")
-                            .on_hover_text(tr("font_sampler.remove"))
+                            .small_button("\u{00D7}")
+                            .rich_tip(tr("font_sampler.remove"))
                             .clicked()
                         {
                             remove = Some(i);
@@ -197,8 +209,12 @@ pub fn font_sampler(app: &mut App, ui: &mut Ui) {
                                 1.0,
                             ),
                         );
-                        ui.painter()
-                            .image(p.texture.id(), clip, uv, egui::Color32::WHITE);
+                        ui.painter().image(
+                            p.texture.id(),
+                            clip,
+                            uv,
+                            crate::ui::font_list::CARD_INK,
+                        );
                         resp
                     }
                     None => ui.label(
@@ -207,7 +223,7 @@ pub fn font_sampler(app: &mut App, ui: &mut Ui) {
                             .italics(),
                     ),
                 };
-                if resp.on_hover_text(tr("font_sampler.apply_tip")).clicked() {
+                if resp.rich_tip(tr("font_sampler.apply_tip")).clicked() {
                     apply = Some(family.clone());
                 }
                 ui.separator();

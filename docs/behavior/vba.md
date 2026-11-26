@@ -30,7 +30,7 @@ Rules that hold everywhere:
 - **Out parameters.** Methods that hand values back through ByRef
   arguments return them as an array in parameter order: `GetPosition`
   gives `[x, y]`, `GetSize` `[w, h]`, `GetBoundingBox` `[x, y, w, h]`.
-- **Named arguments.** Methods are declared with their reference
+- **Named arguments.** Methods are declared with their published
   parameter names (`Left`, `Top`, `Right`, `Bottom`, `CornerUL`...), so
   named arguments match by name.
 - **Collections** are 1-based, take an index or a name in `Item`, have
@@ -41,13 +41,18 @@ Rules that hold everywhere:
 `ActiveDocument`, `ActivePage`, `ActiveLayer`, `ActiveSelection` (the
 selection as one object, type `cdrSelectionShape`, with `Shapes`),
 `ActiveSelectionRange`, `ActiveShape` (the first selected object),
-`ActiveWindow` (`Refresh`, `ActiveView`, accepted without effect),
+`ActiveVirtualLayer` (the active layer), `FontList` (the installed
+font families by name, from 1: `Count`, `Item`, For Each),
+`ActiveWindow` (`Refresh` accepted without effect; `ActiveView`, below),
 `Documents` (the active drawing only), `Version` "27.0", `VersionMajor`
 27, `VersionMinor`, `Name` "CD Draw", `Visible`, `Optimization`,
 `EventsEnabled`, `Refresh`, `CreateColor(ColorString)` ("#RRGGBB",
 "RGB255,USER,r,g,b", "CMYK100,USER,c,m,y,k", "GRAY255,USER,v"),
 `CreateRGBColor`, `CreateCMYKColor`, `CreateGrayColor`,
-`CreateHSBColor`, `CreateShapeRange`, `CreateCurve`. `CreateDocument`
+`CreateHSBColor`, `CreateShapeRange`, `CreateCurve`, `OutlineStyles`
+(`OutlineStyles(0)` the solid line, 1 to 3 the dashes the Outline Pen
+dialog offers, `Count`, `Item`), `ArrowHeads` (`ArrowHeads(0)`, no
+arrowhead; other numbers give none either). `CreateDocument`
 and `OpenDocument` raise an error: a macro works on the active drawing.
 `Status` (`BeginProgress`, `Progress`, `EndProgress`, `SetMainText`:
 the text and percentage go to the status line), `ColorManager`
@@ -60,7 +65,10 @@ the text and percentage go to the status line), `ColorManager`
 `ActiveLayer`, `ActiveShape`, `Selection()`, `SelectionRange()`,
 `SelectableShapes`, `ClearSelection`, `SelectAll`, `BeginCommandGroup`,
 `EndCommandGroup`, `AddPages(n)`, `AddPagesEx(n, Width, Height)`,
-`InsertPages(n, BeforePage, Page)`, `CreateCurve`, `Save` (to its file),
+`InsertPages(n, BeforePage, Page)`, `InsertPagesEx(n, BeforePage, Page,
+Width, Height)`, `LogCreateShapeRange` and `LogCreateShape` (they return
+what they are given: a macro's changes are one undo step already),
+`CreateCurve`, `Save` (to its file),
 `SaveAs(FileName)` (`.cdr`, else the native format), `Export(FileName,
 Filter)`, `ExportEx` and `ExportBitmap(FileName, Filter, Range,
 ImageType, Width, Height, ResolutionX)` (both return a filter whose
@@ -78,7 +86,9 @@ file's extension; bitmaps at the resolution given, or scaled to
 master layers), `ActiveLayer`, `SelectableShapes` (on visible, unlocked
 layers), `Name` (read and write), `Index`, `SizeWidth`, `SizeHeight`,
 `SetSize`, `GetSize`, `Orientation` (`cdrPortrait`, `cdrLandscape`;
-setting it swaps the sides), `LeftX`, `RightX`, `TopY`, `BottomY`,
+setting it swaps the sides), `Paper` (the paper size by name, such as
+"A4", the user's saved sizes first, "" for a size of its own; set to a
+name, the page takes that size in its orientation), `LeftX`, `RightX`, `TopY`, `BottomY`,
 `CenterX`, `CenterY`, `Activate`, `Delete`, `CreateLayer`, `FindShapes`,
 `FindShape`.
 
@@ -175,7 +185,9 @@ Shared with ranges and the selection:
   new curve).
 - **Groups and frames:** `Ungroup`, `UngroupEx`, `UngroupAll`,
   `UngroupAllEx`, `Shapes` (a group's), `Layer`, `Page`, `ParentGroup`,
-  `PowerClip` (`Shapes` inside a clip frame), `PowerClipParent`.
+  `ClipFrame` (`Shapes` inside a clip frame), `ClipFrameParent`; macros
+  that call these and `AddToClipFrame` by other programs' names reach
+  them too (#2968, see below).
 - **Views of the object:**
   - `Curve`: `Nodes`, `SubPaths`, `Segments`, `Closed`, `Length`.
     Nodes have `PositionX`, `PositionY`, `SetPosition`, `Move`, `Type`
@@ -185,7 +197,9 @@ Shared with ranges and the selection:
     `EndNode`.
   - `Text`: `Type`, `Replace(OldText, NewText, CaseSensitive)` and
     `Story`, with `Text`, `Font`, `Size` in points, `Bold`, `Italic`,
-    `Underline`, `Alignment` (`cdrLeftAlignment`...), `Length`,
+    `Underline`, `BackgroundColor` (the colour behind the characters,
+    `Nothing` for none) and `ApplyNoBackground` (#3518),
+    `Alignment` (`cdrLeftAlignment`...), `Length`,
     `Characters.Count` and `Words.Count`.
   - `Rectangle`: `CornerUpperLeft`... as roundness, `RadiusUpperLeft`...
     as lengths, `SetRoundness`, `SetRadius`, `Width`, `Height`.
@@ -206,7 +220,11 @@ Shared with ranges and the selection:
 - **`Outline`:** `Type` (`cdrNoOutline`, `cdrOutline`), `Width`, `Color`
   (tied to the object like the fill's), `Style` (`DashCount`,
   `SetDashes`), `LineCaps`, `LineJoin`, `SetNoOutline`,
-  `SetProperties(Width, Style, Color)`, and `CopyAssign`.
+  `SetProperties(Width, Style, Color, StartArrow, EndArrow, BehindFill,
+  ScaleWithShape, LineCaps, LineJoin, NibAngle, NibStretch, ...)` (the
+  style from `OutlineStyles`; arrowheads, `DashDotLength`, `PenWidth`,
+  `MiterLimit` and `Justification` are taken and left as they are), and
+  `CopyAssign`.
 - **`Transparency`:** `Uniform`, `ApplyUniformTransparency(Value)` (0 to
   100), `ApplyNoTransparency`.
 
@@ -224,7 +242,60 @@ Creatable with `New`.
   `cdrColorRegistration`), `RGBRed`, `RGBGreen`, `RGBBlue`, `RGBValue`,
   `CMYKCyan`, `CMYKMagenta`, `CMYKYellow`, `CMYKBlack` (all read and
   write), `Gray`, `HSBHue`, `HSBSaturation`, `HSBBrightness`,
-  `HexValue`, `Name`, `IsSpot`, `IsCMYK`, `IsSame`.
+  `HexValue`, `Name` (a spot colour's ink name; a palette colour's
+  name), `IsSpot`, `IsCMYK`, `IsSame`.
+
+### Palettes
+
+- **`Application.Palettes`** (also a global): the palettes of the
+  Palette Manager (built in and the user's), 1-based, by index or name,
+  `Count`, `For Each`.
+- **`Document.Palette`**: the drawing's own palette.
+- **`Palette`:** `Name`, `ColorCount`, `Color(Index)` (1-based, the
+  colour with its name), `Colors`, `FindColor(Name)`.
+- A spot colour a macro applies (`ApplyUniformFill`) whose ink the
+  drawing does not have yet joins the drawing's ink list under its
+  palette name, so exports print it on a plate of its own.
+
+### Contours, outlines as objects, copies on a layer
+
+- **`Shape.CreateContour(Direction, Offset, Steps, ..., FillColor)`:**
+  a contour effect (`cdrContourToCenter` 0, `cdrContourInside` 1,
+  `cdrContourOutside` 2; `Offset` in the document unit, mitred corners),
+  stepping from the object's fill to `FillColor`. It gives back the
+  effect, whose `Separate` turns it into plain objects; the object keeps
+  its `StaticID`, so a macro tells it from the rings.
+- **`Outline.ConvertToObject`:** a filled curve of the outline's shape
+  and colour right above the object, which loses its outline (the same
+  geometry as Object > Convert Outline to Object).
+- **`CopyToLayer(Layer)`** on a shape, range or selection: copies on that
+  layer, in the same place on the page.
+
+### View, PDF settings, files
+
+- **`ActiveWindow.ActiveView.Type`:** `cdrEnhancedViewWithOverprints` (5)
+  turns View > Simulate Overprints on, another view type off.
+- **`ActiveWindow.ActiveView.ToFitAllObjects`, `ToFitPage`,
+  `ToFitSelection`:** View > Zoom To Fit, Zoom To Page and Zoom To
+  Selection; `ActiveView.CopyVisibleArea` (also `Application.CopyVisibleArea`)
+  puts what the window shows on the clipboard as a picture, as Edit >
+  Copy Visible Area does. They take effect once the objects the macro
+  made so far are in the drawing (#4020).
+- **`LabelSize`** of a shape, a range or `ActiveSelection`: the label size
+  of the dimensions among them, in points; `SetDimensionStyle` sets any
+  setting of their style by the name it is saved with (#4026).
+- **`Document.PDFSettings`:** `PublishRange` (`pdfWholeDocument` 0,
+  `pdfCurrentPage` 1) chooses what `PublishToPDF` writes; `Load`, `Save`
+  and `ShowDialog` of a named style succeed without changing anything, as
+  the PDF always keeps spot inks and overprint.
+- **`Dir(PathName)`:** a file's name when it exists, else ""; a `*` or `?`
+  in the name gives the first match in its folder. `Dir` with no path is
+  not available.
+- **Queries** (`FindShapes(Query:=...)`): `@name`, `@type` and
+  `@fill.type` compared with `=`, `<>`, or tested with
+  `.StartsWith('...')`, `.EndsWith('...')`, `.Contains('...')`.
+- Methods of the object model take **named arguments**
+  (`CreateArtisticText(..., Font:="Arial", Size:=10)`).
 
 ### Constants
 
@@ -234,14 +305,14 @@ Checked member by member against the published developer reference
 (enumeration pages listing each member's value):
 `cdrUnit` (including `cdrUnitQ` and `cdrUnitH`, both 0.25 mm),
 `cdrReferencePoint`, `cdrShapeType`, `cdrFillType`, `cdrFilter` (every
-member, `cdrWEBP` from a later version of the reference), `cdrImageType`,
+member, `cdrWEBP`, added in a later version of the object model), `cdrImageType`,
 `cdrEffectType`, `cdrAlignment`, `cdrFontLine`, `cdrFontCase`,
 `cdrSegmentType`, `cdrOutlineType`, `cdrOutlineLineCaps`, `cdrMergeMode`,
 `cdrTransparencyAppliedTo`, `cdrDistributeArea`, `cdrAlignDistributeH`,
 `cdrAlignShapesTo`, and the members CD Draw defines of
 `cdrTextLanguage` and `cdrCursorShape`.
 
-Checked against published type definitions rather than the reference:
+Checked against published type definitions, not the enumeration pages:
 `cdrColorType`, `cdrTextType` and `cdrTriState`.
 
 Not yet checked, with the values macros commonly assume:
@@ -255,7 +326,7 @@ bottom, 3 centre, 4 to 6 spread those lines, 7 equal gaps),
 `cdrAntiAliasingType`, `cdrImportMode`, `cdrFileVersion`,
 `cdrCompressionType` and `cdrShapeLinkType`.
 
-Method parameters carry the reference names, so named arguments match;
+Method parameters carry the published names, so named arguments match;
 checked for `CreateRectangle`, `CreateRectangle2`, `CreateEllipse2`,
 `SetPosition`, `SetSize`, `SetSizeEx`, `Move`, `Rotate`, `Duplicate`,
 `ApplyUniformFill`, `ApplyFountainFill`, `RGBAssign`, `CMYKAssign`,
@@ -283,7 +354,7 @@ other libraries):
 | Text, Story, Words, Range, Size, Bold, Italic, Font, LineSpacing, Overflow, IsArtisticText | 100, 12, 3, 5, 9, 9, 9, 3, 8, 4, 3 | W (`LanguageID`: E) |
 | Bitmap, ResolutionX, ResolutionY, Mode, ConvertTo, Resample, ExternallyLinked, Resolution | 51, 12, 12, 7, 14, 5, 3, 4 | W |
 | ConvertToBitmapEx, ConvertToCurves | 6, 4 | W |
-| PowerClip, PowerClipParent | 44, 8 | W |
+| ClipFrame, ClipFrameParent | 44, 8 | W |
 | EnterEditMode, LeaveEditMode | 3, 3 | N |
 | Effects, DropShadow, Separate, Clear | 14, 6, 7, 14 | W (a separated shadow loses its blur) |
 | MergeMode | 6 | W for normal; others E |
@@ -300,7 +371,7 @@ other libraries):
 | Status, BeginProgress, Progress, EndProgress | 22, 9, 14, 9 | W (shown in the status line when the run ends) |
 | BeginCommandGroup, EndCommandGroup, PreserveSelection, SaveSettings, RestoreSettings | 4, 4, 6, 3, 3 | W |
 | ColorContext, DefaultColorContext, ColorEngine | 6, 3, 4 | W (profile names in use) |
-| ActiveWindow, ActiveView, OriginX, OriginY | 4, 13, 3, 3 | W (the window's centre); view changes N |
+| ActiveWindow, ActiveView, OriginX, OriginY | 4, 13, 3, 3 | W (the window's centre; ToFitAllObjects, ToFitPage, ToFitSelection); other view changes N |
 | CorelScript, RedrawScreen | 5, 4 | N |
 | Finish | 3 | W (exports and imports) |
 | Paste, FrameWork, Close | 3, 3, 3 | E |
@@ -315,12 +386,58 @@ declare variables (`cdrShapeType`, `cdrColorType`, `cdrImageType`,
 
 The remaining rarer members follow the same rules:
 
-- Works: `MoveToLayer`, `OrderIsInFrontOf`, `AddToPowerClip`,
+- Works: `MoveToLayer`, `OrderIsInFrontOf`, `AddToClipFrame`
+  (`CenterInContainer` true centres the contents first),
   `FindAnyOfType`, `SelectShapesAtPoint`, `ImportEx`, `DrawingOriginX`
   and `DrawingOriginY` (0: the origin is the page corner).
 - Raise a named error: `GetUserClick`, `GetUserArea`, `DesktopLayer`,
   `UserAssignEx`, `PasteSpecial`, `StartShape`, `Fill.Pattern`,
   `GetPixelColor`, `Quit`, `VBE`.
+
+Two more published macro projects (#4315: a booklet set-up and a
+batch maker of ID cards from a list) were checked the same way, without
+running them. What they call now works too:
+
+- `AlignRangeToPageCenter`, `AlignRangeToPage`, `AlignRangeToShape`,
+  `AlignRangeToPoint`: the same as the `AlignTo...` members, which
+  already move a range as a whole.
+- `SetPositionEx(ReferencePoint, x, y)` and `BoundingBox` (a rectangle
+  with `x`, `y`, `Width`, `Height`, `Left`, `Right`, `Top`, `Bottom`,
+  `CenterX`, `CenterY`); `CreateRect`, `Layer.CreateRectangleRect`.
+- `ShapeRange.OrderReverse`, `Page.SelectShapesFromRectangle` and
+  `Layer.SelectShapesFromRectangle` (inside, or touching with `Touch`).
+- `Page.TextFind(Text, CaseSensitive)` selects the first text object that
+  holds the words (false when none does); `Page.TextReplace(Old, New,
+  CaseSensitive, WholeWord)` replaces them in every text object of the
+  page.
+- `Page.GuidesLayer` and `Document.GuidesLayer` (the master page's,
+  shown on every page): `CreateGuide`, `CreateGuideAngle`, and `Shapes`
+  or `SelectableShapes.All` with `Count`, `Item` and `Delete`. The
+  guidelines are still not a layer in `Layers` (`IsGuidesLayer` stays
+  false there).
+- `StructExportOptions` (`CreateStructExportOptions`): `Export` and
+  `ExportEx` take its `SizeX`, `SizeY` (a width in pixels wins) and
+  `ResolutionX`.
+- `SourceFileVersion` (the object model's version) and `ClearUndoList`
+  (no effect).
+- `ScriptTools.GetFileBox(Filter, Title, Type, File, , Folder)` opens the
+  system's file box (Type 1 saves) with the "Name (*.csv)|*.csv" filters
+  and gives the path, "" for Cancel; `ScriptTools.GetFolder(Folder,
+  Title)` picks a folder. The suite's other name for `ScriptTools` is an
+  alias (below).
+
+Left to keeping going: `FitToFrame`, `ConvertToParagraph`,
+`ConvertToArtistic`, `PrintSettings`, `PrintOut`, the export filter's
+profile flags, and the Windows functions a licence check calls.
+
+### Other names for members
+
+Some members are called by other programs' names in macros. Those names
+are not written in this repository (AGENTS.md rule 3): the object model
+keeps the FNV-1a hashes of their lowercase spelling with the member each
+stands for (`__member_alias` in `vg_model.js`), and the VBA runtime looks
+a member the object lacks up there before raising error 438 (#2968: the
+clip frame members).
 
 ### Not supported
 
@@ -343,7 +460,9 @@ The remaining rarer members follow the same rules:
 - Events.
 - Export of the selection or of a range of pages: export writes the
   active page, and PDF writes every page.
-- The view: `ActiveWindow.ActiveView` takes calls without effect.
+- The view: `ActiveWindow.ActiveView` zooms to fit the objects, the page
+  or the selection; `SetViewArea`, `SetViewPoint` and `Zoom` take calls
+  without effect.
 
 ### Checks (`scripting::vg::tests`)
 
@@ -425,6 +544,9 @@ model is documented with scripting.
 | `__host_form_create/show/hide/unload(form)` | forms; the host fills `form.__controls` |
 | `form.__event(control, event, args)` | the host fires `Control_Event` handlers |
 | `__host_setting(op, app, section, key, value)` | GetSetting, SaveSetting, DeleteSetting, GetAllSettings; without it settings last for the run |
+| `__host_open(url)` | ShellExecute of a web or mail address; true when it was opened (without it, ShellExecute returns 2) |
+| `__host_download(url, path)` | URLDownloadToFile (into `path`) and URLDownloadToCacheFile (`path` empty): the file written, or "" (without it, they fail) |
+| `__host_fs(op, a, b, c)` | the file system for the file statements, file functions and FileSystemObject: `read`, `write` (`c` "1" appends), `exists` ("f", "d" or ""), `size`, `mtime`, `attr`, `list` (JSON of `{n, d, s}`), `kill` (wildcards; how many went), `mkdir`, `rmdir` (`b` "1": with its contents), `copy` (`c` "1" overwrites), `move`, `cwd`, `env`, `special`; a failure is "\u0001" and the VBA error number (without it, files are not available, error 445) |
 
 ### Supported
 
@@ -458,16 +580,77 @@ IIf, Choose, Switch, GetSetting, SaveSetting, DeleteSetting,
 GetAllSettings, Collection, `CreateObject("Scripting.Dictionary")`
 and the vb constants.
 
+Files (#4315), through `__host_fs`, with paths relative to `CurDir`
+(the user's documents folder until `ChDir`):
+
+- Statements: `Open path For Input | Output | Append | Binary | Random
+  As #n` (Access, Lock and Len are accepted), `Close` (some or all),
+  `Print #` (as `Debug.Print`, numbers with their sign space and a space
+  after), `Write #` (comma separated, text in quotes, `#TRUE#`, dates as
+  `#yyyy-mm-dd#`), `Input #` (fields back as text, numbers or those
+  values), `Line Input #`, `Kill` (wildcards), `MkDir`, `RmDir`,
+  `ChDir`, `FileCopy`, `Name ... As`; `SetAttr` does nothing.
+- Functions: `FreeFile`, `EOF`, `LOF`, `Loc`, `Input(n, #f)`,
+  `FileLen`, `FileDateTime`, `GetAttr` (16 folder, 32 file, plus 1 read
+  only), `CurDir`, `Environ(name)`, and `Dir(path, attributes)` with `*`
+  and `?`, folders with `vbDirectory`, and `Dir()` for the next match.
+- Text is read as UTF-8 when it is (or UTF-16 with its byte order
+  mark), else in the Windows Western code page, and written in that code
+  page when every character fits, else as UTF-8.
+- `CreateObject("Scripting.FileSystemObject")` (and `New
+  FileSystemObject`): `FileExists`, `FolderExists`, `GetFile`,
+  `GetFolder` (`Files`, `SubFolders`, `Name`, `Path`, `Size`,
+  `DateLastModified`, `ParentFolder`, `Copy`, `Move`, `Delete`),
+  `OpenTextFile` (1 read, 2 write, 8 append; `ReadLine`, `ReadAll`,
+  `Read`, `AtEndOfStream`, `Write`, `WriteLine`, `WriteBlankLines`,
+  `Close`), `CreateTextFile`, `CreateFolder`, `CopyFile`, `CopyFolder`,
+  `MoveFile`, `MoveFolder`, `DeleteFile`, `DeleteFolder`, `BuildPath`,
+  `GetFileName`, `GetBaseName`, `GetExtensionName`,
+  `GetParentFolderName`, `GetAbsolutePathName`, `GetTempName`,
+  `GetSpecialFolder` (2: the temporary folder).
+- `CreateObject("WScript.Shell")`: `SpecialFolders("Desktop")` and the
+  other folders, `ExpandEnvironmentStrings`, `Popup` (a message box),
+  `CurrentDirectory`; `Run` and `Exec` are not available.
+  `CreateObject("WScript.Network")`: `UserName`, `ComputerName`,
+  `UserDomain`.
+
+### Keeping going
+
+`Options::keep_going` (the Macro Manager's "Keep going past what
+TraceDraw can't do", on unless turned off) compiles every statement so
+that when it stops on something TraceDraw cannot do (error 445 "Not
+supported", 438 a member the object lacks, 429 an object of another
+program, 453 a Windows function, or a member the object model names as
+not available), and no error handler of the procedure takes the error,
+the statement is skipped and the macro goes on. "Object required"
+errors (91, 424) that come after such a skip are skipped too, as they
+follow from it. Any other error stops the macro as before. The skipped
+steps are kept in `__v.skipped` (number, description, module,
+procedure, line and how many times), and when the macro ends the app
+lists them; a click on one opens the Macro Editor at its line.
+
 ### Not supported
 
 These compile and fail at run time with error 445
 `Not supported in CD Draw: ...` (or 429 for objects):
 
-- `Declare` and any Windows API call.
-- File statements: Open, Close, Print #, Write #, Input #, Line Input,
-  Get, Put, Kill, Name, MkDir, RmDir, ChDir, FileCopy, Dir.
-- COM objects other than `Scripting.Dictionary` (FileSystemObject,
-  Excel, Word, Shell...).
+- `Declare` and any Windows API call, except ShellExecute (declared
+  under any name, `Alias "ShellExecuteA"` or `"ShellExecuteW"`): a web
+  or mail address (`http://`, `https://`, `mailto:`) opens with the
+  system, as macros do to show their maker's page, and it returns 42;
+  anything else (a program, a file) is not opened and it returns 2,
+  without an error (#2165). URLDownloadToFile and URLDownloadToCacheFile
+  (`Alias "URLDownloadToFileA"`, `"URLDownloadToCacheFileA"` and the W
+  forms) are also there: the app fetches the `http://`, `https://` or
+  `file:` address (up to 64 MB, one minute), into the file the macro
+  names or into a file of its own in the system's temporary folder
+  whose path goes back into the buffer the macro passed, and they
+  return 0; when nothing comes they return INET_E_DOWNLOAD_FAILURE
+  (-2146697200), without an error (#2165).
+- Binary file statements: Get, Put, Seek, Lock, Unlock, Width, and
+  LSet and RSet.
+- COM objects other than `Scripting.Dictionary`, `FileSystemObject`,
+  `WScript.Shell` and `WScript.Network` (Excel, Word, Shell.Application...).
 - GoSub/Return, On x GoTo/GoSub, AddressOf, Implements.
 - RaiseEvent does nothing; WithEvents is ignored; Class_Terminate is
   not called.
@@ -484,8 +667,16 @@ These compile and fail at run time with error 445
   selected shape is visited once (test `walks_the_selection...`).
 - Given `On Error GoTo H` and a handler that fixes the divisor and calls
   `Resume`, then the failed statement runs again and succeeds.
-- Given `Open "x" For Output As #1`, then the run stops with error 445
-  naming the Open statement.
+- Given a host without files, when `Open "x" For Output As #1` runs,
+  then the run stops with error 445 "Not supported in TraceDraw: files".
+- Given lines written with `Print #` and `Write #`, when they are read
+  with `Line Input #` and `Input #`, then the same text and values come
+  back (tests `files.rs`, also `Dir` through a folder, `FileCopy`,
+  `Name`, `Kill` and the FileSystemObject).
+- Given keep going, when a macro calls a member the object lacks, makes
+  an Excel object and uses it, then it goes on to the end and those
+  three steps are listed; a division by zero still stops it, and an
+  `On Error GoTo` handler still takes the error.
 - Given `Tool.Place(label:="L", y:=2, x:=1)` with `__params`, then the
   host receives `(1, 2, "L")`.
 
@@ -653,6 +844,10 @@ follows the public MS-OVBA and MS-OFORMS specifications.
 Macro projects written for other drawing suites load and run in the
 desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
 `ui/macros_ui.rs`).
+`ui/macros_ui.rs`). The browser build has no threads to run them on:
+there every macro command (Macro Manager, Run Macro, Macro Editor, Load
+Macro Project, a macro in the menu) opens a message that macros run in
+the desktop version, with OK and a button to the desktop downloads.
 
 ### Running macros
 
@@ -721,7 +916,11 @@ desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
 - Enter clicks the form's Default button and Esc its Cancel button
   (outside a text box of several lines).
 - `Me.Hide` hides the form and returns from a modal `Show`; `Unload Me`
-  removes it. The close box asks the macro through
+  removes it, and the code after it still reads and sets the form's
+  controls, as in VBA (#2165). Code in `UserForm_Initialize` that names
+  its own form (`CropForm.ctrlUnits.AddItem`, `CropForm.ctrlLength = 5`
+  for its default property) reaches the instance being made. Drop-down
+  lists take `ListWidth`, `ListRows` and `DropButtonStyle` (not drawn). An image control's `Picture` takes `LoadPicture(path)` and shows that file (PNG, JPEG, GIF, BMP); `LoadPicture("")` clears it. The close box asks the macro through
   `UserForm_QueryClose` (CloseMode vbFormControlMenu); setting Cancel
   keeps the form, otherwise it unloads.
 - Forms still open when a run ends or is stopped are closed.
@@ -735,6 +934,11 @@ desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
 - A padlock marks a password-protected project (its code is still
   read) and modules saved without their code, which cannot run.
 - Load... (Tools > Scripts > Macros > Load Macro Project...) takes a `.gms`
+  read) and modules saved without their code, which cannot run. A
+  `.gms` whose code is stored packed or encrypted by its maker (no
+  project after its header) is not loaded, and the message says it is a
+  protected macro file (#2165).
+- Load... (Tools > Macros > Load Macro Project...) takes a `.gms`
   project, or `.bas`, `.cls` and `.frm` modules (the `.frx` beside a
   `.frm` comes along) that become one project. A copy is kept in the
   `macros` folder of the settings folder, and every copy there loads
@@ -778,6 +982,81 @@ desktop app (`apps/tracedraw/src/macros.rs`, `scripting/vba_run.rs`,
   first Sub without arguments of the snippet (or the lines as the body of
   one) as a macro, with its messages, forms and output; Load and Save use
   `.bas` files. The debugger works on JavaScript only.
+
+### Converting macros
+
+The Macro Editor helps move a project written for another drawing suite
+over to TraceDraw (`macro_convert.rs`, `scripting/vg_catalog.rs`,
+`tracedraw_vba::convert`). A row under its toolbar holds VBA and
+JavaScript tabs, Compatibility and Fix.
+
+- **Compatibility** checks the project and shows a panel on the right:
+  each macro (and each other procedure with something to report) with a
+  dot, green when it runs as it is, yellow when something in it does
+  nothing here or may not exist here, red when something in it is not
+  available; then every issue with its module and line. A click on a
+  macro or an issue opens that module at that line. What is checked:
+  - every member named after a dot, against the object model read from
+    `vg_model.js`: members that raise "is not available" are red (with
+    the model's reason), members with an empty body are yellow ("does
+    nothing here"), members in neither the model, the VBA runtime, the
+    forms nor the project's own declarations are yellow ("may stop with
+    error 438"), and other names of members (`__member_alias`) are
+    yellow with the member's name;
+  - statements the runtime cannot run (file statements, GoSub, On ...
+    GoTo), `Declare` of Windows functions other than ShellExecute and
+    URLDownloadToFile, `CreateObject` of anything but
+    `Scripting.Dictionary` and `VBA.Collection`, and Shell: red;
+  - a module that does not compile or was saved without its code: red.
+  Loading a project (Load in the Macro Manager or Tools > Macros > Load
+  Macro Project) opens the editor on it with this panel.
+- **Fix** saves the editor, then changes the code and saves the project
+  again: other names of members become the member's name; a red member
+  or statement on a line of its own is commented out as
+  `' TODO: <reason>: <the statement>`; one inside a block line (If ...
+  Then, a loop, Set, a line with `:`) or a red `Declare` gets a
+  `' TODO: <reason>` line above it instead. If the commented code would
+  not compile, only the notes are added. Fixing again adds nothing new.
+  The message line counts the names changed, lines commented out and
+  notes added.
+- **JavaScript** writes the project as plain JavaScript on the same
+  object model (the first time the tab opens, and with Convert Again):
+  - It starts with `// TraceDraw macro object model`, a comment naming
+    the project, and `// Run: <first macro>`; then the VBA constants it
+    uses (`const vbYes = 6;`) and each module in turn, with the VBA's
+    whole-line comments kept above the statements they precede.
+  - Procedures become functions (Functions return `result`); variables
+    get `let` with VBA's default for their type (Dim inside a block is
+    declared at the procedure's top; names assigned without Dim get a
+    `let` too); fixed arrays become JavaScript arrays (`Dim a(3)`: 4
+    items); user types become functions returning an object; enums and
+    constants become `const`; class modules become classes (fields set
+    in the constructor, which calls `Class_Initialize`, Property Get/Let
+    as getters and setters).
+  - Members take the model's spelling; a property given an index reads
+    its item (`ActivePage.Shapes(i)` is `ActivePage.Shapes.Item(i)`);
+    named arguments go to the parameter's place; `&` becomes `+` (with
+    `String()` when neither side is text), `\` `Math.trunc(a / b)`,
+    `Mod` `%`, `^` `**`, `=` `==`, `<>` `!=`, `Is` `===`; For Each is
+    `for (x of ...)`, Select Case an if chain on `sel`, With a block with
+    `const it`, Debug.Print `Debug.Print(...)`, `IIf` a `?:`, `Array()`
+    a literal. VBA's library functions keep their names (`Left`, `Mid`,
+    `UCase`, `MsgBox`...); those JavaScript uses are `VbArray`,
+    `VbString`, `VbDate` and `ErrorText`.
+  - What does not carry over becomes a `// TODO:` line: forms and their
+    events (they stay in the VBA project), GoTo, On Error and Resume,
+    Static, Windows functions, ByRef parameters the procedure changes,
+    the Mid statement, RaiseEvent, Load and Unload.
+  - The tab's text can be edited. Run (with the function chosen beside
+    it) runs it as a macro: on the worker thread, one undo step, its
+    messages, Debug.Print to the Scripts panel's output, errors there
+    too; loops check for Stop. Save .js... saves it; Open in Scripts
+    Panel puts it in the Scripts panel (JavaScript) with its `// Run:`
+    line naming the chosen function.
+- The Scripts panel runs a JavaScript script whose first line is
+  `// TraceDraw macro object model` as a macro the same way: the
+  function its `// Run:` line names, else its first function without
+  parameters, else the message that there is nothing to run.
 
 ### Checks (tests in `macros.rs` and `ui/macros_ui.rs`)
 

@@ -7,6 +7,9 @@ Setelah mengambil sampel, alat beralih ke terapkan; klik tombol pilih untuk
 mengambil sampel lagi. <kbd>Esc</kbd> membuang sampel dan kembali ke alat
 [[tool.pick]].
 
+Penunjuk berupa pipet saat alat mengambil sampel dan ember cat saat
+menerapkan. Gambar memberikan warnanya meski di dalam grup atau bingkai.
+
 ## Pipet Warna {#color-eyedropper}
 
 1. Pilih alat [[tool.color_eyedropper]].
@@ -20,6 +23,11 @@ mengambil sampel lagi. <kbd>Esc</kbd> membuang sampel dan kembali ke alat
    di dalam bentuk tertutup yang kosong akan mengisinya.
 
 Bilah properti menampilkan warna sampel.
+
+Saat Anda menggerakkan penunjuk untuk mengambil warna, kotak kecil di
+sampingnya menampilkan warna di bawahnya: contoh warna, nama warna bila itu
+warna palet atau tinta spot, nilainya dalam mode warna gambar (CMYK atau RGB),
+dan nilai heksnya. Pipet pemilih warna menampilkan kotak yang sama.
 
 ## Pipet Atribut {#attributes-eyedropper}
 

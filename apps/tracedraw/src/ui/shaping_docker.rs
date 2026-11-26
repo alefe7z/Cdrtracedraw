@@ -10,6 +10,7 @@ use crate::i18n::tr;
 use crate::ops::Shaping;
 use crate::theme::Tokens;
 use crate::ui::propbar::{draw_pic, pic_button, Pic};
+use crate::ui::tips::RichTip;
 use egui::{Rect, Sense, Ui, Vec2};
 
 /// The picture, name and description of an operation.
@@ -56,13 +57,32 @@ fn leave_slot(op: Shaping) -> Option<usize> {
     }
 }
 
+/// The live combine an operation makes with Keep Live ticked (#4266):
+/// the objects stay, and their group draws as the result.
+fn live_mode(op: Shaping) -> Option<tracedraw_core::shaping::CombineMode> {
+    use tracedraw_core::shaping::CombineMode as M;
+    match op {
+        Shaping::Weld => Some(M::Weld),
+        Shaping::Intersect => Some(M::Intersect),
+        Shaping::FrontMinusBack => Some(M::FrontMinusBack),
+        Shaping::BackMinusFront => Some(M::BackMinusFront),
+        _ => None,
+    }
+}
+
 /// Apply the docker's operation to the selection.
 pub fn apply(app: &mut App) {
     let op = app.shaping_op;
+    if app.settings.shaping_live {
+        if let Some(mode) = live_mode(op) {
+            app.combine_live_as(mode);
+            return;
+        }
+    }
     let (source, target) = leave_slot(op)
         .map(|i| (app.shaping_leave[i][0], app.shaping_leave[i][1]))
         .unwrap_or_else(|| op.default_leave());
-    app.shaping_with(op, source, target);
+    app.begin_shaping(op, source, target);
 }
 
 /// Draw the docker.
@@ -104,25 +124,45 @@ pub fn shaping(app: &mut App, ui: &mut Ui) {
                     .color(Tokens::text_dim())
                     .size(11.0),
             );
+            if op.picks_target() {
+                ui.label(
+                    egui::RichText::new(tr("docker.shaping_pick"))
+                        .color(Tokens::text_dim())
+                        .size(11.0),
+                );
+            }
         });
     });
     ui.add_space(6.0);
-    if let Some(i) = leave_slot(op) {
+    let live = app.settings.shaping_live && live_mode(op).is_some();
+    if live_mode(op).is_some() {
+        ui.checkbox(&mut app.settings.shaping_live, tr("docker.shaping_live"))
+            .rich_tip(crate::ui::tips::keyed("docker.shaping_live"));
+        ui.add_space(2.0);
+    }
+    if let Some(i) = leave_slot(op).filter(|_| !live) {
         ui.checkbox(
             &mut app.shaping_leave[i][0],
             tr("docker.leave_original_source"),
-        );
+        )
+        .rich_tip(crate::ui::tips::keyed("docker.leave_original_source"));
         ui.checkbox(
             &mut app.shaping_leave[i][1],
             tr("docker.leave_original_target"),
-        );
+        )
+        .rich_tip(crate::ui::tips::keyed("docker.leave_original_target"));
         ui.add_space(6.0);
     }
-    let enough = app.selection.len() >= op.needs();
-    let width = ui.available_width().min(240.0);
+    let enough = if live {
+        app.combine_live_ready()
+    } else {
+        op.ready(app.selection.len())
+    };
+    let width = crate::ui::docker_form::fit_w(ui, 240.0);
     let clicked = ui
         .add_enabled_ui(enough, |ui| {
-            ui.add_sized([width, 26.0], egui::Button::new(tr(key)))
+            ui.add_sized([width, 26.0], crate::ui::btn_icons::Ib::new(key))
+                .rich_tip_with(|| format!("{}\n{}", tr(key), tr("docker.shaping_apply_desc")))
                 .clicked()
         })
         .inner;
@@ -131,7 +171,7 @@ pub fn shaping(app: &mut App, ui: &mut Ui) {
     }
     if !enough {
         ui.label(
-            egui::RichText::new(if op.needs() > 1 {
+            egui::RichText::new(if op.needs() > 1 && !op.picks_target() {
                 tr("docker.shaping_needs_two")
             } else {
                 tr("docker.shaping_needs_one")
@@ -199,6 +239,38 @@ mod tests {
         assert!(b.contains(Point::new(29.0, 29.0)) && b.contains(Point::new(1.0, 1.0)));
     }
 
+    /// #4266: with Keep Live the docker's Back Minus Front groups the
+    /// objects and gives the group a live cut; both objects stay, and
+    /// taking the effect away leaves them as they were.
+    #[test]
+    fn keep_live_makes_a_live_combine_that_keeps_the_objects() {
+        use tracedraw_core::live::Effect;
+        use tracedraw_core::shaping::CombineMode;
+        for (op, mode) in [
+            (Shaping::BackMinusFront, CombineMode::BackMinusFront),
+            (Shaping::FrontMinusBack, CombineMode::FrontMinusBack),
+            (Shaping::Intersect, CombineMode::Intersect),
+            (Shaping::Weld, CombineMode::Weld),
+        ] {
+            let mut app = App::headless();
+            let a = rect(&mut app, 0.0, 0.0, 20.0, 20.0);
+            let b = rect(&mut app, 10.0, 10.0, 30.0, 30.0);
+            app.select(vec![a, b]);
+            app.settings.shaping_live = true;
+            app.shaping_op = op;
+            apply(&mut app);
+            assert!(app.doc().find_shape(a).is_some(), "{op:?} keeps a");
+            assert!(app.doc().find_shape(b).is_some(), "{op:?} keeps b");
+            assert_eq!(count(&app), 1, "one group");
+            let g = app.doc().shape_on_page(app.selection[0]).expect("group");
+            assert!(matches!(g.kind, ShapeKind::Group { .. }));
+            assert_eq!(g.effects, vec![Effect::Combine { mode }], "{op:?}");
+        }
+        // Simplify and Trim have no live form: they cut as before.
+        assert!(live_mode(Shaping::Simplify).is_none());
+        assert!(live_mode(Shaping::Trim).is_none());
+    }
+
     #[test]
     fn the_docker_draws_every_operation() {
         let ctx = crate::theme::ui_context();
@@ -221,5 +293,104 @@ mod tests {
         }
         assert_eq!(Shaping::from_id("trim"), Shaping::Trim);
         assert_eq!(Shaping::from_id("no.such.key"), Shaping::Weld);
+    }
+
+    /// A group of `a` (bottom) and `b` (top), selected alone.
+    fn grouped(app: &mut App, a: ShapeId, b: ShapeId) -> ShapeId {
+        app.select(vec![a, b]);
+        app.group_selection();
+        let g = app.selection[0];
+        app.select(vec![g]);
+        g
+    }
+
+    /// #2306: Weld, Trim and Intersect on one selected group act on the
+    /// group's objects (the bottom one the target), in
+    /// one undo step, instead of waiting for a target.
+    #[test]
+    fn the_operations_act_on_a_selected_group() {
+        let mut app = App::headless();
+        let a = rect(&mut app, 0.0, 0.0, 20.0, 20.0);
+        let b = rect(&mut app, 10.0, 10.0, 30.0, 30.0);
+        let g = grouped(&mut app, a, b);
+        for op in [Shaping::Weld, Shaping::Trim, Shaping::Intersect] {
+            assert!(app.shaping_ready(op), "{op:?} offered for a group");
+        }
+
+        app.shaping(Shaping::Weld);
+        assert!(app.pending_shaping.is_none(), "no target to pick");
+        assert_eq!(count(&app), 1);
+        let welded = app
+            .doc()
+            .shape_on_page(app.selection[0])
+            .expect("weld")
+            .bounds();
+        assert!((welded.width() - 30.0).abs() < 1e-6, "{welded:?}");
+        app.undo();
+        assert_eq!(count(&app), 1);
+        assert!(
+            matches!(
+                app.doc().find_shape(g).map(|s| &s.kind),
+                Some(ShapeKind::Group { .. })
+            ),
+            "one undo brings the group back"
+        );
+
+        // Trim: the bottom object is cut by the top one, which stays.
+        app.select(vec![g]);
+        app.shaping(Shaping::Trim);
+        assert!(app.pending_shaping.is_none());
+        assert!(app.doc().find_shape(g).is_none());
+        assert!(app.doc().find_shape(a).is_none(), "the target was cut");
+        assert!(app.doc().find_shape(b).is_some(), "the cutter stays");
+        assert_eq!(count(&app), 2);
+        app.undo();
+        assert!(app.doc().find_shape(g).is_some());
+
+        // Intersect: the overlap, 10 x 10, beside both objects.
+        app.select(vec![g]);
+        app.shaping(Shaping::Intersect);
+        assert_eq!(count(&app), 3);
+        let r = app
+            .doc()
+            .shape_on_page(app.selection[0])
+            .expect("result")
+            .bounds();
+        assert!((r.width() - 10.0).abs() < 1e-6 && (r.height() - 10.0).abs() < 1e-6);
+        app.undo();
+        assert!(app.doc().find_shape(g).is_some());
+        assert_eq!(count(&app), 1);
+    }
+
+    /// Objects of a group that do not overlap: Intersect makes nothing
+    /// and the group stays as it was, selected, with no undo step.
+    #[test]
+    fn a_group_with_nothing_to_intersect_stays() {
+        let mut app = App::headless();
+        let a = rect(&mut app, 0.0, 0.0, 10.0, 10.0);
+        let b = rect(&mut app, 50.0, 50.0, 60.0, 60.0);
+        let g = grouped(&mut app, a, b);
+        let label = app.engine.undo_label();
+        app.shaping(Shaping::Intersect);
+        assert_eq!(app.selection, vec![g]);
+        assert!(matches!(
+            app.doc().find_shape(g).map(|s| &s.kind),
+            Some(ShapeKind::Group { .. })
+        ));
+        assert_eq!(count(&app), 1);
+        assert_eq!(app.engine.undo_label(), label);
+    }
+
+    /// The Shaping docker still picks a target for one selected group:
+    /// the group acts on the object clicked, as before.
+    #[test]
+    fn the_docker_still_picks_a_target_for_a_group() {
+        let mut app = App::headless();
+        let a = rect(&mut app, 0.0, 0.0, 20.0, 20.0);
+        let b = rect(&mut app, 10.0, 10.0, 30.0, 30.0);
+        let _ = rect(&mut app, 5.0, 5.0, 25.0, 25.0);
+        grouped(&mut app, a, b);
+        app.begin_shaping(Shaping::Weld, false, false);
+        assert!(app.pending_shaping.is_some());
     }
 }

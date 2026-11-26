@@ -80,4 +80,6 @@ body:
     id: file
     attributes:
       label: The file
-      description: Drop the zipped `.cdr` here, or say why it cannot be shared.
+      description: Drop the zipped `.cdr` here, or say why it cannot be shared. Without the file the problem usually cannot be found, so a small drawing made just for this report is the best.
+    validations:
+      required: true

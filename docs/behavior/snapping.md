@@ -2,9 +2,9 @@
 
 | Setting | Default |
 |---|---|
-| Snap to objects | on (Alt+Z), radius 10 px (screen) |
+| Snap to objects | on (Alt+Z, the Snap To list, Options > Snapping turn it off; the choice is kept, and preferences saved before keep the setting they have); radius 10 px (screen) for all snapping |
 | Snap to guides | on |
-| Snap to grid | off (Ctrl+Y); document grid 10 mm both ways through the ruler origin (Document Options > Grid) |
+| Snap to grid | off (Ctrl+Y); document grid 10 mm both ways through the ruler origin (Document Setup > Grid) |
 | Snap to baseline grid | off; baselines from the page top (see `rulers-grid-guidelines.md`) |
 | Snap to pixels | off; whole pixels of the document resolution from the page corner |
 | Snap to page | on: the page's corners, edge midpoints, centre and edges |
@@ -26,7 +26,7 @@ Alt+Q turns all snapping off and on.
 | Tangent | from where the line being drawn starts: where it touches an ellipse or a curve | circle under a line |
 | Perpendicular | from the same start: the foot of the perpendicular on a segment | right angle |
 | Edge | the nearest point of an outline | hourglass |
-| Center | the centre of rectangles, ellipses, polygons, bitmaps and tables; the area centroid of closed curves | circle with a cross |
+| Center | the centre of rectangles, ellipses, polygons, bitmaps and tables; the area centroid of closed curves; the middle of the box of any other object (a group, a text, an open curve, a clip frame; a symbol snaps by the objects it shows, their nodes, edges, midpoints and centres, and by the middle of its own box, #2135, `snap::tests::symbols_snap_by_what_they_show`) and of a selection of several objects for the Pick tool (#2004) | circle with a cross |
 | Text baseline | the nearest point of the baseline of a line of artistic or paragraph text | a T on a line |
 
 Groups and clip frames offer their contents' points. The line being drawn
@@ -46,16 +46,122 @@ in black on a white halo, with the mode's name beside it in the
 selection colour, also haloed in white (no box), so both read on any
 drawing.
 
+While an object is moved or scaled, or a box shape drawn, with Snap to
+Guidelines on, each horizontal or vertical guideline its edges or centre
+lie on is drawn over in blue, solid and two pixels wide, so a snap to a
+guideline shows in a crowded drawing (#3073,
+`snap::tests::guidelines_an_object_snapped_to_are_highlighted`).
+
+Only objects whose bounds come within the radius of the pointer are
+looked at. An intersection is found on chords an eighth of the radius
+long, cut from the segments near the pointer, and then refined onto both
+curves, so it is exact while a page of thousands of curves still snaps
+at the screen's rate (#345, `curves_snap_to_their_exact_crossing`).
+Within one outline, only the nodes within the radius are gathered and
+told apart, and a segment is measured only when the box of its control
+points comes within the radius, so a single curve of tens of thousands
+of nodes (a combined ornament) costs a few milliseconds a frame, not the
+seconds it took when every node was compared with every other (#764,
+`snap_points::tests::nodes_near_the_pointer_are_offered_once`,
+`pick_drag_tests::a_combined_curve_of_many_nodes_moves_and_snaps_to_its_nodes`;
+`frame_times_over_a_combined_curve` measures it).
+
 Drawing tools snap the pointer. A move with the Pick tool that starts on
 one of the selection's points (a node, a midpoint, a quadrant or the
 centre within the radius) carries that point onto another object's point
 or edge; otherwise the selection's box edges and centre snap to
-guidelines, the grids, the page and the other objects' boxes. A scale
+guidelines, the grids, the page and the boxes of the objects it faces:
+another object's left, right and centre lines catch it only where the two
+boxes' heights overlap or come within the radius, its top, bottom and
+middle only where their widths do. An object far above or below no longer
+pulls the box sideways because one of its sides is level with it
+somewhere on the page; that pull, on every move over a busy page, is why
+snapping to objects was off at first from #1814 on, and lining up from
+afar is left to alignment guides
+(`snap::tests::a_moved_box_snaps_only_to_the_objects_it_faces`). Once
+the pointer has gone further than the snapping radius from where the
+move began, that grabbed point also snaps to the selection's own points
+and edges where they were at the start, by the modes on (nodes,
+midpoints, quadrants, centres, edges): a square grabbed by a node lands
+with it exactly where another of its nodes was, a node or centre slides
+along the line one of its sides ran on, and a move brought back near its
+start returns exactly there. Before the pointer leaves that radius
+nothing of the selection's own attracts it, so a short move is as the
+pointer makes it and the selection never sticks to itself; the
+selection as it moves is never a target, and its box does not line up
+with where it stood. That geometry is found once a move, in pieces of at
+most 16 segments each with its bounds, as for a node drag below (#1765,
+`snap::tests::a_move_snaps_to_where_the_selection_started`,
+`pick_drag_tests::a_move_snaps_to_where_the_selection_started`). A scale
 handle being dragged snaps like the pointer of a drawing tool, leaving
-out the selection's own points.
+out the selection as it changes; once the point of the box it stands for
+has gone further than the snapping radius from where it was grabbed, it
+also snaps to the selection's own nodes, midpoints, quadrants, centres
+and edges where they stood at the start, as a move does: a rectangle's
+right side dragged in stops where its centre was (#3074,
+`snap::tests::a_scale_handle_snaps_to_where_the_selection_stood`). When that finds nothing on the axis a
+side moves, the side stops, as a guideline does, on the points of other
+objects it meets along its length (from end to end for a side handle,
+from the fixed corner to the pointer for a corner) and on their lines (a
+straight side along it, the outermost point of a curve), marked as the
+pointer's snaps are (#2004,
+`snap::tests::a_side_handle_stops_on_a_point_the_side_meets`). A corner
+keeping the proportions that snapped on one axis only (onto a vertical
+guideline, say) scales by that axis alone, so it stays on the guideline
+while the pointer drifts along it; it used to scale by a mix of both axes
+and slide off (#2004,
+`snap::tests::a_proportional_corner_stays_on_the_guideline_it_snapped_to`).
+The nodes of an interactive fill or transparency (start, end, colour
+nodes, the skew handle), the start node of one moved by its line (not
+with Ctrl), the ends of a new fill's or transparency's line (not with
+Ctrl) snap like the pointer too, onto the object's own points as well
+(#2004,
+`snap::tests::fill_nodes_snap_while_dragged`); so do the nodes of a mesh
+fill and their handles, and the corners of a perspective, keeping their
+offset from the pointer (discussion #2073). The pointer turning the selection (a
+rotate handle without Ctrl) snaps to the points of other objects and of
+the page only (nodes, midpoints, centres), so the turn aims at one;
+edges, guidelines and grid lines are left out, since the handle stands
+off the object and nothing of it lands on them, and the turn used to
+stick to an edge while the pointer crossed it (#933,
+`pick_drag_tests::turning_snaps_the_pointer_to_another_objects_node`,
+`turning_follows_the_pointer_across_edges`). A node of the selection
+dragged in rotate mode turns it too, and that node snaps: it goes
+round its circle about the centre of rotation, aims at another
+object's point near it, and near an edge lands where its circle
+crosses the edge, exactly on it (#933,
+`a_node_dragged_in_rotate_mode_turns_the_selection_onto_a_line`).
+With Snap to Guidelines on, a guideline takes it the same way: the
+node stops where its circle crosses the guideline, horizontal,
+vertical or angled, the page's or the master page's (#3056,
+`snap::tests::a_node_turned_onto_a_guideline_ends_on_it`).
+
+A node dragged with the Shape tool (or by node tracking with the Pick
+tool) snaps to other objects and also to what stays put of its own
+curve: its other nodes and the segments between two of them, with every
+mode (the nodes being dragged, where they started and the segments they
+bend are left out; with Ctrl the point kept on its axis snaps, #673).
+That geometry is found once a drag, in pieces of at most 16 segments
+each with its bounds, and a move looks only at the pieces near the
+pointer, so a curve of thousands of nodes drags as fast as without it
+(`frame_times_of_a_node_drag_on_a_long_curve`).
 
 A guideline being dragged (or dragged out of a ruler) and the ruler origin
-snap to everything except guidelines.
+snap to everything except guidelines. Along its axis a guideline lines up
+with the objects' points by the modes on (nodes, segment midpoints, an
+ellipse's quadrants, centres) and with their lines: where it touches a
+curve's outermost point (Tangent) or lies on a straight side; these win
+over the objects' box edges, the page and the grids. Before, only the
+boxes' edges and centres caught it, so a guideline could not be put on a
+curve's node (#1645, `snap::tests::a_dragged_guideline_snaps_to_a_node`).
+The point it lines up with is marked as the pointer's snaps are, so the
+snap shows (#2004,
+`snap::tests::a_dragged_guideline_touches_curves_and_takes_centres`). The other way round,
+an object moved by its snap point under the pointer (a node, a midpoint,
+a centre) puts that point on a guideline, a baseline or a grid line it
+comes near, on each axis, ahead of its box's edges and centre, when no
+other object's point or edge takes it first
+(`snap::tests::a_curve_moved_by_a_node_puts_the_node_on_a_guideline`).
 
 ## Checks
 
@@ -64,7 +170,24 @@ snap to everything except guidelines.
   (`snap::tests::a_guideline_catches_an_object_moved_near_it`).
 - `snap::tests::drawing_tools_snap_to_object_points_and_show_the_mark`
 - `snap::tests::snapping_to_objects_turns_off_but_the_page_stays`
+- `snap::tests::a_first_start_snaps_to_objects_and_the_page_within_10_px`
 - `snap::tests::a_move_carries_its_snap_point_onto_another_object`
+- Given a 50 x 30 mm rectangle grabbed at its centre, when it is dropped
+  3 px off where the middle of its right side was, then it moves exactly
+  25 mm right; dragged away and back to 3 px off its start, it is back
+  exactly where it was; a 6 px drag moves it 6 px
+  (`pick_drag_tests::a_move_snaps_to_where_the_selection_started`).
+- Given a rectangle converted to curves, when its top right node is
+  dragged with the Shape tool to 3 px off its bottom left node, then it
+  lands on that node
+  (`pick_drag_tests::a_dragged_node_snaps_to_another_node_of_its_own_curve`).
+- Given an open curve through (20, 60), (60, 60) and (100, 60), when the
+  middle node is dragged right with Ctrl, the pointer 15 px below the
+  line 1 mm short of the end, then it lands on the end node
+  (`pick_drag_tests::a_ctrl_dragged_node_snaps_to_its_own_curve_on_its_axis`).
+- A node dragged 6 px off where it started, or off the middle of a side
+  it bends, stays where the pointer puts it
+  (`pick_drag_tests::a_dragged_node_does_not_snap_to_itself_or_its_moving_segments`).
 - `snap::tests::lines_snap_to_tangent_and_perpendicular_points_from_their_start`
 - `snap_points::tests` (each mode, the page, priorities)
 

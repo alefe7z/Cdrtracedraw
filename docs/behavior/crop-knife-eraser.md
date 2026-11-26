@@ -8,9 +8,12 @@
   it, a drag on a handle (within 6 pixels) resizes it (past the
   opposite side it turns round), a drag outside draws a new one. Points
   snap as drawing does.
-- Applied by a double-click inside it, Enter or the bar's Crop button;
-  cleared by Escape (which then does nothing else), a click outside it,
-  Clear Crop Area, or another tool. An area smaller than 0.1 mm is
+- Applied by a double-click inside it, Enter, the bar's Crop button or
+  the Crop button floating on the canvas; cleared by Escape (which then
+  does nothing else), a click outside it, Clear Crop Area, the Clear
+  button on the canvas, or another tool. The two canvas buttons sit 8
+  screen pixels under the area's bottom-left corner, kept inside the
+  canvas, and show only while there is an area (#1202). An area smaller than 0.1 mm is
   dropped.
 - The objects cropped are the selection, or with nothing selected every
   unlocked object on the page's unlocked, visible layers (`crop_tool.rs`):
@@ -22,12 +25,40 @@
     with its fill, outline and effects;
   - bitmaps, tables and symbols go into a clip frame of the area (no
     fill or outline), so their content stays whole and can be taken
-    out again (Extract Contents);
+    out again (Extract Contents). With the bar's Crop picture pixels
+    on (on by default since 0.41's live test, and once for preferences
+    saved before; kept in the settings), an upright picture (not
+    turned or slanted) instead loses its pixels outside the area and
+    stays a free picture (#1913): every pixel the area touches is kept,
+    so the picture's new edges lie on its pixel edges; its transparency,
+    its CMYK ink channels and its bitmap effects' original are cut
+    alike. A turned or slanted picture, or one with a gradient
+    transparency (it lies on the picture's box), still goes into a clip
+    frame (`crop_tool::tests::the_crop_tool_cuts_a_pictures_pixels`,
+    `a_turned_picture_still_goes_in_a_frame`);
+  - exports (SVG, PDF, EPS, EMF and WMF) leave out the pixels of a
+    picture in a clip frame that lie outside the frame's box, so what a
+    crop hid is not in the file; a picture with an outline, a shadow or
+    effects laid on its box keeps them all
+    (`tracedraw_io::picture_crop::tests`). Raster exports and previews
+    are drawn clipped;
   - groups are cropped member by member (a group left empty is
     deleted); a clip frame by its frame.
 - One undo step; the deleted objects leave the selection.
-- The bar (with an area): X and Y of the area's point at the object
-  origin, W and H (sized about that point), Crop, Clear Crop Area.
+- The bar: Crop picture pixels; with an area, X and Y of the area's
+  point at the object origin, W and H (sized about that point), Crop,
+  Clear Crop Area.
+- Bitmaps > Crop to Frame (with a clip frame holding one picture alone
+  selected, as the Crop tool and Crop Bitmap make): the picture's pixels
+  outside the frame's box are cut away and the frame lets the picture
+  go: a free picture in the clip frame's place, where it showed, with
+  the transparency and opacity the picture inside kept. A frame that is
+  not a rectangle along the picture's sides (a piece of a Knife cut, an
+  oval, a turned frame) makes the pixels outside its outline
+  see-through first, a pixel partly inside keeping that share of its
+  opacity (`tracedraw_io::picture_crop::mask_picture`). The frame's own
+  fill and outline go with the frame. One undo step (#1913,
+  `crop_tool::tests::crop_to_frame_frees_the_picture`).
 - Not done: turning the crop area.
 
 ## Knife
@@ -36,8 +67,29 @@
   both ends across the objects. Freehand: drag a line of any shape; the
   cut follows it as drawn.
 - The objects cut are the selection, or with nothing selected every
-  visible object on the page's unlocked layers; bitmaps, groups and text
-  are not cut (`knife.rs`).
+  visible object on the page's unlocked layers; groups and text are not
+  cut (`knife.rs`).
+- A bitmap, or a cropped one (a clip frame holding one bitmap, as Crop
+  Bitmap and the Shape tool make and as `.cdr` crop paths are read), is
+  cut the way a picture is cropped (#1333, `picture_pieces`): each piece
+  is the whole picture, its pixels untouched, behind an outline of its
+  own (a clip frame whose frame has no fill or outline), so the Shape
+  tool edits each piece's outline as it edits a cropped picture's. With
+  Split the outlines are the two sides of the cut, run on far past the
+  picture, so they meet exactly along it and the pieces show the
+  picture with no seam; with Gap they are the picture's outline less the
+  band, the gap's width apart. Keep as one object leaves one picture
+  behind an outline of several parts. The pieces keep the object's
+  place, turn, transparency and effects; a cut beside the picture
+  leaves it as it is. One undo step with the other objects cut
+  (`knife::tests::a_cut_crops_a_bitmap_into_pieces`,
+  `knife::tests::a_turned_or_cropped_picture_is_cut_where_it_is_drawn`).
+- Any other clip frame is cut through its frame as a closed object is
+  (#1606): each piece is a clip frame whose frame has the piece's
+  outline and the frame's fill and outline, holding the contents where
+  they show (the first keeps the clip frame, the others copies of the
+  contents with ids of their own); see `clip-frame.md`
+  (`knife::tests::a_clip_frame_is_cut_through_its_frame`).
 - Closed objects lose a band along the cut: Split (first choice) takes a
   hair (0.01 mm), so the pieces meet; Gap takes the width beside it.
   Each separate piece becomes an object of its own (Keep as one object:
@@ -48,6 +100,9 @@
   object's place. The pieces are selected; one undo step.
 - The bar: Two-point line, Freehand; Split, Gap and its width; Keep as
   one object; kept in the preferences (`tools.knife`).
+- Space switches to the Pick tool and back from the Knife and the Crop
+  tool as from any tool, a crop area waiting or not
+  (`pick_drag_tests::space_toggles_from_the_crop_and_knife_tools`).
 
 ## Segment delete
 
@@ -73,10 +128,55 @@
   (`segment_delete::tests::curves_trimmed_into_a_figure_stop_at_each_cut_end`),
   and a loop left after its tail was cut goes alone
   (`segment_delete::tests::a_loop_ending_on_its_own_curve_goes_alone`).
+  Each crossing found against a flattened outline is then moved onto the
+  true crossing of the two curves (Newton steps), so the end a cut leaves
+  lies on the outline it crossed and the next cut finds that crossing
+  again: a curve whose tail comes back across an earlier segment loses
+  the start, then the tail, and keeps the loop between
+  (`segment_delete::tests::a_tail_crossing_a_cut_curve_loses_only_itself`, #354).
 - Click (within 5 screen pixels; the nearest outline, the topmost of
   equals): its virtual segment under the pointer is removed. Drag: every
-  virtual segment lying wholly inside the rectangle (nine points along
-  it) is removed, on all objects at once.
+  virtual segment the rectangle touches is removed whole, on all objects
+  at once: a stretch with any part inside the rectangle (an end inside,
+  or the curve crossing one of its sides) goes as far as the crossings
+  at its ends, and a closed outline nothing crosses goes whole, though
+  it reaches past the rectangle; what it does not reach stays (#528,
+  `segment_delete::tests::a_drag_removes_every_stretch_it_touches`).
+  Earlier only the stretches lying wholly inside went, so a box drawn
+  across an ornament removed nothing. A level or upright drag (a
+  rectangle of no height or width) takes what it crosses; a curve through
+  a corner of the rectangle counts (`segment_delete::tests::what_a_box_touches`).
+  A click whose pointer slipped into a drag of under 8 pixels each way
+  and whose box reaches nothing deletes as a click at the press,
+  whichever way the pointer slipped
+  (`segment_delete::tests::a_click_that_slips_into_a_little_drag_still_deletes`).
+- Only the objects whose box meets the cut object's box are searched for
+  crossings, their outlines worked out once per click or drag: a drag
+  across 300 objects took about a third of a second in a debug build and
+  takes a tenth of that.
+- Objects inside ordinary groups are cut as objects on their own (their
+  transforms composed with the groups'), for both the click and the
+  drag, and cut the others; a group left empty goes. Linked groups
+  (text, pictures, clip frames) are not cut (#427,
+  `segment_delete::tests::curves_inside_a_group_are_cut`). A drag looks
+  at every object whose box meets the rectangle, a level or upright line
+  (a box of no height or width) included, and takes the stretches of
+  theirs the rectangle touches.
+- Freehand (#1150): the property bar's Box and Freehand choose what a
+  drag draws (Box at first, kept with the tool settings); Alt held at the
+  press takes the other one for that drag. A freehand stroke (points
+  kept a screen pixel apart, drawn as a black line on a white one)
+  removes every virtual segment it crosses or touches, whole, as far as
+  the crossings at its ends, on all objects at once, one undo step;
+  stretches it passes beside stay, so a stroke across a crowded spot
+  takes only what it goes through, where the box would take everything
+  in it (`segment_delete::tests::a_freehand_stroke_removes_the_stretches_it_crosses`,
+  `pick_drag_tests::segment_delete_drags_a_freehand_stroke_with_alt_or_the_bar`).
+  Only the objects whose box meets the stroke's box are looked at. A
+  click that slipped into a stroke of under 8 pixels that crosses
+  nothing deletes as a click at the press. Some Linux desktops move the
+  window on Alt+drag; there, the bar's Freehand does the same without
+  Alt.
 - Curves, rectangles, ellipses and polygons can lose segments; they
   become curves. A closed subpath that loses a stretch opens (what is
   left of it runs on over its start as one piece); an object with
@@ -92,16 +192,55 @@
   object under the start point when nothing is selected. Objects become
   curves; an object that vanishes completely is deleted. Objects whose
   bounds the band does not touch are left alone.
+- The band is smoothed (#2831): the pointer's points are taken as a
+  hand drew them, shaking by up to two screen pixels, so the line
+  through them is first thinned (points within the tolerance of the
+  line through their neighbours are left out, Ramer-Douglas-Peucker)
+  and fitted with few curves, within two pixels or a twentieth of the
+  nib's width when that is more. The round nib's band is that line's
+  stroke as curves (round caps and joins, its own overlaps merged), so
+  the edge it leaves in an object keeps the band's arcs: smooth, with
+  few nodes, the object's own curves outside the band untouched. The
+  band of the raw points was a polygon that followed every shake and
+  left an edge of many short sides. The square nib follows the fitted
+  line too. Dragged with a pen and the round nib, the band still
+  follows the pressure (`shaping::eraser_band`,
+  `shaping::tests::the_eraser_band_is_smooth_and_leaves_few_nodes`,
+  `shape_tool::eraser_tests::a_shaky_eraser_drag_leaves_a_smooth_edge_with_few_nodes`).
 - Click: erases a dot of the nib's size.
 - Double-click an object: deletes it whole.
-- Bitmaps, groups and clip frames are not erased (erasing bitmaps by
-  masking is not implemented).
+- A clip frame is erased through its frame (#1672), as Crop and the
+  Knife take it: the frame loses the band and becomes a closed curve
+  with its fill, outline and id, in the clip frame's space; the
+  contents stay inside, untouched, and are clipped by what is left of
+  the frame, so they are gone along the band and nowhere else. The clip
+  frame stays one object (a band across it leaves a frame of several
+  parts); a clip frame whose frame is erased away is deleted with its
+  contents. This takes a cropped picture too: its outline gets the hole.
+  A frame that is a group is not erased. One undo step with the other
+  objects erased
+  (`shape_tool::eraser_tests::a_clip_frame_is_erased_through_its_frame`,
+  `shape_tool::eraser_tests::a_clip_frame_under_the_pointer_is_erased_and_one_erased_away_goes`).
+- A picture (#3043) loses its pixels along the nib's line, its colours
+  kept: each pixel's alpha goes down by the nib's amount at the
+  distance of its middle from the line (`shape_tool::SoftNib`): fully
+  within Hardness of the radius (property bar, 0 to 100 %, 50 % at
+  first), then fading to nothing at the edge (a smoothstep), times
+  Strength (0 to 100 %, 100 % at first, the most taken of a pixel). The
+  nib is round on pictures. The picture keeps its size, place, pixel
+  count and bitmap effects; erased again, the alpha goes down again.
+  Both values are kept with the tool's other choices
+  (`shape_tool::soft_eraser_tests::the_eraser_fades_a_picture_out_along_the_nib`).
+- Groups are not erased.
 
 ## Checks
 
 - `segment_delete::tests::a_click_removes_the_stretch_between_crossings`
 - `segment_delete::tests::closed_outlines_open_where_they_lose_a_stretch`
-- `segment_delete::tests::a_drag_removes_the_stretches_inside`
+- `segment_delete::tests::a_drag_removes_every_stretch_it_touches`
+- `segment_delete::tests::a_drag_between_crossings_takes_only_that_stretch`
+- `segment_delete::tests::what_a_box_touches`
+- `segment_delete::tests::a_click_that_slips_into_a_little_drag_still_deletes`
 - `segment_delete::tests::pieces_and_stretches`
 - `segment_delete::tests::a_curve_crossing_itself_loses_only_the_stretch_clicked`
 - `segment_delete::tests::curves_trimmed_into_a_figure_stop_at_each_cut_end`
@@ -112,6 +251,8 @@
 - `ui::crop_bar::tests::the_bar_and_the_area_draw`
 - `knife::tests::straight_cuts_split_closed_objects`
 - `knife::tests::freehand_cuts_and_open_curves`
+- `shape_tool::eraser_tests::a_band_through_a_rectangle_splits_it_and_a_dot_outside_does_nothing`
+- `shape_tool::eraser_tests::a_clip_frame_is_erased_through_its_frame`
 
 - Given a 40 x 20 mm rectangle and a 4 mm vertical band through its
   middle, when erased, then the object is a path with two subpaths and
@@ -119,3 +260,7 @@
 - Given a dot 100 mm away, then the object is unchanged.
 - Given a 100 mm band across the whole rectangle, then the object is
   deleted.
+- Given a 40 x 40 mm clip frame holding a 30 x 30 mm square and a 4 mm
+  vertical band through its middle, when erased, then it is still the
+  clip frame, its frame is a curve of two parts with the frame's fill,
+  the contents are unchanged, and one undo brings the frame back whole.

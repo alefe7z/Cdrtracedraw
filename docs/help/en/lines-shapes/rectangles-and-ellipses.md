@@ -21,6 +21,15 @@ The new object takes the default fill and outline (no fill and a thin black
 outline at first) and is selected. To change those defaults, see
 [Object styles and defaults](../templates-styles/object-styles.md#document-defaults).
 
+Many rectangles and circles at once, from a list of sizes such as a cutting
+list: choose Object > Insert > Shapes from Spreadsheet and open a CSV or
+Excel file. Its columns are found by their names (width, height, diameter,
+quantity, name) and can be picked by hand. Each row with a diameter makes a
+circle, each row with a width and a height a rectangle, as many as its
+quantity, laid out in rows from the top-left corner of the page with the gap
+you set. The sizes are read in the document's units, and a row's name
+becomes the object's name.
+
 ## Rectangle {#rectangle}
 
 Choose the [[tool.rectangle]] tool (<kbd>F6</kbd>) and drag from one corner to
@@ -37,7 +46,11 @@ when nothing is selected:
   circle cut inwards) or **Chamfered** (a straight cut).
 - The four sizes: top left, top right, bottom left and bottom right. The size
   is the radius, or for a chamfer how far from the corner the cut starts. A
-  corner is at most half the shorter side.
+  corner can take what the corners beside it leave of its two sides: on a
+  100 x 80 mm rectangle with a 10 mm corner at the top left and square
+  corners at the bottom, the top right corner can be 80 mm. When two corners
+  are too big for the side they share, all the corners are drawn smaller by
+  the same amount and the fields show the sizes drawn.
 - **Edit corners together** (the lock, on at first) gives all four the size
   you type in one.
 - **Relative corner scaling** (on at first): the corners grow and shrink with
@@ -51,7 +64,8 @@ corners at once.
 
 The [[tool.three_point_rectangle]] tool draws a rectangle at an angle:
 
-1. Drag to draw the base line, at any angle.
+1. Drag to draw the base line, at any angle (hold <kbd>Ctrl</kbd> for steps
+   of 15 degrees).
 2. Move the pointer to set the height and click.
 
 ## Ellipse {#ellipse}
@@ -64,12 +78,25 @@ arc, set the start and end angles (in degrees, counterclockwise from the
 right) and the direction. You can also drag the node of an ellipse with the
 [[tool.shape]] tool to make a pie (drag inside) or an arc (drag outside).
 
+An arc is an open curve: its fill shows only while
+[[options.fill_open_curves]] is on in the document options. A pie is closed
+and keeps its fill.
+
+A pie's **Ring** field (inner radius, 0 to 99 %) cuts a hole in its middle:
+the pie becomes a band between the outline and a smaller ellipse, a thick
+arc that keeps its fill and outline. With the start and end angles equal it
+is a whole ring. The Shape tool's angle nodes keep the ring as they move.
+
 ## 3-Point Ellipse {#three-point-ellipse}
 
 The [[tool.three_point_ellipse]] tool draws an ellipse at an angle:
 
 1. Drag to draw the center line of the ellipse, at any angle.
 2. Move the pointer to set the height and click.
+
+For a circle around a point, press on the point and drag out with
+<kbd>Ctrl</kbd> held: the line you drag is the radius, and the circle is
+drawn when you let go, with no click for the height.
 
 ## The Corners panel {#corners}
 
@@ -95,3 +122,5 @@ of curves, which the rectangle settings cannot do. Open it from
 A corner is a node where two segments meet at an angle; smooth nodes are not
 corners. With the [[tool.shape]] tool and some nodes selected, only those
 corners are cut. A corner whose sides are too short for the cut is skipped.
+On a stretched object a fillet or scallop still comes out round, with the
+radius measured on the page.

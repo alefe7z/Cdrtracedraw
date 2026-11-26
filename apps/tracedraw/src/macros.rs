@@ -74,11 +74,20 @@ impl MacroProject {
                     )
                 })
                 .collect(),
+            keep_going: false,
         }
     }
 
     pub fn compile(&self) -> Result<vba::Program, vba::CompileError> {
         vba::compile_with(&self.modules(), &self.options())
+    }
+
+    /// [`Self::compile`] for a run: keeping going past what TraceDraw
+    /// cannot do, or not.
+    pub fn compile_for_run(&self, keep_going: bool) -> Result<vba::Program, vba::CompileError> {
+        let mut o = self.options();
+        o.keep_going = keep_going;
+        vba::compile_with(&self.modules(), &o)
     }
 
     /// Write the project to its copy (the code as it is now).
@@ -94,7 +103,6 @@ impl MacroProject {
 pub fn scan(p: &vp::Project) -> Vec<String> {
     let mut out = Vec::new();
     let mut declares = Vec::new();
-    let mut files = false;
     let mut objects = Vec::new();
     let mut shell = false;
     for m in &p.modules {
@@ -125,16 +133,6 @@ pub fn scan(p: &vp::Project) -> Vec<String> {
                 continue;
             }
             let starts = |w: &str| low.starts_with(w);
-            if (starts("open ") && low.contains(" for "))
-                || starts("kill ")
-                || starts("filecopy ")
-                || starts("mkdir ")
-                || starts("rmdir ")
-                || low.contains("freefile")
-                || low.contains(" dir(")
-            {
-                files = true;
-            }
             if low.contains("shell(") || starts("shell ") {
                 shell = true;
             }
@@ -142,7 +140,14 @@ pub fn scan(p: &vp::Project) -> Vec<String> {
             while let Some(i) = rest.find("createobject(\"") {
                 let after = &rest[i + 14..];
                 let name = after.split('"').next().unwrap_or("");
-                if !name.eq_ignore_ascii_case("scripting.dictionary")
+                let known = [
+                    "scripting.dictionary",
+                    "scripting.filesystemobject",
+                    "wscript.shell",
+                    "wscript.network",
+                    "vba.collection",
+                ];
+                if !known.iter().any(|k| name.eq_ignore_ascii_case(k))
                     && !objects
                         .iter()
                         .any(|o: &String| o.eq_ignore_ascii_case(name))
@@ -164,9 +169,6 @@ pub fn scan(p: &vp::Project) -> Vec<String> {
     }
     if !declares.is_empty() {
         out.push(trf("macros.warn_declare", &[("f", &declares.join(", "))]));
-    }
-    if files {
-        out.push(tr("macros.warn_files"));
     }
     if shell {
         out.push(tr("macros.warn_shell"));
@@ -279,6 +281,9 @@ pub struct MacroState {
     pub prompt: Option<Prompt>,
     /// A run that ended with an error: the error and the project.
     pub error: Option<(RunError, usize)>,
+    /// What the last run kept going past: the macro's name, the steps
+    /// (with how many times each) and the project (#4315).
+    pub skipped: Option<(String, Vec<(RunError, u32)>, usize)>,
     /// Warnings shown before running a project for the first time.
     pub warned: std::collections::BTreeSet<String>,
     /// The drawing's revision after the run's last changes (to add later
@@ -298,6 +303,8 @@ pub struct MacroState {
     pub other_source: String,
     /// A warning dialog before a run: (project, module, macro).
     pub confirm: Option<(usize, String, String)>,
+    /// The web addresses macros opened, in tests (see [`Request::Open`]).
+    pub opened: Vec<String>,
 }
 
 /// A message or input box on screen.
@@ -337,6 +344,13 @@ pub struct Editor {
     pub message: Option<String>,
     /// The caret's line, for F5 (Run Sub).
     pub caret_line: u32,
+    /// The compatibility check's last report, and whether its panel shows.
+    pub report: Option<crate::macro_convert::Report>,
+    pub show_report: bool,
+    /// The JavaScript tab: shown, its text, and the function Run starts.
+    pub js_tab: bool,
+    pub js: String,
+    pub js_run: String,
 }
 
 impl MacroState {
@@ -493,6 +507,10 @@ pub fn project_menu_key(project: &str) -> String {
 /// A macro command's name ("Module.Macro") and project, for
 /// Options > Customization.
 pub fn command_name(key: &str) -> Option<(String, String)> {
+    // A plugin's command is named the same way (#3519).
+    if let Some(named) = crate::plugins::command_name(key) {
+        return Some(named);
+    }
     let rest = key.strip_prefix("menu.macro.")?;
     let mut parts = rest.splitn(3, '|');
     let project = parts.next()?.to_string();
@@ -502,8 +520,21 @@ pub fn command_name(key: &str) -> Option<(String, String)> {
 }
 
 impl App {
+    /// The browser version has no macros (they run on a thread of their
+    /// own, and the browser build has none): any macro command shows a
+    /// message saying so, with the desktop app's downloads. True there.
+    pub fn macros_desktop_only(&mut self) -> bool {
+        if crate::files::WEB {
+            self.dialog = crate::ui::dialogs::Dialog::MacrosDesktopOnly;
+        }
+        crate::files::WEB
+    }
+
     /// Tools > Macros > Load Macro Project: pick the files and install them.
     pub fn load_macro_project(&mut self) {
+        if self.macros_desktop_only() {
+            return;
+        }
         crate::files::Dialog::new()
             .add_filter(tr("macros.filter"), &["gms", "bas", "cls", "frm"])
             .pick_files(self, |app, paths| app.install_macro_files(&paths));
@@ -542,12 +573,18 @@ impl App {
                 );
                 self.macros.chosen = Some((i, None, None));
                 self.show_macro_manager();
+                // The compatibility report of what was loaded.
+                self.edit_macro(i, "", None);
+                self.check_macro_editor();
             }
             Err(e) => self.status = trf("macros.load_failed", &[("e", &e)]),
         }
     }
 
     pub fn show_macro_manager(&mut self) {
+        if self.macros_desktop_only() {
+            return;
+        }
         self.macros.ensure_loaded();
         self.open_docker(crate::app::DockerTab::Macros);
     }
@@ -568,6 +605,9 @@ impl App {
 
     /// Start a macro now.
     pub fn run_macro(&mut self, project: usize, module: &str, name: &str) {
+        if self.macros_desktop_only() {
+            return;
+        }
         if self.macros.run.is_some() {
             self.status = tr("macros.already_running");
             return;
@@ -575,7 +615,7 @@ impl App {
         let Some(p) = self.macros.projects.get(project) else {
             return;
         };
-        let program = match p.compile() {
+        let program = match p.compile_for_run(self.settings.macros_keep_going) {
             Ok(prog) => prog,
             Err(e) => {
                 self.macros.error = Some((
@@ -693,6 +733,50 @@ impl App {
         if let Some(s) = c.status {
             self.status = s;
         }
+        if let Some(on) = c.simulate_overprints {
+            self.simulate_overprints = on;
+        }
+        for (step, selection) in c.view_steps {
+            self.run_view_step_with(step, &selection);
+        }
+    }
+
+    /// The system's file dialog a macro asks for (`ScriptTools.GetFileBox`,
+    /// #4315): `filter` is "Name (*.csv)|*.csv|...", `mode` 0 opens, 1
+    /// saves, 2 picks a folder. The macro gets the path, "" for Cancel.
+    fn macro_file_box(&mut self, filter: &str, title: &str, mode: u8, file: &str, folder: &str) {
+        let mut dialog = crate::files::Dialog::new();
+        let parts: Vec<&str> = filter.split('|').collect();
+        for pair in parts.chunks(2) {
+            let [name, pattern] = pair else { continue };
+            let exts: Vec<&str> = pattern
+                .split(';')
+                .filter_map(|p| p.trim().strip_prefix("*."))
+                .filter(|e| !e.is_empty() && *e != "*")
+                .collect();
+            if !exts.is_empty() {
+                dialog = dialog.add_filter(name.trim(), &exts);
+            }
+        }
+        if !title.is_empty() {
+            dialog = dialog.set_title(title);
+        }
+        let start = std::path::Path::new(file);
+        let dir = if !folder.is_empty() {
+            Some(std::path::PathBuf::from(folder))
+        } else {
+            start.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf())
+        };
+        if let Some(dir) = dir.filter(|d| d.is_dir()) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(name) = start.file_name() {
+            dialog = dialog.set_file_name(name.to_string_lossy().to_string());
+        }
+        dialog.choose(self, mode, |app, path| {
+            let text = path.map(|p| p.display().to_string()).unwrap_or_default();
+            app.answer_macro(Input::Text(Some(text)));
+        });
     }
 
     /// Answer the message or input box the macro waits for.
@@ -761,6 +845,22 @@ impl App {
                         text: default,
                     })
                 }
+                // A page the macro opens (ShellExecute, #2165); tests
+                // keep the address instead of starting a browser.
+                Request::Open(url) => {
+                    if cfg!(test) {
+                        self.macros.opened.push(url);
+                    } else {
+                        self.open_url(&url);
+                    }
+                }
+                Request::FileBox {
+                    filter,
+                    title,
+                    mode,
+                    file,
+                    folder,
+                } => self.macro_file_box(&filter, &title, mode, &file, &folder),
             }
         }
         if !finished {
@@ -773,6 +873,15 @@ impl App {
         let done = run.finish();
         self.apply_macro_changes(done.changes);
         self.macros.prompt = None;
+        if !done.skipped.is_empty() && name != "Scripts" && !done.stopped {
+            let project = self
+                .macros
+                .projects
+                .iter()
+                .position(|p| name.starts_with(&format!("{}.", p.name())))
+                .unwrap_or(usize::MAX);
+            self.macros.skipped = Some((name.clone(), done.skipped, project));
+        }
         if done.stopped {
             self.status = trf("macros.stopped", &[("name", &name)]);
         } else if let Some(e) = done.error {
@@ -782,7 +891,11 @@ impl App {
                 .iter()
                 .position(|p| name.starts_with(&format!("{}.", p.name())))
                 .unwrap_or(usize::MAX);
-            if name == "Scripts" {
+            if name == "Scripts" && e.number == 0 && e.module.is_empty() {
+                // A JavaScript script's error (#4139).
+                self.scripts_output.push(format!("Error: {}", e.description));
+                self.status = trf("status.script_error", &[("e", &e.description)]);
+            } else if name == "Scripts" {
                 self.scripts_output.push(format!(
                     "Error: Run-time error '{}': {} ({}, line {})",
                     e.number, e.description, e.procedure, e.line
@@ -791,13 +904,22 @@ impl App {
                 self.macros.error = Some((e, project));
             }
         } else if name != "Scripts" {
-            self.status = trf("macros.done", &[("name", &name)]);
+            self.status = match &self.macros.skipped {
+                Some((_, steps, _)) => trf(
+                    "macros.done_skipped",
+                    &[("name", &name), ("n", &steps.len().to_string())],
+                ),
+                None => trf("macros.done", &[("name", &name)]),
+            };
         }
         false
     }
 
     /// Tools > Macros > Run Macro (Alt+Shift+F8).
     pub fn open_run_macro(&mut self) {
+        if self.macros_desktop_only() {
+            return;
+        }
         self.macros.ensure_loaded();
         self.macros.run_dialog = Some(RunDialog::default());
     }
@@ -805,6 +927,9 @@ impl App {
     /// Tools > Macros > Macro Editor (Alt+F11): the chosen project's first
     /// module, else the first project's; with no project, a new one.
     pub fn open_macro_editor(&mut self) {
+        if self.macros_desktop_only() {
+            return;
+        }
         self.macros.ensure_loaded();
         if self.macros.editor.is_some() {
             return;
@@ -866,33 +991,62 @@ impl App {
                 return;
             }
         };
-        let first = &files[0];
-        let ext = Path::new(&first.name)
+        let files: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.name, f.bytes)).collect();
+        let first = files[0].0.clone();
+        let ext = Path::new(&first)
             .extension()
             .map(|e| e.to_string_lossy().to_string())
             .unwrap_or_default();
-        let Some(path) = crate::files::Dialog::new()
+        // The save dialog, a download, or the system's save picker on
+        // Android (#1402).
+        crate::files::Dialog::new()
             .add_filter(ext.to_uppercase(), &[ext.as_str()])
-            .set_file_name(first.name.clone())
-            .save_path()
-        else {
+            .set_file_name(first)
+            .save_file(self, move |app, path| {
+                app.write_exported_macros(&path, files)
+            });
+    }
+
+    /// Write the exported files: the first to `path`, the others beside
+    /// it (a form's `.frx` with the name chosen). A document the Android
+    /// picker made has nothing beside it: the picker asks for each of the
+    /// others in turn.
+    fn write_exported_macros(&mut self, path: &Path, files: Vec<(String, Vec<u8>)>) {
+        let mut files = std::collections::VecDeque::from(files);
+        let Some((_, bytes)) = files.pop_front() else {
             return;
         };
-        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let mut result = crate::files::write(&path, &first.bytes);
-        for f in files.iter().skip(1) {
-            // The form's .frx goes beside its .frm, with the name chosen.
-            let target = if f.name.to_ascii_lowercase().ends_with(".frx") {
+        let shown = path.display().to_string();
+        if let Err(e) = crate::files::write(path, &bytes) {
+            self.status = trf("macros.export_failed", &[("e", &e.to_string())]);
+            return;
+        }
+        // The form's .frx goes beside its .frm, with the name chosen.
+        let named = |name: String| {
+            if name.to_ascii_lowercase().ends_with(".frx") {
                 path.with_extension("frx")
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or(name)
             } else {
-                dir.join(&f.name)
-            };
+                name
+            }
+        };
+        let rest: std::collections::VecDeque<(String, Vec<u8>)> =
+            files.into_iter().map(|(n, b)| (named(n), b)).collect();
+        if crate::files::is_document_path(path) {
+            save_each_macro_file(self, rest, shown);
+            return;
+        }
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut result = Ok(());
+        for (name, bytes) in rest {
             if result.is_ok() {
-                result = crate::files::write(&target, &f.bytes);
+                result = crate::files::write(dir.join(&name), &bytes);
             }
         }
         self.status = match result {
-            Ok(()) => trf("macros.exported", &[("f", &path.display().to_string())]),
+            Ok(()) => trf("macros.exported", &[("f", &shown)]),
             Err(e) => trf("macros.export_failed", &[("e", &e.to_string())]),
         };
     }
@@ -909,11 +1063,26 @@ impl App {
         let (name, source) = m
             .map(|m| (m.name.clone(), m.source.clone()))
             .unwrap_or_default();
+        // The report and the JavaScript tab stay while moving around the
+        // same project.
+        let kept = self
+            .macros
+            .editor
+            .take()
+            .filter(|e| e.project == project)
+            .map(|e| (e.report, e.show_report, e.js_tab, e.js, e.js_run, e.find))
+            .unwrap_or_default();
         self.macros.editor = Some(Editor {
             project,
             module: name,
             source,
             goto_line: line,
+            report: kept.0,
+            show_report: kept.1,
+            js_tab: kept.2 && line.is_none(),
+            js: kept.3,
+            js_run: kept.4,
+            find: kept.5,
             ..Default::default()
         });
     }
@@ -955,6 +1124,32 @@ impl App {
             (Ok(()), Ok(_)) => tr("macros.saved"),
         });
     }
+}
+
+/// The system's save picker for each of `rest` in turn (Android, #1402);
+/// the status line names `shown` once all are written.
+fn save_each_macro_file(
+    app: &mut App,
+    mut rest: std::collections::VecDeque<(String, Vec<u8>)>,
+    shown: String,
+) {
+    let Some((name, bytes)) = rest.pop_front() else {
+        app.status = trf("macros.exported", &[("f", &shown)]);
+        return;
+    };
+    let ext = Path::new(&name)
+        .extension()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_default();
+    crate::files::Dialog::new()
+        .add_filter(ext.to_uppercase(), &[ext.as_str()])
+        .set_file_name(name)
+        .save_file(app, move |app, path| {
+            match crate::files::write(&path, &bytes) {
+                Ok(()) => save_each_macro_file(app, rest, shown),
+                Err(e) => app.status = trf("macros.export_failed", &[("e", &e.to_string())]),
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1009,6 +1204,108 @@ mod tests {
     }
 
     #[test]
+    fn a_macro_writes_and_reads_a_text_file_and_keeps_going() {
+        // #4315: files work, and what TraceDraw cannot do is skipped and
+        // listed instead of stopping the macro.
+        let dir = temp("files");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ids.txt");
+        let code = format!(
+            "Sub Go()\r\n\
+             Dim i As Long, s As String\r\n\
+             Open \"{p}\" For Output As #1\r\n\
+             For i = 1 To 3: Print #1, \"ID-\" & i: Next\r\n\
+             Close #1\r\n\
+             ActiveDocument.Frobnicate\r\n\
+             Open \"{p}\" For Input As #1\r\n\
+             Do Until EOF(1)\r\n\
+             Line Input #1, s\r\n\
+             ActiveLayer.CreateArtisticText 0, i, s\r\n\
+             i = i + 1\r\n\
+             Loop\r\n\
+             Close #1\r\n\
+             End Sub\r\n",
+            p = path.display()
+        );
+        let mut app = app_with(project("Ids", &code, Vec::new()));
+        let shapes = |app: &App| app.doc().all_layers().map(|l| l.shapes.len()).sum::<usize>();
+        let before = shapes(&app);
+        app.settings.macros_keep_going = true;
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "ID-1\r\nID-2\r\nID-3\r\n"
+        );
+        assert_eq!(shapes(&app), before + 3);
+        let (_, steps, project) = app.macros.skipped.clone().expect("skipped steps");
+        assert_eq!(project, 0);
+        assert_eq!(steps.len(), 1);
+        assert!(steps[0].0.description.contains("Frobnicate"), "{steps:?}");
+        assert_eq!(steps[0].0.line, 6);
+        // Off: the same macro stops there with the error.
+        app.macros.skipped = None;
+        app.settings.macros_keep_going = false;
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        let (e, _) = app.macros.error.clone().expect("an error");
+        assert_eq!(e.number, 438);
+        assert!(app.macros.skipped.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_members_published_macros_use_work() {
+        // #4315: the file box picks the list, texts are found and
+        // replaced, ranges are centred and placed, and guidelines are
+        // added and removed; the macro writes what it saw to a file.
+        let dir = temp("members");
+        std::fs::create_dir_all(&dir).unwrap();
+        let csv = dir.join("names.csv");
+        std::fs::write(&csv, "Ann\r\n").unwrap();
+        let log = dir.join("log.txt");
+        let code = format!(
+            "Sub Go()\r\n\
+             Dim f As String, s As String, t As Shape, r As Shape, b\r\n\
+             f = ScriptTools.GetFileBox(\"CSV (*.csv)|*.csv\", \"Pick\", 0)\r\n\
+             Open f For Input As #1: Line Input #1, s: Close #1\r\n\
+             Set t = ActiveLayer.CreateArtisticText(10, 10, \"Hello NAME\")\r\n\
+             Open \"{log}\" For Output As #2\r\n\
+             Print #2, s; ActivePage.TextFind(\"name\"); ActivePage.TextReplace(\"NAME\", s, True, True)\r\n\
+             Print #2, t.Text.Story.Text\r\n\
+             Set r = ActiveLayer.CreateRectangleRect(CreateRect(0, 0, 2, 1))\r\n\
+             r.SetPositionEx cdrBottomLeft, 1, 1\r\n\
+             Set b = r.BoundingBox\r\n\
+             Print #2, b.Left; b.Bottom; b.Width; b.Height\r\n\
+             ActiveDocument.Unit = cdrInch\r\n\
+             r.AlignRangeToPageCenter cdrAlignHCenter + cdrAlignVCenter\r\n\
+             Print #2, Round(r.CenterX - ActivePage.SizeWidth / 2, 3); Round(r.CenterY - ActivePage.SizeHeight / 2, 3)\r\n\
+             ActivePage.GuidesLayer.CreateGuideAngle 1, 1, 45\r\n\
+             Print #2, ActivePage.GuidesLayer.Shapes.Count;\r\n\
+             ActivePage.GuidesLayer.SelectableShapes.All.Delete\r\n\
+             Print #2, ActivePage.GuidesLayer.Shapes.Count\r\n\
+             Close #2\r\n\
+             End Sub\r\n",
+            log = log.display()
+        );
+        let mut app = app_with(project("Members", &code, Vec::new()));
+        crate::files::test_pick::answer(vec![csv.clone()]);
+        app.settings.macros_keep_going = false;
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, crate::files::test_save::finish);
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        let out = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            vec!["AnnTrueTrue", "Hello Ann", " 1  1  2  1 ", " 0  0 ", " 1  0 "],
+            "{out}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn projects_are_kept_and_loaded_again() {
         let dir = temp("keep");
         let mut st = MacroState {
@@ -1058,7 +1355,7 @@ mod tests {
         assert!(w.contains("FindWindow"), "{w}");
         assert!(w.contains("Excel.Application"), "{w}");
         assert!(!w.contains("Scripting.Dictionary"), "{w}");
-        assert_eq!(scan(&p).len(), 3, "{w}");
+        assert_eq!(scan(&p).len(), 2, "{w}");
     }
 
     fn app_with(p: vp::Project) -> App {
@@ -1067,6 +1364,83 @@ mod tests {
         app.macros.loaded = true;
         app.macros.install(p, None).unwrap();
         app
+    }
+
+    #[test]
+    fn a_javascript_script_asks_with_inputbox_and_prompt() {
+        // #4139: the Scripts panel's JavaScript waits for the input box.
+        let mut app = App::headless();
+        let before = app
+            .doc()
+            .all_layers()
+            .map(|l| l.shapes.len())
+            .sum::<usize>();
+        app.run_script(
+            "const n = InputBox('How many?', 'Grid', '2');\n\
+             const w = prompt('Width', '10');\n\
+             const c = prompt('Cancelled?');\n\
+             for (let i = 0; i < Number(n); i++) ActiveLayer.CreateRectangle(i * 20, 0, Number(w), 5);\n\
+             print('made ' + n + ' ' + w + ' ' + c);",
+        );
+        let mut asked = Vec::new();
+        drive(&mut app, |app| {
+            if let Some(Prompt::InputBox {
+                prompt,
+                title,
+                text,
+            }) = app.macros.prompt.take()
+            {
+                asked.push(format!("{title}: {prompt} [{text}]"));
+                let answer = match asked.len() {
+                    1 => Some("3".to_string()),
+                    2 => Some("15".to_string()),
+                    _ => None,
+                };
+                app.answer_macro(Input::Text(answer));
+            }
+        });
+        assert_eq!(
+            asked,
+            vec![
+                "Grid: How many? [2]".to_string(),
+                ": Width [10]".to_string(),
+                ": Cancelled? []".to_string()
+            ]
+        );
+        assert!(
+            app.scripts_output.iter().any(|l| l == "made 3 15 null"),
+            "{:?}",
+            app.scripts_output
+        );
+        let after = app
+            .doc()
+            .all_layers()
+            .map(|l| l.shapes.len())
+            .sum::<usize>();
+        assert_eq!(after, before + 3);
+        // Where nobody can answer, the default comes back.
+        let out = crate::scripting::run(&mut app, "print(InputBox('n', 't', '7') + prompt('x'))")
+            .unwrap();
+        assert_eq!(out, vec!["7".to_string()]);
+    }
+
+    #[test]
+    fn a_javascript_script_error_after_inputbox_is_shown() {
+        let mut app = App::headless();
+        app.run_script("const n = InputBox('n'); nothing_here();");
+        drive(&mut app, |app| {
+            if app.macros.prompt.take().is_some() {
+                app.answer_macro(Input::Text(Some("1".into())));
+            }
+        });
+        assert!(
+            app.scripts_output
+                .iter()
+                .any(|l| l.starts_with("Error: ") && l.contains("nothing_here")),
+            "{:?}",
+            app.scripts_output
+        );
+        assert!(app.macros.error.is_none());
     }
 
     #[test]
@@ -1131,6 +1505,319 @@ mod tests {
                 .sum::<usize>(),
             before
         );
+    }
+
+    #[test]
+    fn a_macro_finds_a_palette_spot_colour_by_name_and_fills_with_it() {
+        // The pattern of underlay macros: look up an ink by name in every
+        // open palette, fill with it and set the fill to overprint.
+        let code = "Function FindSpot(nm As String) As Color\r\n\
+            Dim pal As Palette, i As Long\r\n\
+            For Each pal In Application.Palettes\r\n\
+            For i = 1 To pal.ColorCount\r\n\
+            If StrComp(pal.Color(i).Name, nm, vbTextCompare) = 0 Then\r\n\
+            Set FindSpot = pal.Color(i)\r\n\
+            Exit Function\r\n\
+            End If\r\n\
+            Next i\r\n\
+            Next pal\r\n\
+            End Function\r\n\
+            Sub Go()\r\n\
+            Dim c As Color, s As Shape\r\n\
+            Set c = FindSpot(\"Spot_1_W\")\r\n\
+            If c Is Nothing Then Debug.Print \"missing\": Exit Sub\r\n\
+            Debug.Print \"found \" & c.Name & \" \" & c.IsSpot\r\n\
+            Set s = ActiveLayer.CreateRectangle2(10, 10, 40, 20)\r\n\
+            s.Fill.ApplyUniformFill c\r\n\
+            s.OverprintFill = True\r\n\
+            Debug.Print \"fill \" & s.Fill.UniformColor.Name\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Spots", code, Vec::new()));
+        let white = crate::palette::spot_color(
+            "Spot_1_W",
+            tracedraw_core::Color::cmyk_pct(0.0, 0.0, 0.0, 20.0),
+        );
+        app.palettes.push(crate::palette::Palette {
+            name: "UV".into(),
+            key: "",
+            colors: vec![
+                ("Spot_1_W".into(), white),
+                (
+                    "Spot_2_L".into(),
+                    crate::palette::spot_color(
+                        "Spot_2_L",
+                        tracedraw_core::Color::cmyk_pct(50.0, 0.0, 0.0, 0.0),
+                    ),
+                ),
+            ],
+            builtin: false,
+            path: None,
+        });
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        assert!(
+            app.scripts_output
+                .iter()
+                .any(|l| l == "found Spot_1_W True"),
+            "{:?}",
+            app.scripts_output
+        );
+        assert!(
+            app.scripts_output.iter().any(|l| l == "fill Spot_1_W"),
+            "{:?}",
+            app.scripts_output
+        );
+        // The ink joined the drawing under its palette name, and the
+        // rectangle is filled with it and overprints.
+        let tracedraw_core::Color::Spot { ink, .. } = white else {
+            panic!("not a spot colour");
+        };
+        assert_eq!(
+            app.doc().ink(ink).map(|i| i.name.as_str()),
+            Some("Spot_1_W")
+        );
+        let filled = app
+            .doc()
+            .all_layers()
+            .flat_map(|l| l.shapes.iter())
+            .find(|s| matches!(s.fill, tracedraw_core::Fill::Solid(c) if c == white))
+            .expect("a shape filled with the ink");
+        assert!(filled.overprint_fill);
+    }
+
+    #[test]
+    fn an_underlay_macro_builds_offset_spot_underlays_that_overprint() {
+        // The steps of a print underlay macro: inks found by name in the
+        // open palettes, a silhouette of the selection, then for each ink
+        // a copy contoured outside or inside, separated, filled with the
+        // ink and set to overprint.
+        let code = "Function FindSpot(nm As String) As Color\r\n\
+            Dim pal As Palette, i As Long\r\n\
+            On Error Resume Next\r\n\
+            For Each pal In Application.Palettes\r\n\
+            For i = 1 To pal.ColorCount\r\n\
+            If StrComp(pal.Color(i).Name, nm, vbTextCompare) = 0 Then\r\n\
+            Set FindSpot = pal.Color(i)\r\n\
+            Exit Function\r\n\
+            End If\r\n\
+            Next i\r\n\
+            Next pal\r\n\
+            End Function\r\n\
+            Function Offset(src As Shape, mm As Double) As Shape\r\n\
+            Dim d As Shape, eff As Effect, sep As ShapeRange, res As New ShapeRange, i As Long\r\n\
+            Set d = src.Duplicate\r\n\
+            If Abs(mm) < 0.001 Then Set Offset = d: Exit Function\r\n\
+            If mm > 0 Then\r\n\
+            Set eff = d.CreateContour(cdrContourOutside, mm, 1)\r\n\
+            Else\r\n\
+            Set eff = d.CreateContour(cdrContourInside, -mm, 1)\r\n\
+            End If\r\n\
+            Set sep = eff.Separate\r\n\
+            For i = 1 To sep.Count\r\n\
+            If sep(i).StaticID <> d.StaticID Then res.Add sep(i)\r\n\
+            Next i\r\n\
+            d.Delete\r\n\
+            Set Offset = res(1)\r\n\
+            End Function\r\n\
+            Sub Underlay(sil As Shape, mm As Double, c As Color, nm As String)\r\n\
+            Dim u As Shape\r\n\
+            Set u = Offset(sil, mm)\r\n\
+            u.Fill.ApplyUniformFill c\r\n\
+            u.Outline.SetNoOutline\r\n\
+            u.OverprintFill = True\r\n\
+            u.Name = nm\r\n\
+            End Sub\r\n\
+            Sub Go()\r\n\
+            ActiveDocument.Unit = cdrMillimeter\r\n\
+            Dim art As Shape, sil As Shape\r\n\
+            Set art = ActiveLayer.CreateRectangle2(10, 10, 40, 20)\r\n\
+            art.Fill.UniformColor.CMYKAssign 0, 100, 100, 0\r\n\
+            Set sil = art.Duplicate\r\n\
+            Underlay sil, -0.1, FindSpot(\"Spot_1_W\"), \"UNDERLAY_W\"\r\n\
+            Underlay sil, 0.2, FindSpot(\"Spot_2_L\"), \"UNDERLAY_L\"\r\n\
+            Underlay sil, 0, FindSpot(\"Spot_3_K\"), \"UNDERLAY_K\"\r\n\
+            sil.Delete\r\n\
+            Debug.Print \"done \" & ActiveLayer.Shapes.Count\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Underlay", code, Vec::new()));
+        let ink = |n: &str, k: f32| {
+            crate::palette::spot_color(n, tracedraw_core::Color::cmyk_pct(0.0, 0.0, 0.0, k))
+        };
+        let (w, l, k) = (
+            ink("Spot_1_W", 10.0),
+            ink("Spot_2_L", 20.0),
+            ink("Spot_3_K", 30.0),
+        );
+        app.palettes.push(crate::palette::Palette {
+            name: "UV".into(),
+            key: "",
+            colors: vec![
+                ("Spot_1_W".into(), w),
+                ("Spot_2_L".into(), l),
+                ("Spot_3_K".into(), k),
+            ],
+            builtin: false,
+            path: None,
+        });
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        assert!(
+            app.scripts_output.iter().any(|x| x == "done 4"),
+            "{:?}",
+            app.scripts_output
+        );
+        let shapes: Vec<tracedraw_core::document::Shape> = app
+            .doc()
+            .all_layers()
+            .flat_map(|x| x.shapes.iter().cloned())
+            .collect();
+        let get = |n: &str| {
+            shapes
+                .iter()
+                .find(|s| s.name.as_deref() == Some(n))
+                .unwrap_or_else(|| panic!("{n}"))
+                .clone()
+        };
+        let art = shapes.iter().find(|s| s.name.is_none()).expect("artwork");
+        let ab = app.doc().shape_on_page(art.id).expect("art").bounds();
+        for (n, c, grow) in [
+            ("UNDERLAY_W", w, -0.1),
+            ("UNDERLAY_L", l, 0.2),
+            ("UNDERLAY_K", k, 0.0),
+        ] {
+            let u = get(n);
+            assert_eq!(u.fill, tracedraw_core::Fill::Solid(c), "{n}");
+            assert!(u.overprint_fill, "{n}");
+            let b = app.doc().shape_on_page(u.id).expect("underlay").bounds();
+            assert!(
+                (b.width() - (ab.width() + 2.0 * grow)).abs() < 0.01
+                    && (b.height() - (ab.height() + 2.0 * grow)).abs() < 0.01,
+                "{n}: {b:?} {ab:?}"
+            );
+        }
+        // Each ink joined the drawing, so a PDF prints it on its own plate.
+        for name in ["Spot_1_W", "Spot_2_L", "Spot_3_K"] {
+            assert!(app.doc().inks.iter().any(|i| i.name == name), "{name}");
+        }
+        let pdf = tracedraw_io::pdf::document_to_pdf_with(app.doc(), &Default::default());
+        let text = String::from_utf8_lossy(&pdf);
+        for name in ["Spot_1_W", "Spot_2_L", "Spot_3_K"] {
+            assert!(
+                text.contains(&format!("/Separation /{name} ")),
+                "{name} is not a separation in the PDF"
+            );
+        }
+        assert!(text.contains("/op true"), "no overprint in the PDF");
+    }
+
+    #[test]
+    fn artistic_text_takes_its_font_and_size_by_name() {
+        // A label written with named arguments, as layout macros do.
+        let code = "Sub Go()\r\n\
+            Dim t As Shape, pg As Page\r\n\
+            Set pg = ActivePage\r\n\
+            Set t = pg.ActiveLayer.CreateArtisticText(pg.LeftX, pg.BottomY, \"label\", Font:=\"Arial\", Size:=10)\r\n\
+            t.Fill.UniformColor.CMYKAssign 0, 0, 0, 100\r\n\
+            Debug.Print \"made \" & t.Text.Story.Text & \" \" & t.Text.Story.Size\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Label", code, Vec::new()));
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        assert!(
+            app.scripts_output.iter().any(|l| l == "made label 10"),
+            "{:?}",
+            app.scripts_output
+        );
+    }
+
+    /// A VBA macro's ActiveWindow.ActiveView.ToFitAllObjects zooms to
+    /// fit what it drew, as View > Zoom To Fit does (#4020).
+    #[test]
+    fn a_macro_zooms_to_fit_what_it_drew() {
+        let code = "Sub Go()\r\n\
+            ActiveDocument.Unit = cdrMillimeter\r\n\
+            ActiveLayer.CreateRectangle2 150, 120, 20, 20\r\n\
+            ActiveWindow.ActiveView.ToFitAllObjects\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Fit", code, Vec::new()));
+        app.canvas_rect =
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        app.fit_pending = false;
+        app.view.fit(
+            tracedraw_core::geometry::Rect::new(0.0, 0.0, 600.0, 600.0),
+            app.canvas_rect,
+        );
+        let before = app.view.zoom();
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        assert!(app.view.zoom() > before * 4.0, "{before} {}", app.view.zoom());
+    }
+
+    #[test]
+    fn a_macro_turns_on_simulated_overprints_and_grouping_keeps_overprint() {
+        let code = "Sub Go()\r\n\
+            Dim a As Shape, b As Shape, sr As New ShapeRange, g As Shape\r\n\
+            Set a = ActiveLayer.CreateRectangle2(10, 10, 40, 20)\r\n\
+            Set b = ActiveLayer.CreateRectangle2(12, 12, 36, 16)\r\n\
+            b.OverprintFill = True\r\n\
+            sr.Add a: sr.Add b\r\n\
+            Set g = sr.Group\r\n\
+            g.Name = \"UVDTF\"\r\n\
+            On Error Resume Next\r\n\
+            ActiveWindow.ActiveView.Type = cdrEnhancedViewWithOverprints\r\n\
+            Debug.Print \"view \" & (ActiveWindow.ActiveView.Type = cdrEnhancedViewWithOverprints) & \" \" & Err.Number\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("View", code, Vec::new()));
+        assert!(!app.simulate_overprints);
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        assert!(
+            app.scripts_output.iter().any(|l| l == "view True 0"),
+            "{:?}",
+            app.scripts_output
+        );
+        assert!(app.simulate_overprints);
+        let group = app
+            .doc()
+            .all_layers()
+            .flat_map(|l| l.shapes.iter())
+            .find(|s| s.name.as_deref() == Some("UVDTF"))
+            .expect("the group")
+            .clone();
+        let tracedraw_core::document::ShapeKind::Group { children } = &group.kind else {
+            panic!("not a group");
+        };
+        assert_eq!(children.iter().filter(|c| c.overprint_fill).count(), 1);
+    }
+
+    #[test]
+    fn dir_tells_whether_a_file_exists() {
+        let dir = std::env::temp_dir().join(format!("td_dir_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("layout_15.pdf"), b"x").unwrap();
+        let here = dir.join("layout_15.pdf").display().to_string();
+        let gone = dir.join("nothing.pdf").display().to_string();
+        let star = dir.join("lay*.pdf").display().to_string();
+        let code = format!(
+            "Sub Go()\r\nDebug.Print \"[\" & Dir(\"{here}\") & \"][\" & Dir(\"{gone}\") & \"][\" & Dir(\"{star}\") & \"]\"\r\nEnd Sub\r\n"
+        );
+        let mut app = app_with(project("Dir", &code, Vec::new()));
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        assert!(
+            app.scripts_output
+                .iter()
+                .any(|l| l == "[layout_15.pdf][][layout_15.pdf]"),
+            "{:?}",
+            app.scripts_output
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1199,6 +1886,327 @@ mod tests {
         assert!(app.scripts_output.iter().any(|l| l == "closed"));
     }
 
+    /// What a published tiling macro reads and sets (#1255, #2165): the
+    /// page's paper by name, a paper set by name, and an outline set with
+    /// `OutlineStyles`, `ArrowHeads` and named arguments; it stopped with
+    /// error 438 on `Paper`, then with "Sub or Function not defined" on
+    /// `OutlineStyles`.
+    #[test]
+    fn a_tiling_macro_reads_the_paper_and_sets_outlines_by_style() {
+        let code = "Sub Go()\r\n\
+            ActiveDocument.Unit = cdrMillimeter\r\n\
+            Debug.Print \"paper \" & ActiveDocument.ActivePage.Paper\r\n\
+            Dim r As Shape\r\n\
+            Set r = ActiveLayer.CreateRectangle(0#, 30#, 40#, 0#)\r\n\
+            r.Outline.SetProperties 0.5, OutlineStyles(0), CreateCMYKColor(0, 0, 0, 100), ArrowHeads(0), ArrowHeads(0), cdrFalse, cdrFalse, cdrOutlineRoundLineCaps, cdrOutlineRoundLineJoin, 0#, 100, MiterLimit:=5#\r\n\
+            Dim d As Shape\r\n\
+            Set d = ActiveLayer.CreateLineSegment(0#, 0#, 50#, 0#)\r\n\
+            d.Outline.SetProperties 0.3, OutlineStyles(1)\r\n\
+            Debug.Print \"styles \" & OutlineStyles.Count\r\n\
+            ActivePage.Paper = \"A5\"\r\n\
+            Debug.Print \"now \" & ActivePage.Paper & \" \" & ActivePage.SizeWidth\r\n\
+            ActivePage.SizeWidth = 123\r\n\
+            Debug.Print \"custom [\" & ActivePage.Paper & \"]\"\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Tiling", code, Vec::new()));
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        let out = &app.scripts_output;
+        assert!(out.iter().any(|l| l == "paper A4"), "{out:?}");
+        assert!(out.iter().any(|l| l == "now A5 148"), "{out:?}");
+        assert!(out.iter().any(|l| l == "custom []"), "{out:?}");
+        assert!(out.iter().any(|l| l.starts_with("styles ")), "{out:?}");
+        let strokes: Vec<tracedraw_core::Stroke> = app
+            .doc()
+            .all_layers()
+            .flat_map(|l| l.shapes.iter())
+            .filter_map(|s| s.stroke.clone())
+            .collect();
+        let rect = strokes
+            .iter()
+            .find(|s| (s.width - 0.5).abs() < 1e-9)
+            .expect("the rectangle's outline");
+        assert!(rect.dash.is_empty());
+        assert_eq!(rect.cap, tracedraw_core::style::LineCap::Round);
+        assert_eq!(rect.join, tracedraw_core::style::LineJoin::Round);
+        let line = strokes
+            .iter()
+            .find(|s| (s.width - 0.3).abs() < 1e-9)
+            .expect("the line's outline");
+        assert!(!line.dash.is_empty(), "style 1 is dashed");
+    }
+
+    /// Copy and Paste in a macro (#2165): the tiling macro of the same
+    /// collection copies the crop marks of one side, pastes them and
+    /// moves what was pasted (the selection) to the other side. It
+    /// stopped with error 438, "Object doesn't support this property or
+    /// method: Copy". The macro's clipboard is its own.
+    #[test]
+    fn a_macro_copies_and_pastes_shapes() {
+        let code = "Sub Go()\r\n\
+            ActiveDocument.Unit = cdrMillimeter\r\n\
+            Dim a As Shape, b As Shape, g As Shape, r As ShapeRange\r\n\
+            Set a = ActiveLayer.CreateLineSegment(0#, 0#, 5#, 0#)\r\n\
+            Set b = ActiveLayer.CreateLineSegment(0#, 10#, 5#, 10#)\r\n\
+            Set g = ActiveDocument.CreateShapeRangeFromArray(a, b).Group\r\n\
+            g.Copy\r\n\
+            ActiveLayer.Paste\r\n\
+            Set r = ActiveSelectionRange\r\n\
+            Debug.Print \"pasted \" & r.Count & \" \" & (r.Item(1).StaticID <> g.StaticID) & \" \" & r.LeftX\r\n\
+            r.Move -20#, 0#\r\n\
+            Debug.Print \"moved \" & r.LeftX & \" kept \" & g.LeftX\r\n\
+            g.Cut\r\n\
+            Set r = ActiveLayer.Paste\r\n\
+            Debug.Print \"cut \" & ActiveLayer.Shapes.Count & \" \" & r.Count\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Clip", code, Vec::new()));
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        let out = &app.scripts_output;
+        for want in ["pasted 1 True 0", "moved -20 kept 0", "cut 2 1"] {
+            assert!(out.iter().any(|l| l == want), "{want}: {out:?}");
+        }
+        // The app's clipboard is not touched.
+        assert!(app.clipboard.is_none());
+    }
+
+    /// A macro that puts each selected object into a clip frame of its
+    /// own (#2968), and one that centres the contents on the frame. The
+    /// macro of the report calls these members by other names, which
+    /// reach them through `__member_alias` (see vg_tests).
+    #[test]
+    fn a_macro_puts_each_selected_object_into_its_own_clip_frame() {
+        let code = "Sub Go()\r\n\
+            ActiveDocument.Unit = cdrMillimeter\r\n\
+            Dim s As Shape, r As Shape, f As Shape, c As Shape\r\n\
+            ActiveDocument.CreateShapeRangeFromArray(ActiveLayer.CreateEllipse2(10#, 10#, 5#), ActiveLayer.CreateEllipse2(40#, 10#, 5#)).CreateSelection\r\n\
+            For Each s In ActiveSelectionRange\r\n\
+            Set r = ActiveLayer.CreateRectangle2(s.LeftX - 2#, s.BottomY - 2#, s.SizeWidth + 4#, s.SizeHeight + 4#)\r\n\
+            s.AddToClipFrame r\r\n\
+            Next s\r\n\
+            Debug.Print \"frames \" & ActiveLayer.Shapes.Count\r\n\
+            For Each f In ActiveLayer.Shapes\r\n\
+            Debug.Print \"holds \" & f.ClipFrame.Shapes.Count & \" \" & (f.ClipFrame.Shapes.Item(1).ClipFrameParent.StaticID = f.StaticID)\r\n\
+            Next f\r\n\
+            Set f = ActiveLayer.CreateRectangle2(0#, 0#, 20#, 20#)\r\n\
+            Set c = ActiveLayer.CreateEllipse2(100#, 100#, 3#)\r\n\
+            c.AddToClipFrame f, cdrTrue\r\n\
+            Set c = f.ClipFrame.Shapes.Item(1)\r\n\
+            Debug.Print \"centred \" & Round(c.CenterX, 3) & \" \" & Round(c.CenterY, 3)\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Frames", code, Vec::new()));
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        let out = &app.scripts_output;
+        let holds = out.iter().filter(|l| *l == "holds 1 True").count();
+        assert!(out.iter().any(|l| l == "frames 2"), "{out:?}");
+        assert_eq!(holds, 2, "{out:?}");
+        assert!(out.iter().any(|l| l == "centred 10 10"), "{out:?}");
+    }
+
+    /// What the macros of a published collection use that stopped them
+    /// (#2165): `FontList` (For Each over the installed families),
+    /// `ActiveVirtualLayer`, `InsertPagesEx` (its argument named `Page`
+    /// hid the page class: "not a constructor"), `LogCreateShapeRange`,
+    /// and `ShellExecute` declared from the Windows library, which they
+    /// call to open their maker's page when a form closes: a web address
+    /// is opened, anything else is not and returns 2.
+    #[test]
+    fn collection_macros_find_fonts_pages_and_open_their_pages() {
+        let code = "Private Declare PtrSafe Function OpenIt Lib \"shell32.dll\" Alias \"ShellExecuteA\" (ByVal hwnd As Long, ByVal op As String, ByVal file As String, ByVal params As String, ByVal dir As String, ByVal show As Long) As Long\r\n\
+            Sub Go()\r\n\
+            Dim v As Variant, n As Long\r\n\
+            For Each v In FontList\r\n\
+            n = n + 1\r\n\
+            Next v\r\n\
+            Debug.Print \"fonts \" & (n = FontList.Count)\r\n\
+            ActiveDocument.Unit = cdrMillimeter\r\n\
+            Dim s As Shape, sr As New ShapeRange\r\n\
+            Set s = ActiveVirtualLayer.CreateRectangle(0#, 10#, 10#, 0#)\r\n\
+            sr.Add s\r\n\
+            Set sr = ActiveDocument.LogCreateShapeRange(sr)\r\n\
+            Debug.Print \"made \" & sr.Count\r\n\
+            Dim p As Page\r\n\
+            Set p = ActiveDocument.InsertPagesEx(1, False, ActivePage.Index, 100#, 50#)\r\n\
+            Debug.Print \"pages \" & ActiveDocument.Pages.Count & \" \" & p.SizeWidth & \"x\" & p.SizeHeight\r\n\
+            Debug.Print \"web \" & (OpenIt(0, vbNullString, \"http://example.com/page\", \"\", \"\", 1) > 32)\r\n\
+            Debug.Print \"file \" & OpenIt(0, \"open\", \"C:\\Windows\\notepad.exe\", \"\", \"\", 1)\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Collection", code, Vec::new()));
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        let out = &app.scripts_output;
+        for want in [
+            "fonts True",
+            "made 1",
+            "pages 2 100x50",
+            "web True",
+            "file 2",
+        ] {
+            assert!(out.iter().any(|l| l == want), "{want}: {out:?}");
+        }
+        assert_eq!(
+            app.macros.opened,
+            vec!["http://example.com/page".to_string()]
+        );
+    }
+
+    /// Forms of the same collection (#2165): one whose Initialize sets its
+    /// controls through the form's own name (`Crop.ctlLength = 5`, its
+    /// default property; making the form there made it again, without
+    /// end) and sets the drop-down's `ListWidth`, and one that unloads
+    /// itself in Activate and then goes on setting a control (error 5
+    /// "the form was unloaded").
+    #[test]
+    fn a_form_names_itself_in_initialize_and_unloads_itself_in_activate() {
+        let mut crop = vp::Form {
+            name: "Crop".into(),
+            caption: "Crop".into(),
+            width: 200.0,
+            height: 100.0,
+            enabled: true,
+            ..Default::default()
+        };
+        crop.controls = vec![
+            vp::Control::new(vp::ControlKind::TextBox, "ctlLength"),
+            vp::Control::new(vp::ControlKind::ComboBox, "ctlUnits"),
+        ];
+        let mut gone = vp::Form {
+            name: "Gone".into(),
+            caption: "Gone".into(),
+            width: 200.0,
+            height: 100.0,
+            enabled: true,
+            ..Default::default()
+        };
+        gone.controls = vec![vp::Control::new(vp::ControlKind::TextBox, "tbPages")];
+        let mut p = project(
+            "Forms",
+            "Sub Go()\r\nCrop.Show\r\nGone.Show\r\nDebug.Print \"done\"\r\nEnd Sub\r\n",
+            vec![crop, gone],
+        );
+        p.modules[1].source = "Private Sub UserForm_Initialize()\r\n\
+            Crop.ctlUnits.AddItem \"mm\"\r\n\
+            Crop.ctlUnits.ListWidth = 34\r\n\
+            Crop.ctlLength = 5\r\n\
+            Debug.Print \"length \" & ctlLength.Text & \" \" & ctlUnits.ListCount\r\n\
+            End Sub\r\n"
+            .into();
+        p.modules[2].source = "Private Sub UserForm_Activate()\r\n\
+            Unload Me\r\n\
+            tbPages.Value = 1\r\n\
+            Debug.Print \"after \" & tbPages.Value\r\n\
+            End Sub\r\n"
+            .into();
+        let mut app = app_with(p);
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |app| {
+            let Some(run) = &app.macros.run else { return };
+            let open: Vec<u32> = run
+                .forms
+                .lock()
+                .unwrap()
+                .list
+                .iter()
+                .filter(|f| f.visible)
+                .map(|f| f.id)
+                .collect();
+            for id in open {
+                app.macro_form_event(id, "", "QueryClose", vec![serde_json::json!(0)]);
+            }
+        });
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        let out = &app.scripts_output;
+        for want in ["length 5 1", "after 1", "done"] {
+            assert!(out.iter().any(|l| l == want), "{want}: {out:?}");
+        }
+    }
+
+    /// A form that downloads its picture with URLDownloadToCacheFile and
+    /// shows it with LoadPicture (QRCodeInserter of #2165 stopped with
+    /// error 445 on the Windows function): the file comes into a file of
+    /// the app's own, its path back into the macro's buffer, and the
+    /// image control shows it.
+    #[test]
+    fn a_form_downloads_its_picture_and_shows_it() {
+        let dir = std::env::temp_dir().join(format!("td-download-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("qr code.png");
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            3,
+            3,
+            image::Rgba([0, 0, 0, 255]),
+        ))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+        std::fs::write(&src, &png).unwrap();
+        let url = format!(
+            "file://{}",
+            src.to_string_lossy().replace('\\', "/").replace(' ', "%20")
+        );
+        let mut qr = vp::Form {
+            name: "QR".into(),
+            caption: "QR".into(),
+            width: 200.0,
+            height: 100.0,
+            enabled: true,
+            ..Default::default()
+        };
+        qr.controls = vec![vp::Control::new(vp::ControlKind::Image, "imgQR")];
+        let code = "Private Declare PtrSafe Function URLDownloadToCacheFile Lib \"urlmon\" Alias \"URLDownloadToCacheFileA\" (ByVal lpUnkcaller As Long, ByVal szURL As String, ByVal szFileName As String, ByVal dwBufLength As Long, ByVal dwReserved As Long, ByVal IBindStatusCallback As Long) As Long\r\n\
+             Public Function DownloadFile(URL As String) As String\r\n\
+             Dim szFileName As String\r\n\
+             szFileName = Space$(300)\r\n\
+             If URLDownloadToCacheFile(0, URL, szFileName, Len(szFileName), 0, 0) = 0 Then\r\n\
+             DownloadFile = Trim(szFileName)\r\n\
+             End If\r\n\
+             End Function\r\n\
+             Sub Go()\r\n\
+             Debug.Print \"missing [\" & DownloadFile(\"file:///no/such/file.png\") & \"]\"\r\n\
+             QR.Show\r\n\
+             End Sub\r\n";
+        let mut p = project("Forms", code, vec![qr]);
+        p.modules[1].source = format!(
+            "Private Sub UserForm_Initialize()\r\n\
+             Dim f As String\r\n\
+             f = Main.DownloadFile(\"{url}\")\r\n\
+             Debug.Print \"got \" & (Dir(f) <> \"\")\r\n\
+             imgQR.Picture = LoadPicture(f)\r\n\
+             End Sub\r\n"
+        );
+        let mut app = app_with(p);
+        app.run_macro(0, "Main", "Go");
+        let mut shown = None;
+        drive(&mut app, |app| {
+            let Some(run) = &app.macros.run else { return };
+            let open: Vec<(u32, Option<Vec<u8>>)> = run
+                .forms
+                .lock()
+                .unwrap()
+                .list
+                .iter()
+                .filter(|f| f.visible)
+                .map(|f| (f.id, f.control("imgQR").and_then(|c| c.picture.clone())))
+                .collect();
+            for (id, pic) in open {
+                shown = pic;
+                app.macro_form_event(id, "", "QueryClose", vec![serde_json::json!(0)]);
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        let out = &app.scripts_output;
+        for want in ["missing []", "got True"] {
+            assert!(out.iter().any(|l| l == want), "{want}: {out:?}");
+        }
+        assert_eq!(shown.as_deref(), Some(&png[..]));
+    }
+
     #[test]
     fn errors_name_the_line_and_stop_ends_a_loop() {
         let code = "Sub Bad()\r\nDim a As Long\r\na = 1 / 0\r\nEnd Sub\r\nSub Forever()\r\nDim i As Long\r\nDo\r\ni = i + 1\r\nLoop\r\nEnd Sub\r\n";
@@ -1249,7 +2257,8 @@ mod tests {
     /// `.gms` in `TRACEDRAW_MACRO_FILES` (separated by ':') is compiled
     /// and listed; the macros named in `TRACEDRAW_MACRO_RUN`
     /// ("Module.Macro,...") run on a sample drawing, answering each box
-    /// with its first button or default text and closing each form.
+    /// with its first button or default text and closing each form
+    /// (after a click on the button `TRACEDRAW_MACRO_CLICK` names, once).
     #[test]
     #[ignore]
     fn projects_from_the_environment() {
@@ -1295,6 +2304,10 @@ mod tests {
                 ),
                 Err(e) => println!("   COMPILE ERROR {e}"),
             }
+            // The Macro Editor's compatibility report.
+            for issue in crate::macro_convert::check(&p.project).issues {
+                println!("   check {:?} line {}: {}", issue.level, issue.line, issue.text);
+            }
             let macros = p.macros();
             for (m, n) in macros {
                 if !wanted.iter().any(|w| w == &format!("{m}.{n}")) {
@@ -1303,6 +2316,7 @@ mod tests {
                 app.select_all();
                 app.run_macro(i, &m, &n);
                 let mut shown = Vec::new();
+                let mut click = std::env::var("TRACEDRAW_MACRO_CLICK").ok();
                 drive(&mut app, |app| {
                     match app.macros.prompt.take() {
                         Some(Prompt::MsgBox {
@@ -1338,13 +2352,30 @@ mod tests {
                         .collect();
                     for (id, caption) in visible {
                         shown.push(format!("form {caption}"));
+                        // The button `TRACEDRAW_MACRO_CLICK` names is
+                        // clicked once before the form closes.
+                        if let Some(b) = click.take() {
+                            shown.push(format!("click {b}"));
+                            app.macro_form_event(id, &b, "Click", Vec::new());
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                            continue;
+                        }
                         app.macro_form_event(id, "", "QueryClose", vec![serde_json::json!(0)]);
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
                 });
                 let err = app.macros.error.take();
+                if let Some((_, steps, _)) = app.macros.skipped.take() {
+                    for (e, n) in steps {
+                        println!(
+                            "   skipped x{n}: {} {} ({}.{} line {})",
+                            e.number, e.description, e.module, e.procedure, e.line
+                        );
+                    }
+                }
+                let objects: usize = app.doc().all_layers().map(|l| l.shapes.len()).sum();
                 println!(
-                    "   run {m}.{n}: {} {:?} out={:?}",
+                    "   run {m}.{n}: {} {:?} objects={objects} out={:?}",
                     match &err {
                         None => "ok".to_string(),
                         Some((e, _)) => format!(
@@ -1358,5 +2389,63 @@ mod tests {
                 app.scripts_output.clear();
             }
         }
+    }
+
+    /// The crop-marks form of the same collection (#2165): it reads the
+    /// object's box through the variables it hands `GetBoundingBox` (with
+    /// the outline), draws each mark with `CreateLineSegment`, gathers
+    /// the marks from `ActiveSelectionRange` (CorelDRAW selects what it
+    /// makes) and groups them. The marks were drawn around the page's
+    /// corner and the object itself was grouped with them.
+    #[test]
+    fn a_crop_marks_macro_marks_the_corners_of_the_object() {
+        let code = "Sub Go()\r\n\
+            Dim xPos As Double, yPos As Double, xWidth As Double, yHeight As Double\r\n\
+            Dim s As Shape, sr As ShapeRange, crop As Shape, cropRange As New ShapeRange\r\n\
+            ActiveDocument.Unit = cdrMillimeter\r\n\
+            Set s = ActiveLayer.CreateRectangle(50#, 80#, 90#, 60#)\r\n\
+            s.Outline.SetProperties 1#\r\n\
+            Set sr = ActiveSelectionRange\r\n\
+            Debug.Print \"selected \" & sr.Count\r\n\
+            For Each s In sr\r\n\
+            s.GetBoundingBox xPos, yPos, xWidth, yHeight, True\r\n\
+            Debug.Print \"box \" & xPos & \" \" & yPos & \" \" & xWidth & \" \" & yHeight\r\n\
+            Set crop = ActiveLayer.CreateLineSegment(xPos - 8, yPos, xPos - 3, yPos)\r\n\
+            crop.Outline.SetProperties 0.2\r\n\
+            cropRange.AddRange ActiveSelectionRange\r\n\
+            Set crop = ActiveLayer.CreateLineSegment(xPos + xWidth, yPos + yHeight + 3, xPos + xWidth, yPos + yHeight + 8)\r\n\
+            crop.Outline.SetProperties 0.2\r\n\
+            cropRange.AddRange ActiveSelectionRange\r\n\
+            Next s\r\n\
+            Debug.Print \"marks \" & cropRange.Count\r\n\
+            cropRange.Group\r\n\
+            End Sub\r\n";
+        let mut app = app_with(project("Crop", code, Vec::new()));
+        app.run_macro(0, "Main", "Go");
+        drive(&mut app, |_| {});
+        assert!(app.macros.error.is_none(), "{:?}", app.macros.error);
+        let out = &app.scripts_output;
+        for want in ["selected 1", "box 49.5 59.5 41 21", "marks 2"] {
+            assert!(out.iter().any(|l| l == want), "{want}: {out:?}");
+        }
+        let top: Vec<&tracedraw_core::document::Shape> = app
+            .doc()
+            .all_layers()
+            .flat_map(|l| l.shapes.iter())
+            .collect();
+        assert_eq!(top.len(), 2, "the rectangle and the group of marks");
+        let group = top
+            .iter()
+            .find(|s| matches!(s.kind, tracedraw_core::document::ShapeKind::Group { .. }))
+            .expect("the marks are grouped");
+        let b = group.bounds();
+        assert!(
+            (b.x0 - 41.5).abs() < 1e-6 && (b.x1 - 90.5).abs() < 1e-6,
+            "{b:?}"
+        );
+        assert!(
+            (b.y0 - 59.5).abs() < 1e-6 && (b.y1 - 88.5).abs() < 1e-6,
+            "{b:?}"
+        );
     }
 }

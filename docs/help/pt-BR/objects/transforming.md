@@ -80,8 +80,30 @@ propriedades:
 Mantenha <kbd>Alt</kbd> pressionado para escalonar, <kbd>Ctrl</kbd> para
 inclinar ou <kbd>Shift</kbd> para refletir em um arraste, qualquer que seja o
 modo. Com **Aplicar à duplicata** ativado, o clique faz uma cópia e o arraste
-transforma a cópia, deixando o original como estava. A barra de propriedades
+transforma a cópia, deixando o original como estava. Um arraste é um único
+passo: <kbd>Ctrl+Z</kbd> devolve a seleção ao que era antes do arraste (e
+remove a cópia). A barra de propriedades
 também tem os campos de posição, tamanho, escala, ângulo e espelho.
+
+## Girar para acompanhar uma linha {#rotate-by-lines}
+
+Para girar um objeto de modo que uma das bordas fique ao longo de outra linha,
+selecione-o e escolha [[menu.object > menu.object.transformations > menu.object.rotate_by_lines]].
+Clique nas duas pontas da linha base no objeto e depois nas duas pontas da
+linha alvo; os cliques se encaixam em nós e outros pontos de encaixe. O objeto
+gira em torno do primeiro ponto clicado, e a linha base fica com o ângulo da
+linha alvo. Um clique direito cancela.
+
+## Transformar cada objeto {#transform-each}
+
+[[menu.object > menu.object.transformations > menu.object.transform_each]]
+muda a escala, move e gira cada objeto selecionado pelas mesmas quantidades,
+cada um em torno do próprio centro, num só passo de desfazer. Com **Aleatório**
+ligado, cada objeto recebe uma quantidade própria entre nenhuma e a definida,
+para variar de uma vez uma fileira de cópias. O diálogo guarda as quantidades
+para a próxima vez.
+
+![A caixa de diálogo Transformar cada um](../../img/objects-transforming-transform-each.png)
 
 ## Desfazer transformações {#clear}
 

@@ -4,9 +4,18 @@
 //! `2*3,5` work, a comma or a point marks decimals, and a distance field
 //! takes a value in another unit (`1 in` in a millimetre field). The
 //! arrows and the mouse wheel over the box step the value (one unit, or
-//! the step the field was given; Ctrl a tenth, Shift ten times).
+//! the step the field was given; Ctrl a tenth or the fine step given,
+//! Shift ten times). Dragging left or right on the arrows, or on the
+//! field's label, slides the value: a step every few pixels, down and
+//! left lower, up and right higher, with the same keys (#1303).
+//!
+//! `Response::changed()` is the one sign that the value was applied, typed
+//! or stepped: a step leaves the focus where it was, so a caller waiting
+//! for `lost_focus()` takes the first step only (when the step took the
+//! focus from the box) and then none.
 
 use crate::app::Units;
+use crate::ui::tips::RichTip;
 use egui::{emath::Numeric, Response, TextEdit, Ui, Widget};
 use std::ops::RangeInclusive;
 
@@ -15,6 +24,8 @@ pub struct NumField<'a, N: Numeric> {
     value: &'a mut N,
     range: Option<(f64, f64)>,
     suffix: String,
+    /// A label shown just before the box ("X:").
+    prefix: String,
     min_decimals: usize,
     max_decimals: Option<usize>,
     /// Millimetres per unit of the field, for distances typed with a unit.
@@ -31,6 +42,14 @@ pub struct NumField<'a, N: Numeric> {
     spin: bool,
     /// Show the decimal point as a comma (languages that write it so).
     comma: bool,
+    /// What they add or take with Ctrl (a tenth of the step unless
+    /// given).
+    fine_step: Option<f64>,
+    /// The wheel over the box steps it without the box having the focus
+    /// (on unless turned off).
+    wheel_on_hover: bool,
+    /// The box takes the keyboard focus, its text selected.
+    focus: bool,
 }
 
 /// The width of the spin arrows at the right of a field, points.
@@ -39,12 +58,93 @@ pub const SPIN_W: f32 = 11.0;
 /// The width of a field added without a size (see [`NumField::width`]).
 pub const DEFAULT_WIDTH: f32 = 64.0;
 
+/// The pixels of a drag on a field's arrows or label for one step.
+pub const DRAG_PX_PER_STEP: f32 = 4.0;
+
+/// How far right of a label drawn on its own (a bar's picture, a dialog's
+/// row label) a field may start and still be the field it names.
+const LABEL_REACH: f32 = 240.0;
+
+/// A label drawn apart from its field this frame, and its drag.
+#[derive(Clone, Copy)]
+struct LabelDrag {
+    id: egui::Id,
+    rect: egui::Rect,
+    delta: egui::Vec2,
+}
+
+fn pending_id() -> egui::Id {
+    egui::Id::new("num_field_label_drags")
+}
+
+fn matched_id() -> egui::Id {
+    egui::Id::new("num_field_labels_matched")
+}
+
+/// A label drawn apart from the number field after it, such as a bar's
+/// picture or a dialog's row label: a drag on it slides that field's
+/// value as a drag on a field's own label does (#3044, #1303). `resp`
+/// must sense drags. The field takes it up when it is laid out on the
+/// same line, just right of the label; a label with no field after it
+/// does nothing and shows no slide cursor.
+pub fn label_slides(ui: &Ui, resp: &Response) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    let matched = ui.ctx().data(|d| {
+        d.get_temp::<std::collections::HashSet<egui::Id>>(matched_id())
+            .is_some_and(|m| m.contains(&resp.id))
+    });
+    if matched && (resp.hovered() || resp.dragged()) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    let delta = if resp.dragged() && !crate::ui::overflow::finger_sliding(ui.ctx()) {
+        resp.drag_delta()
+    } else {
+        egui::Vec2::ZERO
+    };
+    ui.ctx().data_mut(|d| {
+        let list = d.get_temp_mut_or_default::<(u64, Vec<LabelDrag>)>(pending_id());
+        if list.0 != frame {
+            *list = (frame, Vec::new());
+        }
+        list.1.push(LabelDrag {
+            id: resp.id,
+            rect: resp.rect,
+            delta,
+        });
+    });
+}
+
+/// The drag of the label drawn apart just left of a field at `field`,
+/// taken up so no other field takes it.
+pub(crate) fn take_label_drag(ui: &Ui, field: egui::Rect) -> Option<egui::Vec2> {
+    let frame = ui.ctx().cumulative_frame_nr();
+    let found = ui.ctx().data_mut(|d| {
+        let list = d.get_temp_mut_or_default::<(u64, Vec<LabelDrag>)>(pending_id());
+        if list.0 != frame {
+            return None;
+        }
+        let at = list.1.iter().rposition(|l| {
+            let gap = field.left() - l.rect.right();
+            (-1.0..=LABEL_REACH).contains(&gap)
+                && l.rect.top() < field.bottom()
+                && field.top() < l.rect.bottom()
+        })?;
+        Some(list.1.remove(at))
+    })?;
+    ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<std::collections::HashSet<egui::Id>>(matched_id())
+            .insert(found.id);
+    });
+    Some(found.delta)
+}
+
 impl<'a, N: Numeric> NumField<'a, N> {
     pub fn new(value: &'a mut N) -> Self {
         NumField {
             value,
             range: None,
             suffix: String::new(),
+            prefix: String::new(),
             min_decimals: 0,
             max_decimals: None,
             unit_mm: None,
@@ -53,7 +153,35 @@ impl<'a, N: Numeric> NumField<'a, N> {
             step: 1.0,
             spin: true,
             comma: false,
+            fine_step: None,
+            wheel_on_hover: true,
+            focus: false,
         }
+    }
+
+    /// What the arrows and the wheel add or take with Ctrl (a tenth of
+    /// the step unless given).
+    pub fn fine_step(mut self, step: f64) -> Self {
+        if step.is_finite() && step > 0.0 {
+            self.fine_step = Some(step);
+        }
+        self
+    }
+
+    /// The box takes the keyboard focus now, its text selected to be
+    /// typed over (the Guidelines panel after a double click on a
+    /// guideline, #2883).
+    pub fn focus(mut self, on: bool) -> Self {
+        self.focus = on;
+        self
+    }
+
+    /// Whether the wheel over the box steps it while the box does not
+    /// have the focus (on by default). Off, the wheel scrolls the panel
+    /// around unless the box is being typed in.
+    pub fn wheel_on_hover(mut self, on: bool) -> Self {
+        self.wheel_on_hover = on;
+        self
     }
 
     /// No up and down arrows: the field takes all its width (the wheel
@@ -105,6 +233,12 @@ impl<'a, N: Numeric> NumField<'a, N> {
         self.step(speed.into())
     }
 
+    /// A label just before the box, such as `X:`.
+    pub fn prefix(mut self, prefix: impl ToString) -> Self {
+        self.prefix = prefix.to_string().trim_end().to_string();
+        self
+    }
+
     pub fn suffix(mut self, suffix: impl ToString) -> Self {
         self.suffix = suffix.to_string();
         self
@@ -118,6 +252,15 @@ impl<'a, N: Numeric> NumField<'a, N> {
 
     pub fn max_decimals(mut self, n: usize) -> Self {
         self.max_decimals = Some(n);
+        self
+    }
+
+    /// A length: the decimals the value needs, at least one and at most
+    /// `precision` (Options > Edit, Drawing precision), trailing zeros
+    /// dropped: 80.0 mm, 140.5 mm, 140.625 mm (#1761).
+    pub fn length_decimals(mut self, precision: usize) -> Self {
+        self.min_decimals = precision.min(1);
+        self.max_decimals = Some(precision);
         self
     }
 
@@ -160,29 +303,74 @@ pub fn format_number(v: f64, integral: bool, min: usize, max: Option<usize>) -> 
             s.pop();
         }
     }
-    if s == "-0" {
-        s = "0".into();
+    // No minus before a zero that rounding made (-0, -0.0).
+    if s.starts_with('-') && s.bytes().all(|b| matches!(b, b'-' | b'0' | b'.')) {
+        s.remove(0);
     }
     s
 }
 
 impl<N: Numeric> Widget for NumField<'_, N> {
     fn ui(self, ui: &mut Ui) -> Response {
+        // Fill a sized slot; otherwise keep to the field's own width, so a
+        // field in a row of controls does not take the rest of the row.
+        let slot = ui
+            .layout()
+            .horizontal_justify()
+            .then(|| ui.available_width());
+        // The prefix, the box and the arrows stay together on one line, in
+        // a row of their own: in a column (or a justified slot) they would
+        // land under each other or the prefix would take the whole slot,
+        // and in a grid each would take a cell of its own, the arrows
+        // standing apart from the box at the right of the next column
+        // (#948).
+        ui.horizontal(|ui| self.row(ui, slot)).inner
+    }
+}
+
+impl<N: Numeric> NumField<'_, N> {
+    /// The prefix, the box and the arrows, laid out left to right; `slot`
+    /// is the width they share when the parent gave one.
+    fn row(self, ui: &mut Ui, mut slot: Option<f32>) -> Response {
         let id = ui.next_auto_id().with("num_field");
         let shown = self.text();
         // While typing, the text lives in memory until it is applied.
-        let stored = ui.data(|d| d.get_temp::<String>(id));
+        let mut stored = ui.data(|d| d.get_temp::<String>(id));
+        // A box focused and not typed into follows its value: in Bitmaps >
+        // Resample, a width typed and left for the percent box changed
+        // the percent after that box took the focus, which kept the old
+        // percent and put it back when left (#3332).
+        let shown_id = id.with("shown");
+        let was_shown = ui.data(|d| d.get_temp::<String>(shown_id));
+        if stored.is_some() && stored == was_shown && was_shown.as_ref() != Some(&shown) {
+            stored = Some(shown.clone());
+            ui.data_mut(|d| d.insert_temp(shown_id, shown.clone()));
+            if let Some(mut state) = TextEdit::load_state(ui.ctx(), id) {
+                let all = egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(shown.chars().count()),
+                );
+                state.cursor.set_char_range(Some(all));
+                state.store(ui.ctx(), id);
+            }
+        }
         let mut buf = stored.clone().unwrap_or_else(|| shown.clone());
-        // Fill a sized slot; otherwise keep to the field's own width, so a
-        // field in a row of controls does not take the rest of the row.
+        // A drag on the label slides the value (#1303). The label is no
+        // stop for Tab, which goes from box to box (#1537).
+        let mut label_resp = None;
+        if !self.prefix.is_empty() {
+            let label = ui.add(egui::Label::new(&self.prefix).sense(egui::Sense::DRAG));
+            if let Some(s) = &mut slot {
+                *s -= label.rect.width() + ui.spacing().item_spacing.x;
+            }
+            if label.hovered() || label.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            label_resp = Some(label);
+        }
         // The spin arrows take their width at the right of the box.
-        let justified = ui.layout().horizontal_justify();
         let spin_w = if self.spin { SPIN_W } else { 0.0 };
-        let width = if justified {
-            (ui.available_width() - spin_w).max(16.0)
-        } else {
-            (self.width - spin_w).max(16.0)
-        };
+        let width = (slot.unwrap_or(self.width) - spin_w).max(16.0);
         let spacing = ui.spacing().item_spacing;
         ui.spacing_mut().item_spacing.x = 0.0;
         let mut resp = ui.add(
@@ -192,9 +380,17 @@ impl<N: Numeric> Widget for NumField<'_, N> {
                 .vertical_align(egui::Align::Center)
                 .desired_width(width),
         );
-        // The arrows: up over down, each half the box's height.
+        if self.focus {
+            resp.request_focus();
+        }
+        // The arrows: up over down, each half the box's height. They take
+        // clicks and drags but no focus: Tab from the box goes to the next
+        // box, not to the arrows beside it (#1537). None without `spin`.
         let (spin, spin_resp) = if self.spin {
-            ui.allocate_exact_size(egui::vec2(SPIN_W, resp.rect.height()), egui::Sense::click())
+            ui.allocate_exact_size(
+                egui::vec2(SPIN_W, resp.rect.height()),
+                egui::Sense::CLICK | egui::Sense::DRAG,
+            )
         } else {
             let r = egui::Rect::from_min_size(resp.rect.right_top(), egui::vec2(0.0, 0.0));
             (r, ui.interact(r, id.with("no_spin"), egui::Sense::hover()))
@@ -248,29 +444,83 @@ impl<N: Numeric> Widget for NumField<'_, N> {
                 }
             }
         }
-        // The wheel over the box or the arrows.
-        if ui.rect_contains_pointer(resp.rect) || ui.rect_contains_pointer(spin) {
-            let scroll: Option<(f32, egui::Modifiers)> = ui.input(|i| {
-                i.raw.events.iter().rev().find_map(|e| match e {
-                    egui::Event::MouseWheel {
-                        delta, modifiers, ..
-                    } if delta.y != 0.0 => Some((delta.y, *modifiers)),
-                    _ => None,
-                })
-            });
-            if let Some((dy, mods)) = scroll {
-                stepped = Some((if dy > 0.0 { 1.0 } else { -1.0 }, mods));
+        // A drag left or right (or down and up) on the arrows or the
+        // label: a step every few pixels, the part left over kept for the
+        // next frame (#1303). A finger sliding the bar the field is on
+        // steps nothing (#1997).
+        let drag_id = id.with("drag");
+        let drags = [Some(&spin_resp), label_resp.as_ref()];
+        // A label drawn apart just left of the box (#3044).
+        let apart = take_label_drag(ui, resp.rect).filter(|d| *d != egui::Vec2::ZERO);
+        let dragging = (drags.iter().flatten().any(|r| r.dragged())
+            && !crate::ui::overflow::finger_sliding(ui.ctx()))
+            || apart.is_some();
+        if dragging {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            let d = drags
+                .iter()
+                .flatten()
+                .fold(apart.unwrap_or_default(), |a, r| a + r.drag_delta());
+            let acc = ui.data(|m| m.get_temp::<f32>(drag_id)).unwrap_or(0.0) + d.x - d.y;
+            let steps = (acc / DRAG_PX_PER_STEP).trunc();
+            ui.data_mut(|m| m.insert_temp(drag_id, acc - steps * DRAG_PX_PER_STEP));
+            if steps != 0.0 {
+                stepped = Some((f64::from(steps), ui.input(|i| i.modifiers)));
             }
+        } else {
+            ui.data_mut(|m| m.remove::<f32>(drag_id));
+        }
+        // The wheel over the box or the arrows, a step a notch; the bar or
+        // panel around the field does not scroll with it (#783).
+        let wheel_here = self.wheel_on_hover || resp.has_focus();
+        let mut by_wheel = false;
+        if stepped.is_some() {
+            // Dragged this frame: the wheel waits.
+        } else if wheel_here
+            && (ui.rect_contains_pointer(resp.rect) || ui.rect_contains_pointer(spin))
+        {
+            if let Some(steps) = wheel_steps(ui, id.with("wheel")) {
+                let mods = ui.input(|i| {
+                    i.raw
+                        .events
+                        .iter()
+                        .rev()
+                        .find_map(|e| match e {
+                            egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
+                            _ => None,
+                        })
+                        .unwrap_or(i.modifiers)
+                });
+                if steps != 0 {
+                    stepped = Some((f64::from(steps), mods));
+                    by_wheel = true;
+                }
+            }
+        } else {
+            ui.data_mut(|d| d.remove::<f32>(id.with("wheel")));
         }
         if let Some((dir, mods)) = stepped {
-            let factor = if mods.command {
-                0.1
-            } else if mods.shift {
-                10.0
+            // A whole-number field steps at least one: a step below one
+            // rounded back to the value held, so the arrows of Cut into
+            // Grid's rows and columns (step 0.1) did nothing and a drag
+            // on them jumped (#4043, #4044).
+            let base = if N::INTEGRAL {
+                self.step.max(1.0)
             } else {
-                1.0
+                self.step
             };
-            let mut v = self.value.to_f64() + dir * self.step * factor;
+            let fine = self.fine_step.unwrap_or(self.step / 10.0);
+            let span = self.range.map(|(lo, hi)| (hi - lo).abs());
+            let step = if by_wheel && !N::INTEGRAL {
+                wheel_step(self.step, fine, span, mods)
+            } else if mods.command {
+                fine
+            } else if mods.shift {
+                base * 10.0
+            } else {
+                base
+            };
+            let mut v = self.value.to_f64() + dir * step;
             if let Some((lo, hi)) = self.range {
                 v = v.clamp(lo.min(hi), hi.max(lo));
             }
@@ -287,29 +537,25 @@ impl<N: Numeric> Widget for NumField<'_, N> {
                 *self.value = N::from_f64(v);
                 resp.mark_changed();
             }
-            return resp;
+            // Steps of one turn of the wheel, clicks on the arrows or one
+            // drag are one undo step (see `crate::step_merge`).
+            note_step(id.with("wheel"), dragging);
+            return with_arrows(resp, spin_resp);
         }
         if self.mixed {
-            resp = resp.on_hover_text(crate::i18n::tr("docker.mixed_tip"));
+            resp = resp.rich_tip(crate::i18n::tr("docker.mixed_tip"));
         }
         // Typing does not change the value; applying it does.
         resp.flags.set(egui::response::Flags::CHANGED, false);
-        if resp.has_focus() && stored.is_none() {
-            // Just focused: the whole value is selected, ready to be typed
-            // over.
-            if let Some(mut state) = TextEdit::load_state(ui.ctx(), id) {
-                let all = egui::text::CCursorRange::two(
-                    egui::text::CCursor::new(0),
-                    egui::text::CCursor::new(buf.chars().count()),
-                );
-                state.cursor.set_char_range(Some(all));
-                state.store(ui.ctx(), id);
-            }
-        }
+        select_all_when_focused(ui, &resp, stored.is_none(), &buf);
         if resp.has_focus() {
+            if stored.is_none() {
+                ui.data_mut(|d| d.insert_temp(shown_id, shown.clone()));
+            }
             ui.data_mut(|d| d.insert_temp(id, buf.clone()));
         } else if stored.is_some() || resp.lost_focus() {
             ui.data_mut(|d| d.remove::<String>(id));
+            ui.data_mut(|d| d.remove::<String>(shown_id));
             let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
             if !escaped && buf != shown {
                 if let Some(mut v) = parse(&buf, self.unit_mm) {
@@ -326,8 +572,320 @@ impl<N: Numeric> Widget for NumField<'_, N> {
                 }
             }
         }
-        resp
+        with_arrows(resp, spin_resp)
     }
+}
+
+/// A number box just focused (`fresh`: nothing typed in it yet) has its
+/// whole value selected, ready to be typed over, as every number box of
+/// the bars does: a click put the caret where it landed, so "2" typed
+/// into "0.57 pt" made it "0.572 pt" and the width seemed not to change
+/// (#1329).
+pub fn select_all_when_focused(ui: &Ui, resp: &Response, fresh: bool, text: &str) {
+    if !resp.has_focus() || !fresh {
+        return;
+    }
+    if let Some(mut state) = TextEdit::load_state(ui.ctx(), resp.id) {
+        let all = egui::text::CCursorRange::two(
+            egui::text::CCursor::new(0),
+            egui::text::CCursor::new(text.chars().count()),
+        );
+        state.cursor.set_char_range(Some(all));
+        state.store(ui.ctx(), resp.id);
+    }
+}
+
+/// The box's response, also hovered over its spin arrows: a tip given
+/// to the field shows over the arrows too. The focus stays the box's.
+fn with_arrows(mut resp: Response, arrows: Response) -> Response {
+    // Only the hover joins: a click on an arrow is a step, not a click
+    // on the box.
+    if arrows.hovered() {
+        resp.flags.set(egui::response::Flags::HOVERED, true);
+    }
+    resp
+}
+
+/// What one wheel notch adds to a decimal field whose arrows step by
+/// `step` (`fine` with Ctrl) over a range `span` wide (`None`: no
+/// range). A field stepping by less than a whole unit over a range of
+/// ten units or more steps the whole units with the plain wheel and its
+/// own step, the decimals, with Ctrl, so typical values need no key
+/// held (#2705); Shift steps ten units. Any other field steps as its
+/// arrows do: `step`, `fine` with Ctrl, ten steps with Shift.
+pub fn wheel_step(step: f64, fine: f64, span: Option<f64>, mods: egui::Modifiers) -> f64 {
+    let wide = span.is_none_or(|s| s >= 10.0);
+    // A whole unit must be a run of steps, or the field's snapping would
+    // pull the value back between two of them.
+    let units_fit = step > 0.0 && ((1.0 / step) - (1.0 / step).round()).abs() < 1e-6;
+    if step < 1.0 && wide && units_fit {
+        if mods.command {
+            step
+        } else if mods.shift {
+            10.0
+        } else {
+            1.0
+        }
+    } else if mods.command {
+        fine
+    } else if mods.shift {
+        step * 10.0
+    } else {
+        step
+    }
+}
+
+/// Raw wheel units one notch of a mouse wheel sends. The desktop
+/// backends report a notch as one line (or 50 points from a
+/// trackpad); browsers report it as three lines or as 100 pixels, so
+/// read as desktop notches a browser notch counted three or two
+/// notches at once (#1016 on the canvas, #1406 everywhere else).
+pub fn wheel_notch(unit: egui::MouseWheelUnit, web: bool) -> f32 {
+    match (unit, web) {
+        (egui::MouseWheelUnit::Line, false) => 1.0,
+        (egui::MouseWheelUnit::Line, true) => 3.0,
+        (egui::MouseWheelUnit::Point, false) => 50.0,
+        (egui::MouseWheelUnit::Point, true) => 100.0,
+        (egui::MouseWheelUnit::Page, _) => 0.1,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: read the wheel as the browser build does (see [`web_wheel`]).
+    static WEB_WHEEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests: read the wheel events of this thread as the browser build does
+/// (`on`) or as the desktop does, to feed browser-style notches to the
+/// widgets.
+#[cfg(test)]
+pub fn set_web_wheel(on: bool) {
+    WEB_WHEEL.with(|w| w.set(on));
+}
+
+/// Whether wheel events come in the browser's units.
+pub fn web_wheel() -> bool {
+    #[cfg(test)]
+    if WEB_WHEEL.with(|w| w.get()) {
+        return true;
+    }
+    crate::files::WEB
+}
+
+/// Points the desktop scrolls a panel for one wheel notch: one line at
+/// egui's desktop line speed.
+pub const DESKTOP_NOTCH_POINTS: f32 = 40.0;
+
+/// How much egui's scroll of a browser wheel event is scaled so that a
+/// notch scrolls a panel as far as on the desktop (#1406). egui makes a
+/// browser line `line_speed` points (8, where the desktop has 40) and a
+/// pixel one point, so a notch of three lines (Firefox) scrolled 24
+/// points and one of 100 pixels (Chromium, Safari) 100, where the
+/// desktop scrolls 40. A smaller pixel event (under half a notch) comes
+/// from a touchpad, which scrolls by the distance it reports, as on the
+/// desktop; a page is the window's height on both.
+pub fn web_scroll_scale(unit: egui::MouseWheelUnit, delta: egui::Vec2, line_speed: f32) -> f32 {
+    match unit {
+        egui::MouseWheelUnit::Line if line_speed > 0.0 => {
+            DESKTOP_NOTCH_POINTS / (wheel_notch(unit, true) * line_speed)
+        }
+        egui::MouseWheelUnit::Point
+            if delta.x.abs().max(delta.y.abs()) >= wheel_notch(unit, true) / 2.0 =>
+        {
+            DESKTOP_NOTCH_POINTS / wheel_notch(unit, true)
+        }
+        _ => 1.0,
+    }
+}
+
+/// The memory key of the scale of the browser wheel turn whose smoothed
+/// scroll is running (see [`scale_web_scroll`]).
+fn web_scroll_scale_id() -> egui::Id {
+    egui::Id::new("web_scroll_scale")
+}
+
+/// Called at the start of every frame, before anything reads the scroll:
+/// in the browser, egui's smoothed scroll is scaled by
+/// [`web_scroll_scale`] of the last wheel event, also in the frames the
+/// smoothing spreads a notch over, so panels scroll as far a notch as on
+/// the desktop (#1406). The wheel events stay as they came: the steps of
+/// number fields, lists and the canvas zoom count them in browser units.
+pub fn scale_web_scroll(ctx: &egui::Context) {
+    if !web_wheel() {
+        return;
+    }
+    let id = web_scroll_scale_id();
+    let line_speed = ctx.options(|o| o.input_options.line_scroll_speed);
+    let latest = ctx.input(|i| {
+        i.raw.events.iter().rev().find_map(|e| match e {
+            egui::Event::MouseWheel { unit, delta, .. } => {
+                Some(web_scroll_scale(*unit, *delta, line_speed))
+            }
+            _ => None,
+        })
+    });
+    let scale = match latest {
+        Some(k) => {
+            ctx.data_mut(|d| d.insert_temp(id, k));
+            k
+        }
+        None => ctx.data(|d| d.get_temp::<f32>(id)).unwrap_or(1.0),
+    };
+    if scale != 1.0 {
+        ctx.input_mut(|i| i.smooth_scroll_delta *= scale);
+    }
+}
+
+/// The notches one wheel event of `delta` raw units turns, up positive,
+/// in the units the desktop (`web` false) or the browser reports: an
+/// event of a notch or more is one notch whatever its size, a smaller one
+/// (a touchpad, a fine wheel) the part of a notch it makes.
+pub fn event_notches(unit: egui::MouseWheelUnit, delta: f32, web: bool) -> f32 {
+    let n = delta / wheel_notch(unit, web);
+    if n.abs() >= 1.0 {
+        n.signum()
+    } else {
+        n
+    }
+}
+
+/// Add the notches of one frame (see [`event_notches`]) to `acc`, the
+/// part of a notch left from earlier frames: the whole steps they make.
+/// The part left starts again when the wheel turns the other way.
+pub fn add_notches(acc: &mut f32, notches: impl IntoIterator<Item = f32>) -> i32 {
+    let mut steps = 0i32;
+    for d in notches {
+        if *acc != 0.0 && acc.signum() != d.signum() {
+            *acc = 0.0;
+        }
+        *acc += d;
+        let whole = acc.trunc();
+        steps += whole as i32;
+        *acc -= whole;
+    }
+    steps
+}
+
+/// The memory key that says a field took the wheel and the smoothed
+/// scroll of that turn is still running.
+fn wheel_taken_id() -> egui::Id {
+    egui::Id::new("field_wheel_taken")
+}
+
+/// Tests: whether a field took the wheel (see [`take_wheel`]).
+#[cfg(test)]
+pub fn wheel_taken(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(wheel_taken_id()))
+        .unwrap_or(false)
+}
+
+/// The wheel turned over a field, list or tab strip that steps with it:
+/// nothing around it scrolls with that turn. The smoothed scroll egui
+/// makes of a notch reaches the next frames too, and those frames slid the
+/// bar or panel holding the field, carrying the field away from under the
+/// pointer after a step or two (#783); [`hold_taken_wheel`] keeps them
+/// from scrolling anything.
+pub fn take_wheel(ui: &Ui) {
+    ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+    ui.ctx().data_mut(|d| d.insert_temp(wheel_taken_id(), true));
+}
+
+/// Called at the start of every frame, before anything reads the scroll:
+/// while the smoothed scroll of a notch a field took is still running,
+/// it scrolls nothing. A new turn of the wheel ends the hold (a field
+/// under the pointer takes that one again).
+pub fn hold_taken_wheel(ctx: &egui::Context) {
+    let id = wheel_taken_id();
+    if !ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
+        return;
+    }
+    let (turned, scrolling) = ctx.input(|i| {
+        (
+            i.raw
+                .events
+                .iter()
+                .any(|e| matches!(e, egui::Event::MouseWheel { .. })),
+            i.is_scrolling(),
+        )
+    });
+    if turned || !scrolling {
+        ctx.data_mut(|d| d.remove::<bool>(id));
+        return;
+    }
+    ctx.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+}
+
+thread_local! {
+    /// The widget stepped this frame (see [`note_step`]).
+    static STEPPED: std::cell::Cell<Option<(egui::Id, bool)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// A number field (or a list or slider stepping with the wheel) stepped
+/// its value this frame by the wheel, its arrows or a drag on them;
+/// `held` while the drag goes on. The steps one such widget makes in a
+/// row, with nothing else done in between, become one undo step
+/// (`crate::step_merge`).
+pub fn note_step(widget: egui::Id, held: bool) {
+    STEPPED.with(|s| s.set(Some((widget, held))));
+}
+
+/// The widget [`note_step`] named since the last call, forgotten.
+pub fn take_step() -> Option<(egui::Id, bool)> {
+    STEPPED.with(|s| s.take())
+}
+
+/// The wheel notches turned this frame over a widget that steps with the
+/// wheel, up positive; `None` when the wheel did not turn. An event of a
+/// notch or more is one step whatever its size; parts of a notch from a
+/// touchpad or a fine wheel add up (in memory under `acc_id`) until they
+/// make one, and start again when the wheel turns the other way. A
+/// browser's notch counts as one, as a desktop notch does (#1406). A turn
+/// takes the wheel ([`take_wheel`]), so nothing around scrolls with it.
+pub fn wheel_steps(ui: &Ui, acc_id: egui::Id) -> Option<i32> {
+    wheel_steps_with(ui, acc_id, |_| true, false)
+}
+
+/// [`wheel_steps`] counting only the wheel events whose modifiers `keys`
+/// accepts, and their sideways turn too when `sideways` (a palette row
+/// steps with either).
+pub fn wheel_steps_with(
+    ui: &Ui,
+    acc_id: egui::Id,
+    keys: impl Fn(egui::Modifiers) -> bool,
+    sideways: bool,
+) -> Option<i32> {
+    let web = web_wheel();
+    let notches: Vec<f32> = ui.input(|i| {
+        i.raw
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                    ..
+                } if keys(*modifiers) => {
+                    let d = if sideways { delta.y + delta.x } else { delta.y };
+                    (d != 0.0).then(|| event_notches(*unit, d, web))
+                }
+                _ => None,
+            })
+            .collect()
+    });
+    if notches.is_empty() {
+        return None;
+    }
+    take_wheel(ui);
+    let mut acc = ui.data(|d| d.get_temp::<f32>(acc_id)).unwrap_or(0.0);
+    let steps = add_notches(&mut acc, notches);
+    ui.data_mut(|d| d.insert_temp(acc_id, acc));
+    if steps != 0 {
+        note_step(acc_id, false);
+    }
+    Some(steps)
 }
 
 /// Cover a colour button whose objects have different colours: an empty
@@ -350,7 +908,7 @@ pub fn mixed_note(ui: &mut Ui) -> Response {
             .color(crate::theme::Tokens::text_dim())
             .italics(),
     )
-    .on_hover_text(crate::i18n::tr("docker.mixed_tip"))
+    .rich_tip(crate::i18n::tr("docker.mixed_tip"))
 }
 
 /// Millimetres per unit for a unit name typed after a value.
@@ -369,42 +927,69 @@ fn unit_named(name: &str) -> Option<f64> {
 }
 
 /// The value typed in `text`: numbers joined by `+ - * /` (with the usual
-/// precedence and brackets), a comma or a point as the decimal mark,
-/// then optionally a unit name, converted to the field's unit when the
-/// field measures distances (`unit_mm`). Other trailing marks (`%`, `°`,
-/// an unknown unit) are ignored.
+/// precedence and brackets), a comma or a point as the decimal mark. A
+/// number (or a bracket) may carry a unit name, which converts it to the
+/// field's unit when the field measures distances (`unit_mm`); a number
+/// without one is in the field's unit, so "60.352 mm / 2", "24 mm + 1 in"
+/// and "(16mm*2)+4in+2pt" work out as in the reference program (#1495).
+/// Percent and degree marks and unknown unit names are read past.
 pub fn parse(text: &str, unit_mm: Option<f64>) -> Option<f64> {
-    let t = text.trim();
+    // A percent or degree mark after a number says what it is, as the
+    // field does: read past it ("50 % * 2").
+    let marks: String = text
+        .chars()
+        .map(|c| if c == '%' || c == '\u{00B0}' { ' ' } else { c })
+        .collect();
+    let t = marks.trim();
     // Split off what follows the expression.
     let end = t
         .char_indices()
-        .find(|(_, c)| !(c.is_ascii_digit() || "+-*/.,() eE".contains(*c)))
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || "+-*/.,() \"".contains(*c)))
         .map(|(i, _)| i)
         .unwrap_or(t.len());
-    let (expr, tail) = t.split_at(end);
-    // A trailing "e" would be read as an exponent; keep it with the unit.
-    let expr = expr.trim();
-    let v = Expr::new(expr).parse()?;
-    if !v.is_finite() {
-        return None;
-    }
-    match (unit_mm, unit_named(tail)) {
-        (Some(field), Some(typed)) if field > 0.0 => Some(v * typed / field),
-        _ => Some(v),
-    }
+    let (expr, _) = t.split_at(end);
+    let v = Expr::new(expr.trim(), unit_mm).parse()?;
+    v.is_finite().then_some(v)
 }
 
 /// A small recursive-descent reader for sums and products.
 struct Expr<'a> {
     s: &'a [u8],
     i: usize,
+    /// Millimetres per unit of the field, when it measures distances.
+    unit_mm: Option<f64>,
 }
 
 impl<'a> Expr<'a> {
-    fn new(s: &'a str) -> Self {
+    fn new(s: &'a str, unit_mm: Option<f64>) -> Self {
         Expr {
             s: s.as_bytes(),
             i: 0,
+            unit_mm,
+        }
+    }
+
+    /// `v` with the unit name typed after it, if any, read and taken into
+    /// the field's unit. An unknown name is read and left alone.
+    fn unit(&mut self, v: f64) -> f64 {
+        let save = self.i;
+        self.ws();
+        let start = self.i;
+        while self
+            .s
+            .get(self.i)
+            .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'"')
+        {
+            self.i += 1;
+        }
+        if self.i == start {
+            self.i = save;
+            return v;
+        }
+        let name = std::str::from_utf8(&self.s[start..self.i]).unwrap_or("");
+        match (self.unit_mm, unit_named(name)) {
+            (Some(field), Some(typed)) if field > 0.0 => v * typed / field,
+            _ => v,
         }
     }
 
@@ -478,12 +1063,16 @@ impl<'a> Expr<'a> {
             b'(' => {
                 self.i += 1;
                 let v = self.sum()?;
-                (self.peek()? == b')').then(|| {
-                    self.i += 1;
-                    v
-                })
+                if self.peek()? != b')' {
+                    return None;
+                }
+                self.i += 1;
+                Some(self.unit(v))
             }
-            _ => self.number(),
+            _ => {
+                let v = self.number()?;
+                Some(self.unit(v))
+            }
         }
     }
 
@@ -531,6 +1120,369 @@ impl<'a> Expr<'a> {
 mod tests {
     use super::*;
 
+    /// One notch of a mouse wheel, as Windows sends it (one line).
+    fn notch(dy: f32) -> egui::Event {
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// One notch is one step on the desktop and in the browser, in any
+    /// unit the wheel event comes in: the desktop sends a line or 50
+    /// points a notch, a browser three lines (Firefox) or 100 pixels
+    /// (Chromium, Safari). Parts of a browser notch add up per browser
+    /// notch, not per desktop one (#1406).
+    #[test]
+    fn a_wheel_notch_is_one_step_on_the_desktop_and_in_the_browser() {
+        use egui::MouseWheelUnit::{Line, Page, Point};
+        let steps = |turns: &[(egui::MouseWheelUnit, f32)], web: bool| {
+            let mut acc = 0.0;
+            turns
+                .iter()
+                .map(|&(unit, d)| add_notches(&mut acc, [event_notches(unit, d, web)]))
+                .collect::<Vec<i32>>()
+        };
+        assert_eq!(
+            steps(&[(Line, 1.0), (Point, 50.0), (Line, -1.0)], false),
+            [1, 1, -1]
+        );
+        assert_eq!(
+            steps(&[(Line, 3.0), (Point, 100.0), (Line, -3.0)], true),
+            [1, 1, -1]
+        );
+        assert_eq!(steps(&[(Page, 1.0)], true), [1]);
+        // A touchpad's small turns: two halves of a browser notch make one
+        // step (they made two), a turn back starts again.
+        assert_eq!(steps(&[(Point, 50.0), (Point, 50.0)], true), [0, 1]);
+        assert_eq!(steps(&[(Point, 25.0), (Point, 25.0)], false), [0, 1]);
+        assert_eq!(steps(&[(Line, 1.5), (Line, 1.5)], true), [0, 1]);
+        assert_eq!(
+            steps(&[(Point, 60.0), (Point, -60.0), (Point, -40.0)], true),
+            [0, 0, -1]
+        );
+    }
+
+    /// The browser's scroll scale: a notch of three lines at egui's web
+    /// line speed (8) or of 100 pixels scrolls the desktop's 40 points; a
+    /// touchpad's small pixel turns and pages are left as they are.
+    #[test]
+    fn a_browser_notch_is_scaled_to_the_desktop_distance() {
+        use egui::MouseWheelUnit::{Line, Page, Point};
+        let v = |y: f32| egui::vec2(0.0, y);
+        let notch = |unit, d: f32, line: f32| {
+            let egui_points = match unit {
+                Line => d * line,
+                _ => d,
+            };
+            egui_points * web_scroll_scale(unit, v(d), line)
+        };
+        assert!((notch(Line, 3.0, 8.0) - DESKTOP_NOTCH_POINTS).abs() < 1e-4);
+        assert!((notch(Line, -3.0, 8.0) + DESKTOP_NOTCH_POINTS).abs() < 1e-4);
+        assert!((notch(Line, 3.0, 40.0) - DESKTOP_NOTCH_POINTS).abs() < 1e-4);
+        assert!((notch(Point, 100.0, 8.0) - DESKTOP_NOTCH_POINTS).abs() < 1e-4);
+        assert!((notch(Point, -200.0, 8.0) + 2.0 * DESKTOP_NOTCH_POINTS).abs() < 1e-4);
+        // Sideways notches too.
+        assert_eq!(
+            web_scroll_scale(Point, egui::vec2(100.0, 0.0), 8.0),
+            web_scroll_scale(Point, v(100.0), 8.0)
+        );
+        assert_eq!(web_scroll_scale(Point, v(12.0), 8.0), 1.0);
+        assert_eq!(web_scroll_scale(Page, v(1.0), 8.0), 1.0);
+        assert_eq!(web_scroll_scale(Line, v(3.0), 0.0), 1.0);
+    }
+
+    /// The smoothed scroll a panel moves by adds up to as much for a
+    /// browser notch (three lines or 100 pixels) as for a desktop notch,
+    /// over all the frames egui spreads it across (#1406); 100 pixels made
+    /// 2.5 times as much. A touchpad's small turn keeps its distance.
+    #[test]
+    fn a_browser_notch_scrolls_as_far_as_a_desktop_notch() {
+        let scrolled = |unit, dy: f32, web: bool| -> f32 {
+            let ctx = crate::theme::ui_context();
+            set_web_wheel(web);
+            let mut total = 0.0;
+            for frame in 0..120 {
+                let mut events = Vec::new();
+                if frame == 1 {
+                    events.push(egui::Event::MouseWheel {
+                        unit,
+                        delta: egui::vec2(0.0, dy),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let input = egui::RawInput {
+                    events,
+                    time: Some(frame as f64 / 60.0),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    scale_web_scroll(ui.ctx());
+                    total += ui.input(|i| i.smooth_scroll_delta.y);
+                });
+                out.textures_delta.clear();
+            }
+            set_web_wheel(false);
+            total
+        };
+        use egui::MouseWheelUnit::{Line, Point};
+        let desktop = scrolled(Line, -1.0, false);
+        assert!((desktop + DESKTOP_NOTCH_POINTS).abs() < 1.0, "{desktop}");
+        for (unit, dy) in [(Line, -3.0), (Point, -100.0)] {
+            let web = scrolled(unit, dy, true);
+            assert!((web - desktop).abs() < 1.0, "{unit:?}: {web} vs {desktop}");
+        }
+        let touchpad = scrolled(Point, -12.0, true);
+        assert!((touchpad + 12.0).abs() < 0.5, "{touchpad}");
+    }
+
+    /// Fed browser-style notches, the wheel over a field steps it once a
+    /// notch, three lines or 100 pixels alike.
+    #[test]
+    fn a_browser_wheel_notch_steps_a_field_once() {
+        let ctx = crate::theme::ui_context();
+        let id = egui::Id::new("web_wheel_test");
+        let clock = std::cell::Cell::new(0.0f64);
+        let run = |events: Vec<egui::Event>| -> Option<i32> {
+            clock.set(clock.get() + 1.0 / 60.0);
+            let input = egui::RawInput {
+                events,
+                time: Some(clock.get()),
+                ..Default::default()
+            };
+            let mut steps = None;
+            let mut out = ctx.run_ui(input, |ui| steps = wheel_steps(ui, id));
+            out.textures_delta.clear();
+            steps
+        };
+        let turn = |unit, dy: f32| egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        };
+        use egui::MouseWheelUnit::{Line, Point};
+        set_web_wheel(true);
+        assert_eq!(run(vec![turn(Line, 3.0)]), Some(1));
+        assert_eq!(run(vec![turn(Point, -100.0)]), Some(-1));
+        assert_eq!(run(vec![turn(Point, 30.0)]), Some(0));
+        assert_eq!(run(vec![turn(Point, 30.0)]), Some(0));
+        assert_eq!(run(vec![turn(Point, 40.0)]), Some(1));
+        assert_eq!(run(Vec::new()), None);
+        set_web_wheel(false);
+        assert_eq!(run(vec![turn(Point, 30.0)]), Some(0));
+        assert_eq!(run(vec![turn(Point, 30.0)]), Some(1));
+    }
+
+    /// The wheel over a number field in a bar longer than its window (the
+    /// property bar, which slides with the wheel) steps the field every
+    /// notch and leaves the bar where it is, however many frames the
+    /// smoothed scroll of a notch takes to run out: the bar slid on the
+    /// frames after a notch, carrying the field away from under the
+    /// pointer, so the wheel stopped working on it after a step or two
+    /// (#783). That is for the box clicked into: over a box not clicked
+    /// into the wheel slides the bar, so a turn meant to slide the bar
+    /// changes no value (#3589). Away from the fields the wheel still
+    /// slides the bar.
+    #[test]
+    fn the_wheel_steps_a_field_in_a_long_bar_without_sliding_the_bar() {
+        let ctx = crate::theme::ui_context();
+        let mut v = 100.0f64;
+        // Frames a sixtieth of a second apart, as on screen.
+        let clock = std::cell::Cell::new(0.0f64);
+        let run = |v: &mut f64, events: Vec<egui::Event>| -> egui::Rect {
+            let mut field = egui::Rect::NOTHING;
+            clock.set(clock.get() + 1.0 / 60.0);
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 200.0),
+                    )),
+                    events,
+                    time: Some(clock.get()),
+                    ..Default::default()
+                },
+                |ui| {
+                    hold_taken_wheel(ui.ctx());
+                    crate::ui::overflow::row(ui, "bar", |ui| {
+                        ui.add_space(150.0);
+                        field = ui.add(NumField::new(v).range(0.0..=360.0)).rect;
+                        // Wider than the window, as a full bar is.
+                        ui.add_space(900.0);
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            field
+        };
+        for _ in 0..3 {
+            run(&mut v, Vec::new());
+        }
+        let start = run(&mut v, Vec::new());
+        assert!(start.is_positive(), "{start:?}");
+        run(&mut v, vec![egui::Event::PointerMoved(start.center())]);
+        // Not clicked into: the wheel slides the bar and leaves the
+        // value alone (#3589).
+        run(&mut v, vec![notch(-1.0)]);
+        let mut slid = start;
+        for _ in 0..20 {
+            slid = run(&mut v, Vec::new());
+        }
+        assert!(slid.left() < start.left() - 10.0, "{slid:?}");
+        assert_eq!(v, 100.0, "the wheel changed an unfocused box");
+        // Back to the start, then clicked into: the box takes the wheel.
+        run(&mut v, vec![notch(1.0), notch(1.0), notch(1.0)]);
+        for _ in 0..40 {
+            run(&mut v, Vec::new());
+        }
+        let back = run(&mut v, Vec::new());
+        assert!((back.left() - start.left()).abs() < 0.5, "{back:?}");
+        let click = |pressed| egui::Event::PointerButton {
+            pos: start.center(),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(&mut v, vec![click(true)]);
+        run(&mut v, vec![click(false)]);
+        run(&mut v, Vec::new());
+        assert!(ctx.memory(|m| m.focused().is_some()), "clicked into");
+        for k in 1..=8 {
+            // Down: up would push the bar back past its start, where it
+            // cannot go.
+            let now = run(&mut v, vec![notch(-1.0)]);
+            assert!(
+                (now.left() - start.left()).abs() < 0.5,
+                "notch {k}: {now:?}"
+            );
+            // The frames between two notches, while the smoothed scroll
+            // of the last one runs.
+            for f in 0..4 {
+                let now = run(&mut v, Vec::new());
+                assert!(
+                    (now.left() - start.left()).abs() < 0.5,
+                    "notch {k}, frame {f}: the bar slid to {now:?}"
+                );
+            }
+            assert_eq!(v, 100.0 - k as f64, "notch {k}");
+        }
+        // The smoothed scroll runs out with the bar in place.
+        for _ in 0..40 {
+            assert!((run(&mut v, Vec::new()).left() - start.left()).abs() < 0.5);
+        }
+        // Two notches in one frame (a slow frame): two steps.
+        run(&mut v, vec![notch(-1.0), notch(-1.0)]);
+        assert_eq!(v, 90.0);
+        for _ in 0..40 {
+            run(&mut v, Vec::new());
+        }
+        // Over the bar away from the field the wheel slides the bar.
+        ctx.memory_mut(|m| m.stop_text_input());
+        let away = egui::pos2(start.left() - 60.0, start.center().y);
+        run(&mut v, vec![egui::Event::PointerMoved(away)]);
+        run(&mut v, vec![notch(-1.0)]);
+        let mut moved = start;
+        for _ in 0..20 {
+            moved = run(&mut v, Vec::new());
+        }
+        assert!(moved.left() < start.left() - 10.0, "{moved:?}");
+        assert_eq!(v, 90.0);
+    }
+
+    /// The same in a docker or dialog that scrolls up and down: the wheel
+    /// over a field steps it and the panel stays put.
+    #[test]
+    fn the_wheel_steps_a_field_in_a_scrolling_panel_without_scrolling_it() {
+        let ctx = crate::theme::ui_context();
+        let mut v = 5i32;
+        let clock = std::cell::Cell::new(0.0f64);
+        let run = |v: &mut i32, events: Vec<egui::Event>| -> egui::Rect {
+            let mut field = egui::Rect::NOTHING;
+            clock.set(clock.get() + 1.0 / 60.0);
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(300.0, 300.0),
+                    )),
+                    events,
+                    time: Some(clock.get()),
+                    ..Default::default()
+                },
+                |ui| {
+                    hold_taken_wheel(ui.ctx());
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.add_space(100.0);
+                        field = ui.add(NumField::new(v).range(0..=100)).rect;
+                        ui.add_space(2000.0);
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            field
+        };
+        for _ in 0..3 {
+            run(&mut v, Vec::new());
+        }
+        let start = run(&mut v, Vec::new());
+        run(&mut v, vec![egui::Event::PointerMoved(start.center())]);
+        for k in 1..=5 {
+            run(&mut v, vec![notch(-1.0)]);
+            for _ in 0..6 {
+                let now = run(&mut v, Vec::new());
+                assert!((now.top() - start.top()).abs() < 0.5, "notch {k}: {now:?}");
+            }
+            assert_eq!(v, 5 - k, "notch {k}");
+        }
+    }
+
+    /// A touchpad or a fine wheel sends parts of a notch: they add up to
+    /// one step instead of a step each.
+    #[test]
+    fn parts_of_a_notch_add_up_to_one_step() {
+        let ctx = crate::theme::ui_context();
+        let mut v = 0.0f64;
+        let mut rect = egui::Rect::NOTHING;
+        let mut run = |v: &mut f64, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(300.0, 200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| rect = ui.add(NumField::new(v)).rect,
+            );
+            out.textures_delta.clear();
+            rect
+        };
+        run(&mut v, Vec::new());
+        let r = run(&mut v, Vec::new());
+        run(&mut v, vec![egui::Event::PointerMoved(r.center())]);
+        for _ in 0..3 {
+            run(&mut v, vec![notch(0.25)]);
+            assert_eq!(v, 0.0);
+        }
+        run(&mut v, vec![notch(0.25)]);
+        assert_eq!(v, 1.0);
+        run(
+            &mut v,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 100.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(v, 2.0);
+    }
+
     /// The spin arrows at the right of a field and the mouse wheel over
     /// it step the value: a unit (or the field's step), ten with Shift,
     /// a tenth with Ctrl, within the range; a whole-number field stays
@@ -559,7 +1511,9 @@ mod tests {
                             .show(ui.ctx(), |ui| {
                                 ui.horizontal(|ui| {
                                     let a = ui.add(NumField::new(v).range(0.0..=12.0).step(0.5));
-                                    let b = ui.add(NumField::new(n).range(0..=100));
+                                    // A whole-number field given a step below one
+                                    // steps whole units (#4043).
+                                    let b = ui.add(NumField::new(n).range(0..=100).speed(0.1));
                                     rects = (a.rect, b.rect);
                                 });
                             });
@@ -588,14 +1542,15 @@ mod tests {
                 }],
             );
         };
-        // The wheel over the first field: half a unit up, ten halves
-        // with Shift, within the range; Ctrl a twentieth.
+        // The wheel over the first field (half-unit steps over twelve
+        // units): a whole unit up, ten units with Shift, within the
+        // range; Ctrl its own half step (#2705).
         wheel(&mut v, &mut n, a.center(), true, egui::Modifiers::NONE);
-        assert_eq!(v, 10.5);
+        assert_eq!(v, 11.0);
         wheel(&mut v, &mut n, a.center(), true, egui::Modifiers::SHIFT);
         assert_eq!(v, 12.0, "clamped to the range");
         wheel(&mut v, &mut n, a.center(), false, egui::Modifiers::COMMAND);
-        assert!((v - 11.95).abs() < 1e-9, "{v}");
+        assert!((v - 11.5).abs() < 1e-9, "{v}");
         // The arrows at the right of the second field (past its box): up
         // then down.
         let spin_x = b.right() + SPIN_W / 2.0;
@@ -639,6 +1594,190 @@ mod tests {
         assert_eq!(n, 3);
     }
 
+    /// The plain wheel steps the whole units of a decimal field over a
+    /// wide range and Ctrl its decimals (#2705); a narrow range (an
+    /// opacity from 0 to 1), a step a unit cannot be made of, or a step
+    /// of a unit or more keeps the field's own steps.
+    #[test]
+    fn the_plain_wheel_steps_whole_units_and_ctrl_the_decimals() {
+        use egui::Modifiers as M;
+        // A depth from 0.1 to 50 stepping by 0.5.
+        let depth = Some(49.9);
+        assert_eq!(wheel_step(0.5, 0.05, depth, M::NONE), 1.0);
+        assert_eq!(wheel_step(0.5, 0.05, depth, M::COMMAND), 0.5);
+        assert_eq!(wheel_step(0.5, 0.05, depth, M::SHIFT), 10.0);
+        // A length with no range, stepping by a tenth.
+        assert_eq!(wheel_step(0.1, 0.01, None, M::NONE), 1.0);
+        assert_eq!(wheel_step(0.1, 0.01, None, M::COMMAND), 0.1);
+        // A fraction from 0 to 1: its own steps.
+        assert_eq!(wheel_step(0.05, 0.005, Some(1.0), M::NONE), 0.05);
+        assert_eq!(wheel_step(0.05, 0.005, Some(1.0), M::COMMAND), 0.005);
+        // Steps of 0.3: a unit is not a run of them.
+        assert_eq!(wheel_step(0.3, 0.03, None, M::NONE), 0.3);
+        // A whole-unit step or more: unchanged.
+        assert_eq!(wheel_step(5.0, 0.5, Some(360.0), M::NONE), 5.0);
+        assert_eq!(wheel_step(5.0, 0.5, Some(360.0), M::COMMAND), 0.5);
+        assert_eq!(wheel_step(5.0, 0.5, Some(360.0), M::SHIFT), 50.0);
+    }
+
+    /// A drag right on a field's arrows or its label slides the value up,
+    /// a step every few pixels; left slides it down, within the range
+    /// (#1303).
+    #[test]
+    fn dragging_the_arrows_or_the_label_slides_the_value() {
+        let ctx = crate::theme::ui_context();
+        let mut v = 10.0f64;
+        let origin = egui::pos2(100.0, 100.0);
+        let run = |v: &mut f64, events: Vec<egui::Event>| -> egui::Rect {
+            let mut rect = egui::Rect::NOTHING;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Area::new(egui::Id::new("fields"))
+                        .fixed_pos(origin)
+                        .show(ui.ctx(), |ui| {
+                            rect = ui.add(NumField::new(v).range(0.0..=20.0).prefix("W:")).rect;
+                        });
+                },
+            );
+            out.textures_delta.clear();
+            rect
+        };
+        run(&mut v, Vec::new());
+        let b = run(&mut v, Vec::new());
+        let drag = |v: &mut f64, from: egui::Pos2, dx: f32| {
+            run(v, vec![egui::Event::PointerMoved(from)]);
+            run(
+                v,
+                vec![egui::Event::PointerButton {
+                    pos: from,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            for i in 1..=4 {
+                let p = from + egui::vec2(dx * i as f32 / 4.0, 0.0);
+                run(v, vec![egui::Event::PointerMoved(p)]);
+            }
+            let to = from + egui::vec2(dx, 0.0);
+            run(
+                v,
+                vec![egui::Event::PointerButton {
+                    pos: to,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            run(v, Vec::new());
+        };
+        // On the arrows, 20 pixels right: up by about five steps (the
+        // drag starts past egui's few pixels of slack).
+        let spin = egui::pos2(b.right() + SPIN_W / 2.0, b.center().y);
+        drag(&mut v, spin, 20.0);
+        assert!(v > 11.0 && v <= 15.0, "{v}");
+        let after = v;
+        // On the label, 40 pixels left: down, and not below the range.
+        let label = egui::pos2(b.left() - 14.0, b.center().y);
+        drag(&mut v, label, -40.0);
+        assert!(v < after - 1.0, "{v}");
+        drag(&mut v, label, -400.0);
+        assert_eq!(v, 0.0, "clamped to the range");
+    }
+
+    /// A label drawn apart from its field, as a dialog's row label or a
+    /// bar's picture is, slides the field after it on the same line
+    /// (#3044); a label on another line, with no field after it, slides
+    /// nothing.
+    #[test]
+    fn a_label_drawn_apart_slides_its_field() {
+        let ctx = crate::theme::ui_context();
+        let mut v = (10.0f64, 10.0f64);
+        let origin = egui::pos2(100.0, 100.0);
+        let fields = std::cell::Cell::new((egui::Rect::NOTHING, egui::Rect::NOTHING));
+        let mut run = |v: &mut (f64, f64), events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Area::new(egui::Id::new("apart"))
+                        .fixed_pos(origin)
+                        .show(ui.ctx(), |ui| {
+                            crate::ui::options::grid("apart_grid").show(ui, |ui| {
+                                crate::ui::options::row_label(ui, "Width:");
+                                let a = ui.add(NumField::new(&mut v.0).range(0.0..=20.0)).rect;
+                                ui.end_row();
+                                crate::ui::options::row_label(ui, "Nothing here:");
+                                ui.label("text");
+                                ui.end_row();
+                                crate::ui::options::row_label(ui, "Height:");
+                                let b = ui.add(NumField::new(&mut v.1).range(0.0..=20.0)).rect;
+                                ui.end_row();
+                                fields.set((a, b));
+                            });
+                        });
+                },
+            );
+            out.textures_delta.clear();
+        };
+        run(&mut v, Vec::new());
+        run(&mut v, Vec::new());
+        let drag = |run: &mut dyn FnMut(&mut (f64, f64), Vec<egui::Event>),
+                    v: &mut (f64, f64),
+                    from: egui::Pos2,
+                    dx: f32| {
+            run(v, vec![egui::Event::PointerMoved(from)]);
+            run(
+                v,
+                vec![egui::Event::PointerButton {
+                    pos: from,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            for i in 1..=4 {
+                let p = from + egui::vec2(dx * i as f32 / 4.0, 0.0);
+                run(v, vec![egui::Event::PointerMoved(p)]);
+            }
+            run(
+                v,
+                vec![egui::Event::PointerButton {
+                    pos: from + egui::vec2(dx, 0.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            run(v, Vec::new());
+        };
+        // The first row's label: its text ends just left of the field.
+        let (a, b) = fields.get();
+        let label = egui::pos2(a.left() - 12.0, a.center().y);
+        drag(&mut run, &mut v, label, 30.0);
+        assert!(v.0 > 12.0, "the width slid up: {v:?}");
+        assert_eq!(v.1, 10.0, "the height stays");
+        // The middle row's label has no field: the height stays.
+        let before = v;
+        let middle = egui::pos2(a.left() - 12.0, (a.bottom() + b.top()) / 2.0);
+        drag(&mut run, &mut v, middle, 30.0);
+        assert_eq!(v, before, "a label without a field slides nothing");
+    }
+
     #[test]
     fn typed_values_read_units_decimal_commas_and_sums() {
         assert_eq!(parse("12.5 mm", Some(1.0)), Some(12.5));
@@ -655,8 +1794,38 @@ mod tests {
         assert_eq!(parse("2\"", Some(1.0)), Some(50.8));
         assert_eq!(parse("1 cm", Some(1.0)), Some(10.0));
         assert_eq!(parse("25.4 mm", Some(25.4)), Some(1.0));
+        // Sums and products with units: each number in its own unit, a
+        // bare one in the field's (#1495).
+        let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-9);
+        assert!(close(parse("60.352 mm / 2", Some(1.0)), 30.176));
+        assert!(close(parse("60,352 mm / 2", Some(1.0)), 30.176));
+        assert!(close(parse("24 mm + 2", Some(1.0)), 26.0));
+        assert!(close(parse("24 mm + 1 in", Some(1.0)), 49.4));
+        assert!(close(
+            parse("24 mm + 10 pt", Some(1.0)),
+            24.0 + 10.0 * 25.4 / 72.0
+        ));
+        assert!(close(
+            parse("24mm+20pt", Some(1.0)),
+            24.0 + 20.0 * 25.4 / 72.0
+        ));
+        assert!(close(parse("24*2", Some(1.0)), 48.0));
+        assert!(close(parse("24/2", Some(1.0)), 12.0));
+        assert!(close(
+            parse("(16mm*2)+4in+2pt", Some(1.0)),
+            32.0 + 101.6 + 2.0 * 25.4 / 72.0
+        ));
+        // In a field in inches: a bare number is inches.
+        assert!(close(parse("1 + 25.4 mm", Some(25.4)), 2.0));
+        assert!(close(parse("(10 + 15.4) mm", Some(25.4)), 1.0));
+        assert!(close(parse("2\" / 2", Some(1.0)), 25.4));
+        // A field without a unit reads the numbers as they are.
+        assert!(close(parse("50 % * 2", None), 100.0));
+        assert!(close(parse("12 px + 3 px", None), 15.0));
         // Nonsense keeps the old value.
         assert_eq!(parse("abc", None), None);
+        assert_eq!(parse("mm", Some(1.0)), None);
+        assert_eq!(parse("24 mm +", Some(1.0)), None);
         assert_eq!(parse("", None), None);
         assert_eq!(parse("1/0", None), None);
         assert_eq!(parse("1+", None), None);
@@ -669,7 +1838,85 @@ mod tests {
         assert_eq!(format_number(12.0, false, 3, Some(3)), "12.000");
         assert_eq!(format_number(0.123456, false, 1, Some(4)), "0.1235");
         assert_eq!(format_number(-0.0001, false, 0, Some(2)), "0");
+        assert_eq!(format_number(-0.0001, false, 1, Some(3)), "0.0");
+        assert_eq!(format_number(-10.0, false, 1, Some(3)), "-10.0");
         assert_eq!(format_number(7.6, true, 0, None), "8");
+    }
+
+    /// A field alone in a grid cell, with a wider row below setting the
+    /// column, as Print Preview's gap between pages: its arrows sit at
+    /// the right of its box, in the same cell, and step the value (#948).
+    #[test]
+    fn a_field_in_a_grid_keeps_its_arrows_at_its_box() {
+        let ctx = egui::Context::default();
+        let mut v = 5.0f64;
+        let run = |v: &mut f64, events: Vec<egui::Event>| -> (egui::Rect, egui::Rect) {
+            let mut rects = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Grid::new("gap_grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Gap between pages");
+                        let field = ui.add(NumField::new(v).range(0.0..=50.0).suffix(" mm"));
+                        ui.end_row();
+                        ui.label("Margins");
+                        let (wide, _) =
+                            ui.allocate_exact_size(egui::vec2(320.0, 20.0), egui::Sense::hover());
+                        ui.end_row();
+                        rects = (field.rect, wide);
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            rects
+        };
+        // The grid sizes itself on the first frames.
+        for _ in 0..3 {
+            run(&mut v, Vec::new());
+        }
+        let (field, wide) = run(&mut v, Vec::new());
+        assert!(field.right() + SPIN_W < wide.right(), "{field:?} {wide:?}");
+        // A click just right of the box, on the up arrow, steps the value.
+        let at = egui::pos2(
+            field.right() + SPIN_W / 2.0,
+            field.top() + field.height() * 0.25,
+        );
+        run(&mut v, vec![egui::Event::PointerMoved(at)]);
+        for pressed in [true, false] {
+            run(
+                &mut v,
+                vec![egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        run(&mut v, Vec::new());
+        assert_eq!(v, 6.0, "the arrows are at the box");
+        // The next widget in the row comes after the arrows, not over them.
+        let mut rects = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+        let mut w = 1.0f64;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.horizontal(|ui| {
+                let a = ui.add(NumField::new(&mut w));
+                let b = ui.label("x");
+                rects = (a.rect, b.rect);
+            });
+        });
+        out.textures_delta.clear();
+        assert!(
+            rects.1.left() >= rects.0.right() + SPIN_W - 0.5,
+            "{rects:?}"
+        );
     }
 
     #[test]
@@ -703,7 +1950,92 @@ mod tests {
         });
         out.textures_delta.clear();
         assert!(row_width < 100.0, "{row_width}");
-        assert!((slot_width - 120.0).abs() < 1.0, "{slot_width}");
+        // The box and its arrows fill the slot together.
+        assert!((slot_width + SPIN_W - 120.0).abs() < 1.0, "{slot_width}");
+    }
+
+    /// The symmetry bar's X and Y: fields with a prefix stacked in a
+    /// column keep the prefix, the box and the arrows on one line, inside
+    /// the slot they are given.
+    #[test]
+    fn prefixed_fields_in_a_column_stay_on_one_line() {
+        let ctx = egui::Context::default();
+        let (mut x, mut y) = (1.0f64, 2.0f64);
+        let mut rects = Vec::new();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 200.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            ui.vertical(|ui| {
+                let left = ui.cursor().left();
+                for (label, v) in [("X:", &mut x), ("Y:", &mut y)] {
+                    let r = ui.add_sized([120.0, 20.0], NumField::new(v).prefix(label));
+                    rects.push((left, r.rect));
+                }
+            });
+        });
+        out.textures_delta.clear();
+        let (left, a) = rects[0];
+        let (_, b) = rects[1];
+        assert!(
+            a.left() > left + 8.0,
+            "the prefix sits before the box: {a:?}"
+        );
+        assert!(a.right() + SPIN_W <= left + 121.0, "inside the slot: {a:?}");
+        assert!(b.top() - a.top() < 30.0, "one line each: {a:?} {b:?}");
+    }
+
+    /// Tab goes from one field's box to the next field's box in one
+    /// press: the spin arrows and the label are no stops on the way
+    /// (#1537, they were, so Tab had to be pressed twice or three times).
+    #[test]
+    fn tab_goes_from_box_to_box_in_one_press() {
+        let ctx = egui::Context::default();
+        let (mut x, mut y) = (1.0f64, 2.0f64);
+        let tab = || egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        // One frame; `focus` asks the keyboard for the first box. Which
+        // boxes have the focus after it.
+        let mut frame = |events: Vec<egui::Event>, focus: bool| -> (bool, bool) {
+            let mut focused = (false, false);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 100.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                ui.horizontal(|ui| {
+                    let a = ui.add(NumField::new(&mut x).prefix("X:"));
+                    let b = ui.add(NumField::new(&mut y).prefix("Y:"));
+                    if focus {
+                        a.request_focus();
+                    }
+                    focused = (a.has_focus(), b.has_focus());
+                });
+            });
+            out.textures_delta.clear();
+            focused
+        };
+        frame(Vec::new(), true);
+        assert_eq!(frame(Vec::new(), false), (true, false));
+        frame(vec![tab()], false);
+        assert_eq!(
+            frame(Vec::new(), false),
+            (false, true),
+            "one Tab moves to the next box"
+        );
     }
 
     #[test]

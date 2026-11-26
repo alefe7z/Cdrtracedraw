@@ -1,5 +1,7 @@
 # Fusioni
 
+> *Traduzione automatica: questa pagina può essere meno aggiornata della versione inglese.*
+
 Una fusione disegna una serie di passaggi intermedi tra due oggetti, cambiando
 forma, dimensione e colore dall'uno all'altro. Usala per ombreggiature
 morbide, motivi ripetuti o una forma che si trasforma in un'altra.
@@ -47,17 +49,54 @@ pannello si applica subito.
 La barra delle proprietà dello strumento contiene i passaggi, la rotazione e
 le due accelerazioni.
 
+### Controlli sulla tela {#canvas-controls}
+
+Scegliete una fusione con lo strumento [[tool.blend]] (fate clic sull'oggetto
+iniziale o finale, o su un passo) per vederne i controlli: un quadrato
+sull'oggetto iniziale, un quadrato barrato su quello finale, la linea tra loro
+e due cursori su di essa, l'accelerazione degli oggetti sopra e quella dei
+colori sotto.
+
+- Trascinate un cursore verso l'inizio o la fine per addensare lì i passi o i
+  colori. La fusione segue dal vivo, ogni trascinamento è un passo di
+  annullamento e la barra delle proprietà si aggiorna.
+- Trascinate un quadrato di estremità per spostarne l'oggetto, e la fusione
+  cambia direzione. Rilasciatelo su un altro oggetto per farne il nuovo
+  inizio o la nuova fine, con le impostazioni della fusione.
+
+L'accelerazione degli oggetti sposta i passi verso un'estremità anche quando
+la fusione non segue un tracciato. Un effetto bitmap sull'oggetto iniziale
+mantiene la fusione disegnata.
+
 ## Fondere lungo un tracciato {#path}
 
 1. Seleziona la fusione.
-2. Fai clic su **Nuovo tracciato** nel pannello [[docker.blend]] e fai clic su
-   una curva.
+2. Fai clic su [[docker.new_path]] nel pannello [[docker.blend]] o nella barra
+   delle proprietà dello strumento Fusione, e fai clic su una curva.
 
 I passaggi seguono la curva. **Ruota tutti gli oggetti** ruota ogni passaggio
 lungo la curva e [[docker.blend_full_path]] posiziona il primo e l'ultimo
 passaggio alle estremità della curva.
 
+La fusione resta una fusione: passaggi, spaziatura, accelerazione, rotazione e
+colori la modificano ancora. Per mettere gli oggetti iniziale e finale in un
+punto qualsiasi della curva, imposta [[docker.blend_path_start]] e
+[[docker.blend_path_end]], in % della lunghezza della curva: ogni oggetto si
+sposta lì e i passaggi corrono tra loro. [[docker.detach_path]] toglie la
+fusione dalla curva, di nuovo una fusione diritta.
+
 ## Rimuovere o dividere una fusione {#clear}
 
 **Cancella fusione** rimuove i passaggi e lascia entrambi gli oggetti.
 **Separa** trasforma i passaggi in oggetti a sé stanti.
+I passaggi escono raggruppati accanto all'oggetto. [[menu.object > menu.object.break_blend_apart]] (<kbd>Ctrl+K</kbd>,
+anche nel menu del tasto destro) fa lo stesso.
+
+## Salvare come `.cdr` {#cdr}
+
+Una fusione salvata come `.cdr` (versione 9 o successiva) resta una fusione: il file
+contiene i due oggetti e il record della fusione tra loro, quindi il programma
+che apre il file mostra i passaggi e permette di cambiare la fusione. I passaggi, la
+spaziatura e i due oggetti vanno nel file; accelerazione, rotazione, un tracciato e la
+direzione del colore tornano in TraceDraw (versione 14 o successiva); gli altri programmi
+partono dai loro valori predefiniti.

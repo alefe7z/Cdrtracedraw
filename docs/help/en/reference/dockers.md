@@ -6,6 +6,10 @@ under the panel tabs. Open panels are tabs down the right side of the window
 (the left side in right-to-left languages). This page lists every panel and
 the page that explains it.
 
+Drop a panel's tab on the bottom part of an open panel to show the two one
+above the other. The lower panel's tab moves to the bottom of the tabs, and a
+click on either tab closes and opens the column without undoing the split.
+
 | Panel | Key | Page |
 |---|---|---|
 | [[docker.properties]] | <kbd>Alt+Enter</kbd> | [→](../objects/properties-docker.md) |
@@ -13,7 +17,7 @@ the page that explains it.
 | [[docker.hints]] |  | [→](../get-started/hints.md) |
 | [[docker.transformations]] | <kbd>Alt+F7</kbd> | [→](../objects/transforming.md#transformations-docker) |
 | [[docker.undo]] |  | [→](../get-started/undo-and-views.md#undo-docker) |
-| [[docker.align_distribute]] | <kbd>Ctrl+Shift+A</kbd> | [→](../objects/align-distribute.md) |
+| [[docker.align_distribute]] |  | [→](../objects/align-distribute.md) |
 | [[docker.shaping]] |  | [→](../lines-shapes/shaping.md) |
 | [[docker.step_and_repeat]] | <kbd>Ctrl+Shift+D</kbd> | [→](../objects/step-and-repeat.md) |
 | [[docker.text]] | <kbd>Ctrl+T</kbd> | [→](../text/adding-text.md#text-docker) |
@@ -56,5 +60,8 @@ the page that explains it.
 - The close button in a panel's title bar takes it out of the tabs; the
   collapse button folds the panel area.
 - The panels you leave open come back the next time CD Draw starts.
+  collapse button folds the panel area; its arrows point to the side of the
+  window the panels fold toward (left for panels docked at the left).
+- The panels you leave open come back the next time TraceDraw starts.
 - Panel shortcuts toggle: pressing one when its panel is in front hides the
   panels.

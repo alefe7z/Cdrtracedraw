@@ -9,7 +9,7 @@ deseni ya da dokuyu izleyebilir.
 - [[tool.transparency]] aracıyla: bir nesneye tıklayın, ardından özellik
   çubuğunda bir saydamlık türü seçin veya opaktan (bastığınız yer) saydama
   (bıraktığınız yer) uzanan bir degrade saydamlık için nesnenin üzerinde
-  sürükleyin.
+  sürükleyin. Degradenin düğümleri ardından [[tool.interactive_fill]] aracındaki gibi nesnede görünür: başlangıcı, sonu veya yuvarlak eğim düğümünü sürükleyin; iki düğüm arasındaki çubuğu (orta nokta) sürükleyerek geçişin yarıya ulaştığı yeri değiştirin; çizgiye çift tıklamak düğüm ekler, düğüme çift tıklamak onu kaldırır.
 - [[docker.properties]] panelinin [[docker.transparency]] bölümünde.
 
 ## Ayarlar {#settings}
@@ -28,6 +28,8 @@ deseni ya da dokuyu izleyebilir.
   [[transparency.target_all]] öğesine uygulanıp uygulanmayacağı.
 - **Dondur**: alttaki nesneler taşınsa bile içinden görüneni şu anki hâliyle
   tutar.
+
+Kaldırmak için özellik çubuğunun sonundaki [[toolbar.clear_transparency]] düğmesine tıklayın (ya da tür olarak [[transparency.none]] seçin).
 
 Başka bir nesnenin saydamlığını kopyalamak için
 [[menu.object > menu.object.copy_effect > menu.object.copy_transparency_from]]

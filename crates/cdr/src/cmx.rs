@@ -466,12 +466,12 @@ fn start_head(head: Arrowhead) -> Arrowhead {
 /// Arrowhead units (`rarw`) per outline width: 127 000 units (half an inch
 /// of 1/254 000) are one outline width. Measured on a public sample file
 /// against the preview picture it carries (see `docs/cmx-format.md`).
-const HEAD_UNITS_PER_WIDTH: f64 = 127_000.0;
+pub(crate) const HEAD_UNITS_PER_WIDTH: f64 = 127_000.0;
 
 /// `path` with every open subpath replaced by the area a round pen of
 /// `width` sweeps along it; closed subpaths are kept, turned to one
 /// orientation.
-fn stroke_open_subpaths(path: &BezPath, width: f64) -> BezPath {
+pub(crate) fn stroke_open_subpaths(path: &BezPath, width: f64) -> BezPath {
     use tracedraw_core::geometry::PathEl;
     let mut out = BezPath::new();
     let mut sub: Vec<PathEl> = Vec::new();
@@ -568,7 +568,8 @@ struct PageBuild {
     open: Option<(String, Vec<Vec<Shape>>)>,
     clip_depth: usize,
     pending_image: Option<Placement>,
-    images: Vec<Option<(u32, u32, Vec<u8>)>>,
+    /// The page's images, each one copy that every placement shares.
+    images: Vec<Option<(u32, u32, tracedraw_core::SharedBytes)>>,
     text: TextState,
 }
 
@@ -1039,10 +1040,10 @@ impl Ctx {
             let (Some(i), Some(p)) = (s.u16(), s.u16()) else {
                 break;
             };
-            stops.push(Stop {
-                pos: (f64::from(p) / 100.0).clamp(0.0, 1.0),
-                color: self.color(i).unwrap_or(Color::BLACK),
-            });
+            stops.push(Stop::new(
+                (f64::from(p) / 100.0).clamp(0.0, 1.0),
+                self.color(i).unwrap_or(Color::BLACK),
+            ));
         }
         stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
         let only = stops.first().copied()?;
@@ -1200,7 +1201,7 @@ impl Ctx {
         let mut found = Vec::new();
         walk_chunks(d, 0, d.len(), 0, &mut found);
         for c in found.iter().filter(|c| c.tag == *b"data") {
-            let image = decode_image(c.data);
+            let image = decode_image(c.data).map(|(w, h, png)| (w, h, png.into()));
             page.images.push(image.clone().ok());
             // Images that fill shapes (patterns) have no placement.
             if let Some(p) = page.pending_image.take() {
@@ -1288,7 +1289,11 @@ fn push_shape(page: &mut PageBuild, shape: Shape) {
     }
 }
 
-fn image_shape(p: Placement, (w, h, png): (u32, u32, Vec<u8>), doc: &mut Document) -> Shape {
+fn image_shape(
+    p: Placement,
+    (w, h, png): (u32, u32, tracedraw_core::SharedBytes),
+    doc: &mut Document,
+) -> Shape {
     let mut s = Shape::new(
         doc.ids_mut().shape(),
         ShapeKind::Bitmap {
@@ -2017,21 +2022,11 @@ pub(crate) mod tests {
             "{b:?}"
         );
         // Top row first in the picture: red above blue. The rows of the
-        // PNG (RGBA, each after a filter byte) from its IDAT chunk.
+        // PNG (RGBA, each after a filter byte).
         let ShapeKind::Bitmap { png, .. } = &s[0].kind else {
             panic!("not a picture");
         };
-        let at = png
-            .windows(4)
-            .position(|w| w == b"IDAT")
-            .expect("an IDAT chunk");
-        let len = u32::from_be_bytes([png[at - 4], png[at - 3], png[at - 2], png[at - 1]]) as usize;
-        let mut rows = Vec::new();
-        std::io::Read::read_to_end(
-            &mut flate2::read::ZlibDecoder::new(&png[at + 4..at + 4 + len]),
-            &mut rows,
-        )
-        .expect("rows");
+        let rows = crate::parse::raw_rows(png);
         assert_eq!(rows.get(1..4), Some([255, 0, 0].as_slice()), "{rows:?}");
         assert_eq!(rows.get(6..9), Some([0, 0, 255].as_slice()), "{rows:?}");
     }

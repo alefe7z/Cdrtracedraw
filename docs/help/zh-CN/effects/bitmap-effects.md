@@ -8,7 +8,7 @@
 
 1. 选择一个或多个对象。
 2. 在 [[menu.effects]] 菜单中选择一个组和一种效果。
-3. 没有设置的效果会立即应用。其他效果会打开一个对话框，显示第一个所选对象的 **之前** 和 **之后** 预览：设置数值后单击 [[dialog.ok]]。**重置** 将所有设置恢复为默认值。
+3. 没有设置的效果会立即应用。其他效果会打开一个对话框，显示第一个所选对象的 **之前** 和 **之后** 预览：设置数值后单击 [[dialog.ok]]。设置位于右侧的面板中；面板下方的 **重置** 将所有设置恢复为默认值，两个箭头撤消和重做在对话框中所做的更改。
 
 ![位图效果对话框](../../img/effects-bitmap-effects.png)
 
@@ -20,19 +20,21 @@
 |---|---|
 | [[menu.effects.3d]] | [[fx.cylinder]]、[[fx.emboss]]、[[fx.page_curl]]、[[fx.pinch_punch]]、[[fx.sphere]] |
 | [[menu.effects.adjust]] | [[fx.auto_adjust]]、[[fx.image_adjustments]]、[[fx.contrast_enhancement]]、[[fx.local_equalization]]、[[fx.target_balance]]、[[fx.tone_curve]]、[[fx.brightness_contrast_intensity]]、[[fx.color_balance]]、[[fx.gamma]]、[[fx.hue_saturation_lightness]]、[[fx.selective_color]]、[[fx.replace_colors]]、[[fx.desaturate]]、[[fx.channel_mixer]] |
-| [[menu.effects.art_strokes]] | [[fx.charcoal]]、[[fx.conte_crayon]]、[[fx.crayon]]、[[fx.cubist]]、[[fx.impressionist]]、[[fx.palette_knife]]、[[fx.pastels]]、[[fx.pen_ink]]、[[fx.pointillist]]、[[fx.scraperboard]]、[[fx.sketch_pad]]、[[fx.watercolor]]、[[fx.felt_marker]]、[[fx.paper_grain]] |
+| [[menu.effects.art_strokes]] | [[fx.charcoal]]、[[fx.conte_crayon]]、[[fx.crayon]]、[[fx.cubist]]、[[fx.impressionist]]、[[fx.palette_knife]]、[[fx.pastels]]、[[fx.pen_ink]]、[[fx.pointillist]]、[[fx.scraperboard]]、[[fx.sketch_pad]]、[[fx.watercolor]]、[[fx.felt_marker]]、[[fx.paper_grain]], [[fx.paper_layers]], [[fx.bristle_paint]], [[fx.mural_paint]], [[fx.luminous_wash]], [[fx.inked_poster]], [[fx.diagonal_smear]], [[fx.blotted_color]], [[fx.primed_canvas]], [[fx.chalked_edges]], [[fx.diagonal_hatching]], [[fx.pencil_weave]], [[fx.light_shadow_strokes]], [[fx.spray_streaks]], [[fx.ink_wash]], [[fx.copier_toner]], [[fx.rubber_print]], [[fx.wet_fiber_paper]] |
 | [[menu.effects.blur]] | [[fx.directional_smooth]]、[[fx.gaussian_blur]]、[[fx.jagged_edges]]、[[fx.low_pass]]、[[fx.motion_blur]]、[[fx.radial_blur]]、[[fx.smart_blur]]、[[fx.smooth]]、[[fx.soften]]、[[fx.zoom]] |
-| [[menu.effects.camera]] | [[fx.colorize]]、[[fx.diffuse]]、[[fx.photo_filter]]、[[fx.sepia_toning]]、[[fx.vintage_photo]] |
-| [[menu.effects.color_transform]] | [[fx.bit_planes]]、[[fx.halftone]]、[[fx.psychedelic]]、[[fx.solarize]] |
-| [[menu.effects.contour_group]] | [[fx.edge_detect]]、[[fx.find_edges]]、[[fx.trace_contour]] |
+| [[menu.effects.camera]] | [[fx.colorize]]、[[fx.diffuse]]、[[fx.lens_correction]]、[[fx.photo_filter]]、[[fx.sepia_toning]]、[[fx.tilt_shift]]、[[fx.vintage_photo]] |
+| [[menu.effects.color_transform]] | [[fx.bit_planes]]、[[fx.halftone]]、[[fx.psychedelic]]、[[fx.solarize]]、[[fx.dither]]、[[fx.gradient_map]]、[[fx.riso_print]]、[[fx.newsprint]], [[fx.grit_screen]] |
+| [[menu.effects.contour_group]] | [[fx.edge_detect]]、[[fx.find_edges]]、[[fx.trace_contour]], [[fx.neon_outline]] |
 | [[menu.effects.correction]] | [[fx.dust_and_scratch]] |
 | [[menu.effects.creative]] | [[fx.crystallize]]、[[fx.fabric]]、[[fx.frame]]、[[fx.glass_tiles]]、[[fx.mosaic]]、[[fx.scatter]]、[[fx.tinted_glass]]、[[fx.stained_glass]]、[[fx.vignette]]、[[fx.vortex]] |
 | [[menu.effects.custom]] | [[fx.bump_map]] |
-| [[menu.effects.distort]] | [[fx.blocks]]、[[fx.displace]]、[[fx.mesh_warp]]、[[fx.offset]]、[[fx.pixelate]]、[[fx.ripple]]、[[fx.swirl]]、[[fx.tile]]、[[fx.wet_paint]]、[[fx.whirlpool]]、[[fx.wind]] |
+| [[menu.effects.distort]] | [[fx.blocks]]、[[fx.displace]]、[[fx.mesh_warp]]、[[fx.offset]]、[[fx.pixelate]]、[[fx.ripple]]、[[fx.swirl]]、[[fx.tile]]、[[fx.wet_paint]]、[[fx.whirlpool]]、[[fx.wind]]、[[fx.polar_coordinates]] |
+| [[menu.effects.glitch]] | [[fx.rgb_split]]、[[fx.scanlines]]、[[fx.pixel_sort]]、[[fx.compression_blocks]]、[[fx.band_shift]] |
+| [[menu.effects.light]] | [[fx.lighting]], [[fx.lens_flare]], [[fx.light_rays]], [[fx.bloom]], [[fx.light_leak]] |
 | [[menu.effects.noise]] | [[fx.add_noise]]、[[fx.maximum]]、[[fx.median]]、[[fx.minimum]]、[[fx.remove_moire]]、[[fx.remove_noise]] |
 | [[menu.effects.sharpen]] | [[fx.adaptive_unsharp]]、[[fx.directional_sharpen]]、[[fx.high_pass]]、[[fx.sharpen]]、[[fx.unsharp_mask]] |
-| [[menu.effects.texture]] | [[fx.cobblestone]]、[[fx.wrinkles]]、[[fx.etching]]、[[fx.plastic]]、[[fx.relief_sculpture]]、[[fx.stone]] |
-| [[menu.effects.transform]] | [[fx.deinterlace]]、[[fx.invert_colors]]、[[fx.posterize]] |
+| [[menu.effects.texture]] | [[fx.cobblestone]]、[[fx.wrinkles]]、[[fx.etching]]、[[fx.plastic]]、[[fx.relief_sculpture]]、[[fx.stone]], [[fx.embossed_paper]], [[fx.gypsum_cast]], [[fx.film_clumping]], [[fx.cracked_surface]], [[fx.quilt_squares]] |
+| [[menu.effects.transform]] | [[fx.deinterlace]]、[[fx.invert_colors]]、[[fx.posterize]], [[fx.broadcast_safe]] |
 
 ## 特殊对话框 {#special-dialogs}
 
@@ -46,6 +48,12 @@
 [[docker.properties]] 面板的 [[docker.fx]] 部分列出所选对象的效果，最先应用的在顶部。每一行都有一个用于显示或隐藏效果的复选框、**编辑**（打开其对话框）、**上移**、**下移** 和 **删除**。**添加效果** 打开效果组。
 
 [[menu.effects > menu.effects.flatten]] 使效果成为永久性的：位图保留其显示的内容，矢量对象变为位图。
+
+### 应用到所有页面
+
+在包含多个页面的绘图中，选中图片时效果的对话框会显示 [[dialog.fx_all_pages]] 复选框。勾选后，单击确定也会将效果应用到每个页面上的每张图片，并作为一个撤销步骤。锁定的图片和锁定图层上的图片保持不变。
+
+[[menu.effects > menu.effects.all_pages]] 对所选图片已有的效果（包括没有对话框的效果）执行相同操作：其他每张图片都获得相同的效果列表，作为一个撤销步骤。
 
 ## 效果选择器 {#effect-picker}
 

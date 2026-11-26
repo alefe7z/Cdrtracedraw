@@ -1,7 +1,9 @@
 # Misturas
 
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
 Uma mistura desenha uma série de passos intermediários entre dois objetos,
-mudando forma, tamanho e cor de um para o outro. Use-a para sombreamentos
+mudando forma, tamanho, cor e transparência de um para o outro. Use-a para sombreamentos
 suaves, padrões repetidos ou uma forma que se transforma em outra.
 
 ## Para misturar dois objetos {#create}
@@ -46,16 +48,56 @@ painel vale na hora.
 A barra de propriedades da ferramenta tem os passos, a rotação e as duas
 acelerações.
 
+### Controles na tela {#canvas-controls}
+
+Escolha uma mistura com a ferramenta [[tool.blend]] (clique no objeto inicial
+ou final, ou em um passo) para mostrar os controles: um quadrado no objeto
+inicial, um quadrado cruzado no final, a linha entre eles e dois controles
+deslizantes nela, a aceleração dos objetos em cima e a das cores embaixo.
+
+- Arraste um controle para o início ou o fim para juntar ali os passos ou as
+  cores. A mistura acompanha ao vivo, cada arraste é um passo de desfazer, e
+  a barra de propriedades acompanha. O controle vai tão longe para um lado
+  quanto para o outro: em 100 % o passo do meio fica junto ao objeto inicial,
+  em -100 % junto ao objeto final.
+- Arraste um quadrado da ponta para mover o objeto dele, e a mistura muda de
+  direção. Solte-o sobre outro objeto para torná-lo o novo início ou fim, com
+  as configurações da mistura.
+
+A aceleração dos objetos move os passos para uma ponta também quando a mistura
+não segue um caminho. Um efeito de bitmap no objeto inicial mantém a mistura
+desenhada.
+
+![Uma mistura feita com a ferramenta Mistura, curvada pela alça redonda](../../img/effects-blend-bend.png)
+
 ## Misturar ao longo de um caminho {#path}
 
 1. Selecione a mistura.
-2. Clique em **Novo caminho** no painel [[docker.blend]] e clique em uma curva.
+2. Clique em [[docker.new_path]] no painel [[docker.blend]] ou na barra de
+   propriedades da ferramenta Mistura, e clique em uma curva.
 
 Os passos seguem a curva. **Girar todos os objetos** gira cada passo ao longo da
 curva, e [[docker.blend_full_path]] coloca o primeiro e o último passo nas
 pontas da curva.
 
+A mistura continua sendo mistura: passos, espaçamento, aceleração, rotação e
+cores ainda a alteram. Para pôr os objetos inicial e final em qualquer ponto da
+curva, ajuste [[docker.blend_path_start]] e [[docker.blend_path_end]], em % do
+comprimento da curva: cada objeto vai para lá e os passos correm entre eles.
+[[docker.detach_path]] tira a mistura da curva, que volta a ser reta.
+
 ## Remover ou separar uma mistura {#clear}
 
 **Limpar mistura** remove os passos e deixa os dois objetos. **Separar**
 transforma os passos em objetos próprios.
+Os passos saem agrupados ao lado do objeto. [[menu.object > menu.object.break_blend_apart]] (<kbd>Ctrl+K</kbd>, também no
+menu do botão direito) faz o mesmo.
+
+## Salvar como `.cdr` {#cdr}
+
+Uma mistura salva como `.cdr` (versão 9 ou posterior) continua sendo uma mistura: o arquivo
+guarda os dois objetos e o registro da mistura entre eles, então o programa
+que abre o arquivo mostra os passos e deixa mudar a mistura. Os passos, o
+espaçamento e os dois objetos vão para o arquivo; aceleração, rotação, um caminho e a
+direção da cor voltam no TraceDraw (versão 14 ou posterior); outros programas começam
+com os seus padrões.

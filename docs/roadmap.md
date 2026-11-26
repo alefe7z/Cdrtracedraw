@@ -33,7 +33,7 @@ Status tracked in `docs/features.md`.
 - PDF export (vector, CMYK, separations), EPS, AI (PDF-based), bitmaps
 - Print to PDF, print preview, print merge
 - PDF/X-1a, X-3 and X-4 output (done)
-- Publish to PDF with document information, bookmarks and password protection (AES-256); protected PDFs of every revision open (done; see `behavior/publish-to-pdf.md`)
+- Export as PDF with document information, bookmarks and password protection (AES-256); protected PDFs of every revision open (done; see `behavior/publish-to-pdf.md`)
 - `.cdr` write in versions 7 to 27, chosen when saving (RIFF, ZIP and redirected ZIP layouts; read back here and opened by another public reader) (done)
 
 ## M4 Platform (done)
@@ -49,6 +49,7 @@ Status tracked in `docs/features.md`.
 
 ## M6 Editing, colour and effects (planned)
 - Pick and Shape tool parity: every interaction checked side by side, one behaviour at a time (in progress)
+- Select Same panel: combine appearance, dimensions and text properties, restrict the search to the page or active layer, and undo the resulting selection (#3203; see `behavior/select-same.md`)
 - Extrude: 3D rotation, several lights and bevels (done; see `behavior/extrude.md`)
 - Opacity masks as objects of their own, next to transparency (done: a clip frame drawn as an opacity mask; see `behavior/clip-frame.md`)
 - Artboards: not planned (decided 2026-10-14: pages stay the only drawing areas, as in `.cdr`)

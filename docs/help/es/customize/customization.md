@@ -1,5 +1,7 @@
 # Opciones de personalización
 
+> *Traducción automática: esta página puede ir por detrás de la versión en inglés.*
+
 [[menu.tools > menu.tools.options > menu.tools.options_customization]] ajusta
 el aspecto de la interfaz, sus propios atajos de teclado, qué barras se
 muestran y cómo se comporta la paleta de colores.
@@ -11,8 +13,13 @@ muestran y cómo se comporta la paleta de colores.
 - [[options.center_dialogs]]: los cuadros de diálogo se abren en el centro de
   la ventana; desactivado, se abren donde los dejó.
 - [[options.ui_shadows]] (menos sombras ayudan con gráficos más lentos).
+- [[options.translucent_menus]]: los menús abiertos dejan ver el dibujo detrás, con la [[options.menu_opacity]] junto a la casilla (desactivado por defecto).
 - [[options.colored_icons]]: cada grupo de herramientas recibe un color
   propio.
+- [[options.docker_tabs_icons_only]]: las pestañas de los paneles a los
+  lados de la ventana muestran solo su imagen, con el nombre en la
+  sugerencia. Desactivado, muestran imagen y nombre, y una columna con más
+  pestañas de las que caben se desplaza.
 - [[options.ui_size]]: el tamaño de menús, barras, iconos y paneles, en
   relación con la escala que su sistema da al monitor (100% de forma
   predeterminada). [[options.reset_to_default]] vuelve al 100%. El tamaño de
@@ -45,6 +52,15 @@ valores predeterminados los quita todos. Las teclas de herramienta son una
 letra o <kbd>Shift</kbd> y una letra. Vea
 [Atajos de teclado](../reference/keyboard-shortcuts.md).
 
+Un comando puede tener varios atajos: una tecla nueva se suma a las que ya
+tiene (una tecla predeterminada sigue funcionando a su lado), y cada tecla tiene
+su propio botón para quitarla. Los botones de las barras que ejecutan un
+comando de menú (Nuevo, Abrir, Guardar, Deshacer, Acercar y otros) también
+admiten atajos, las mismas teclas que su comando de menú, igual que las filas
+que los menús muestran solo a veces. Una lista **Botones de las barras de
+herramientas** tiene todos los botones de las barras Estándar y Zoom: arrastre
+desde ahí de vuelta a la barra un botón que haya quitado.
+
 ## Barras de comandos {#command-bars}
 
 ![La página Barras de comandos de las opciones de personalización](../../img/customize-customization-command-bars.png)
@@ -57,14 +73,31 @@ letra o <kbd>Shift</kbd> y una letra. Vea
 [[options.reset]] vuelve a colocar las barras. En [[options.other]]:
 [[bars.lock]] y [[options.show_outline_flyout]].
 
+[[options.toolbar_drag_hint]]
+
 ## Paleta de colores {#color-palette}
 
 ![La página Paleta de colores de las opciones de personalización](../../img/customize-customization-color-palette.png)
 
 - [[options.palette_auto_update]] y [[options.palette_show_document]] (ambas
   activadas).
+- [[options.palette_position]] (Arriba, Abajo, Izquierda, Derecha o Flotante)
+  de la paleta predeterminada, como la ajusta su propio menú; no cambia
+  mientras las barras de herramientas están bloqueadas.
 - [[options.palette_swatches]]: [[options.palette_no_color]] (activado), y lo
   que hace el [[options.palette_right_button]]: [[options.palette_set_outline]]
   (opción predeterminada) o abrir el [[options.palette_context_menu]].
 
 Vea [Paletas de colores](../color/palettes.md).
+
+## Menús contextuales {#context-menus}
+
+En Personalización, elija [[options.context_menus]] para administrar por separado las 32 ubicaciones de los menús contextuales. Seleccione una ubicación con [[options.context_menu_scene]], use [[options.context_menu_search]] para buscar una operación y quite la marca de su casilla para ocultarla allí. Las operaciones siguen apareciendo en esta lista aunque la selección actual no pueda utilizarlas.
+
+Todas las operaciones están visibles de forma predeterminada. Cada ubicación tiene sus propias opciones: ocultar una operación de objetos en el lienzo no la oculta en el panel Objetos. Las listas dinámicas, como las capas de destino y las colecciones de fuentes, se administran como una sola operación, de modo que cambiar sus nombres no restablece las opciones.
+
+[[options.context_menu_reset]] restaura el menú seleccionado y [[options.context_menu_reset_all]] restaura todos los menús. [[dialog.ok]] guarda las opciones en la configuración de la aplicación; [[dialog.cancel]], Escape o el botón de cierre restaura las opciones que había al abrir Opciones. Los menús principales, los atajos y la búsqueda de comandos siguen ofreciendo los comandos originales.
+
+Expanda un submenú para ver sus elementos con sangría. Arrastre el asa de una fila, o use [[options.context_menu_move_up]] y [[options.context_menu_move_down]], para reordenar elementos del mismo nivel. Al mover un menú superior, sus elementos se mueven con él; no se pueden mover elementos a otro menú superior. La búsqueda conserva visibles los menús que contienen los resultados. Restaurar un menú restablece tanto la visibilidad como el orden; cancelar Opciones devuelve ambos al estado que tenían al abrir el diálogo.
+
+El menú de las muestras de la paleta del documento y su entrada en el Administrador de paletas tienen ajustes independientes. Los destinos dinámicos conservan su orden; la lista de estilos del documento mantiene su posición entre las acciones estáticas de Estilos de objeto. Las operaciones nuevas de versiones posteriores permanecen visibles y se colocan después de los elementos guardados del mismo nivel.

@@ -300,6 +300,7 @@ fn fill_colors(f: &Fill) -> Vec<Color> {
         Fill::Solid(c) => vec![*c],
         Fill::Fountain(g) => g.stops.iter().map(|s| s.color).collect(),
         Fill::Mesh(m) => m.nodes.iter().map(|n| n.color).collect(),
+        Fill::Procedural(p) => std::iter::once(p.foreground).chain(p.background).collect(),
         Fill::Pattern(p) => match p {
             tracedraw_core::Pattern::TwoColor { front, back, .. } => vec![*front, *back],
             _ => Vec::new(),
@@ -692,7 +693,7 @@ mod tests {
                 rect: Rect::new(0.0, 0.0, 25.4, 25.4),
                 width_px: 100,
                 height_px: 100,
-                png: Vec::new(),
+                png: Vec::new().into(),
                 fx: None,
             },
         );

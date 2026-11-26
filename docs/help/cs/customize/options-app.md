@@ -12,6 +12,7 @@ nastavuje, jak program pracuje. Stránku zvolte ze seznamu vlevo.
 - [[options.show_new_document_dialog]] (zapnuto): ptát se na nastavení nové
   kresby; viz [Vytvoření kresby](../get-started/new-document.md).
 - [[options.show_splash]] (zapnuto).
+- [[options.hardware_acceleration]] (zapnuto): okno se kreslí grafickou kartou vybranou vedle ([[options.gpu_automatic]] na začátku); vypnuto, softwarovým vykreslováním počítače. Platí od dalšího spuštění. Pokud se okno takto neotevře, TraceDraw se spustí znovu se softwarovým vykreslováním, pak s OpenGL, a pamatuje si, co fungovalo.
 - [[options.undo_levels]]: kolik kroků můžete vrátit zpět (výchozí 150).
 
 ## Zobrazení {#display}
@@ -25,6 +26,11 @@ nastavuje, jak program pracuje. Stránku zvolte ze seznamu vlevo.
 - [[options.full_screen_preview]]: [[options.show_page_border]].
 - [[options.wheel_default_action]]: [[options.wheel_zoom]] (výchozí) nebo
   [[options.wheel_scroll]].
+- [[options.open_view]]: [[options.open_view_page]] (výchozí),
+  [[options.open_view_objects]], [[options.open_view_width]],
+  [[options.open_view_height]], [[options.open_view_actual]], [[options.open_view_percent]] nebo
+  [[options.open_view_saved]] (stránka, místo a zvětšení uložené s každým
+  uložením souboru TraceDraw).
 - [[options.ruler_calibration]]: přiložte k obrazovce pravítko a měňte
   [[options.screen_resolution]], dokud se značky neshodují, aby zvětšení
   100 % ukazovalo skutečné velikosti. [[options.reset]] vrátí hodnotu 96.
@@ -48,6 +54,7 @@ nastavuje, jak program pracuje. Stránku zvolte ze seznamu vlevo.
 - [[options.node_shape]] pro uzly typu [[options.node_cusp]],
   [[options.node_smooth]] a [[options.node_symmetrical]].
 - [[options.show_curve_direction]].
+- [[options.corner_widgets]].
 - [[options.colors]]: [[options.main_color]] vybraných uzlů a úchytů a
   [[options.secondary_color]].
 - [[options.unselected_nodes_filled]].
@@ -92,8 +99,36 @@ Viz [Přichytávání](../pages-layout/snapping.md).
 
 ![Stránka Text v možnostech CD Draw](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]: o kolik <kbd>Ctrl+8</kbd> a
-  <kbd>Ctrl+2</kbd> zvětší a zmenší vybraný text (1 bod).
-- [[options.default_font]] a [[options.default_size]] nového textu.
-- [[menu.text.use_hyphenation]], [[menu.text.show_non_printing]] a
-  [[menu.text.show_text_frames]].
+Stránka má pět karet.
+
+- [[options.display]]: [[options.keyboard_text_increment]] (o kolik
+  <kbd>Ctrl+8</kbd> a <kbd>Ctrl+2</kbd> zvětší a zmenší vybraný text, 1 bod),
+  [[options.default_font]] a [[options.default_size]] nového textu a
+  [[menu.text.show_non_printing]].
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]: [[menu.text.show_text_frames]],
+  [[menu.text.use_hyphenation]] a [[options.hyphenation_patterns]]
+  (vestavěné, nebo slovník dělení slov pro váš jazyk).
+  - [[options.default_tab_spacing]]: kam skočí <kbd>Tab</kbd> v odstavci bez vlastních zarážek (12,7 mm, půl palce).
+- [[docker.fonts]]: [[options.show_recent_fonts]] nahoře v seznamech písem,
+  [[options.recent_font_count]] (5, nejvýše 20) a
+  [[options.font_sample_size]].
+- [[options.spelling]]: [[writing.ignore_digits]], [[writing.ignore_capitals]]
+  a [[options.add_to_autocorrect]], aby se slovo opravené v kontrole pravopisu
+  příště opravilo při psaní; a [[options.dictionaries]], které používá, viz
+  [Slovníky](../text/writing-tools.md#dictionaries).
+- [[dialog.autocorrect]]: co se opravuje při psaní; viz
+  [Automatické opravy](../text/writing-tools.md#autocorrect).
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

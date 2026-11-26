@@ -8,19 +8,37 @@ description = "Import/export between the CD Draw document model and other format
 [dependencies]
 tracedraw-core.workspace = true
 tracedraw-render.workspace = true
+# Type 1 font programs embedded in PDF files are read by its Type 1
+# reader (#3810).
+tracedraw-text.workspace = true
+kurbo.workspace = true
 thiserror.workspace = true
 base64 = "0.22"
 flate2 = "1"
 tiny-skia.workspace = true
 usvg = { version = "0.48", default-features = false }
-lopdf = { version = "0.36", default-features = false }
+lopdf = { version = "0.46", default-features = false }
 roxmltree = "0.21"
+# Text in SVG import: the style sheets of the file (simplecss) and its
+# lengths, colours and font lists (svgtypes); both already come with usvg.
+simplecss = "0.2"
+svgtypes = "0.16"
 # Fonts embedded in PDF files: their tables (ttf-parser) and the subset of
 # glyphs a file uses (subsetter, MIT OR Apache-2.0).
 ttf-parser.workspace = true
 subsetter = "0.2"
 zip.workspace = true
+# Compound files (the container of newer `.pmd` files, #2822).
+cfb = "0.15"
+# Hebrew and Arabic in PDF import: the directions of the letters, to put
+# text drawn right to left back in the order it is typed; the same version
+# the text layout uses.
+unicode-bidi = "0.3"
+encoding_rs.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# The raw inks of a CMYK JPEG in a PDF, which the image decoder above
+# turns into RGB as if they were stored inverted (#2322).
+zune-jpeg = "0.5"
 # PDF password protection (AES-256, revision 6) and its random keys;
 # reading protected files also needs RC4 keys made with MD5.
 aes = "0.8"
@@ -28,3 +46,10 @@ cbc = "0.1"
 sha2 = "0.10"
 md5 = { package = "md-5", version = "0.10" }
 getrandom = "0.3"
+
+[dev-dependencies]
+# The round trip of Hindi through a PDF lays text out with the real text
+# engine (tests/devanagari_pdf.rs); the library itself does not use it.
+tracedraw-text.workspace = true
+# CMYK test profiles for the PDF/X output intent tests.
+tracedraw-core = { workspace = true, features = ["test-profiles"] }

@@ -13,6 +13,7 @@ izquierda.
 - [[options.show_new_document_dialog]] (activado): pedir los ajustes de un
   dibujo nuevo; vea [Crear un dibujo](../get-started/new-document.md).
 - [[options.show_splash]] (activado).
+- [[options.hardware_acceleration]] (activado): dibuja la ventana con la tarjeta gráfica elegida al lado ([[options.gpu_automatic]] al principio); desactivado, con el renderizador por software del equipo. Se aplica en el siguiente inicio. Si la ventana no se abre así, TraceDraw vuelve a iniciarse con el renderizador por software y luego con OpenGL, y conserva el que funcionó.
 - [[options.undo_levels]]: cuántos pasos puede deshacer (150 de forma
   predeterminada).
 
@@ -27,6 +28,11 @@ izquierda.
 - [[options.full_screen_preview]]: [[options.show_page_border]].
 - [[options.wheel_default_action]]: [[options.wheel_zoom]] (opción
   predeterminada) o [[options.wheel_scroll]].
+- [[options.open_view]]: [[options.open_view_page]] (opción predeterminada),
+  [[options.open_view_objects]], [[options.open_view_width]],
+  [[options.open_view_height]], [[options.open_view_actual]], [[options.open_view_percent]] o
+  [[options.open_view_saved]] (la página, el lugar y el zoom que se guardan
+  cada vez que se guarda un archivo de TraceDraw).
 - [[options.ruler_calibration]]: sostenga una regla junto a la pantalla y
   cambie la [[options.screen_resolution]] hasta que las marcas coincidan, para
   que el zoom al 100% muestre los tamaños reales. [[options.reset]] vuelve a
@@ -51,6 +57,7 @@ izquierda.
 - [[options.node_shape]] para los nodos [[options.node_cusp]],
   [[options.node_smooth]] y [[options.node_symmetrical]].
 - [[options.show_curve_direction]].
+- [[options.corner_widgets]].
 - [[options.colors]]: el [[options.main_color]] de los nodos y tiradores
   seleccionados y el [[options.secondary_color]].
 - [[options.unselected_nodes_filled]].
@@ -96,8 +103,37 @@ Vea [Ajuste](../pages-layout/snapping.md).
 
 ![La página Texto de las opciones de CD Draw](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]: cuánto agrandan y reducen
-  <kbd>Ctrl+8</kbd> y <kbd>Ctrl+2</kbd> el texto seleccionado (1 punto).
-- [[options.default_font]] y [[options.default_size]] del texto nuevo.
-- [[menu.text.use_hyphenation]], [[menu.text.show_non_printing]] y
-  [[menu.text.show_text_frames]].
+La página tiene cinco pestañas.
+
+- [[options.display]]: [[options.keyboard_text_increment]] (cuánto agrandan y
+  reducen <kbd>Ctrl+8</kbd> y <kbd>Ctrl+2</kbd> el texto seleccionado, 1 punto),
+  la [[options.default_font]] y el [[options.default_size]] del texto nuevo, y
+  [[menu.text.show_non_printing]].
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]: [[menu.text.show_text_frames]],
+  [[menu.text.use_hyphenation]] y los [[options.hyphenation_patterns]]
+  (integrados, o un diccionario de división de su idioma).
+  - [[options.default_tab_spacing]]: adónde salta <kbd>Tab</kbd> en un párrafo sin paradas de tabulación propias (12,7 mm, media pulgada).
+- [[docker.fonts]]: [[options.show_recent_fonts]] arriba de las listas de
+  fuentes, el [[options.recent_font_count]] (5, hasta 20) y el
+  [[options.font_sample_size]].
+- [[options.spelling]]: [[writing.ignore_digits]], [[writing.ignore_capitals]]
+  y [[options.add_to_autocorrect]], para que una palabra corregida en el
+  corrector se corrija al escribir la próxima vez; y los
+  [[options.dictionaries]] que usa, consulte
+  [Diccionarios](../text/writing-tools.md#dictionaries).
+- [[dialog.autocorrect]]: lo que se corrige al escribir; consulte
+  [Autocorrección](../text/writing-tools.md#autocorrect).
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

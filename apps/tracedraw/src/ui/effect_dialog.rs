@@ -1,13 +1,17 @@
-//! The dialog of a bitmap effect: its settings (sliders, direction dials,
-//! lists, check boxes, colours) with a before and after preview. OK adds
-//! the effect to the selected bitmaps, or changes the one being edited
-//! from the Properties docker's FX section. The Tone Curve filter shows
-//! its curves instead of sliders.
+//! The dialog of a bitmap effect: a window the user sizes with the
+//! shared Before and After preview (`before_after.rs`) at the left and
+//! the settings (sliders, direction dials, lists, check boxes, colours)
+//! at the right. OK adds the effect to the selected bitmaps, or changes
+//! the one being edited from the Properties docker's FX section. The
+//! Tone Curve filter shows its curves instead of sliders.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::fx::{new_effect, ParamKind, ParamSpec};
 use crate::i18n::tr;
-use crate::ui::bitmap_preview::{before_after_pick, settings_key, Source};
+use crate::ui::before_after::{self, View, BOTTOM_H, RIGHT_W};
+use crate::ui::bitmap_preview::{settings_key, Source};
+use crate::ui::tips::RichTip;
 use egui::{Color32, Context, Rect, Sense, Stroke, Ui, Vec2};
 use std::collections::BTreeMap;
 use tracedraw_core::{BitmapEffect, ShapeId};
@@ -23,19 +27,100 @@ pub struct EffectState {
     pub lab: crate::ui::lab_dialog::LabState,
     /// The colour setting an eyedropper is picking from the preview.
     pub pick: Option<String>,
+    /// The Preview box: the effect shows on the drawing while the dialog
+    /// is open (see `fx::preview`).
+    pub preview: bool,
+    /// The All pages box: OK also gives the effect to every picture on
+    /// the drawing's pages (#1551).
+    pub all_pages: bool,
+    /// Show Original is held: the drawing shows the objects without the
+    /// effect for a moment (#1129).
+    pub show_original: bool,
+    /// The name typed for a new preset of the effect's settings.
+    pub preset_name: String,
+}
+
+/// An effect's settings saved under a name (#1129), offered again in
+/// the dialog of the same effect in any drawing.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FxPreset {
+    pub name: String,
+    pub effect: BitmapEffect,
+}
+
+/// At most this many effect presets are kept.
+pub const MAX_FX_PRESETS: usize = 300;
+
+/// The presets of effect `id`, with their places in `all`.
+pub fn presets_of<'a>(all: &'a [FxPreset], id: &str) -> Vec<(usize, &'a FxPreset)> {
+    all.iter()
+        .enumerate()
+        .filter(|(_, p)| p.effect.id == id)
+        .collect()
+}
+
+/// Save `effect`'s settings as a preset named `name` (a free "`base` n"
+/// when blank); a preset of the same effect and name is replaced. False
+/// when the list is full.
+pub fn save_fx_preset(
+    all: &mut Vec<FxPreset>,
+    effect: &BitmapEffect,
+    name: &str,
+    base: &str,
+) -> bool {
+    let mut name = name.trim().to_string();
+    if name.is_empty() {
+        name = (1..)
+            .map(|n| format!("{base} {n}"))
+            .find(|n| {
+                presets_of(all, &effect.id)
+                    .iter()
+                    .all(|(_, p)| p.name != *n)
+            })
+            .unwrap_or_else(|| base.to_string());
+    }
+    let mut kept = effect.clone();
+    kept.visible = true;
+    if let Some(p) = all
+        .iter_mut()
+        .find(|p| p.effect.id == effect.id && p.name == name)
+    {
+        p.effect = kept;
+        return true;
+    }
+    if all.len() >= MAX_FX_PRESETS {
+        return false;
+    }
+    all.push(FxPreset { name, effect: kept });
+    true
 }
 
 impl EffectState {
     pub fn new(id: &str) -> Self {
+        let mut lab = crate::ui::lab_dialog::LabState::default();
+        // Image Adjustments shows the result alone at first; the other
+        // dialogs the picture over the result.
+        if id != "image_adjustments" {
+            lab.view = Default::default();
+        }
         EffectState {
             effect: new_effect(id),
             edit: None,
             channel: 0,
-            lab: Default::default(),
+            lab,
             pick: None,
+            preview: PREVIEW_AT_START,
+            all_pages: false,
+            show_original: false,
+            preset_name: String::new(),
         }
     }
 }
+
+/// The Preview box as an effect dialog opens: ticked on the desktop; in
+/// the browser the preview is made on the interface thread, so it starts
+/// cleared there and opening an effect never stalls the page.
+pub const PREVIEW_AT_START: bool = !crate::files::WEB;
 
 /// A direction dial: click or drag around it to point it.
 fn dial(ui: &mut Ui, deg: &mut f64) -> bool {
@@ -74,13 +159,32 @@ pub const PICK_PARAMS: [&str; 4] = ["low_sample", "mid_sample", "high_sample", "
 
 /// One setting's control; true when it changed. `pick` is the colour
 /// setting whose eyedropper is on, if the dialog has eyedroppers.
-pub fn param_widget(
+/// The control of `spec` in the settings panel's column: a slider with
+/// its label above it, stretched to the column; a list, a colour or a
+/// dial with its label at the left; a check box alone.
+pub fn param_stacked(
     ui: &mut Ui,
     spec: &ParamSpec,
     values: &mut BTreeMap<String, f64>,
     pick: Option<&mut Option<String>>,
 ) -> bool {
     let key = format!("fxp.{}", spec.name);
+    // The setting's own description, or what every setting of its kind does.
+    let tip = || {
+        let own = format!("{key}_desc");
+        let desc = if crate::i18n::has_english(&own) {
+            tr(&own)
+        } else {
+            tr(match spec.kind {
+                ParamKind::Range { .. } => "fx.param_range_desc",
+                ParamKind::Angle { .. } => "fx.param_angle_desc",
+                ParamKind::Choice { .. } => "fx.param_choice_desc",
+                ParamKind::Check { .. } => "fx.param_check_desc",
+                ParamKind::Color { .. } => "fx.param_color_desc",
+            })
+        };
+        format!("{}\n{desc}", tr(&key))
+    };
     let mut changed = false;
     match spec.kind {
         ParamKind::Range {
@@ -89,9 +193,9 @@ pub fn param_widget(
             default,
             step,
         } => {
-            ui.label(tr(&key));
+            ui.label(format!("{}:", tr(&key)));
             let mut v = values.get(spec.name).copied().unwrap_or(default);
-            let mut s = egui::Slider::new(&mut v, min..=max);
+            let mut s = crate::ui::Slider::new(&mut v, min..=max);
             if step >= 1.0 {
                 s = s.integer();
             } else {
@@ -102,94 +206,111 @@ pub fn param_widget(
             if min > 0.0 && max / min >= 100.0 {
                 s = s.logarithmic(true);
             }
-            if ui.add(crate::ui::Rail(s)).changed() {
+            let resp = crate::ui::tips::tip_over(ui, tip(), |ui| ui.add(s));
+            if resp.changed() {
                 values.insert(spec.name.to_string(), v);
                 changed = true;
             }
         }
         ParamKind::Angle { default } => {
-            ui.label(tr(&key));
             let mut v = values.get(spec.name).copied().unwrap_or(default);
-            ui.horizontal(|ui| {
-                changed |= dial(ui, &mut v);
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut v)
-                            .range(-360.0..=360.0)
-                            .suffix(" \u{b0}"),
-                    )
-                    .changed();
-            });
+            let draw = |ui: &mut Ui| {
+                ui.label(tr(&key));
+                crate::ui::tips::tip_over(ui, tip(), |ui| {
+                    ui.horizontal(|ui| {
+                        changed |= dial(ui, &mut v);
+                        changed |= ui
+                            .add(
+                                crate::ui::field::NumField::new(&mut v)
+                                    .range(-360.0..=360.0)
+                                    .suffix(" \u{b0}"),
+                            )
+                            .changed();
+                    })
+                });
+            };
+            ui.horizontal(draw);
             if changed {
                 values.insert(spec.name.to_string(), v);
             }
         }
         ParamKind::Choice { options, default } => {
-            ui.label(tr(&key));
             let cur = values
                 .get(spec.name)
                 .map(|v| v.max(0.0) as usize)
                 .unwrap_or(default)
                 .min(options.len().saturating_sub(1));
-            egui::ComboBox::from_id_salt(("fx_choice", spec.name))
-                .selected_text(tr(&format!("fxo.{}", options[cur])))
-                .width(170.0)
-                .show_ui(ui, |ui| {
-                    for (i, o) in options.iter().enumerate() {
-                        if ui
-                            .selectable_label(i == cur, tr(&format!("fxo.{o}")))
-                            .clicked()
-                        {
-                            values.insert(spec.name.to_string(), i as f64);
-                            changed = true;
+            let draw = |ui: &mut Ui| {
+                ui.label(tr(&key));
+                crate::ui::keynav::ComboBox::from_id_salt(("fx_choice", spec.name))
+                    .selected_text(tr(&format!("fxo.{}", options[cur])))
+                    .width(170.0)
+                    .show_ui(ui, |ui| {
+                        for (i, o) in options.iter().enumerate() {
+                            if ui
+                                .selectable_label(i == cur, tr(&format!("fxo.{o}")))
+                                .clicked()
+                            {
+                                values.insert(spec.name.to_string(), i as f64);
+                                changed = true;
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .rich_tip_with(tip);
+            };
+            ui.horizontal(draw);
         }
         ParamKind::Check { default } => {
-            ui.label("");
             let mut on = values.get(spec.name).map(|v| *v != 0.0).unwrap_or(default);
-            if ui.checkbox(&mut on, tr(&key)).changed() {
+            if ui.checkbox(&mut on, tr(&key)).rich_tip_with(tip).changed() {
                 values.insert(spec.name.to_string(), if on { 1.0 } else { 0.0 });
                 changed = true;
             }
         }
         ParamKind::Color { default } => {
-            ui.label(tr(&key));
             let c = values
                 .get(spec.name)
                 .copied()
                 .unwrap_or(default as f64)
                 .max(0.0) as u32;
             let mut rgb = crate::fx::util::rgb(c);
-            ui.horizontal(|ui| {
-                if ui.color_edit_button_srgb(&mut rgb).changed() {
-                    let v = ((rgb[0] as u32) << 16) | ((rgb[1] as u32) << 8) | rgb[2] as u32;
-                    values.insert(spec.name.to_string(), v as f64);
-                    changed = true;
-                }
-                if let Some(pick) = pick {
-                    if PICK_PARAMS.contains(&spec.name) {
-                        let on = pick.as_deref() == Some(spec.name);
-                        let (rect, resp) =
-                            ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
-                        crate::ui::propbar::frame(ui, rect, resp.hovered(), on);
-                        crate::ui::icons::draw(
-                            ui.painter(),
-                            Rect::from_center_size(rect.center(), Vec2::splat(16.0)),
-                            crate::tools::Tool::ColorEyedropper,
-                            crate::theme::Tokens::icon(),
-                        );
-                        if resp.on_hover_text(tr("dialog.pick_from_image")).clicked() {
-                            *pick = if on {
-                                None
-                            } else {
-                                Some(spec.name.to_string())
-                            };
+            let draw = |ui: &mut Ui| {
+                ui.label(tr(&key));
+                ui.horizontal(|ui| {
+                    if ui
+                        .color_edit_button_srgb(&mut rgb)
+                        .rich_tip_with(tip)
+                        .changed()
+                    {
+                        let v = ((rgb[0] as u32) << 16) | ((rgb[1] as u32) << 8) | rgb[2] as u32;
+                        values.insert(spec.name.to_string(), v as f64);
+                        changed = true;
+                    }
+                    if let Some(pick) = pick {
+                        if PICK_PARAMS.contains(&spec.name) {
+                            let on = pick.as_deref() == Some(spec.name);
+                            let (rect, resp) =
+                                ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
+                            crate::ui::propbar::frame(ui, rect, resp.hovered(), on);
+                            crate::ui::icons::draw(
+                                ui.painter(),
+                                Rect::from_center_size(rect.center(), Vec2::splat(16.0)),
+                                crate::tools::Tool::ColorEyedropper,
+                                crate::theme::Tokens::icon(),
+                            );
+                            if resp.rich_tip(tr("dialog.pick_from_image")).clicked() {
+                                *pick = if on {
+                                    None
+                                } else {
+                                    Some(spec.name.to_string())
+                                };
+                            }
                         }
                     }
-                }
-            });
+                });
+            };
+            ui.horizontal(draw);
         }
     }
     changed
@@ -240,7 +361,7 @@ fn tone_curve_part(
     hist: Option<&[u32; 256]>,
     image: Option<&image::RgbaImage>,
     picked: Option<image::Rgba<u8>>,
-    status: &mut String,
+    app: &mut App,
 ) {
     use crate::bitmap_modes::ToneCurve;
     use crate::fx::adjust::{
@@ -253,17 +374,22 @@ fn tone_curve_part(
     let mut style = curve_style(params, ch);
     ui.horizontal(|ui| {
         ui.label(tr("fxp.channel"));
-        egui::ComboBox::from_id_salt("tone_curve_channel")
+        crate::ui::keynav::ComboBox::from_id_salt("tone_curve_channel")
             .selected_text(tr(CURVE_CHANNELS[idx].1))
             .width(110.0)
             .show_ui(ui, |ui| {
                 for (i, (_, key)) in CURVE_CHANNELS.iter().enumerate() {
                     ui.selectable_value(&mut st.channel, i, tr(key));
                 }
-            });
+            })
+            .response
+            .rich_tip(crate::ui::tips::pair(
+                "fxp.channel",
+                "dialog.curve_channel_desc",
+            ));
         ui.add_space(10.0);
         ui.label(tr("dialog.curve_style"));
-        egui::ComboBox::from_id_salt("tone_curve_style")
+        crate::ui::keynav::ComboBox::from_id_salt("tone_curve_style")
             .selected_text(tr(&format!("dialog.curve_style_{}", CURVE_STYLES[style])))
             .width(110.0)
             .show_ui(ui, |ui| {
@@ -289,7 +415,9 @@ fn tone_curve_part(
                         style = i;
                     }
                 }
-            });
+            })
+            .response
+            .rich_tip(crate::ui::tips::keyed("dialog.curve_style"));
     });
     // The pixel the eyedropper took becomes a node (curve and straight).
     if let Some(px) = picked {
@@ -375,7 +503,7 @@ fn tone_curve_part(
                     crate::theme::Tokens::border()
                 },
             );
-            if resp.on_hover_text(tr("dialog.curve_eyedropper")).clicked() && style < 2 {
+            if resp.rich_tip(tr("dialog.curve_eyedropper")).clicked() && style < 2 {
                 st.pick = if on {
                     None
                 } else {
@@ -383,7 +511,9 @@ fn tone_curve_part(
                 };
             }
             if ui
-                .add_enabled(style == 2, egui::Button::new(tr("dialog.smooth")))
+                .add_enabled(style == 2, crate::ui::btn_icons::Ib::new("dialog.smooth"))
+                .rich_tip(crate::ui::tips::keyed("dialog.smooth"))
+                .rich_disabled_tip(crate::ui::tips::keyed("dialog.smooth"))
                 .clicked()
             {
                 let lut = smoothed(&curve_from(params, ch));
@@ -398,7 +528,9 @@ fn tone_curve_part(
                 set_curve_style(params, ch, 2);
             }
             if ui
-                .add_enabled(style != 3, egui::Button::new(tr("dialog.invert")))
+                .add_enabled(style != 3, crate::ui::btn_icons::Ib::new("dialog.invert"))
+                .rich_tip(crate::ui::tips::keyed("dialog.invert"))
+                .rich_disabled_tip(crate::ui::tips::keyed("dialog.invert"))
                 .clicked()
             {
                 let c = curve_from(params, ch);
@@ -413,18 +545,26 @@ fn tone_curve_part(
                 curve_into(params, ch, &inverted);
                 set_curve_style(params, ch, style);
             }
-            if ui.button(tr("dialog.reset_active_channel")).clicked() {
+            if ui
+                .ibutton("dialog.reset_active_channel")
+                .rich_tip(crate::ui::tips::keyed("dialog.reset_active_channel"))
+                .clicked()
+            {
                 params.retain(|k, _| !(k.starts_with(ch) && channel_key_of(k, ch)));
             }
-            if ui.button(tr("dialog.reset")).clicked() {
+            if ui
+                .ibutton("dialog.reset")
+                .rich_tip(crate::ui::tips::keyed("dialog.reset"))
+                .clicked()
+            {
                 params.clear();
             }
             if ui
                 .add_enabled(
                     image.is_some(),
-                    egui::Button::new(tr("dialog.auto_balance_tone")),
+                    crate::ui::btn_icons::Ib::new("dialog.auto_balance_tone"),
                 )
-                .on_hover_text(tr("dialog.auto_balance_tone_tip"))
+                .rich_tip(tr("dialog.auto_balance_tone_tip"))
                 .clicked()
             {
                 if let Some(img) = image {
@@ -438,28 +578,40 @@ fn tone_curve_part(
             let mut all = show_all;
             if ui
                 .checkbox(&mut all, tr("dialog.display_all_channels"))
+                .rich_tip(crate::ui::tips::keyed("dialog.display_all_channels"))
                 .changed()
             {
                 ui.data_mut(|d| d.insert_temp(egui::Id::new("tone_curve_all"), all));
             }
             // Presets: the curves of every channel in a JSON file.
             ui.horizontal(|ui| {
-                if ui.button(tr("dialog.load")).clicked() {
+                if ui
+                    .ibutton("dialog.load")
+                    .rich_tip(crate::ui::tips::pair(
+                        "dialog.load",
+                        "dialog.curve_load_desc",
+                    ))
+                    .clicked()
+                {
                     crate::files::Dialog::new()
                         .add_filter(tr("dialog.tone_curve_preset"), &["json"])
                         .pick_into(PRESET_PICK);
                 }
-                if ui.button(tr("dialog.save")).clicked() {
-                    if let Some(path) = crate::files::Dialog::new()
-                        .add_filter(tr("dialog.tone_curve_preset"), &["json"])
-                        .set_file_name("tone curve.json")
-                        .save_path()
-                    {
-                        if let Ok(json) = serde_json::to_string_pretty(&*params) {
-                            if let Err(e) = crate::files::write(&path, json) {
-                                *status = e.to_string();
-                            }
-                        }
+                if ui
+                    .ibutton("dialog.save")
+                    .rich_tip(crate::ui::tips::pair(
+                        "dialog.save",
+                        "dialog.curve_save_desc",
+                    ))
+                    .clicked()
+                {
+                    // The save dialog, a download, or the system's save
+                    // picker on Android (#1402).
+                    if let Ok(json) = serde_json::to_string_pretty(&*params) {
+                        crate::files::Dialog::new()
+                            .add_filter(tr("dialog.tone_curve_preset"), &["json"])
+                            .set_file_name("tone curve.json")
+                            .save_bytes(app, json);
                     }
                 }
             });
@@ -674,15 +826,23 @@ fn levels_part(
             } else {
                 "dialog.pick_input_low"
             };
-            if resp.on_hover_text(tr(tip)).clicked() {
+            if resp.rich_tip(tr(tip)).clicked() {
                 st.pick = if on { None } else { Some(name.to_string()) };
             }
         }
         if ui
             .add_enabled(
                 image.is_some(),
-                egui::Button::new(tr("dialog.lab_auto_adjust")),
+                crate::ui::btn_icons::Ib::new("dialog.lab_auto_adjust"),
             )
+            .rich_tip(crate::ui::tips::pair(
+                "dialog.lab_auto_adjust",
+                "dialog.levels_auto_desc",
+            ))
+            .rich_disabled_tip(crate::ui::tips::pair(
+                "dialog.lab_auto_adjust",
+                "dialog.levels_auto_desc",
+            ))
             .clicked()
         {
             if let Some(img) = image {
@@ -738,6 +898,12 @@ pub fn effect_dialog(app: &mut App, ctx: &Context, st: &mut EffectState, close: 
         crate::ui::lab_dialog::lab_dialog(app, ctx, st, close);
         return;
     }
+    // Settings in the Effects panel (#4253): the docker takes the effect
+    // and the dialog closes, leaving the drawing in view.
+    if crate::ui::fx_panel::take_over(app, st) {
+        *close = true;
+        return;
+    }
     if spec.id == "tone_curve" {
         if let Some(path) = crate::files::take_picked(PRESET_PICK) {
             match crate::files::read_to_string(&path)
@@ -750,14 +916,54 @@ pub fn effect_dialog(app: &mut App, ctx: &Context, st: &mut EffectState, close: 
         }
     }
     let title = tr(&format!("fx.{}", spec.id));
-    super::dialogs::window(ctx, title).show(ctx, |ui| {
+    let mut ok = false;
+    // Gaussian Blur has one value: its settings alone in a compact
+    // window, the blur seen on the drawing, with no large preview panes
+    // covering it (#4091).
+    let compact = compact_effect(spec.id);
+    if app.settings.fx_settings_only || compact {
+        // The settings alone in a small window: the effect is seen on the
+        // drawing (#2799), which the wheel zooms meanwhile.
+        st.pick = None;
+        let (size, min, body_min) = if compact {
+            (COMPACT_SIZE, COMPACT_MIN, 120.0)
+        } else {
+            (SETTINGS_ONLY_SIZE, SETTINGS_ONLY_MIN, 200.0)
+        };
+        crate::ui::dialogs::window(ctx, title)
+            .id_salt(if compact { "fx_compact" } else { "fx_settings_only" })
+            .resizable(size, min)
+            .show(ctx, |ui| {
+                let total = ui.available_rect_before_wrap();
+                let body_h = (total.height() - BOTTOM_H).max(body_min);
+                let r = Rect::from_min_size(total.min, Vec2::new(total.width(), body_h));
+                let mut col = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(r)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                );
+                effect_settings(&mut col, app, st, spec, None);
+                ui.allocate_rect(r, Sense::hover());
+                ok = super::dialogs::ok_cancel(ui, close);
+            });
+        finish(app, ctx, st, ok, *close);
+        return;
+    }
+    before_after::window(ctx, title).show(ctx, |ui| {
         let effect = st.effect.clone();
-        // Adding starts from what the bitmap shows now; editing, from what
-        // the effects before this one made, and the after view runs the
-        // ones after it too.
-        let stack = st
-            .edit
-            .and_then(|(id, i)| app.bitmap_fx_stack(id).map(|s| (id, i, s)));
+        // Adding starts from what the bitmap shows without this effect
+        // (its effects so far; the live preview puts this one last);
+        // editing, from what the effects before this one made, and the
+        // after view runs the ones after it too.
+        let stack = match st.edit {
+            Some((id, i)) => app.bitmap_fx_stack(id).map(|s| (id, i, s)),
+            None => crate::ui::bitmap_preview::selected_bitmap(app).and_then(|(id, _, _)| {
+                let s = app.bitmap_fx_stack(id)?;
+                let shown = usize::from(app.fx_preview.on_drawing());
+                let i = s.effects.len().saturating_sub(shown);
+                Some((id, i, s))
+            }),
+        };
         let after: Vec<BitmapEffect> = match &stack {
             Some((_, index, stack)) => stack.effects.iter().skip(index + 1).cloned().collect(),
             None => Vec::new(),
@@ -770,21 +976,75 @@ pub fn effect_dialog(app: &mut App, ctx: &Context, st: &mut EffectState, close: 
             },
             None => Source::Shown,
         };
-        let preview = before_after_pick(
-            ui,
-            app,
-            &src,
-            settings_key(&(&effect, &after)),
-            220.0,
-            st.pick.is_some(),
-            |img, scale| {
-                let mut out = crate::fx::apply_effect(img, &crate::fx::scaled(&effect, scale));
-                for e in after.iter().filter(|e| e.visible) {
-                    out = crate::fx::apply_effect(&out, &crate::fx::scaled(e, scale));
-                }
-                out
-            },
-        );
+        before_after::columns(ui, RIGHT_W, BOTTOM_H, |left, right| {
+            let mut picking = st.pick.is_some();
+            let preview = before_after::live(
+                left,
+                app,
+                egui::Id::new("effect_preview"),
+                &mut st.lab.view,
+                &src,
+                settings_key(&(&effect, &after)),
+                &View::PLAIN,
+                &mut picking,
+                0.0,
+                |_, _, _| {},
+                |img, scale| {
+                    let mut out = crate::fx::apply_effect(img, &crate::fx::scaled(&effect, scale));
+                    for e in after.iter().filter(|e| e.visible) {
+                        out = crate::fx::apply_effect(&out, &crate::fx::scaled(e, scale));
+                    }
+                    out
+                },
+            );
+            if !picking {
+                st.pick = None;
+            }
+            effect_settings(right, app, st, spec, preview);
+        });
+        ok = super::dialogs::ok_cancel(ui, close);
+    });
+    finish(app, ctx, st, ok, *close);
+}
+
+/// The settings-only window's first size and its smallest.
+pub const SETTINGS_ONLY_SIZE: Vec2 = Vec2::new(380.0, 600.0);
+pub const SETTINGS_ONLY_MIN: Vec2 = Vec2::new(320.0, 380.0);
+
+/// The compact window of an effect with a single value (#4091): its first
+/// size and its smallest.
+pub const COMPACT_SIZE: Vec2 = Vec2::new(360.0, 330.0);
+pub const COMPACT_MIN: Vec2 = Vec2::new(300.0, 260.0);
+
+/// Effects whose dialog opens as the compact settings window (#4091).
+pub fn compact_effect(id: &str) -> bool {
+    id == "gaussian_blur"
+}
+
+/// After the dialog's frame: OK keeps the effect, a close takes the
+/// preview back, otherwise the drawing shows the values.
+fn finish(app: &mut App, ctx: &Context, st: &mut EffectState, ok: bool, close: bool) {
+    if ok {
+        app.commit_bitmap_effect(st);
+    } else if close {
+        app.end_bitmap_effect_preview();
+    } else {
+        app.preview_bitmap_effect(ctx, st);
+    }
+}
+
+/// The settings column: the effect's controls (the Tone Curve's curves,
+/// Contrast Enhancement's histogram), Reset and the Preview box.
+/// `preview` is what the shared preview made this frame: the copy for
+/// histograms and the pixel an eyedropper picked.
+fn effect_settings(
+    ui: &mut Ui,
+    app: &mut App,
+    st: &mut EffectState,
+    spec: &crate::fx::EffectSpec,
+    preview: Option<before_after::Live>,
+) {
+    {
         // An eyedropper picks the colour under a click on the preview (the
         // Tone Curve's adds a node instead).
         let mut node_pick = None;
@@ -814,60 +1074,214 @@ pub fn effect_dialog(app: &mut App, ctx: &Context, st: &mut EffectState, close: 
             }
         }
         let thumb = preview.map(|p| p.img);
-        ui.add_space(6.0);
         if spec.id == "tone_curve" {
             let hist = thumb.as_ref().map(|t| histogram(t));
-            tone_curve_part(
-                ui,
-                st,
-                hist.as_ref(),
-                thumb.as_deref(),
-                node_pick,
-                &mut app.status,
-            );
+            tone_curve_part(ui, st, hist.as_ref(), thumb.as_deref(), node_pick, app);
         } else if spec.params.is_empty() {
             ui.label(tr("dialog.no_settings"));
         } else {
-            if spec.id == "contrast_enhancement" {
-                // The chosen channel's histogram (brightness for all).
-                let ch = st
-                    .effect
-                    .params
-                    .get("channel")
-                    .map(|v| v.max(0.0) as usize)
-                    .unwrap_or(0)
-                    .min(3);
-                let hist = thumb.as_ref().map(|t| channel_histogram(t, ch));
-                levels_part(ui, st, hist.as_ref(), thumb.as_deref());
-            }
-            ui.spacing_mut().slider_width = 200.0;
-            egui::ScrollArea::vertical()
-                .max_height(340.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("fx_params")
-                        .num_columns(2)
-                        .spacing([10.0, 6.0])
-                        .show(ui, |ui| {
-                            for p in spec.params {
-                                param_widget(ui, p, &mut st.effect.params, Some(&mut st.pick));
-                                ui.end_row();
-                            }
-                        });
-                });
-            if ui.button(tr("dialog.reset")).clicked() {
-                st.effect.params.clear();
+            // The settings panel, with the Reset, undo and redo row and
+            // the Preview box under it.
+            // Room for the presets, Preview, Show Original and All
+            // pages rows.
+            let below = before_after::STEPS_H + 120.0;
+            before_after::panel(ui, "fx_params_scroll", below, |ui| {
+                if spec.id == "contrast_enhancement" {
+                    // The chosen channel's histogram (brightness for all).
+                    let ch = st
+                        .effect
+                        .params
+                        .get("channel")
+                        .map(|v| v.max(0.0) as usize)
+                        .unwrap_or(0)
+                        .min(3);
+                    let hist = thumb.as_ref().map(|t| channel_histogram(t, ch));
+                    levels_part(ui, st, hist.as_ref(), thumb.as_deref());
+                }
+                for p in spec.params {
+                    let r = ui
+                        .vertical(|ui| {
+                            param_stacked(ui, p, &mut st.effect.params, Some(&mut st.pick))
+                        })
+                        .response;
+                    before_after::mark(ui, p.name, r.rect);
+                    ui.add_space(2.0);
+                }
+            });
+            before_after::steps_for(
+                ui,
+                egui::Id::new("fx_steps"),
+                &mut st.effect.params,
+                BTreeMap::new(),
+                &crate::ui::tips::keyed("dialog.reset"),
+            );
+        }
+        presets_row(ui, app, st);
+        preview_row(ui, app, &mut st.preview);
+        original_row(ui, app, st);
+        all_pages_row(ui, app, st);
+    }
+}
+
+/// The effect's presets (#1129): a list that puts a saved preset's
+/// settings in the dialog, the name for a new one, Save and Delete.
+pub(crate) fn presets_row(ui: &mut Ui, app: &mut App, st: &mut EffectState) {
+    let presets: Vec<(usize, FxPreset)> = presets_of(&app.settings.fx_presets, &st.effect.id)
+        .into_iter()
+        .map(|(i, p)| (i, p.clone()))
+        .collect();
+    let mut delete = None;
+    ui.horizontal(|ui| {
+        ui.label(tr("dialog.fx_presets"));
+        let chosen = presets
+            .iter()
+            .find(|(_, p)| p.effect.params == st.effect.params)
+            .map(|(i, p)| (*i, p.name.clone()));
+        let shown = chosen
+            .as_ref()
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| tr("dialog.fx_preset_none"));
+        egui::ComboBox::from_id_salt("fx_presets")
+            .selected_text(shown)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                if presets.is_empty() {
+                    ui.label(tr("dialog.fx_preset_empty"));
+                }
+                for (_, p) in &presets {
+                    let on = chosen.as_ref().is_some_and(|(_, n)| *n == p.name);
+                    if ui.selectable_label(on, &p.name).clicked() {
+                        st.effect.params = p.effect.params.clone();
+                        st.preset_name = p.name.clone();
+                    }
+                }
+            })
+            .response
+            .rich_tip(crate::ui::tips::pair(
+                "dialog.fx_presets",
+                "dialog.fx_presets_desc",
+            ));
+        if ui
+            .add_enabled(chosen.is_some(), egui::Button::new("\u{00D7}").small())
+            .rich_tip(tr("dialog.fx_preset_delete"))
+            .rich_disabled_tip(tr("dialog.fx_preset_delete"))
+            .clicked()
+        {
+            delete = chosen.map(|(i, _)| i);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut st.preset_name)
+                .desired_width(170.0)
+                .hint_text(tr("dialog.fx_preset_name")),
+        )
+        .rich_tip(tr("dialog.fx_preset_name"));
+        if ui
+            .ibutton("dialog.fx_preset_save")
+            .rich_tip(crate::ui::tips::pair(
+                "dialog.fx_preset_save",
+                "dialog.fx_preset_save_desc",
+            ))
+            .clicked()
+        {
+            let base = tr("dialog.fx_preset_default_name");
+            if save_fx_preset(
+                &mut app.settings.fx_presets,
+                &st.effect,
+                &st.preset_name,
+                &base,
+            ) {
+                app.settings.save();
             }
         }
-        if super::dialogs::ok_cancel(ui, close) {
-            let e = st.effect.clone();
-            match st.edit {
-                Some((id, i)) => app.edit_bitmap_effects(id, "Edit Effect", move |list| {
-                    if let Some(slot) = list.get_mut(i) {
-                        *slot = e;
-                    }
-                }),
-                None => app.add_bitmap_effect(e),
+    });
+    if let Some(i) = delete {
+        if i < app.settings.fx_presets.len() {
+            app.settings.fx_presets.remove(i);
+            app.settings.save();
+        }
+    }
+}
+
+/// Show Original (held: the drawing without the effect, #1129) and the
+/// Settings only box (the dialog without its Before and After panes,
+/// #2799).
+fn original_row(ui: &mut Ui, app: &mut App, st: &mut EffectState) {
+    ui.horizontal(|ui| {
+        let held = ui
+            .add_enabled(st.preview, crate::ui::btn_icons::Ib::new("dialog.fx_show_original"))
+            .rich_tip(crate::ui::tips::pair(
+                "dialog.fx_show_original",
+                "dialog.fx_show_original_desc",
+            ))
+            .rich_disabled_tip(crate::ui::tips::pair(
+                "dialog.fx_show_original",
+                "dialog.fx_show_original_desc",
+            ));
+        st.show_original = st.preview && held.is_pointer_button_down_on();
+        let mut only = app.settings.fx_settings_only;
+        if ui
+            .checkbox(&mut only, tr("dialog.fx_settings_only"))
+            .rich_tip(crate::ui::tips::pair(
+                "dialog.fx_settings_only",
+                "dialog.fx_settings_only_desc",
+            ))
+            .changed()
+        {
+            app.settings.fx_settings_only = only;
+            // The drawing is where the effect is seen now.
+            if only {
+                st.preview = true;
             }
+            app.settings.save();
+        }
+        // The settings beside the drawing in the Effects docker instead
+        // (#4253): the next frame moves them there.
+        if crate::ui::fx_panel::fits(&st.effect.id) {
+            let mut panel = app.settings.fx_in_panel;
+            if ui
+                .checkbox(&mut panel, tr("dialog.fx_in_panel"))
+                .rich_tip(crate::ui::tips::keyed("dialog.fx_in_panel"))
+                .changed()
+            {
+                app.settings.fx_in_panel = panel;
+                app.settings.save();
+            }
+        }
+    });
+}
+
+/// The All pages box, while adding an effect with a picture selected in a
+/// drawing of several pages: OK gives the effect to every picture on all
+/// pages too (#1551).
+pub fn all_pages_row(ui: &mut Ui, app: &App, st: &mut EffectState) {
+    if st.edit.is_some() || app.doc().pages.len() < 2 || !app.selection_has_picture() {
+        return;
+    }
+    ui.checkbox(&mut st.all_pages, tr("dialog.fx_all_pages"))
+        .rich_tip(crate::ui::tips::pair(
+            "dialog.fx_all_pages",
+            "dialog.fx_all_pages_desc",
+        ));
+}
+
+/// The Preview box (the effect on the drawing while the dialog is open)
+/// and, while a preview is being made, a busy mark beside it.
+pub fn preview_row(ui: &mut Ui, app: &App, preview: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.checkbox(preview, tr("dialog.preview"))
+            .rich_tip(crate::ui::tips::pair(
+                "dialog.preview",
+                "dialog.live_preview_desc",
+            ));
+        if *preview && app.fx_preview.busy() {
+            ui.spinner();
+            ui.label(
+                egui::RichText::new(tr("dialog.preview_busy"))
+                    .size(11.0)
+                    .color(crate::theme::Tokens::text_dim()),
+            );
         }
     });
 }
@@ -889,7 +1303,12 @@ pub fn choose_effect(app: &mut App, id: &str) {
 /// show/hide, edit, move up and down and delete, and Add effect.
 pub fn fx_section(app: &mut App, ui: &mut Ui, id: ShapeId) {
     let effects = app.bitmap_effects(id);
-    if effects.is_empty() {
+    // Live effects listed above it count as effects too (#4231).
+    let live = app
+        .doc()
+        .find_shape(id)
+        .is_some_and(|s| !s.effect_stack().is_empty());
+    if effects.is_empty() && !live {
         ui.label(
             egui::RichText::new(tr("docker.no_effects"))
                 .color(crate::theme::Tokens::text_dim())
@@ -899,11 +1318,12 @@ pub fn fx_section(app: &mut App, ui: &mut Ui, id: ShapeId) {
     let n = effects.len();
     for (i, e) in effects.iter().enumerate() {
         ui.horizontal(|ui| {
-            let mut vis = e.visible;
-            if ui
-                .checkbox(&mut vis, "")
-                .on_hover_text(tr("docker.show_hide_effect"))
-                .changed()
+            // An eye, as the stack's effects above and the objects in
+            // the Objects docker (#4231).
+            let vis = !e.visible;
+            if crate::ui::effects_docker::eye_button(ui, e.visible)
+                .rich_tip(tr("docker.show_hide_effect"))
+                .clicked()
             {
                 app.edit_bitmap_effects(id, "Show or Hide Effect", move |l| {
                     if let Some(x) = l.get_mut(i) {
@@ -913,8 +1333,8 @@ pub fn fx_section(app: &mut App, ui: &mut Ui, id: ShapeId) {
             }
             ui.label(tr(&format!("fx.{}", e.id)));
             if ui
-                .small_button("\u{270E}")
-                .on_hover_text(tr("docker.edit_effect"))
+                .small_button("\u{270F}")
+                .rich_tip(tr("docker.edit_effect"))
                 .clicked()
             {
                 app.dialog = crate::ui::dialogs::Dialog::Effect(EffectState {
@@ -923,25 +1343,29 @@ pub fn fx_section(app: &mut App, ui: &mut Ui, id: ShapeId) {
                     channel: 0,
                     lab: Default::default(),
                     pick: None,
+                    preview: PREVIEW_AT_START,
+                    all_pages: false,
+                    show_original: false,
+                    preset_name: String::new(),
                 });
             }
             if ui
-                .add_enabled(i > 0, egui::Button::new("\u{25B2}").small())
-                .on_hover_text(tr("docker.move_up"))
+                .add_enabled(i > 0, egui::Button::new("\u{23F6}").small())
+                .rich_tip(tr("docker.move_up"))
                 .clicked()
             {
                 app.edit_bitmap_effects(id, "Reorder Effects", move |l| l.swap(i, i - 1));
             }
             if ui
-                .add_enabled(i + 1 < n, egui::Button::new("\u{25BC}").small())
-                .on_hover_text(tr("docker.move_down"))
+                .add_enabled(i + 1 < n, egui::Button::new("\u{23F7}").small())
+                .rich_tip(tr("docker.move_down"))
                 .clicked()
             {
                 app.edit_bitmap_effects(id, "Reorder Effects", move |l| l.swap(i, i + 1));
             }
             if ui
-                .small_button("\u{2715}")
-                .on_hover_text(tr("docker.delete_effect"))
+                .small_button("\u{00D7}")
+                .rich_tip(tr("docker.delete_effect"))
                 .clicked()
             {
                 app.edit_bitmap_effects(id, "Delete Effect", move |l| {
@@ -952,7 +1376,9 @@ pub fn fx_section(app: &mut App, ui: &mut Ui, id: ShapeId) {
             }
         });
     }
-    let resp = ui.button(tr("docker.add_effect"));
+    let resp = ui
+        .ibutton("docker.add_effect")
+        .rich_tip(crate::ui::tips::keyed("docker.add_effect"));
     egui::Popup::menu(&resp)
         .id(egui::Id::new("fx_add_menu"))
         .style(crate::ui::menus::menu_popup_style)
@@ -975,6 +1401,34 @@ pub fn fx_section(app: &mut App, ui: &mut Ui, id: ShapeId) {
 #[cfg(test)]
 mod tests {
     use super::channel_key_of;
+
+    #[test]
+    fn effect_presets_are_saved_by_effect_and_name() {
+        use super::{presets_of, save_fx_preset};
+        let mut all = Vec::new();
+        let mut blur = crate::fx::new_effect("gaussian_blur");
+        blur.params.insert("radius".into(), 3.0);
+        blur.visible = false;
+        assert!(save_fx_preset(&mut all, &blur, "  ", "Preset"));
+        assert!(save_fx_preset(&mut all, &blur, "", "Preset"));
+        assert_eq!(all[0].name, "Preset 1");
+        assert_eq!(all[1].name, "Preset 2");
+        assert!(all[0].effect.visible, "kept shown");
+        let emboss = crate::fx::new_effect("emboss");
+        assert!(save_fx_preset(&mut all, &emboss, "Soft", "Preset"));
+        // The same name replaces the settings.
+        blur.params.insert("radius".into(), 9.0);
+        assert!(save_fx_preset(&mut all, &blur, "Preset 1", "Preset"));
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].effect.params["radius"], 9.0);
+        let blurs = presets_of(&all, "gaussian_blur");
+        assert_eq!(blurs.len(), 2);
+        assert_eq!(presets_of(&all, "emboss")[0].0, 2);
+        // The settings file keeps them.
+        let json = serde_json::to_string(&all).expect("json");
+        let back: Vec<super::FxPreset> = serde_json::from_str(&json).expect("back");
+        assert_eq!(back, all);
+    }
 
     #[test]
     fn presets_keep_numbers_only() {

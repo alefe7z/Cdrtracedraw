@@ -1,5 +1,7 @@
 # Gerenciamento de cores
 
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
 As telas mostram cores com luz vermelha, verde e azul; as impressoras misturam
 tintas ciano, magenta, amarela e preta. O gerenciamento de cores usa **perfis de
 cor** para descrever cada dispositivo, para que uma cor mantenha a aparência da
@@ -74,3 +76,12 @@ também avisa sobre essas cores.
 
 Sem perfis carregados, o CD Draw converte as cores com o próprio modelo de
 tintas de processo em papel revestido.
+
+[[menu.view > menu.view.separations]] mostra a página como uma só tinta a
+imprime, na cor dessa tinta: escolha ciano, magenta, amarelo, preto ou uma
+tinta especial do desenho, e aparece só o que essa tinta imprime, a tinta
+ciano em ciano. Você continua a desenhar e editar como sempre; o desenho em si
+não muda. [[menu.view.separations_composite]] volta a mostrar todas as tintas.
+
+Para converter todas as cores da seleção ou do desenho em CMYK ou RGB com
+esses perfis, veja [Converter cores para CMYK ou RGB](convert-colors.md).

@@ -9,6 +9,7 @@
 - [[options.on_startup]]：显示欢迎屏幕、新建文档，或打开上次编辑的文档。
 - [[options.show_new_document_dialog]]（打开）：询问新绘图的设置；请参阅 [创建绘图](../get-started/new-document.md)。
 - [[options.show_splash]]（打开）。
+- [[options.hardware_acceleration]]（开）：用旁边选择的显卡绘制窗口（开始时为 [[options.gpu_automatic]]）；关闭时使用计算机的软件渲染器。下次启动时生效。如果窗口无法这样打开，TraceDraw 会改用软件渲染器、再改用 OpenGL 重新启动，并记住可用的那个。
 - [[options.undo_levels]]：可以撤消的步骤数（起初为 150）。
 
 ## 显示 {#display}
@@ -19,6 +20,7 @@
 - [[options.show_tooltips]]（打开）、[[options.hide_bbox_curve_tools]] 和 [[options.node_tracking]]（关闭：打开时，[[tool.pick]] 工具可以拖动所选曲线的节点）。
 - [[options.full_screen_preview]]：[[options.show_page_border]]。
 - [[options.wheel_default_action]]：[[options.wheel_zoom]]（起初选用）或 [[options.wheel_scroll]]。
+- [[options.open_view]]：[[options.open_view_page]]（起初选用）、[[options.open_view_objects]]、[[options.open_view_width]]、[[options.open_view_height]]、[[options.open_view_actual]]、[[options.open_view_percent]]或[[options.open_view_saved]]（每次保存 TraceDraw 文件时记下的页面、位置和缩放）。
 - [[options.ruler_calibration]]：将一把尺子贴在屏幕上，更改 [[options.screen_resolution]] 直到刻度吻合，使 100% 缩放显示真实尺寸。[[options.reset]] 恢复为 96。
 
 ## 编辑 {#edit}
@@ -36,6 +38,7 @@
 - [[options.node_size]]：小、中或大。
 - [[options.node_cusp]]、[[options.node_smooth]] 和 [[options.node_symmetrical]] 节点的 [[options.node_shape]]。
 - [[options.show_curve_direction]]。
+- [[options.corner_widgets]]。
 - [[options.colors]]：所选节点和控制柄的 [[options.main_color]] 以及 [[options.secondary_color]]。
 - [[options.unselected_nodes_filled]]。
 
@@ -70,6 +73,35 @@
 
 ![CD Draw 选项的文本页面](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]：<kbd>Ctrl+8</kbd> 和 <kbd>Ctrl+2</kbd> 使所选文本放大和缩小的幅度（1 点）。
-- 新文本的 [[options.default_font]] 和 [[options.default_size]]。
-- [[menu.text.use_hyphenation]]、[[menu.text.show_non_printing]] 和 [[menu.text.show_text_frames]]。
+此页面有五个选项卡。
+
+- [[options.display]]：[[options.keyboard_text_increment]]（<kbd>Ctrl+8</kbd> 和
+  <kbd>Ctrl+2</kbd> 放大和缩小所选文本的幅度，1 点）、新文本的
+  [[options.text_units]] [[options.default_font]] 和 [[options.default_size]]，以及
+  [[menu.text.show_non_printing]]。
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]：[[menu.text.show_text_frames]]、
+  [[menu.text.use_hyphenation]] 和 [[options.hyphenation_patterns]]
+  （内置，或您所用语言的断字词典）。
+  - [[options.default_tab_spacing]]: 没有自己制表位的段落中 <kbd>Tab</kbd> 跳到的位置(12.7 毫米,半英寸)。
+- [[docker.fonts]]：在字体列表顶部 [[options.show_recent_fonts]]、
+  [[options.recent_font_count]]（5，最多 20）以及
+  [[options.font_sample_size]]。
+- [[options.spelling]]：[[writing.ignore_digits]]、[[writing.ignore_capitals]]
+  和 [[options.add_to_autocorrect]]，这样在拼写检查中更正的单词下次键入时会被自动更正；以及它使用的
+  [[options.dictionaries]]，请参阅[词典](../text/writing-tools.md#dictionaries)。
+- [[dialog.autocorrect]]：键入时更正的内容；请参阅
+  [自动更正](../text/writing-tools.md#autocorrect)。
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

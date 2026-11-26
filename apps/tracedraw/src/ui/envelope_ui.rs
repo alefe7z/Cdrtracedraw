@@ -8,7 +8,7 @@
 //! Lines, Copy Envelope Properties and Clear Envelope.
 
 use crate::app::App;
-use crate::envelope_edit::{last_envelope, Part, Preset};
+use crate::envelope_edit::{Part, Preset};
 use crate::i18n::tr;
 use crate::theme::Tokens;
 use crate::tools::Tool;
@@ -16,7 +16,7 @@ use crate::ui::propbar::{pic_button, sep, Pic};
 use crate::ui::tips::RichTip;
 use egui::{epaint, Color32, Painter, Pos2, Rect, Stroke, Ui, Vec2};
 use tracedraw_core::envelope::{Mapping, Mode};
-use tracedraw_core::geometry::ParamCurve;
+use tracedraw_core::geometry::{CubicBez, ParamCurve};
 
 /// The name of a mode.
 pub fn mode_key(m: Mode) -> &'static str {
@@ -57,6 +57,28 @@ pub fn mapping_key(m: Mapping) -> &'static str {
     }
 }
 
+/// What a mapping does.
+fn mapping_hint_key(m: Mapping) -> &'static str {
+    match m {
+        Mapping::Horizontal => "envelope.mapping_horizontal_hint",
+        Mapping::Original => "envelope.mapping_original_hint",
+        Mapping::Putty => "envelope.mapping_putty_hint",
+        Mapping::Vertical => "envelope.mapping_vertical_hint",
+    }
+}
+
+/// The mapping list's tip: the mapping in use by name, and what it does
+/// with the object (#2212). The list showed the name alone and said
+/// only "How the object fills the envelope", whichever was chosen.
+fn mapping_tip(m: Mapping) -> String {
+    format!(
+        "{}: {}\n{}",
+        tr("envelope.mapping"),
+        tr(mapping_key(m)),
+        tr(mapping_hint_key(m))
+    )
+}
+
 fn dim(ui: &mut Ui, text: String) {
     ui.label(
         egui::RichText::new(text)
@@ -69,13 +91,15 @@ fn dim(ui: &mut Ui, text: String) {
 fn mapping_list(app: &mut App, ui: &mut Ui, width: f32) {
     let (shown, _) = app.envelope_settings_shown();
     let mut chosen = None;
-    egui::ComboBox::from_id_salt("envelope_mapping")
+    crate::ui::keynav::ComboBox::from_id_salt("envelope_mapping")
         .selected_text(tr(mapping_key(shown)))
         .width(width)
         .show_ui(ui, |ui| {
             for m in Mapping::ALL {
+                // Each row says what its mapping does.
                 if ui
                     .selectable_label(m == shown, tr(mapping_key(m)))
+                    .rich_tip(crate::ui::tips::pair(mapping_key(m), mapping_hint_key(m)))
                     .clicked()
                 {
                     chosen = Some(m);
@@ -83,7 +107,7 @@ fn mapping_list(app: &mut App, ui: &mut Ui, width: f32) {
             }
         })
         .response
-        .rich_tip(tr("envelope.mapping_tip"));
+        .rich_tip(mapping_tip(shown));
     if let Some(m) = chosen {
         app.set_envelope_mapping(m);
     }
@@ -93,7 +117,7 @@ fn mapping_list(app: &mut App, ui: &mut Ui, width: f32) {
 fn preset_list(app: &mut App, ui: &mut Ui, enabled: bool) {
     let mut chosen = None;
     ui.add_enabled_ui(enabled, |ui| {
-        egui::ComboBox::from_id_salt("envelope_presets")
+        crate::ui::keynav::ComboBox::from_id_salt("envelope_presets")
             .selected_text(tr("docker.presets"))
             .width(110.0)
             .show_ui(ui, |ui| {
@@ -114,10 +138,7 @@ fn preset_list(app: &mut App, ui: &mut Ui, enabled: bool) {
 /// The Envelope tool's property bar.
 pub fn envelope_bar(app: &mut App, ui: &mut Ui) {
     let selected = !app.selection.is_empty();
-    let enveloped = app
-        .selection
-        .iter()
-        .any(|id| app.envelope_of(*id).is_some());
+    let enveloped = app.selection.iter().any(|id| app.has_any_envelope(*id));
     preset_list(app, ui, selected);
     sep(ui);
     for m in Mode::ALL {
@@ -244,11 +265,9 @@ fn preset_cell(ui: &mut Ui, i: usize, size: Vec2, enabled: bool) -> bool {
 /// with the mapping, and Keep lines, Copy and Clear.
 pub fn envelope_docker(app: &mut App, ui: &mut Ui) {
     let selected = !app.selection.is_empty();
-    let enveloped = app
-        .selection
-        .iter()
-        .any(|id| app.envelope_of(*id).is_some());
-    if crate::ui::docker_form::wide_button(ui, &tr("envelope.add_new"), selected) {
+    let enveloped = app.selection.iter().any(|id| app.has_any_envelope(*id));
+    let tip = crate::ui::tips::keyed("envelope.add_new");
+    if crate::ui::docker_form::wide_button(ui, &tr("envelope.add_new"), selected, &tip) {
         app.add_new_envelope();
         app.set_tool(Tool::Envelope);
     }
@@ -333,9 +352,56 @@ pub fn envelope_docker(app: &mut App, ui: &mut Ui) {
             app.clear_envelope();
         }
     });
+    ui.separator();
+    mesh_row(app, ui, selected);
     if !selected {
         ui.add_space(4.0);
         dim(ui, tr("docker.envelope_hint"));
+    }
+}
+
+/// The mesh envelope: its columns and rows, and Add Mesh Envelope, which
+/// lays the grid over the selection; its points are dragged with the
+/// Envelope tool.
+fn mesh_row(app: &mut App, ui: &mut Ui, selected: bool) {
+    ui.horizontal(|ui| {
+        let max = tracedraw_core::envelope::MESH_MAX;
+        let (mut cols, mut rows) = app.envelope_mesh;
+        ui.label(tr("envelope.mesh_cols"));
+        ui.add(egui::DragValue::new(&mut cols).range(1..=max))
+            .rich_tip(tr("envelope.mesh_cols_desc"));
+        ui.label(tr("envelope.mesh_rows"));
+        ui.add(egui::DragValue::new(&mut rows).range(1..=max))
+            .rich_tip(tr("envelope.mesh_rows_desc"));
+        app.envelope_mesh = (cols.clamp(1, max), rows.clamp(1, max));
+        if ui
+            .add_enabled(selected, crate::ui::btn_icons::Ib::new("envelope.add_mesh"))
+            .rich_tip(tr("envelope.add_mesh_desc"))
+            .clicked()
+        {
+            app.add_mesh_envelope();
+            app.set_tool(Tool::Envelope);
+        }
+    });
+}
+
+/// How far a drawn frame may stray from its curves, in pixels.
+const FRAME_TOLERANCE: f64 = 0.25;
+
+/// How many equal steps draw the frame segment `c` (in screen pixels)
+/// within [`FRAME_TOLERANCE`] of the curve: a step of `1/n` strays at most
+/// `6 d / (8 n^2)` from a cubic whose control points' second differences
+/// are at most `d`. A fixed 16 steps drew a large segment, zoomed in, as
+/// a visible row of lines (#881); a short one takes few.
+fn frame_steps(c: &CubicBez) -> usize {
+    let d = (c.p0.to_vec2() - 2.0 * c.p1.to_vec2() + c.p2.to_vec2())
+        .hypot()
+        .max((c.p1.to_vec2() - 2.0 * c.p2.to_vec2() + c.p3.to_vec2()).hypot());
+    let n = (0.75 * d / FRAME_TOLERANCE).sqrt().ceil();
+    if n.is_finite() {
+        (n as usize).clamp(1, 256)
+    } else {
+        1
     }
 }
 
@@ -348,15 +414,24 @@ pub fn draw_envelopes(app: &App, painter: &Painter) {
     }
     let blue = Color32::from_rgb(40, 110, 220);
     for s in app.selected_shapes() {
-        let Some((_, f)) = last_envelope(&s.effects) else {
+        // The Envelope tool's frame on an object with no envelope shows
+        // too, before it is edited (#2611).
+        let Some((_, _, f)) = app.editable_envelope(s.id) else {
             continue;
         };
         let page = f.transformed(s.transform);
         let mut outline: Vec<Pos2> = Vec::new();
         for i in 0..page.len() {
+            let screen = |p: tracedraw_core::geometry::Point| {
+                let q = app.view.to_screen(p);
+                tracedraw_core::geometry::Point::new(q.x as f64, q.y as f64)
+            };
             let c = page.segment(i);
-            for k in 0..16 {
-                outline.push(app.view.to_screen(c.eval(k as f64 / 16.0)));
+            let c = CubicBez::new(screen(c.p0), screen(c.p1), screen(c.p2), screen(c.p3));
+            let n = frame_steps(&c);
+            for k in 0..n {
+                let p = c.eval(k as f64 / n as f64);
+                outline.push(Pos2::new(p.x as f32, p.y as f32));
             }
         }
         if outline.len() > 2 {
@@ -382,7 +457,9 @@ pub fn draw_envelopes(app: &App, painter: &Painter) {
             let sp = app.view.to_screen(*n);
             let size = if page.is_corner(i) { 8.0 } else { 7.0 };
             let r = Rect::from_center_size(sp, Vec2::splat(size));
-            let chosen = dragged == Some(i) || app.selected_effect_node == Some((s.id, i));
+            let chosen = dragged == Some(i)
+                || app.selected_effect_node == Some((s.id, i))
+                || app.envelope_node_chosen(s.id, i);
             painter.rect_filled(r, 0.0, if chosen { blue } else { Color32::WHITE });
             painter.rect_stroke(r, 0.0, Stroke::new(1.0, blue), egui::StrokeKind::Outside);
         }
@@ -501,6 +578,62 @@ pub fn draw_envelope_pic(painter: &Painter, r: Rect, pic: Pic, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracedraw_core::geometry::Point;
+
+    /// A frame segment is drawn within a quarter pixel of its curve
+    /// however large it is on screen, with few steps when it is small or
+    /// straight (#881).
+    #[test]
+    fn the_frame_is_drawn_smooth_at_any_zoom() {
+        // An arch, from a frame segment seen at growing zooms.
+        for zoom in [0.5, 4.0, 40.0, 400.0] {
+            let c = CubicBez::new(
+                Point::new(0.0, 0.0),
+                Point::new(10.0 * zoom, -30.0 * zoom),
+                Point::new(30.0 * zoom, -30.0 * zoom),
+                Point::new(40.0 * zoom, 0.0),
+            );
+            let n = frame_steps(&c);
+            let pts: Vec<Point> = (0..=n).map(|k| c.eval(k as f64 / n as f64)).collect();
+            // The curve's farthest point from the drawn line.
+            let mut worst: f64 = 0.0;
+            for k in 0..=4000 {
+                let p = c.eval(k as f64 / 4000.0);
+                let d = pts
+                    .windows(2)
+                    .map(|w| {
+                        let ab = w[1] - w[0];
+                        let t = ((p - w[0]).dot(ab) / ab.hypot2().max(1e-12)).clamp(0.0, 1.0);
+                        (p - (w[0] + ab * t)).hypot()
+                    })
+                    .fold(f64::MAX, f64::min);
+                worst = worst.max(d);
+            }
+            assert!(
+                worst <= FRAME_TOLERANCE,
+                "zoom {zoom}: {n} steps, {worst} px off"
+            );
+            if zoom >= 40.0 {
+                // The 16 steps it used to take were not enough.
+                assert!(n > 16, "zoom {zoom}: {n}");
+            }
+        }
+        // A straight segment is one line; a tiny curve a few.
+        let line = CubicBez::new(
+            Point::new(0.0, 0.0),
+            Point::new(100.0, 0.0),
+            Point::new(200.0, 0.0),
+            Point::new(300.0, 0.0),
+        );
+        assert_eq!(frame_steps(&line), 1);
+        let nan = CubicBez::new(
+            Point::new(f64::NAN, 0.0),
+            Point::ZERO,
+            Point::ZERO,
+            Point::ZERO,
+        );
+        assert_eq!(frame_steps(&nan), 1);
+    }
 
     /// The bar and the docker draw with nothing selected, with an
     /// enveloped object and in every mode.
@@ -553,5 +686,57 @@ mod tests {
         }
         assert_eq!(mode_key(Mode::DoubleArc), "envelope.double_arc");
         assert_eq!(mapping_key(Mapping::Original), "envelope.mapping_original");
+    }
+
+    /// #2212: the mapping list says which mapping is in use and what it
+    /// does, on the property bar and in the docker, and follows the
+    /// mapping chosen; every mapping has words of its own.
+    #[test]
+    fn the_mapping_list_says_what_the_mapping_in_use_does() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let id = app
+            .new_shape(tracedraw_core::ShapeKind::Rect {
+                rect: tracedraw_core::Rect::new(0.0, 0.0, 40.0, 20.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("shape");
+        app.select(vec![id]);
+        app.add_new_envelope();
+        app.tool = Tool::Envelope;
+        let mut hints = std::collections::BTreeSet::new();
+        for m in Mapping::ALL {
+            app.set_envelope_mapping(m);
+            assert_eq!(app.envelope_settings_shown().0, m);
+            let hint = tr(mapping_hint_key(m));
+            assert!(hint.len() > 20 && !hint.starts_with("envelope."), "{hint}");
+            hints.insert(hint.clone());
+            let tip = mapping_tip(m);
+            assert!(tip.starts_with(&format!(
+                "{}: {}\n",
+                tr("envelope.mapping"),
+                tr(mapping_key(m))
+            )));
+            assert!(tip.ends_with(&hint));
+            for docker in [false, true] {
+                crate::ui::tips::start_recording();
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1400.0, 600.0))),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    if docker {
+                        envelope_docker(&mut app, ui);
+                    } else {
+                        ui.horizontal(|ui| envelope_bar(&mut app, ui));
+                    }
+                });
+                out.textures_delta.clear();
+                let seen = crate::ui::tips::recorded();
+                assert!(seen.contains(&tip), "{m:?} (docker {docker}): {seen:?}");
+            }
+        }
+        assert_eq!(hints.len(), Mapping::ALL.len());
     }
 }

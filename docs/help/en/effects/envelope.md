@@ -3,7 +3,8 @@
 An envelope is a frame of nodes around an object; the object is bent to fill
 the frame, and follows when you move its nodes. Use it to arch text, bulge a
 shape or fit artwork into a flag or a circle. The object keeps its own shape,
-so the envelope can be changed or removed at any time.
+so the envelope can be changed or removed at any time. Pictures bend too,
+alone or inside a group or clip frame.
 
 ## To add an envelope {#create}
 
@@ -49,4 +50,23 @@ it. In the unconstrained mode the property bar also has **Add node** and
   over the envelope it has.
 - **Copy envelope properties**: click another object to copy its envelope (as
   [[menu.object > menu.object.copy_effect > menu.object.copy_envelope_from]]).
-- **Clear envelope** removes the last envelope.
+  Click an object without an envelope, such as a circle, a star or a curve
+  you drew, to fit the selected text or objects into its shape: they move
+  into that shape and fill it.
+- [[menu.object > menu.object.copy_effect > menu.object.envelope_from_top]]:
+  select the objects and, on top of them, the shape to fit them into; the
+  others fill that shape where it lies, and the shape itself goes.
+- **Clear envelope** removes the last envelope (a frame or a mesh).
+
+## Mesh envelope {#mesh}
+
+Instead of a frame, an object can bend through a grid. In the Envelope panel
+set **Columns** and **Rows** (1 to 8) and click **Add Mesh**: the grid is laid
+over the selected objects, which stay as they were. With the [[tool.envelope]]
+tool (or the [[tool.shape]] tool) drag any point of the grid, inside or on its
+edge, and the object bends smoothly around it, so arrows can be pulled into a
+star or a word into a wave. Pictures bend through the grid too. **Add Mesh** again starts a fresh grid with the
+columns and rows set; [[effect.mesh_envelope]] shows in the effect stack of the
+Effects panel, and Convert to Curves makes it part of the curves.
+
+![A mesh envelope of four columns and two rows bending a group, its grid points dragged](../../img/effects-envelope-mesh.png)

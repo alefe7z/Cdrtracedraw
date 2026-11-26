@@ -1,6 +1,9 @@
 # Ferramentas de escrita
 
 O CD Draw verifica ortografia e gramática, encontra sinônimos, corrige
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
+O TraceDraw verifica ortografia e gramática, encontra sinônimos, corrige
 enquanto você digita e conserta textos que chegaram com caracteres errados. Os
 comandos ficam em [[menu.text > menu.text.writing_tools]] e no menu
 [[menu.text]].
@@ -8,7 +11,7 @@ comandos ficam em [[menu.text > menu.text.writing_tools]] e no menu
 ## A caixa de diálogo Ferramentas de escrita {#writing-tools}
 
 [[menu.text > menu.text.writing_tools > menu.text.spell_check]],
-[[menu.text.grammatik]] e [[menu.text.thesaurus]] abrem a caixa de diálogo
+[[menu.text.grammar]] e [[menu.text.thesaurus]] abrem a caixa de diálogo
 [[writing.title]] nessa guia. [[writing.check]] escolhe se verifica todo texto
 da página ([[writing.scope_document]]) ou só os textos selecionados
 ([[writing.scope_selection]]).
@@ -29,6 +32,31 @@ da página ([[writing.scope_document]]) ou só os textos selecionados
 [[writing.options]] tem [[writing.ignore_digits]] e
 [[writing.ignore_capitals]]. O CD Draw usa os dicionários instalados no seu
 sistema; sem nenhum, só uma lista de palavras incluída é usada.
+[[writing.options]] tem [[writing.ignore_digits]],
+[[writing.ignore_capitals]] e [[options.add_to_autocorrect]].
+
+### Dicionários {#dictionaries}
+
+O TraceDraw verifica a ortografia com dicionários Hunspell: para cada idioma,
+um arquivo `.dic` e um arquivo `.aff` com o mesmo nome, como `pt_BR.dic` e
+`pt_BR.aff`. Dicionários gratuitos para a maioria dos idiomas podem ser baixados
+dos projetos que os fazem; outros programas costumam instalá-los também.
+
+1. Abra [[menu.tools > menu.tools.options]] > [[options.text]] >
+   [[options.spelling]].
+2. Clique em [[options.open_folder]] e copie os arquivos `.dic` e `.aff` para
+   essa pasta (pastas dentro dela também servem), ou indique uma pasta que já
+   tenha dicionários em [[options.more_dictionaries]].
+3. Clique em [[options.refresh_dictionaries]]. A lista [[options.dictionaries]]
+   mostra cada um; desmarque a caixa para deixar de usá-lo.
+
+Uma palavra está certa quando algum dicionário em uso a conhece. Os dicionários
+instalados no sistema também são usados. Sem nenhum, só uma lista de palavras
+incluída é usada.
+
+Dicionários de hifenização (arquivos `hyph_`, como `hyph_pt_BR.dic`) vão nas
+mesmas pastas. Escolha um em [[options.text]] > [[options.paragraph_text]] >
+[[options.hyphenation_patterns]] para hifenizar texto nesse idioma.
 
 ### Gramática {#grammar}
 
@@ -51,21 +79,33 @@ coloca no texto, mantendo as maiúsculas. Em [[writing.options]],
 
 ## Correção automática {#autocorrect}
 
-[[menu.text > menu.text.writing_tools > menu.text.autocorrect]] define o que é
-corrigido enquanto você digita:
+[[menu.text > menu.text.writing_tools > menu.text.autocorrect]] abre a aba
+[[dialog.autocorrect]] de [[menu.tools > menu.tools.options]] >
+[[options.text]], que define o que é corrigido enquanto você digita:
 
-- [[autocorrect.enabled]];
 - [[autocorrect.capitalize]];
 - [[autocorrect.two_capitals]] ("THe" vira "The");
-- [[autocorrect.quotes]], no estilo do idioma da interface;
-- a [[autocorrect.replacements]]: `(c)` vira ©, `(r)` ®, `(tm)` ™, `1/2` ½ e
-  assim por diante. [[autocorrect.add]] e [[autocorrect.remove]] mudam as
-  linhas.
+- [[autocorrect.days]] ("monday" vira "Monday");
+- [[autocorrect.hyperlinks]]: digitar `www.exemplo.com` ou um endereço que
+  começa com `http://` ou `https://` dá esse hiperlink ao objeto de texto, se
+  ele ainda não tiver um;
+- [[autocorrect.language]] o idioma cujas aspas são usadas (o idioma da
+  interface, a menos que você escolha outro);
+- [[autocorrect.quotes]] e [[autocorrect.straight_after_numbers]];
+- [[autocorrect.single_quotes]] e [[autocorrect.double_quotes]]: as aspas de
+  [[autocorrect.open]] e [[autocorrect.close]], se você quiser outras que não
+  as do idioma;
+- a [[autocorrect.replacements]], usada quando
+  [[autocorrect.replace_while_typing]] está ligado: `(c)` vira ©, `(r)` ®,
+  `(tm)` ™, `1/2` ½ e assim por diante. Digite em [[autocorrect.replace_col]] e
+  [[autocorrect.with_col]] e clique em [[autocorrect.add]]; clique em uma linha
+  para [[autocorrect.delete]], ou mude o texto dela e clique em
+  [[autocorrect.replace]].
 
 [[autocorrect.apply_selection]] aplica as regras ao texto selecionado. Texto
 colado ou importado nunca é alterado.
 
-![A caixa de diálogo Correção automática](../../img/text-writing-tools-autocorrect.png)
+![A aba Correção automática](../../img/text-writing-tools-autocorrect.png)
 
 ## Hífens personalizados {#custom-hyphens}
 
@@ -89,12 +129,35 @@ hifenização está ativada.
 
 ## Mudar maiúsculas e minúsculas {#change-case}
 
-[[menu.text > menu.text.change_case]] muda o texto selecionado para
+[[menu.text > menu.text.change_case]] (<kbd>Shift+F3</kbd>) muda o texto
+selecionado para
 [[menu.text.case_sentence]], [[menu.text.case_lower]],
 [[menu.text.case_upper]], [[menu.text.case_title]] ou
-[[menu.text.case_toggle]].
+[[menu.text.case_toggle]]. Com vários textos selecionados, todos mudam num
+único passo de desfazer.
 
 ![A caixa de diálogo Mudar maiúsculas e minúsculas](../../img/text-writing-tools-change-case.png)
+
+## Ordenar linhas {#sort-lines}
+
+[[menu.text > menu.text.sort_lines]] põe em ordem as linhas dos textos
+selecionados (ou do texto em edição): [[menu.text.sort_a_z]] ou
+[[menu.text.sort_z_a]], com maiúsculas e minúsculas por igual e os números
+dentro de uma linha pelo seu valor (Item 2 antes de Item 10), ou pelo
+primeiro número de cada linha com [[menu.text.sort_numbers_up]] ou
+[[menu.text.sort_numbers_down]] (as linhas sem número ficam depois das
+outras). Cada linha mantém a sua formatação, as linhas em branco vão para
+o fim e todos os textos mudam num só passo de desfazer. Cada ordem é um
+comando que pode ter um atalho próprio.
+
+## Altura do texto {#text-height}
+
+[[menu.text > menu.text.text_height]] dimensiona os textos selecionados
+pela altura das suas letras maiúsculas (um H, que não tem descendente), ou
+pelas minúsculas (um x) quando o texto não tem maiúsculas. Escreva a
+altura nas unidades do desenho e clique em [[dialog.ok]]: o tamanho em
+pontos de cada carácter muda pelo mesmo fator, por isso tamanhos
+diferentes dentro de um texto mantêm as proporções. Um passo de desfazer.
 
 ## Estatísticas do texto {#statistics}
 

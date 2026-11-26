@@ -7,13 +7,28 @@ Each acts on the selected paragraph text. Their settings are also in the
 ## Tabs {#tabs}
 
 [[menu.text > menu.text.tabs]] sets where the <kbd>Tab</kbd> character jumps
-to. At first there is a tab stop every 12.7 mm (half an inch).
+to. A paragraph without stops of its own has a left stop every 12.7 mm (half
+an inch); [[options.default_tab_spacing]] in the Options changes that.
 
-1. Select the paragraph text.
+1. Select the paragraph text, or click in the paragraphs to change.
 2. Choose [[menu.text > menu.text.tabs]].
-3. Under [[dialog.tab_stops]], change the positions, or click
-   [[dialog.add_tab]] to add one.
+3. Under [[dialog.tab_stops]], click [[dialog.add_tab]] to add a stop,
+   change a stop's position, its alignment (left, centre, right or
+   decimal) and its leader, or click **x** to remove it.
 4. Click [[dialog.close]].
+
+A right stop ends the text after the tab at the stop, so prices line up
+on their right; a decimal stop lines up their decimal points.
+
+The Paragraph section of the [[docker.text]] panel shows the paragraph's tab
+stops too, and its **Tabs...** button opens this dialog box.
+
+While you type in a paragraph frame, a ruler runs along its top edge. Click
+it to add a left stop, drag a stop to move it, drag it off the ruler to
+remove it, or right-click to choose its alignment. The two small triangles
+along the ruler's upper edge are the left and right indents of the
+paragraph: drag them to move where its lines start and end. Each change
+undoes in one step.
 
 ![The Tabs dialog box](../../img/text-paragraphs-tabs.png)
 
@@ -45,6 +60,22 @@ To break to the next column at a given place, insert
 
 ![The Bullets dialog box](../../img/text-paragraphs-bullets.png)
 
+[[menu.text > menu.text.toggle_bullets]] (Ctrl+Shift+L) turns the bullets
+on or off without the dialog box: for the selected paragraph text, or
+for the paragraphs at the cursor while you type. The bullet keeps the
+symbol and indent set for it.
+
+In the same dialog box, [[dialog.bullet_color]] and [[dialog.bullet_style]]
+give the bullet or number a colour, bold and italic of its own instead of
+the first letter's. For a list inside a list,
+[[menu.text > menu.text.list_level_down]] sets the paragraphs one
+level deeper and [[menu.text > menu.text.list_level_up]] brings them back
+(the dialog box has the [[dialog.bullet_level]] too). Each level is set in
+by the [[dialog.bullet_level_indent]] and counts on its own, starting again under
+each paragraph above it. [[dialog.bullet_restart]] starts a number again,
+and [[dialog.bullet_continue]] goes on from the last number of its level
+after paragraphs without bullets.
+
 ## Drop caps {#drop-cap}
 
 A drop cap is a large first letter that spans several lines.
@@ -57,13 +88,22 @@ A drop cap is a large first letter that spans several lines.
 
 The letter is scaled so its top meets the top of the first line and it sits
 on the baseline of the last line it spans; the lines beside it are shortened
-to make room.
+to make room, as wide as the letter's ink (an italic letter leans out of
+its width), an accent on the letter drops with it, and the lines stay
+shortened down to the end of the tail of a g, y or j.
+
+The letter is still a character of the text: click it with the Text tool,
+or drag over it, to select it and change its colour, font or size as for
+any other letter.
 
 ![The Drop Cap dialog box](../../img/text-paragraphs-drop-cap.png)
 
 ## Hyphenation {#hyphenation}
 
-[[menu.text > menu.text.use_hyphenation]] lets words break at the end of
-lines, with at least two letters before and three after the break. Words
-with a capital letter are never broken. To decide yourself where a word may
+[[menu.text > menu.text.use_hyphenation]] lets the selected text's words
+break at the end of lines (while you type in a text, the paragraphs at the
+cursor; with no text selected, it is the setting for new text), with at least two letters before and three after the break. A comma
+or other punctuation next to a word does not stop it from breaking, and
+words with an apostrophe (such as Italian *dell'anno*) break too. Words with
+a capital letter are never broken. To decide yourself where a word may
 break, see [Custom hyphens](writing-tools.md#custom-hyphens).

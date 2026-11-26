@@ -11,7 +11,11 @@ the color palette behaves.
 - [[options.center_dialogs]]: dialog boxes open in the middle of the window;
   off, they open where you left them.
 - [[options.ui_shadows]] (fewer shadows help slower graphics).
+- [[options.translucent_menus]]: open menus let the drawing show through them, at the [[options.menu_opacity]] beside the box (off by default).
 - [[options.colored_icons]]: each group of tools gets a color of its own.
+- [[options.docker_tabs_icons_only]]: the panel tabs at the window's sides
+  show their pictures alone, the name in the tip. Off, each tab shows its
+  picture and name, and a column with more tabs than fit slides.
 - [[options.ui_size]]: how large menus, bars, icons and panels are, relative
   to the scaling your system gives the monitor (100% at first).
   [[options.reset_to_default]] goes back to 100%. The interface size never
@@ -40,6 +44,20 @@ shortcut. The **x** beside a shortcut removes it, and resetting to the
 defaults removes them all. Tool keys are a letter or <kbd>Shift</kbd> and a
 letter. See [Keyboard shortcuts](../reference/keyboard-shortcuts.md).
 
+A command can have several shortcuts: a new key joins the ones it has (a
+built-in key keeps working beside it), and each key has its own delete
+button. The buttons of the bars that run a menu command (New, Open, Save,
+Undo, Zoom In and others) take shortcuts too, the same keys as their menu
+command, and so do rows the menus show only at times (such as Finish Editing
+Contents). A **Toolbar buttons** list holds every button of the Standard and
+Zoom toolbars: drag a button you removed from a bar back onto it from there.
+
+A command dragged onto a toolbar shows its picture there, or its name when
+it has none. On the **General** tab, **Icon** shows the command's picture:
+**Choose...** opens the pictures of the other commands and of the tools, and
+a click gives the command that one, in the menus and on the toolbars;
+**Reset to Default** gives it its own back.
+
 ## Command Bars {#command-bars}
 
 ![The Command Bars page of the customization options](../../img/customize-customization-command-bars.png)
@@ -52,14 +70,48 @@ letter. See [Keyboard shortcuts](../reference/keyboard-shortcuts.md).
 [[options.reset]] puts the bars back. Under [[options.other]]:
 [[bars.lock]] and [[options.show_outline_flyout]].
 
+[[options.toolbar_drag_hint]]
+
 ## Color Palette {#color-palette}
 
 ![The Color Palette page of the customization options](../../img/customize-customization-color-palette.png)
 
 - [[options.palette_auto_update]] and [[options.palette_show_document]] (both
   on).
+- [[options.palette_position]] (Top, Bottom, Left, Right or Floating),
+  **Rows** (1 to 8, or Fit) and **Swatch size** (Extra Small to Extra Large)
+  of the default palette, as its own menu sets them: a floating palette
+  takes the rows at its length. The position stays while the toolbars are
+  locked.
 - [[options.palette_swatches]]: [[options.palette_no_color]] (on), and what
   the [[options.palette_right_button]] does: [[options.palette_set_outline]]
   (at first) or open the [[options.palette_context_menu]].
 
 See [Color palettes](../color/palettes.md).
+
+## Context Menus {#context-menus}
+
+Choose [[options.context_menus]] under Customization to manage 32 right-click
+menu locations independently. Select a location with [[options.context_menu_scene]], then use
+[[options.context_menu_search]] to find an operation and clear its checkbox
+to hide it there. Operations remain in this list when the current selection
+cannot use them.
+
+All operations are visible by default. Each location has its own choices:
+hiding an object operation on the canvas does not hide it in the Objects panel.
+Dynamic lists such as target layers and font collections are managed as one
+operation, so changing their names does not reset your choices.
+
+[[options.context_menu_reset]] restores the selected menu;
+[[options.context_menu_reset_all]] restores all menus. [[dialog.ok]] saves the
+choices with application settings; [[dialog.cancel]], Escape or the close
+button restores the choices from when Options opened. Main menus, shortcuts and command
+search continue to offer the original commands.
+
+Expand a submenu to see its indented children. Drag a row's handle, or use [[options.context_menu_move_up]] and [[options.context_menu_move_down]], to reorder items at the same level. Moving a parent carries its children with it; items cannot move into another parent. Search keeps the parents of matching items visible. Restoring a menu resets both visibility and order, and cancelling Options restores both to their values when the dialog opened.
+
+The document palette's swatch menu and its entry in Palette Manager have
+separate settings. Dynamic targets retain their own order; in Object Styles,
+the list of document styles keeps its position between the static actions.
+New operations added by a later version remain visible and follow saved
+items in a customized sibling list.

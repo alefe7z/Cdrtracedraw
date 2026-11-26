@@ -9,8 +9,19 @@ pattern or texture.
 - With the [[tool.transparency]] tool: click an object, then choose a kind of
   transparency on the property bar, or drag across the object for a gradient
   transparency from opaque (where you press) to transparent (where you
-  release).
+  release). The gradient's nodes then show on the object, as with the
+  [[tool.interactive_fill]] tool: drag the start, the end or the round skew
+  node; drag the bar between two nodes (the midpoint) to move where the blend
+  is half way; double-click the line to add a node, a node to remove it.
 - In the [[docker.transparency]] section of the [[docker.properties]] panel.
+- With **Object > Apply Uniform Transparency** (a uniform transparency over
+  fill and outline, at the amount used last, 50% at first) and **Object >
+  Remove Transparency**. Both can be given a keyboard shortcut in
+  Customization > Commands.
+- **Object > Flatten Transparency** turns the selected see-through objects
+  into one opaque bitmap of how they look over what lies beneath them, shaped
+  like them, for printers and files that cannot mix transparency. The objects
+  beneath stay as they are.
 
 ## Settings {#settings}
 
@@ -27,6 +38,16 @@ pattern or texture.
   [[transparency.target_outline]] or [[transparency.target_all]].
 - **Freeze**: keeps what shows through as it is now, even if the objects
   below move.
+
+To remove it, click [[toolbar.clear_transparency]] at the end of the property
+bar (or choose [[transparency.none]] as the kind).
+
+In the Properties panel, a pattern transparency also has its tiles' size,
+rotation and skew and the mirror tiles buttons, and a texture its **Texture
+library** (clouds, marble, noise, wood) with its size and **Regenerate**. The
+**+** button beside **Edit Transparency** (**Save as New**) keeps the current
+transparency in the picker of its type, for any drawing; a right click on a
+saved one removes it.
 
 To copy the transparency of another object, use
 [[menu.object > menu.object.copy_effect > menu.object.copy_transparency_from]].

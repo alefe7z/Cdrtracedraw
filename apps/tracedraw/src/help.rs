@@ -85,6 +85,7 @@ pub fn file_url(path: &Path, anchor: Option<&str>) -> String {
 pub fn dialog_topic(d: &Dialog, options: OptionsPage) -> &'static str {
     match d {
         Dialog::None => HOME,
+        Dialog::WebNotice | Dialog::MacrosDesktopOnly | Dialog::StorageRefused(_) => HOME,
         Dialog::NewFromTemplate(_) => "templates-styles/templates#new-from-template",
         Dialog::BitmapBw(_) => "bitmaps/color-modes#black-and-white",
         Dialog::BitmapDuotone(_) => "bitmaps/color-modes#duotone",
@@ -93,58 +94,105 @@ pub fn dialog_topic(d: &Dialog, options: OptionsPage) -> &'static str {
         Dialog::NodeAlign { .. } => "lines-shapes/shape-tool#align-nodes",
         Dialog::RenamePage { .. } => "pages-layout/pages#rename-page",
         Dialog::GoToPage { .. } => "pages-layout/pages#go-to-page",
+        Dialog::PageSpacing { .. } => "pages-layout/multipage-view#page-spacing",
+        Dialog::OutlineOffset { .. } => "lines-shapes/shaping#outline-offset",
+        Dialog::GatherPages { .. } => "pages-layout/pages",
+        Dialog::ArrangeGrid { .. } | Dialog::FillWithCopies { .. } => {
+            "objects/align-distribute#grid"
+        }
+        Dialog::MultipagePages { .. } => "pages-layout/multipage-view#choose-pages",
         Dialog::InsertPage { .. } => "pages-layout/pages#insert-page",
+        Dialog::DeletePage { .. } => "pages-layout/pages#delete-page",
         Dialog::DuplicatePage { .. } => "pages-layout/pages#duplicate-page",
         Dialog::PageSize { .. } => "pages-layout/pages#page-size",
+        Dialog::ObjectSize { .. } => "objects/transforming#transformations-docker",
         Dialog::Options => options_topic(options),
         Dialog::PageNumberSettings => "pages-layout/pages#page-numbers",
-        Dialog::LineStyle(_) => "lines-shapes/outlines#outline-pen",
+        Dialog::LineStyle(_) | Dialog::OutlinePen(_) | Dialog::ArrowheadEditor(_) => {
+            "lines-shapes/outlines#outline-pen"
+        }
+        Dialog::EditFill(_) => "color/fills#edit-fill",
         Dialog::TableCount(_) => "objects/tables",
         Dialog::OldCdrVersion { .. } => "get-started/open-and-save#save-as",
-        Dialog::RenameLayer { .. } | Dialog::RenameObject { .. } => {
+        Dialog::DamagedFile { .. } => "get-started/open-and-save",
+        Dialog::NewRangeLayer(_) => "objects/objects-and-layers#range-pages",
+        Dialog::LayerProperties(st) if st.use_page_range => "objects/objects-and-layers#range-pages",
+        Dialog::RenameLayer { .. }
+        | Dialog::LayerProperties(_)
+        | Dialog::RenameObject { .. }
+        | Dialog::RenameGuide { .. } => {
             "objects/objects-and-layers#rename"
         }
         Dialog::DocumentProperties(_) => "pages-layout/document-properties",
         Dialog::ConfirmClose => "get-started/open-and-save#closing",
         Dialog::ConfirmResetSettings => "customize/reset-settings",
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::ProblemReport(_) => "welcome/about-and-updates#problem-reports",
         Dialog::Recover(_) => "get-started/open-and-save#recovery",
-        Dialog::OpenNotes(_) => "get-started/open-and-save#open-notes",
+        Dialog::OpenNotes(_) | Dialog::MissingFonts(_) => "get-started/open-and-save#open-notes",
         Dialog::ConfirmShelfRemove { .. } => "objects/shelf#remove",
+        Dialog::ConfirmPixelFlatten { .. } => "bitmaps/index",
+        Dialog::HardwareAccelerationHint { .. } => "customize/options-app#general",
+        Dialog::Benchmark => "customize/options-app#benchmark",
+        Dialog::Plugins => "customize/plugins#manager",
+        Dialog::SizesAreas(_) => "lines-shapes/dimensions#sizes-areas",
         Dialog::Export(_) => "file-formats/export",
         Dialog::Print(_) => "printing/print",
         Dialog::PrintMerge(_) => "printing/print-merge",
         Dialog::CreatePattern { .. } => "color/patterns#create-pattern",
         Dialog::CreateTable { .. } => "objects/tables#create-table",
+        Dialog::TextToTable(_) => "objects/tables#convert",
+        Dialog::StretchZones(_) => "objects/stretch-zones",
         Dialog::PasteSpecial(_) => "objects/paste-special",
         Dialog::Barcode(_) => "objects/barcodes",
+        Dialog::Formula(_) => "objects/formulas",
+        Dialog::TransformEach(_) => "objects/transforming#transform-each",
+        Dialog::Flare(_) => "objects/light-flare",
+        Dialog::Chart(_) => "objects/charts",
+        Dialog::Pins(_) => "effects/bend-with-pins",
         Dialog::ConvertToBitmap(_) => "bitmaps/convert-to-bitmap",
+        Dialog::PictureCaptions(_) => "bitmaps/picture-captions",
+        Dialog::ScaleKnown(_) => "bitmaps/resample-and-straighten#other",
+        Dialog::TableShapes(_) => "lines-shapes/rectangles-and-ellipses#drawing",
         Dialog::StraightenImage(_) => "bitmaps/resample-and-straighten#straighten",
         Dialog::Resample(_) => "bitmaps/resample-and-straighten#resample",
         Dialog::InflateBitmap(_) => "bitmaps/resample-and-straighten#inflate",
-        Dialog::Trace(_) => "bitmaps/tracing",
+        Dialog::Trace(_) | Dialog::Tracing => "bitmaps/tracing",
         Dialog::Effect(_) => "effects/bitmap-effects",
+        Dialog::TextDefaults { .. } => "text/fonts",
+        Dialog::CopyProperties(_) => "effects/copy-and-clone#clone",
+        Dialog::EditText { .. } => "text/adding-text#edit",
         Dialog::TextTabs => "text/paragraphs#tabs",
         Dialog::TextColumns => "text/paragraphs#columns",
         Dialog::TextBullets => "text/paragraphs#bullets",
         Dialog::TextDropCap => "text/paragraphs#drop-cap",
         Dialog::TextStatistics => "text/writing-tools#statistics",
         Dialog::ChangeCase(_) => "text/writing-tools#change-case",
+        Dialog::TextHeight { .. } => "text/writing-tools#text-height",
         Dialog::WritingTools(_) => "text/writing-tools",
         Dialog::CustomHyphens(_) => "text/writing-tools#custom-hyphens",
         Dialog::Encode(_) => "text/writing-tools#encode",
-        Dialog::Autocorrect(_) => "text/writing-tools#autocorrect",
         Dialog::BorderGrommet(_) => "printing/border-and-grommet",
-        Dialog::ColorManagement(_) => "color/color-management",
+        Dialog::ColorManagement(_)
+        | Dialog::ConvertColors(_)
+        | Dialog::Recolor(_)
+        | Dialog::ReplaceColor(_) => "color/color-management",
         Dialog::FontManager(_) => "text/fonts#font-manager",
+        Dialog::TraceCut(_) => "objects/tracecut",
         Dialog::PaletteEditor(_) => "color/palettes#palette-editor",
+        Dialog::PictureColors(_) => "color/palettes#using",
+        Dialog::ConfirmResetPalette => "color/palettes#document-palette",
         Dialog::NewDocument(_) => "get-started/new-document",
         Dialog::About => "welcome/about-and-updates#about",
         Dialog::TimeTracker(_) => "customize/time-tracker",
+        Dialog::Workflow => "customize/scripts#workflow",
         Dialog::Preflight(_) => "printing/preflight",
         Dialog::PublishPdf(_) => "file-formats/publish-pdf",
         Dialog::PdfPassword(_) => "file-formats/publish-pdf#password",
+        Dialog::PdfText(_) => "file-formats/import#formats",
+        Dialog::PdfPages(_) => "file-formats/import#pdf-pages",
         Dialog::ChangeDefaults(_) => "templates-styles/object-styles#document-defaults",
-        Dialog::SaveAs(_) => "get-started/open-and-save#save-as",
+        Dialog::SaveAs(_) | Dialog::Package(_) => "get-started/open-and-save#save-as",
     }
 }
 
@@ -174,13 +222,15 @@ pub fn options_topic(p: OptionsPage) -> &'static str {
         Curves => "customize/tool-options#curves",
         Rectangle => "customize/tool-options#rectangle",
         Ellipse => "customize/tool-options#ellipse",
-        SmartDrawing | Dimension | AngularDimension | Connector | MeshFill => {
-            "customize/tool-options"
-        }
+        SmartDrawing => "customize/tool-options",
         Spiral => "customize/tool-options#spiral",
         GraphPaper => "customize/tool-options#graph-paper",
         Table => "customize/tool-options#table",
         Eraser => "customize/tool-options#eraser",
+        Dimension => "customize/tool-options#dimension",
+        AngularDimension => "customize/tool-options#angular-dimension",
+        Connector => "customize/tool-options#connector",
+        MeshFill => "customize/tool-options#mesh-fill",
         GlobalGeneral => "customize/global-options#general",
         Printing => "customize/global-options#printing",
         FileFormats => "customize/global-options#file-formats",
@@ -215,8 +265,18 @@ pub fn docker_topic(t: DockerTab) -> &'static str {
         DockerTab::ColorStyles => "color/color-styles",
         DockerTab::ObjectStyles => "templates-styles/object-styles",
         DockerTab::FindReplace => "objects/find-replace",
+        DockerTab::SelectSame => "objects/selecting#select-same",
         DockerTab::Scripts => "customize/scripts",
         DockerTab::Macros => "customize/scripts#macros",
+        DockerTab::PrintMerge => "printing/print-merge#docker",
+        DockerTab::PixelLayers
+        | DockerTab::PixelSelection
+        | DockerTab::PixelRetouch
+        | DockerTab::PixelDistort
+        | DockerTab::PixelEffects
+        | DockerTab::PixelImage
+        | DockerTab::PixelHistogram
+        | DockerTab::PixelHints => "bitmaps/resample-and-straighten#other",
         DockerTab::Palettes => "color/palettes",
         DockerTab::Lens => "effects/lens",
         DockerTab::Blend => "effects/blend",
@@ -235,9 +295,15 @@ pub fn docker_topic(t: DockerTab) -> &'static str {
         DockerTab::FontSampler => "text/fonts#font-sampler",
         DockerTab::Corners => "lines-shapes/rectangles-and-ellipses#corners",
         DockerTab::JoinCurves => "lines-shapes/join-curves",
+        DockerTab::FitToPath => "objects/align-distribute#fit-to-path",
         DockerTab::Coordinates => "objects/transforming#coordinates",
         DockerTab::VectorMosaic => "effects/mosaics#vector-mosaic",
         DockerTab::PictureMosaic => "effects/mosaics#picture-mosaic",
+        DockerTab::ShapeGenerator => "objects/shape-generator",
+        DockerTab::SymbolScatter => "effects/symbol-scatter",
+        DockerTab::FrameGenerator => "effects/frame-generator",
+        DockerTab::Mockup => "effects/mockup",
+        DockerTab::Shape3d => "effects/revolve-inflate",
         DockerTab::Shelf => "objects/shelf",
         DockerTab::Export => "web-graphics/export-docker",
         DockerTab::Comments => "objects/comments",
@@ -257,6 +323,7 @@ pub fn tool_topic(t: Tool) -> &'static str {
         Tool::FreeformPick => "objects/selecting#freehand-pick",
         Tool::FreeTransform => "objects/transforming#free-transform",
         Tool::Shape => "lines-shapes/shape-tool",
+        Tool::Join => "lines-shapes/join-curves#join-tool",
         Tool::Smooth => "lines-shapes/distortion-tools#smooth",
         Tool::Smear => "lines-shapes/distortion-tools#smear",
         Tool::Twirl => "lines-shapes/distortion-tools#twirl",
@@ -268,6 +335,7 @@ pub fn tool_topic(t: Tool) -> &'static str {
         Tool::Knife => "lines-shapes/cut-and-erase#knife",
         Tool::SegmentDelete => "lines-shapes/cut-and-erase#segment-delete",
         Tool::Eraser => "lines-shapes/cut-and-erase#eraser",
+        Tool::ShapeBuilder => "lines-shapes/cut-and-erase#shape-builder",
         Tool::Zoom => "get-started/undo-and-views#zoom",
         Tool::Pan => "get-started/undo-and-views#pan",
         Tool::Freehand => "lines-shapes/lines#freehand",
@@ -275,6 +343,7 @@ pub fn tool_topic(t: Tool) -> &'static str {
         Tool::Bezier => "lines-shapes/lines#bezier",
         Tool::Pen => "lines-shapes/lines#pen",
         Tool::BSpline => "lines-shapes/lines#b-spline",
+        Tool::CurvaturePen => "lines-shapes/lines#curvature-pen",
         Tool::Polyline => "lines-shapes/lines#polyline",
         Tool::ThreePointCurve => "lines-shapes/lines#three-point-curve",
         Tool::BrushStrokes => "lines-shapes/artistic-media#brush-strokes",
@@ -290,7 +359,9 @@ pub fn tool_topic(t: Tool) -> &'static str {
         Tool::Spiral => "lines-shapes/polygons-stars-spirals#spiral",
         Tool::CommonShapes => "lines-shapes/polygons-stars-spirals#common-shapes",
         Tool::ActionLines => "lines-shapes/polygons-stars-spirals#action-lines",
+        Tool::Balloon => "lines-shapes/polygons-stars-spirals#speech-balloons",
         Tool::GraphPaper => "lines-shapes/polygons-stars-spirals#graph-paper",
+        Tool::ShapeGenerator => "objects/shape-generator#tool",
         Tool::Text => "text/adding-text",
         Tool::Table => "objects/tables",
         Tool::ParallelDimension => "lines-shapes/dimensions#parallel",
@@ -309,6 +380,7 @@ pub fn tool_topic(t: Tool) -> &'static str {
         Tool::Envelope => "effects/envelope",
         Tool::Extrude => "effects/extrude",
         Tool::BlockShadow => "effects/block-shadow",
+        Tool::InnerShadow => "effects/drop-shadow",
         Tool::Transparency => "color/transparency",
         Tool::ColorEyedropper => "color/eyedroppers#color-eyedropper",
         Tool::AttributesEyedropper => "color/eyedroppers#attributes-eyedropper",
@@ -462,7 +534,13 @@ mod tests {
             Dialog::Options,
             Dialog::PageNumberSettings,
             Dialog::ConfirmClose,
+            Dialog::DamagedFile {
+                path: "/nowhere/art.cdr".into(),
+                reason: "content/riffData.cdr: Invalid checksum".into(),
+            },
             Dialog::ConfirmResetSettings,
+            Dialog::Benchmark,
+            Dialog::SizesAreas(Default::default()),
             Dialog::TextTabs,
             Dialog::TextColumns,
             Dialog::TextBullets,
@@ -477,7 +555,8 @@ mod tests {
     fn dialog_topics_in_source() -> Vec<String> {
         let src =
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/help.rs"))
-                .unwrap();
+                .unwrap()
+                .replace("\r\n", "\n");
         let start = src.find("pub fn dialog_topic").unwrap();
         let end = src[start..].find("\n}\n").unwrap() + start;
         let body = &src[start..end];

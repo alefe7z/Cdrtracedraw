@@ -8,7 +8,7 @@ configurações também estão na seção **Moldura** do painel [[docker.text]].
 
 [[menu.text > menu.text.tabs]] define para onde salta o caractere
 <kbd>Tab</kbd>. De início, há uma parada de tabulação a cada 12,7 mm (meia
-polegada).
+polegada); [[options.default_tab_spacing]] nas Opções muda isso.
 
 1. Selecione o texto de parágrafo.
 2. Escolha [[menu.text > menu.text.tabs]].
@@ -46,6 +46,22 @@ Para pular para a próxima coluna em um ponto, insira
 
 ![A caixa de diálogo Marcadores](../../img/text-paragraphs-bullets.png)
 
+[[menu.text > menu.text.toggle_bullets]] (Ctrl+Shift+L) ativa ou desativa os
+marcadores sem a caixa de diálogo: no texto de parágrafo selecionado, ou
+nos parágrafos onde está o cursor enquanto você digita. O marcador mantém
+o símbolo e o recuo definidos para ele.
+
+Na mesma caixa de diálogo, [[dialog.bullet_color]] e [[dialog.bullet_style]]
+dão ao marcador ou número cor, negrito e itálico próprios em vez dos da
+primeira letra. Para uma lista dentro de outra,
+[[menu.text > menu.text.list_level_down]] leva os parágrafos um
+nível para dentro e [[menu.text > menu.text.list_level_up]] os traz de
+volta (a caixa de diálogo também tem o [[dialog.bullet_level]]). Cada nível
+entra pelo [[dialog.bullet_level_indent]] e conta sozinho, recomeçando sob cada
+parágrafo acima dele. [[dialog.bullet_restart]] recomeça um número, e
+[[dialog.bullet_continue]] continua do último número do seu nível depois
+de parágrafos sem marcadores.
+
 ## Capitulares {#drop-cap}
 
 Uma capitular é uma primeira letra grande que ocupa várias linhas.
@@ -64,7 +80,10 @@ encurtadas para dar espaço.
 
 ## Hifenização {#hyphenation}
 
-[[menu.text > menu.text.use_hyphenation]] deixa as palavras quebrarem no fim
-das linhas, com pelo menos duas letras antes e três depois da quebra. Palavras
-com letra maiúscula nunca são quebradas. Para decidir você mesmo onde uma
+[[menu.text > menu.text.use_hyphenation]] deixa as palavras do texto
+selecionado quebrarem no fim das linhas (durante a digitação, os parágrafos
+no cursor; sem texto selecionado, vale para o texto novo), com pelo menos duas letras antes e três depois da quebra. Uma
+vírgula ou outra pontuação colada à palavra não impede a quebra, e palavras
+com apóstrofo (como o italiano *dell'anno*) também quebram. Palavras com letra
+maiúscula nunca são quebradas. Para decidir você mesmo onde uma
 palavra pode quebrar, veja [Hífens personalizados](writing-tools.md#custom-hyphens).

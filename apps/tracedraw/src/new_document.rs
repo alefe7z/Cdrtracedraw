@@ -10,8 +10,10 @@
 //! again", OK and Cancel.
 
 use crate::app::{App, Units};
+use crate::color_policy::{FoundProfile, Space};
 use crate::i18n::tr;
 use crate::theme::Tokens;
+use crate::ui::tips::RichTip;
 use egui::{Context, Ui};
 use serde::{Deserialize, Serialize};
 use tracedraw_core::geometry::Size;
@@ -127,6 +129,8 @@ pub struct NewDocSettings {
     pub gray_profile: String,
     pub intent: String,
     pub saved_presets: Vec<SavedPreset>,
+    /// Color settings was left open: the next dialog shows it open (#4058).
+    pub color_settings_open: bool,
 }
 
 impl Default for NewDocSettings {
@@ -140,6 +144,7 @@ impl Default for NewDocSettings {
             gray_profile: GRAY_PROFILES[0].into(),
             intent: INTENTS[1].into(),
             saved_presets: Vec::new(),
+            color_settings_open: false,
         }
     }
 }
@@ -169,6 +174,7 @@ impl NewDocSettings {
             let add = tracedraw_core::Command::AddPage {
                 name: Some(crate::i18n::trf("doc.page_n", &[("n", &n.to_string())])),
                 size,
+                layer: None,
             };
             if add.apply(&mut doc).is_err() {
                 break;
@@ -179,10 +185,22 @@ impl NewDocSettings {
                 }
             }
         }
+        // The master page's desktop layer: objects put on it, beside the
+        // pages or on them, show and can be picked from every page
+        // (#1161, #1775). New objects still go to the page's own layer.
+        let id = doc.ids_mut().layer();
+        let mut desktop = tracedraw_core::Layer::master(
+            id,
+            crate::i18n::tr("docker.desktop_layer"),
+            tracedraw_core::MasterScope::All,
+        );
+        desktop.desktop = true;
+        doc.master.push(desktop);
         let m = &mut doc.metadata;
         m.resolution_dpi = self.values.dpi;
         m.rgb_profile = self.rgb_profile.clone();
         m.cmyk_profile = self.cmyk_profile.clone();
+        m.gray_profile = self.gray_profile.clone();
         m.primary_color_mode = if self.values.rgb {
             tracedraw_core::document::PrimaryColorMode::Rgb
         } else {
@@ -236,6 +254,11 @@ pub struct NewDocState {
     pub color_settings_open: bool,
     /// Typing a name for Save Preset (Some while the field is shown).
     pub saving_preset: Option<String>,
+    /// The ICC profiles installed on this computer, looked up once the
+    /// colour settings are first shown (#1033).
+    pub found: Option<Vec<FoundProfile>>,
+    /// The Width box takes the keyboard when the dialog shows (#3886).
+    pub focus_width: bool,
 }
 
 impl NewDocState {
@@ -244,8 +267,10 @@ impl NewDocState {
             name,
             settings: settings.clone(),
             dont_show: false,
-            color_settings_open: false,
+            color_settings_open: settings.color_settings_open,
             saving_preset: None,
+            found: None,
+            focus_width: true,
         }
     }
 
@@ -265,11 +290,9 @@ impl NewDocState {
 
     /// After a typed width or height: the page size name that matches, in
     /// either orientation, or Custom.
-    fn match_page_size(&mut self) {
+    fn match_page_size(&mut self, saved: &[crate::settings::PageSizePreset]) {
         let v = &mut self.settings.values;
-        let (w, h) = (v.width_mm, v.height_mm);
-        v.page_size = crate::ui::dialogs::paper_name_of(Size::new(w, h))
-            .map(str::to_string)
+        v.page_size = crate::ui::dialogs::paper_name(Size::new(v.width_mm, v.height_mm), saved)
             .unwrap_or_else(|| CUSTOM.into());
         self.settings.refresh_preset();
     }
@@ -300,6 +323,7 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
     let outer_dpi = crate::app::pixel_dpi();
     crate::app::set_pixel_dpi(st.settings.values.dpi);
     let mut ok = false;
+    let saved_sizes = app.settings.page_sizes.clone();
     let extra = if st.color_settings_open {
         COLOR_ROWS * ROW_PITCH
     } else {
@@ -332,7 +356,19 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
                 at(0.0, y + 14.0).y,
                 &tr("dialog.name"),
             );
-            chrome::text_field(ui, field(FIELD_X, y, WIDE), &mut st.name);
+            // A Hebrew or Arabic name reads right to left (#3885).
+            crate::ui::save_as::name_edit_at(
+                ui,
+                field(FIELD_X, y, WIDE),
+                &mut st.name,
+                egui::Id::new("newdoc_name_field"),
+            );
+            tip(
+                ui,
+                field(FIELD_X, y, WIDE),
+                "newdoc_name",
+                &crate::ui::tips::pair("dialog.name", "newdoc.name_desc"),
+            );
             y += ROW_PITCH;
             // Preset and its menu.
             chrome::label_right(
@@ -353,6 +389,12 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
                 let mut done = None;
                 if let Some(name) = &mut st.saving_preset {
                     chrome::text_field(ui, field(FIELD_X, y, 160.0), name);
+                    tip(
+                        ui,
+                        field(FIELD_X, y, 160.0),
+                        "newdoc_preset_name",
+                        &crate::ui::tips::keyed("newdoc.preset_name"),
+                    );
                     if chrome::button_at(ui, field(FIELD_X + 166.0, y, 65.0), &tr("dialog.ok"))
                         .clicked()
                         && !name.trim().is_empty()
@@ -391,6 +433,12 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
             ) {
                 st.settings.pages = v.round() as u32;
             }
+            tip(
+                ui,
+                field(FIELD_X, y, 62.0),
+                "newdoc_pages",
+                &crate::ui::tips::keyed("newdoc.pages"),
+            );
             y += ROW_PITCH;
             // Primary colour mode.
             chrome::label_right(
@@ -406,8 +454,10 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
                         ui.spacing_mut().item_spacing.x = 16.0;
                         let v = &mut st.settings.values;
                         let mut rgb = v.rgb;
-                        ui.radio_value(&mut rgb, false, "CMYK");
-                        ui.radio_value(&mut rgb, true, "RGB");
+                        ui.radio_value(&mut rgb, false, "CMYK")
+                            .rich_tip(crate::ui::tips::pair("newdoc.cmyk_tip", "newdoc.cmyk_desc"));
+                        ui.radio_value(&mut rgb, true, "RGB")
+                            .rich_tip(crate::ui::tips::pair("newdoc.rgb_tip", "newdoc.rgb_desc"));
                         if rgb != v.rgb {
                             v.rgb = rgb;
                             st.settings.refresh_preset();
@@ -417,7 +467,7 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
             );
             y += ROW_PITCH + 42.0;
             chrome::heading(ui, at(14.0, y - 16.0), &tr("newdoc.dimensions"));
-            dimensions(ui, st, body, y);
+            dimensions(ui, st, body, y, &saved_sizes);
             y += 5.0 * ROW_PITCH + 26.0;
             // Colour settings: a bold header with a triangle; open, the
             // profiles and the intent.
@@ -449,9 +499,13 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
             chrome::heading(ui, at(45.0, y + 1.0), &tr("newdoc.color_settings"));
             if resp
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .rich_tip(crate::ui::tips::keyed("newdoc.color_settings"))
                 .clicked()
             {
                 st.color_settings_open = !st.color_settings_open;
+                // Remembered at once, OK or Cancel (#4058).
+                st.settings.color_settings_open = st.color_settings_open;
+                app.settings.new_document.color_settings_open = st.color_settings_open;
             }
             y += 29.0;
             if st.color_settings_open {
@@ -461,7 +515,7 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
             // The bottom row.
             let help = egui::Rect::from_min_size(at(14.0, y), egui::vec2(FIELD_H, FIELD_H));
             if chrome::button_at(ui, help, "?")
-                .on_hover_text(tr("menu.help.product_help"))
+                .rich_tip(tr("menu.help.product_help"))
                 .clicked()
             {
                 app.open_dialog_help();
@@ -473,7 +527,8 @@ pub fn new_document_dialog(app: &mut App, ctx: &Context, st: &mut NewDocState, c
                 )),
                 |ui| {
                     ui.horizontal_centered(|ui| {
-                        ui.checkbox(&mut st.dont_show, tr("newdoc.dont_show"));
+                        ui.checkbox(&mut st.dont_show, tr("newdoc.dont_show"))
+                            .rich_tip(crate::ui::tips::keyed("newdoc.dont_show"));
                     });
                 },
             );
@@ -508,6 +563,16 @@ pub fn create(app: &mut App, st: &NewDocState) {
         st.name.trim().to_string()
     };
     let mut doc = st.settings.build(name);
+    // A CMYK profile installed here goes with the drawing, so its colours
+    // show through it (a built-in name only names the formulas).
+    let found = st.found.clone().unwrap_or_else(|| {
+        if st.settings.cmyk_profile == NewDocSettings::default().cmyk_profile {
+            Vec::new()
+        } else {
+            crate::color_policy::system_profiles()
+        }
+    });
+    doc.cmyk_profile = cmyk_profile_file(&st.settings.cmyk_profile, &found);
     app.settings.document_defaults.apply(&mut doc);
     // The name shown was the next Untitled-N: use it up.
     app.untitled_counter += 1;
@@ -522,6 +587,7 @@ pub fn create(app: &mut App, st: &NewDocState) {
 fn preset_row(ui: &mut Ui, st: &mut NewDocState, rect: egui::Rect, menu_at: egui::Pos2) {
     let current = st.settings.preset_label(&st.settings.preset);
     let mut chosen = None;
+    let combo_rect = rect;
     crate::ui::chrome::combo(ui, "newdoc_preset", rect, current, |ui| {
         for d in Destination::ALL {
             if ui
@@ -541,15 +607,23 @@ fn preset_row(ui: &mut Ui, st: &mut NewDocState, rect: egui::Rect, menu_at: egui
         }
         ui.add_enabled(
             false,
-            egui::Button::selectable(st.settings.preset == CUSTOM, tr("newdoc.preset_custom")),
+            crate::ui::btn_icons::Ib::selectable(st.settings.preset == CUSTOM, "newdoc.preset_custom"),
         );
     });
     if let Some(name) = chosen {
         st.apply_preset(&name);
     }
+    tip(
+        ui,
+        combo_rect,
+        "newdoc_preset",
+        &crate::ui::tips::keyed("newdoc.preset"),
+    );
     // The preset menu: three bold dots.
     let r = egui::Rect::from_min_size(menu_at, egui::vec2(24.0, crate::ui::chrome::FIELD_H));
-    let resp = ui.interact(r, egui::Id::new("newdoc_preset_menu"), egui::Sense::click());
+    let resp = ui
+        .interact(r, egui::Id::new("newdoc_preset_menu"), egui::Sense::click())
+        .rich_tip(crate::ui::tips::keyed("newdoc.preset_menu"));
     if resp.hovered() {
         ui.painter()
             .rect_filled(r, 0.0, crate::theme::Tokens::tool_hover());
@@ -583,7 +657,13 @@ fn preset_row(ui: &mut Ui, st: &mut NewDocState, rect: egui::Rect, menu_at: egui
         });
 }
 
-fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
+fn dimensions(
+    ui: &mut Ui,
+    st: &mut NewDocState,
+    body: egui::Rect,
+    top: f32,
+    saved: &[crate::settings::PageSizePreset],
+) {
     use crate::ui::chrome::{self, FIELD_H, ROW_PITCH};
     let units = st.units();
     let at = |x: f32, y: f32| body.min + egui::vec2(x, y);
@@ -607,13 +687,59 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
         field(FIELD_X, y, WIDE),
         shown,
         |ui| {
-            pick = crate::ui::dialogs::paper_list(ui, &st.settings.values.page_size);
+            pick = crate::ui::dialogs::paper_preset_menu(ui, &st.settings.values.page_size, saved);
         },
     );
     if let Some((n, s)) = pick {
-        st.set_page_size(n, s);
+        st.set_page_size(&n, s);
     }
+    tip(
+        ui,
+        field(FIELD_X, y, WIDE),
+        "newdoc_page_size",
+        &crate::ui::tips::keyed("newdoc.page_size"),
+    );
     y += ROW_PITCH;
+    // The dialog opens with Width taking the keyboard, and Tab goes from
+    // Width straight to Height (Shift+Tab back), past the units, so a
+    // page size is typed without the mouse (#3886).
+    let (width_box, height_box) = (
+        chrome::number_edit_id("newdoc_width"),
+        chrome::number_edit_id("newdoc_height"),
+    );
+    // Asked for until it holds: a window's first frame only measures it.
+    if st.focus_width {
+        if ui.memory(|m| m.has_focus(width_box)) {
+            st.focus_width = false;
+        } else {
+            ui.memory_mut(|m| m.request_focus(width_box));
+        }
+    }
+    // The key's own modifiers, as egui moves the focus by them.
+    let (tab, shift_tab) = ui.input(|i| {
+        i.events.iter().fold((false, false), |(t, st), e| match e {
+            egui::Event::Key {
+                key: egui::Key::Tab,
+                pressed: true,
+                modifiers,
+                ..
+            } => (t || !modifiers.any(), st || modifiers.shift_only()),
+            _ => (t, st),
+        })
+    });
+    ui.memory_mut(|m| {
+        let to = if tab && m.has_focus(width_box) {
+            Some(height_box)
+        } else if shift_tab && m.has_focus(height_box) {
+            Some(width_box)
+        } else {
+            None
+        };
+        if let Some(to) = to {
+            m.move_focus(egui::FocusDirection::None);
+            m.request_focus(to);
+        }
+    });
     // Width and the units.
     label(ui, y, "newdoc.width");
     if length(
@@ -623,8 +749,14 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
         &mut st.settings.values.width_mm,
         units,
     ) {
-        st.match_page_size();
+        st.match_page_size(saved);
     }
+    tip(
+        ui,
+        field(FIELD_X, y, NUMBER_W),
+        "newdoc_width",
+        &crate::ui::tips::keyed("newdoc.width"),
+    );
     let mut u = units;
     chrome::combo(
         ui,
@@ -636,6 +768,12 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
                 ui.selectable_value(&mut u, x, x.label());
             }
         },
+    );
+    tip(
+        ui,
+        field(300.0, y, 123.0),
+        "newdoc_units",
+        &crate::ui::tips::keyed("newdoc.units"),
     );
     if u != units {
         st.settings.values.units = u.id().into();
@@ -651,15 +789,21 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
         &mut st.settings.values.height_mm,
         units,
     ) {
-        st.match_page_size();
+        st.match_page_size(saved);
     }
+    tip(
+        ui,
+        field(FIELD_X, y, NUMBER_W),
+        "newdoc_height",
+        &crate::ui::tips::keyed("newdoc.height"),
+    );
     y += ROW_PITCH;
     // Orientation.
     label(ui, y, "newdoc.orientation");
     let v = &mut st.settings.values;
     let landscape = v.width_mm > v.height_mm;
     if orientation_button(ui, field(FIELD_X, y, FIELD_H), false, !landscape)
-        .on_hover_text(tr("dialog.portrait"))
+        .rich_tip(tr("dialog.portrait"))
         .clicked()
         && landscape
     {
@@ -668,7 +812,7 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
     }
     let v = &mut st.settings.values;
     if orientation_button(ui, field(FIELD_X + 33.0, y, FIELD_H), true, landscape)
-        .on_hover_text(tr("dialog.landscape"))
+        .rich_tip(tr("dialog.landscape"))
         .clicked()
         && !landscape
     {
@@ -702,6 +846,12 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
             }
         },
     );
+    tip(
+        ui,
+        field(FIELD_X, y, NUMBER_W),
+        "newdoc_dpi",
+        &crate::ui::tips::keyed("newdoc.resolution"),
+    );
     chrome::label_at(
         ui,
         at(FIELD_X + NUMBER_W + 6.0, y + 14.0),
@@ -719,13 +869,54 @@ fn dimensions(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
     }
 }
 
+/// The file of the CMYK profile `name` when it is installed here.
+fn cmyk_profile_file(
+    name: &str,
+    found: &[FoundProfile],
+) -> Option<tracedraw_core::DocumentProfile> {
+    let p = found
+        .iter()
+        .find(|p| p.space == Space::Cmyk && p.name == name)?;
+    let data = crate::files::read(std::path::Path::new(&p.path)).ok()?;
+    tracedraw_core::icc::Profile::parse(&data).ok()?;
+    Some(tracedraw_core::DocumentProfile::new(name.to_string(), data))
+}
+
+/// The choices of a profile list: the current one, the built-in ones,
+/// then those of `space` installed on this computer.
+fn profile_choices(
+    current: &str,
+    builtin: &[&str],
+    found: &[FoundProfile],
+    space: Space,
+) -> Vec<String> {
+    std::iter::once(current)
+        .chain(builtin.iter().copied())
+        .chain(
+            found
+                .iter()
+                .filter(|p| p.space == space)
+                .map(|p| p.name.as_str()),
+        )
+        .map(String::from)
+        .collect()
+}
+
 fn color_settings(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32) {
     use crate::ui::chrome::{self, FIELD_H, ROW_PITCH};
     let at = |x: f32, y: f32| body.min + egui::vec2(x, y);
+    let found = st
+        .found
+        .get_or_insert_with(crate::color_policy::system_profiles);
     let s = &mut st.settings;
-    let rgb = [s.rgb_profile.clone(), "sRGB IEC61966-2.1".to_string()];
-    let cmyk = [s.cmyk_profile.clone(), "Generic CMYK (open)".to_string()];
-    let gray = GRAY_PROFILES.map(String::from);
+    let rgb = profile_choices(&s.rgb_profile, &["sRGB IEC61966-2.1"], found, Space::Rgb);
+    let cmyk = profile_choices(
+        &s.cmyk_profile,
+        &["Generic CMYK (open)"],
+        found,
+        Space::Cmyk,
+    );
+    let gray = profile_choices(&s.gray_profile, &GRAY_PROFILES, found, Space::Gray);
     let intents = INTENTS.map(String::from);
     let rows: [(&str, &str, &mut String, &[String]); 4] = [
         ("newdoc_rgb", "newdoc.rgb_profile", &mut s.rgb_profile, &rgb),
@@ -757,7 +948,13 @@ fn color_settings(ui: &mut Ui, st: &mut NewDocState, body: egui::Rect, top: f32)
                 ui.selectable_value(value, o.clone(), o);
             }
         });
+        tip(ui, rect, id, &crate::ui::tips::keyed(key));
     }
+}
+
+/// The tip over a field drawn at `rect` (its box, arrows and list).
+fn tip(ui: &mut Ui, rect: egui::Rect, id: &str, tip: &str) {
+    crate::ui::tips::cover(ui, rect, egui::Id::new((id, "tip")), tip);
 }
 
 /// A length field in the drawing units with its spin arrows; true when
@@ -825,6 +1022,78 @@ fn orientation_button(
 mod tests {
     use super::*;
 
+    /// Color settings opens as it was left, and the choice survives the
+    /// settings file (#4058).
+    #[test]
+    fn color_settings_open_is_remembered() {
+        let st = NewDocState::from_settings(&NewDocSettings::default(), "A".into());
+        assert!(!st.color_settings_open);
+        let saved = NewDocSettings {
+            color_settings_open: true,
+            ..NewDocSettings::default()
+        };
+        let back: NewDocSettings =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let st = NewDocState::from_settings(&back, "B".into());
+        assert!(st.color_settings_open);
+    }
+
+    /// The dialog opens with Width taking the keyboard, its number
+    /// selected; Tab goes straight to Height, its number selected too,
+    /// so a page size is typed without the mouse (#3886).
+    #[test]
+    fn tab_goes_from_width_straight_to_height() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let mut st = NewDocState::from_settings(&NewDocSettings::default(), "Untitled".into());
+        st.settings.values.units = Units::Millimeters.id().into();
+        let mut close = false;
+        let tab = |modifiers| egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let mut frame = |app: &mut App, st: &mut NewDocState, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                new_document_dialog(app, &ui.ctx().clone(), st, &mut close)
+            });
+            out.textures_delta.clear();
+        };
+        let width_box = crate::ui::chrome::number_edit_id("newdoc_width");
+        let height_box = crate::ui::chrome::number_edit_id("newdoc_height");
+        frame(&mut app, &mut st, Vec::new());
+        frame(&mut app, &mut st, Vec::new());
+        assert!(
+            ctx.memory(|m| m.has_focus(width_box)),
+            "Width has the keyboard"
+        );
+        frame(&mut app, &mut st, vec![egui::Event::Text("200".into())]);
+        frame(&mut app, &mut st, vec![tab(egui::Modifiers::NONE)]);
+        frame(&mut app, &mut st, Vec::new());
+        assert!(ctx.memory(|m| m.has_focus(height_box)), "one Tab: Height");
+        let width = st.settings.values.width_mm;
+        assert!((width - 200.0).abs() < 1e-6, "{width}");
+        frame(&mut app, &mut st, vec![egui::Event::Text("400".into())]);
+        frame(&mut app, &mut st, vec![tab(egui::Modifiers::SHIFT)]);
+        frame(&mut app, &mut st, Vec::new());
+        assert!(
+            ctx.memory(|m| m.has_focus(width_box)),
+            "Shift+Tab: back to Width"
+        );
+        let height = st.settings.values.height_mm;
+        assert!((height - 400.0).abs() < 1e-6, "{height}");
+    }
+
     #[test]
     fn build_makes_the_pages_size_resolution_and_colour_mode() {
         let mut s = NewDocSettings {
@@ -842,6 +1111,51 @@ mod tests {
             doc.metadata.primary_color_mode,
             tracedraw_core::document::PrimaryColorMode::Rgb
         );
+    }
+
+    #[test]
+    fn the_profile_lists_offer_the_installed_profiles() {
+        // #1033: profiles installed here are listed by their colour space.
+        let found = vec![
+            FoundProfile {
+                name: "Coated FOGRA39".into(),
+                path: "fogra39.icc".into(),
+                space: Space::Cmyk,
+            },
+            FoundProfile {
+                name: "Adobe RGB (1998)".into(),
+                path: "adobergb.icc".into(),
+                space: Space::Rgb,
+            },
+        ];
+        let cmyk = profile_choices(
+            "Generic CMYK (open)",
+            &["Generic CMYK (open)"],
+            &found,
+            Space::Cmyk,
+        );
+        assert!(cmyk.iter().any(|n| n == "Coated FOGRA39"), "{cmyk:?}");
+        assert!(!cmyk.iter().any(|n| n == "Adobe RGB (1998)"), "{cmyk:?}");
+        let rgb = profile_choices(
+            "sRGB IEC61966-2.1",
+            &["sRGB IEC61966-2.1"],
+            &found,
+            Space::Rgb,
+        );
+        assert!(rgb.iter().any(|n| n == "Adobe RGB (1998)"), "{rgb:?}");
+        // A profile that is not installed carries no file.
+        assert!(cmyk_profile_file("Coated FOGRA39", &[]).is_none());
+    }
+
+    #[test]
+    fn build_names_the_chosen_profiles() {
+        let s = NewDocSettings {
+            gray_profile: "Gray Gamma 2.2".into(),
+            ..Default::default()
+        };
+        let doc = s.build("U".into());
+        assert_eq!(doc.metadata.gray_profile, "Gray Gamma 2.2");
+        assert_eq!(doc.metadata.cmyk_profile, "Generic CMYK (open)");
     }
 
     #[test]
@@ -868,10 +1182,10 @@ mod tests {
         assert!((st.settings.values.width_mm - 420.0).abs() < 1e-9);
         st.settings.values.width_mm = 279.4;
         st.settings.values.height_mm = 215.9;
-        st.match_page_size();
+        st.match_page_size(&[]);
         assert_eq!(st.settings.values.page_size, "Letter");
         st.settings.values.width_mm = 100.0;
-        st.match_page_size();
+        st.match_page_size(&[]);
         assert_eq!(st.settings.values.page_size, CUSTOM);
     }
 

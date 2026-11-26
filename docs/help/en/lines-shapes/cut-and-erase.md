@@ -1,8 +1,9 @@
 # Cropping, cutting and erasing
 
 Four tools of the Crop flyout take parts of objects away: [[tool.crop]],
-[[tool.knife]], [[tool.segment_delete]] and [[tool.eraser]]. Each change is
-one undo step.
+[[tool.knife]], [[tool.segment_delete]] and [[tool.eraser]]; the fifth,
+[[tool.shape_builder]], merges or removes the parts overlapping objects
+cut each other into. Each change is one undo step.
 
 ## Crop {#crop}
 
@@ -56,8 +57,14 @@ places where they cross other outlines or themselves, for example the bits of
 lines that stick out past a crossing.
 
 - Click a part of an outline to delete it.
-- Drag a rectangle to delete every part that lies wholly inside it, on all
-  objects at once.
+- Drag a rectangle across outlines to delete every part it touches, on all
+  objects at once. Each part goes whole, up to the crossings at its ends, even
+  where it reaches past the rectangle; a closed shape that nothing crosses goes
+  whole.
+- Choose **Freehand** on the property bar and drag a stroke across outlines:
+  every part the stroke crosses is deleted, up to the crossings with other
+  lines, in one step. Hold <kbd>Alt</kbd> as a drag starts to use the other
+  way (stroke or rectangle) for that drag only.
 
 Rectangles, ellipses and polygons become curves; a closed shape that loses a
 part opens, and an object with nothing left is deleted.
@@ -73,7 +80,50 @@ The [[tool.eraser]] tool (<kbd>X</kbd>) rubs out parts of objects.
 3. Drag over the objects. A click erases one dot.
 
 Erased objects become curves; an object erased completely is deleted.
-Double-click an object with the tool to delete it whole. Bitmaps, groups and
-clip frames are not erased. The defaults of the eraser are on the
+Double-click an object with the tool to delete it whole. A clip frame is
+erased through its frame: the frame loses the band and the contents inside
+are hidden along it, so the eraser cuts through the frame and its contents
+together. Groups are not erased.
+
+On a picture the eraser makes the pixels transparent along the nib, with a
+soft edge: **Hardness** on the property bar is how much of the nib erases
+fully before its edge fades out (0 % is all soft edge), and **Strength** how
+much of each pixel it takes at most (100 % makes it fully transparent). Use a
+wide, soft nib to fade a picture into the background. The defaults of the eraser are on the
 [[tool.eraser]] page of the tool options; see
 [Tool options](../customize/tool-options.md#eraser).
+
+## Shape Builder {#shape-builder}
+
+The [[tool.shape_builder]] tool builds a new shape out of the parts that
+overlapping objects cut each other into, by dragging across them.
+
+1. Select the overlapping objects (rectangles, ellipses, polygons and
+   closed curves; a click with the tool selects when nothing is selected).
+2. Choose the [[tool.shape_builder]] tool. The part under the pointer is
+   hatched: a place inside the same objects and outside the others.
+3. Drag across the parts you want as one object. Each part lights up as
+   you cross it. When you let go, the parts become one new object with the
+   fill and outline of the front object over the first part, and they are
+   cut out of the objects they came from. An object left with nothing is
+   deleted.
+
+Hold <kbd>Alt</kbd> while you drag to take the parts away instead: they
+are cut out and nothing new is made. A click on a part makes it an object
+of its own. The objects stay selected, with the new one, so you can go on
+building.
+
+Parts about to be taken away (with <kbd>Alt</kbd> or in Delete mode) are
+hatched in red; parts about to be merged in the selection colour. A selected
+group works as the objects in it: they are cut where they are, in their
+group, and the group stays selected.
+
+Tick **Use guidelines** on the property bar to let the guidelines shown
+on the page cut the objects into parts too, as if each were a line drawn
+across them. The guidelines stay where they are. It is off by default.
+
+![The part under the Shape Builder pointer is hatched](../../img/lines-shapes-cut-and-erase-shape-builder-1.png)
+
+![A drag across three parts lights each one up](../../img/lines-shapes-cut-and-erase-shape-builder-2.png)
+
+![The parts crossed became one new object](../../img/lines-shapes-cut-and-erase-shape-builder-3.png)

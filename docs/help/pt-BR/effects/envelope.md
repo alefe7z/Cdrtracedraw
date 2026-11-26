@@ -1,10 +1,13 @@
 # Envelopes
 
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
 Um envelope é uma moldura de nós em volta de um objeto; o objeto é curvado para
 preencher a moldura e acompanha quando você move os nós. Use-o para arquear
 texto, inflar uma forma ou encaixar uma arte em uma bandeira ou um círculo. O
 objeto mantém a própria forma, então o envelope pode ser mudado ou removido a
-qualquer momento.
+qualquer momento. Imagens também se deformam, sozinhas ou dentro de um grupo ou
+quadro de recorte.
 
 ## Para acrescentar um envelope {#create}
 
@@ -53,4 +56,24 @@ do mesmo jeito.
 - **Copiar propriedades do envelope**: clique em outro objeto para copiar o
   envelope dele (como
   [[menu.object > menu.object.copy_effect > menu.object.copy_envelope_from]]).
-- **Limpar envelope** remove o último envelope.
+  Clique em um objeto sem envelope, como um círculo, uma estrela ou uma curva
+  desenhada, para encaixar o texto ou os objetos selecionados na forma dele.
+- [[menu.object > menu.object.copy_effect > menu.object.envelope_from_top]]:
+  selecione os objetos e, por cima deles, a forma onde encaixá-los; os outros
+  preenchem essa forma onde ela está, e a forma some.
+- **Limpar envelope** remove o último envelope (moldura ou malha).
+
+## Envelope de malha {#mesh}
+
+Em vez de uma moldura, o objeto pode se dobrar por uma grade. No painel
+Envelope, escolha **Colunas** e **Linhas** (de 1 a 8) e clique em
+**Adicionar malha**: a grade é colocada sobre os objetos selecionados, que
+ficam como estavam. Com a ferramenta [[tool.envelope]] (ou a [[tool.shape]])
+arraste qualquer ponto da grade, de dentro ou da borda, e o objeto se dobra
+suavemente em volta dele: setas viram uma estrela, uma palavra vira uma onda.
+Imagens também se dobram pela grade.
+**Adicionar malha** de novo começa uma grade nova com as colunas e linhas
+escolhidas; [[effect.mesh_envelope]] aparece na pilha de efeitos do painel
+Efeitos, e Converter em curvas a torna parte das curvas.
+
+![Um envelope de malha de quatro colunas e duas linhas dobrando um grupo, com pontos da grade arrastados](../../img/effects-envelope-mesh.png)

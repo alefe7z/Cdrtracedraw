@@ -2,8 +2,8 @@
 
 A workspace is how the window is set up: which bars show and where they
 sit, the toolbox, keyboard shortcuts, the colour palette options and the
-interface's look. Window > Workspace picks a built-in one (Default, Lite,
-Classic, Illustration, Page Layout, Touch); the user's own setup can be
+interface's look. Window > Workspace picks a built-in one (Standard, Minimal,
+Compact, Drawing, Publishing, Touch); the user's own setup can be
 kept in a file and brought back.
 
 ## Touch
@@ -17,8 +17,41 @@ fingers pan and a pinch zooms about its centre, with any tool; the
 gesture drops what the first finger had begun, so it neither drags an
 object nor draws a marquee. Picking another workspace brings the
 interface back to the size chosen.
-Checks: `ui::tests::the_touch_workspace_is_larger_and_keeps_real_sizes`,
+
+With a finger only (#1611, #1707, #1499): the standard toolbar's Delete deletes
+the selection, its Shift, Ctrl and Alt buttons hold those keys down
+until they are tapped again (a tap adds to the selection with Shift held) and its Panels button shows the dockers (Properties and
+the rest); a finger held still on the drawing for 0.8 s is the right
+click (egui's long press), so it opens the menu of the object under it
+(picking it) or of the page, with Delete, Copy, Order, Group and the
+rest; on a palette swatch a tap fills, a hold of 0.5 s let go sets the
+outline and a hold of 1 s shows the shades (`color-palettes.md`).
+Checks: `ui::tests::a_finger_deletes_opens_the_panels_and_the_object_menu`,
+`ui::tests::the_touch_workspace_is_larger_and_keeps_real_sizes`,
 `pick_drag_tests::two_fingers_pan_without_dragging_anything`.
+
+On a phone (a screen whose smaller side is under 600 density-independent
+pixels, Android's line between phone and tablet layouts, in either
+orientation) the interface is not enlarged: a 360 dp phone would be
+257 points wide, too narrow for any bar (#1301, #1691). The phone
+layout: the bars, the property bar, the toolbox and the palette slide
+with their « and » buttons, the wheel, or a finger dragged along them
+(#1997, `toolbars.md`, "Bars longer than the window"); the menu titles
+that do not fit go under » at the end of the menu bar; an open panel is
+a sheet over the whole room beside its tab strip instead of a column
+beside the drawing, and a drawing opened or started closes the sheet so
+it shows in front (the panel's tab opens it again; before, a drawing
+opened from the browser on a phone stayed behind the Hints panel and
+seemed not to open, #3735); the Welcome Screen's tabs wrap and Get Started puts
+the recent drawings under its buttons, the page scrolling; a dialog
+larger than the screen is drawn at the screen's size and its body
+scrolls both ways. A tablet (600 dp and more) keeps its layout.
+Checks: `ui::tests::the_touch_workspace_is_larger_and_keeps_real_sizes`,
+`pick_drag_tests::two_fingers_pan_without_dragging_anything`,
+`ui::phone::tests::phones_are_told_by_their_smaller_side`,
+`ui::tests::phones_fit_and_tablets_keep_their_layout` (360 x 640 and
+412 x 915 dp phones and an 800 x 1280 tablet, upright and turned:
+nothing ends outside the screen).
 
 ## Kept across restarts
 
@@ -46,19 +79,35 @@ Options' OK, and
 when CD Draw closes; not while Options is open, whose Cancel puts them
 back. Values out of range in a file edited by hand are brought into
 range, and names CD Draw does not know fall back to the defaults.
+The preferences are saved whenever they change, written at most once a
+second (so a change lasts even when TraceDraw does not close normally,
+and in the browser, where closing the tab saves nothing), on Options' OK,
+and when TraceDraw closes. They are looked at on a frame whose input
+could change them (a key, text, a click or release, the clipboard, a
+dropped file) and at most once a second otherwise (a frame that does
+not look asks for one when the second is up): pointer moves, drags in
+progress, the wheel and animation frames do not serialize them all,
+which cost every frame on slow computers (#616). Not while Options is open, whose Cancel puts
+them back. Values out of range in a file edited by hand are brought into
+range, and names TraceDraw does not know fall back to the defaults.
 Preferences written before the bars shown were kept have no
 `shown_bars`: the built-in workspace's bars show, as before; without
 `dockers` the column holds Hints, Properties and Objects; without
 `tools`, `view` or `panels` they start as on a first start. Picking a
 built-in workspace sets its own bars, as it always did.
 Checks: `app::tests::tools_view_snapping_and_dockers_survive_a_restart`,
-`app::tests::preferences_are_saved_when_they_change`.
+`app::tests::preferences_are_saved_when_they_change`,
+`app::tests::preferences_are_looked_at_only_when_they_could_have_changed`,
+`pick_drag_tests::an_idle_window_asks_for_no_frame`.
 
 ## Dockers
 
-The tab column holds the open dockers, as tabs; a click on a tab brings
-its docker to the front, a click on the tab in front collapses the
-docker area to the column. The docker's close button (x) and its tab's
+The tab column holds the open dockers, as tabs; the tab of the docker
+in front takes the colour of the document tab in front (light blue on
+the light themes; #2316,
+`ui::dockers::tests::the_tab_of_the_docker_in_front_is_marked`). A
+click on a tab brings its docker to the front, a click on the tab in
+front collapses the docker area to the column. The docker's close button (x) and its tab's
 "Close Docker" take the docker out of the column and bring the next one
 forward; with none left the docker area closes. Collapse (the two
 triangles) only folds the area. A docker opened from a menu or its
@@ -125,6 +174,39 @@ contents are laid out within it and clipped to it.
 Checks: `ui::properties_docker::tests`,
 `ui::dockers::tests::properties_sections_open_close_and_jump`,
 `ui::dockers::tests::properties_sections_fit_the_default_docker_width`;
+With objects selected: the first one's kind and box, a row of buttons,
+then its sections, in this order: Outline, Fill, Transparency, then
+what the kind has (Rectangle: its corners; a bitmap: its effects; text:
+its character settings), then Summary (the selection in figures, Wrap
+paragraph text and Lock Object, see `properties-docker.md`). Each
+section has a header bar
+with a triangle; the buttons (the outline pen, the fill bucket, the
+transparency checker, a rectangle, "fx", "A", "i") show which sections
+are open and open or close them, as a click on a header does. Sections
+come open; the ones closed are kept in the preferences
+(`properties_closed`). F11 and the status bar's fill and outline open
+their section again. The fill kinds are pictures (none, uniform,
+gradient, pattern, texture, mesh) with their names as tooltips; the
+Transparency section holds the Transparency tool's settings in rows
+that keep to the docker's width: the kind and what it applies to, then
+the amount (or the gradient's angle and kind), then the merge mode. The
+Rectangle section lists the corner kinds (round, scalloped, chamfered)
+one under the other and the four radii two by two as the corners lie,
+each named above its field; the two columns share the docker's width
+and a name too long for its column goes on to a second line, never cut
+short (#487). With nothing selected the docker shows the defaults for
+new objects under the same Outline and Fill header bars, in the same
+order, so each row of paint kinds is named and the docker keeps its
+layout when an object is selected (#487). The docker keeps the width it has (340
+points by default, or what the edge was dragged to): selecting an
+object never widens it, and its contents are laid out within it and
+clipped to it. Every section of every kind of object (rectangle,
+ellipse, polygon, artistic and paragraph text, bitmap) with each fill
+and transparency kind fits the default width, in English, German,
+Russian and Brazilian Portuguese.
+Checks: `ui::dockers::tests::properties_sections_open_close_and_jump`,
+`ui::dockers::tests::properties_sections_fit_the_default_docker_width`,
+`ui::dockers::tests::properties_sections_are_titled_and_add_buttons_need_a_paint`;
 every kind's sections draw in
 `ui::mod::tests::window_draws_with_every_docker_tool_and_selection`.
 
@@ -139,6 +221,7 @@ Workspace > Export Workspace... and Import Workspace...
 | Toolbars, toolbox and status bar | the built-in workspace it starts from, where the bars sit and whether they are locked, which bars show, the tool each toolbox group shows, hidden flyouts, the Outline flyout, what the status bar's first field shows |
 | Color palette options | No Color well, right mouse button, document palette, the palette shown, colours joining the document palette |
 | Appearance | interface size, desktop colour, page border |
+| Other preferences | every other option of Options and the defaults saved for new drawings: the colour mode of new drawings and colour management, document defaults (grid, rulers, guides, fill and outline of new objects), the New Document settings, units, nudge, tools, view, saving, printing, export and the rest (#3721). Never carried: what belongs to one computer or one session (recent files, folders, window size, graphics card and renderer, benchmarks, update checks, recent fonts and glyphs, installed fonts, accounts and AI keys, plugins, scripts and outside programs) and what the other parts carry |
 
 - The options page has a check box per part (remembered in
   `workspace_parts`); Export writes the parts checked, Import applies the
@@ -183,6 +266,10 @@ A file is never trusted:
   fall back to the default layout's; toolbox lists keep at most 256
   entries, and an overlong tool id counts as none.
 - An interface size outside 50 % to 400 % becomes 100 %.
+- Other preferences: names of this computer's own preferences are
+  dropped, and a file with more than 1024 is refused that part. A value
+  of the wrong shape keeps the preference as it is; the others still
+  come across. Names TraceDraw does not know are ignored.
 
 ## Checks
 
@@ -192,6 +279,13 @@ A file is never trusted:
 - Given a file exported with shortcuts and palette only, when it is
   imported with only shortcuts checked, then the bars and palette stay as
   they were.
+- Given new drawings in RGB, document defaults, units, nudge and undo
+  levels changed, recent files and a window size, when the workspace is
+  exported and imported into a fresh editor, then the colour mode,
+  document defaults, units, nudge and undo levels come across and the
+  recent files and window size do not; a hand-written value of the wrong
+  shape keeps the one there was
+  (`workspace_file::tests::a_workspace_carries_the_other_preferences`).
 - Given garbage, an empty file, another kind, version 0 or a part of the
   wrong shape, when it is imported, then nothing changes and the status
   bar says it is not a workspace file.

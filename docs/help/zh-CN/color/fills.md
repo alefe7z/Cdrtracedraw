@@ -30,6 +30,12 @@
 
 类型下方的色条按绘制效果显示整个颜色序列。
 
+## 编辑填充对话框 {#edit-fill}
+
+<kbd>F11</kbd> 打开所选对象填充的 [[edit_fill.title]] 对话框。渐变会显示预览、[[edit_fill.fill_picker]]、类型、重复方式和色带：单击节点选中，拖动移动，双击添加或删除节点。色带下方是节点的颜色、透明度、位置、[[edit_fill.midpoint]] 和 [[edit_fill.reverse]]。[[edit_fill.transform]] 包含旋转、中心和边缘填充。**确定** 应用您所做的更改，并包括 [[edit_fill.overprint]]。对话框打开期间，所选对象会随着你的修改实时显示填充；**取消** 或 <kbd>Esc</kbd> 会恢复原来的填充。
+
+![编辑填充对话框](../../img/color-fills-edit-fill.png)
+
 ## 交互式填充工具 {#interactive-fill}
 
 [[tool.interactive_fill]] 工具（<kbd>G</kbd>）直接在对象上编辑填充。
@@ -45,7 +51,7 @@
 [[tool.area_fill]] 工具通过为任何闭合区域创建一个新对象来填充它，即使该区域由多个重叠对象构成。周围的对象保持原样。
 
 1. 选择 [[tool.area_fill]] 工具。
-2. 在属性栏上选择填充和轮廓：**使用默认值**（新对象的填充和轮廓；若默认为无填充，则使用一种颜色，以便区域可见）、**指定**（旁边的颜色，轮廓还有宽度）或 **无**。
+2. 在属性栏上选择填充和轮廓：**指定**（旁边的颜色，轮廓还有宽度）、**使用默认值**（新对象的填充和轮廓；若默认为无填充，则使用一种颜色，以便区域可见）或 **无**。
 3. 在区域内部单击。
 
 新对象放在活动图层的顶部并被选中。在轮廓上单击，或在没有被任何对象围住的区域中单击，不会创建任何对象。
@@ -65,6 +71,7 @@
 
 - [[docker.fill_pattern]] 填充重复一个图块：双色、矢量图样或位图。请参阅 [图样填充](patterns.md)。
 - [[docker.fill_texture]] 填充是生成的自然外观纹理：[[texture.clouds]]、[[texture.marble]]、[[texture.noise]] 或 [[texture.wood]]，可设置其颜色和比例。
+- [[texture.holographic]] 和 [[texture.holo_glitter]] 给出固定的全息箔效果：彩虹色在深色和浅色区域（颜色 A 和 B）之间流动，闪粉带有闪亮的颗粒。不随视角变化；PDF 和 SVG 以图像形式保存。
 
 ## 一个对象上的多个填充 {#several-fills}
 

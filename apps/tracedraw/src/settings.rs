@@ -4,36 +4,97 @@
 //! `$XDG_CONFIG_HOME/tracedraw`).
 
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-/// How large the buttons of the bars are (the bars' menu > Customize).
+/// How large the buttons of the bars are (the bars' menu > Customize),
+/// five sizes from Extra Small to Extra Large. Ctrl+wheel over a bar
+/// steps through the same sizes. Saved as `extra_small`, `small`,
+/// `medium`, `large` and `extra_large`; settings saved with three sizes
+/// keep their meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ButtonSize {
-    Small,
+    #[serde(alias = "ExtraSmall")]
+    ExtraSmall,
     #[default]
+    #[serde(alias = "Small")]
+    Small,
+    #[serde(alias = "Medium")]
     Medium,
+    #[serde(alias = "Large")]
     Large,
+    #[serde(alias = "ExtraLarge")]
+    ExtraLarge,
+}
+
+/// The pixel sizes (points, at interface size 100 %) of one button size:
+/// the toolbox's icon box (the side of its 24 unit design grid, see
+/// `ui::icon_paint::Pen`), the toolbox's and the standard bars' buttons,
+/// the standard bars' icon box, and the property bar's buttons and
+/// icons. All are whole, even pixel sizes so an icon sits centred on
+/// whole pixels in its button.
+///
+/// The toolbox's icon boxes are 16, 20, 24, 32 and 40, the padding
+/// around them growing more slowly than the icon. The standard and
+/// property bars' icons are drawn smaller at Large and Extra Large,
+/// about 5/6 of the toolbox's box (standard bars 28 and 34, property bar
+/// 24 and 28), so their heavier line icons keep 7 and 9 px of margin in
+/// the button instead of nearly filling it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ButtonMetrics {
+    pub icon: f32,
+    pub button: f32,
+    pub bar_icon: f32,
+    pub prop_icon: f32,
+    pub prop_button: f32,
 }
 
 impl ButtonSize {
-    pub const ALL: [ButtonSize; 3] = [ButtonSize::Small, ButtonSize::Medium, ButtonSize::Large];
+    pub const ALL: [ButtonSize; 5] = [
+        ButtonSize::ExtraSmall,
+        ButtonSize::Small,
+        ButtonSize::Medium,
+        ButtonSize::Large,
+        ButtonSize::ExtraLarge,
+    ];
 
-    /// The buttons' size as a share of the medium size (32 px).
-    pub fn scale(self) -> f32 {
-        match self {
-            ButtonSize::Small => 0.75,
-            ButtonSize::Medium => 1.0,
-            ButtonSize::Large => 1.25,
+    /// The sizes of the buttons and icons at this size.
+    pub fn metrics(self) -> ButtonMetrics {
+        let (icon, button, bar_icon, prop_icon, prop_button) = match self {
+            ButtonSize::ExtraSmall => (16.0, 22.0, 16.0, 14.0, 20.0),
+            ButtonSize::Small => (20.0, 26.0, 20.0, 18.0, 24.0),
+            ButtonSize::Medium => (24.0, 32.0, 24.0, 22.0, 28.0),
+            ButtonSize::Large => (32.0, 42.0, 28.0, 24.0, 38.0),
+            ButtonSize::ExtraLarge => (40.0, 52.0, 34.0, 28.0, 46.0),
+        };
+        ButtonMetrics {
+            icon,
+            button,
+            bar_icon,
+            prop_icon,
+            prop_button,
         }
     }
 
     pub fn key(self) -> &'static str {
         match self {
+            ButtonSize::ExtraSmall => "bars.size_extra_small",
             ButtonSize::Small => "bars.size_small",
             ButtonSize::Medium => "bars.size_medium",
             ButtonSize::Large => "bars.size_large",
+            ButtonSize::ExtraLarge => "bars.size_extra_large",
         }
+    }
+
+    /// The size `steps` sizes up (down for a negative count) from this
+    /// one, held at Extra Small and Extra Large: Ctrl+wheel over a bar
+    /// steps its buttons' size by the notches turned.
+    pub fn stepped(self, steps: i32) -> ButtonSize {
+        let at = ButtonSize::ALL.iter().position(|s| *s == self).unwrap_or(0) as i64;
+        let last = (ButtonSize::ALL.len() - 1) as i64;
+        let to = (at + i64::from(steps)).clamp(0, last);
+        ButtonSize::ALL[to as usize]
     }
 }
 
@@ -73,9 +134,198 @@ impl Captions {
     }
 }
 
+/// A page size the user saved under a name, in millimetres (portrait or
+/// landscape as saved).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageSizePreset {
+    pub name: String,
+    pub width_mm: f64,
+    pub height_mm: f64,
+}
+
+/// Right-click menu visibility and sibling order, keyed by stable identifiers.
+/// Empty preferences preserve all existing rows, including later commands.
+/// Order paths name each enclosing submenu, so repeated actions are independent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(from = "ContextMenuPreferencesData")]
+pub struct ContextMenuPreferences {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    hidden: BTreeMap<String, BTreeSet<String>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    order: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+}
+
+/// Read the original visibility-only map as well as the extended preferences.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ContextMenuPreferencesData {
+    Legacy(BTreeMap<String, BTreeSet<String>>),
+    Structured {
+        #[serde(default)]
+        hidden: BTreeMap<String, BTreeSet<String>>,
+        #[serde(default)]
+        order: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    },
+}
+
+impl From<ContextMenuPreferencesData> for ContextMenuPreferences {
+    fn from(data: ContextMenuPreferencesData) -> Self {
+        let (mut hidden, mut order) = match data {
+            ContextMenuPreferencesData::Legacy(hidden) => (hidden, BTreeMap::new()),
+            ContextMenuPreferencesData::Structured { hidden, order } => (hidden, order),
+        };
+        hidden.retain(|_, items| !items.is_empty());
+        order.retain(|_, branches| {
+            branches.retain(|_, items| {
+                let mut seen = BTreeSet::new();
+                items.retain(|key| !key.is_empty() && seen.insert(key.clone()));
+                !items.is_empty()
+            });
+            !branches.is_empty()
+        });
+        Self { hidden, order }
+    }
+}
+
+impl ContextMenuPreferences {
+    /// Whether a row is shown in this menu. Other menus are independent.
+    pub fn is_visible(&self, menu: &str, item: &str) -> bool {
+        self.hidden
+            .get(menu)
+            .is_none_or(|items| !items.contains(item))
+    }
+
+    /// Whether this menu has any saved changes, including newer operations.
+    pub fn has_overrides(&self, menu: &str) -> bool {
+        self.hidden.get(menu).is_some_and(|items| !items.is_empty()) || self.has_order(menu)
+    }
+
+    /// Whether any sibling group in this menu has a custom order.
+    pub fn has_order(&self, menu: &str) -> bool {
+        self.order
+            .get(menu)
+            .is_some_and(|branches| !branches.is_empty())
+    }
+
+    /// The root has an empty path; nested paths join stable parent keys with `/`.
+    pub fn order(&self, menu: &str, parent_path: &str) -> &[String] {
+        self.order
+            .get(menu)
+            .and_then(|branches| branches.get(parent_path))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Save sibling keys once. An empty order restores this branch's defaults.
+    pub fn set_order(&mut self, menu: &str, parent_path: &str, items: &[&str]) {
+        let mut seen = BTreeSet::new();
+        let mut items: Vec<String> = items
+            .iter()
+            .filter(|key| !key.is_empty() && seen.insert(**key))
+            .map(|key| (*key).to_owned())
+            .collect();
+        if items.is_empty() {
+            if let Some(branches) = self.order.get_mut(menu) {
+                branches.remove(parent_path);
+                if branches.is_empty() {
+                    self.order.remove(menu);
+                }
+            }
+        } else {
+            // Editing in an older version must not discard keys it cannot
+            // display. Resetting the branch explicitly still clears them.
+            let retained: Vec<_> = self
+                .order(menu, parent_path)
+                .iter()
+                .filter(|key| !items.contains(key))
+                .cloned()
+                .collect();
+            items.extend(retained);
+            self.order
+                .entry(menu.to_owned())
+                .or_default()
+                .insert(parent_path.to_owned(), items);
+        }
+    }
+
+    /// Unknown saved keys stay in storage but never create rows. New operations
+    /// follow the saved siblings in their own default order.
+    pub fn ordered_items<'a>(
+        &self,
+        menu: &str,
+        parent_path: &str,
+        defaults: &[&'a str],
+    ) -> Vec<&'a str> {
+        let saved = self.order(menu, parent_path);
+        let mut items = defaults.to_vec();
+        if !saved.is_empty() {
+            items.sort_by_key(|key| {
+                saved
+                    .iter()
+                    .position(|item| item == key)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        items
+    }
+
+    /// Change only this row's visibility, keeping default preferences compact.
+    pub fn set_visible(&mut self, menu: &str, item: &str, visible: bool) {
+        if visible {
+            if let Some(items) = self.hidden.get_mut(menu) {
+                items.remove(item);
+                if items.is_empty() {
+                    self.hidden.remove(menu);
+                }
+            }
+        } else {
+            self.hidden
+                .entry(menu.to_owned())
+                .or_default()
+                .insert(item.to_owned());
+        }
+    }
+
+    /// Restore this menu without affecting any other menu's choices.
+    pub fn reset_menu(&mut self, menu: &str) {
+        self.hidden.remove(menu);
+        self.order.remove(menu);
+    }
+
+    /// Restore every menu's default visibility and sibling order.
+    pub fn reset_all(&mut self) {
+        self.hidden.clear();
+        self.order.clear();
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.hidden.is_empty() && self.order.is_empty()
+    }
+
+    /// A menu drawing scope owns its filters without borrowing the app.
+    pub(crate) fn hidden_items(&self, menu: &str) -> BTreeSet<String> {
+        self.hidden.get(menu).cloned().unwrap_or_default()
+    }
+
+    /// A drawing scope owns its orders without retaining an app borrow.
+    pub(crate) fn menu_orders(&self, menu: &str) -> BTreeMap<String, Vec<String>> {
+        self.order.get(menu).cloned().unwrap_or_default()
+    }
+}
+
+/// The most seconds Options > General can keep the splash screen up
+/// (#4340).
+pub const SPLASH_MAX_SECONDS: f32 = 10.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Macros keep going past what TraceDraw cannot do (the step is
+    /// skipped and listed when the macro ends) instead of stopping with an
+    /// error (#4315).
+    pub macros_keep_going: bool,
+    /// Edit > Select Similar > Close Look: how far apart colours, outline
+    /// widths and opacity may be, 0 to 100 %.
+    pub similar_tolerance: u32,
     pub language: String,
     pub recent_files: Vec<PathBuf>,
     #[serde(default)]
@@ -86,6 +336,17 @@ pub struct Settings {
     pub fit_path: FitPathPrefs,
     pub workspace: String,
     pub show_welcome_on_start: bool,
+    /// Help > Mark New Features, kept across starts and updates (#4325).
+    pub mark_new_features: bool,
+    /// The version of the last start: the first start of a newer one
+    /// opens What's New when Mark New Features is on (#4325).
+    pub last_run_version: String,
+    /// The Welcome Screen tab was closed: it shows as its house alone
+    /// until the Welcome Screen is shown again (#677).
+    pub welcome_tab_closed: bool,
+    /// The Crop tool cuts an upright picture's pixels instead of putting
+    /// it in a clip frame (#1913).
+    pub crop_picture_pixels: bool,
     /// Options > Tools > Table: what Tab does in a cell.
     #[serde(default)]
     pub table: crate::table_tool::TablePrefs,
@@ -101,7 +362,34 @@ pub struct Settings {
     pub default_dpi: f64,
     pub snap: SnapPrefs,
     pub shortcuts: Vec<(String, String)>,
+    /// The Node editing shortcut table (#3243): menu command keys and
+    /// tool ids with keys that hold only while the Shape tool is chosen,
+    /// looked at before [`Settings::shortcuts`]; a key not in it does
+    /// what it does elsewhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_shortcuts: Vec<(String, String)>,
+    /// Pictures the user chose for menu commands (#2100): the command's
+    /// key and the picture's source, another command's key or a tool
+    /// ("tool:" and its id). Shown in the menus and on toolbar buttons.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command_icons: Vec<(String, String)>,
+    /// The program Edit Bitmap opens pictures in (a path; empty for the
+    /// system's program for PNG files, #593).
+    #[serde(default)]
+    pub bitmap_editor: String,
+    /// The program Edit in Spreadsheet opens a table's workbook in (a
+    /// path; empty for the system's program for `.xlsx` files, #4144).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spreadsheet_editor: String,
     pub last_dir: Option<PathBuf>,
+    /// The folder of pictures the bitmap pattern picker lists as tiles
+    /// (#3323).
+    pub pattern_folder: Option<PathBuf>,
+    /// The folder exported to last: File > Export's dialog opens there
+    /// (#1817).
+    pub last_export_dir: Option<PathBuf>,
+    /// Folders bookmarked in the Save Drawing dialog (#1391).
+    pub folder_bookmarks: Vec<PathBuf>,
     pub color: ColorPrefs,
     /// Show the Outline flyout in the toolbox (hidden by default).
     pub show_outline_flyout: bool,
@@ -112,6 +400,21 @@ pub struct Settings {
     /// Default action of the mouse wheel: zoom (the default) or scroll.
     #[serde(default = "default_true")]
     pub wheel_zooms: bool,
+    /// What Print Preview's View button shows, as it was last left: the
+    /// rulers, the strip of sheets and the options panel (#3603).
+    #[serde(default = "default_true")]
+    pub print_preview_rulers: bool,
+    #[serde(default = "default_true")]
+    pub print_preview_strip: bool,
+    #[serde(default = "default_true")]
+    pub print_preview_options: bool,
+    /// The view a drawing opens in (#1134).
+    #[serde(default)]
+    pub open_view: OpenView,
+    /// The zoom, in percent, of the Zoom level choice of `open_view`
+    /// (#1266).
+    #[serde(default = "default_open_zoom_percent")]
+    pub open_zoom_percent: f32,
     /// Arrowheads created with Object > Create > Arrowhead.
     #[serde(default)]
     pub custom_arrowheads: Vec<tracedraw_core::Arrowhead>,
@@ -119,30 +422,51 @@ pub struct Settings {
     /// outline widths).
     #[serde(default)]
     pub custom_dashes: Vec<Vec<f64>>,
+    /// Page sizes saved in Document Setup > Page Size, listed in every
+    /// page size list after the favourites.
+    #[serde(default)]
+    pub page_sizes: Vec<PageSizePreset>,
     /// The unit outline widths are shown and typed in (a unit id, "pt"
     /// by default); widths are kept in millimetres.
     #[serde(default = "default_outline_units")]
     pub outline_units: String,
+    /// Options > Text > Display > Text units: the unit font sizes are shown
+    /// and typed in (a unit id, "pt" by default); sizes are kept in
+    /// points (#529).
+    #[serde(default = "default_outline_units")]
+    pub text_units: String,
     /// Grid, ruler and guideline settings new drawings start with
-    /// (Document Options > Save as Default).
+    /// (Document Setup > Save as Default).
     #[serde(default)]
     pub document_defaults: DocumentDefaults,
-    /// Text > Writing Tools > Autocorrect options.
+    /// Options > Text > Autocorrect.
     #[serde(default)]
     pub autocorrect: crate::autocorrect::AutocorrectPrefs,
-    /// Thesaurus file picked by the user (Text > Writing Tools > Thesaurus).
+    /// Options > Text > Spelling.
+    #[serde(default)]
+    pub spelling: SpellingPrefs,
+    /// Thesaurus file picked by the user (Text > Proofing > Thesaurus).
     #[serde(default)]
     pub thesaurus_file: Option<PathBuf>,
     /// Options > General: show the Create a New Document dialog for File >
     /// New (off: new drawings use the last settings at once).
     #[serde(default = "default_true")]
     pub show_new_document_dialog: bool,
+    /// View > Scrollbars: the drawing window's scrollbars shown (off:
+    /// the drawing takes their room; the page tabs and the Navigator
+    /// button stay, #1344).
+    #[serde(default = "default_true")]
+    pub show_scrollbars: bool,
     /// The Create a New Document dialog's last used settings.
     #[serde(default)]
     pub new_document: crate::new_document::NewDocSettings,
     /// Colour of the area around the page (Customization > Appearance).
     #[serde(default = "default_desktop")]
     pub desktop_rgb: [u8; 3],
+    /// The desktop colour was picked: white too is then white, not the
+    /// theme's colour that white stood for (#530).
+    #[serde(default)]
+    pub desktop_custom: bool,
     /// What the status bar's first field shows.
     #[serde(default)]
     pub status_info: crate::ui::status::StatusInfo,
@@ -151,13 +475,18 @@ pub struct Settings {
     #[serde(default)]
     pub toolbox_hidden: Vec<String>,
     /// The bars' menu > Customize > Default Button Size: how large the
-    /// buttons of every bar are.
+    /// buttons of every bar are (Small at first, as in the reference
+    /// program; a size already saved stays).
     #[serde(default)]
     pub button_size: ButtonSize,
     /// The property bar's Autofit Page: the margin (mm) left around the
     /// drawing when the page is fitted to it.
     #[serde(default)]
     pub fit_page_margin: f64,
+    /// Autofit Page's popup shows the page it would make while open
+    /// (#659).
+    #[serde(default = "default_true")]
+    pub fit_page_preview: bool,
     /// The toolbox's own button size, when it does not follow the default.
     #[serde(default)]
     pub toolbox_button_size: Option<ButtonSize>,
@@ -174,6 +503,46 @@ pub struct Settings {
     /// Options > General: show the splash screen while CD Draw starts.
     #[serde(default = "default_true")]
     pub show_splash: bool,
+    /// Options > General: the least time, in seconds, the splash screen
+    /// stays up so its name and version can be read (#4340); 0, the
+    /// default, lets it go as soon as the program is ready.
+    #[serde(default)]
+    pub splash_seconds: f32,
+    /// Options > General: draw the window with the graphics card (off:
+    /// its software adapter), from the next start (#445).
+    #[serde(default = "default_true")]
+    pub hardware_acceleration: bool,
+    /// The graphics card chosen by name; empty, the fastest one.
+    #[serde(default)]
+    pub gpu_adapter: String,
+    /// Options > General: blur large drop shadows shown on screen on the
+    /// graphics card (gpu_fx.rs); exports and printing stay on the CPU.
+    #[serde(default)]
+    pub gpu_effects: bool,
+    /// The renderer that opened the window when the first choice could
+    /// not ("software" or "gl"); cleared when the choice changes.
+    #[serde(default)]
+    pub working_renderer: String,
+    /// The OpenGL renderer once read back drawn on this computer: later
+    /// starts skip the check of its frames, so a slow first frame (a heavy
+    /// drawing still loading) is never taken for a blind driver (#4236).
+    #[serde(default)]
+    pub gl_drawn: bool,
+    /// Options > General, Linux: on a Wayland desktop that leaves the
+    /// title bar to the application, open the window through XWayland so
+    /// that the desktop draws its own and file drops arrive, from the
+    /// next start (#2070, #2486, `title_bar.rs`). On by default; off keeps
+    /// the native Wayland window.
+    #[serde(default = "default_true")]
+    pub system_title_bar: bool,
+    /// Options > General: File > Save As (and Save of a drawing without a
+    /// file) opens the system's save dialog instead of TraceDraw's Save
+    /// Drawing dialog, the type chosen there by its filter and the
+    /// versions the Options set (#2965). Off by default everywhere: the
+    /// system's dialog has no version choice, and the macOS one shows no
+    /// type either, so a `.cdr` could not be chosen (#3811).
+    #[serde(default = "default_system_save_dialog")]
+    pub system_save_dialog: bool,
     /// Customization > Appearance: dialogs open in the middle of the
     /// window and stay there; off, they move by their title bar and open
     /// where they were left.
@@ -183,10 +552,23 @@ pub struct Settings {
     /// draws less, for slower graphics).
     #[serde(default = "default_true")]
     pub ui_shadows: bool,
+    /// Customization > Appearance: open menus let the window show
+    /// through, at `menu_opacity` (off by default).
+    #[serde(default)]
+    pub translucent_menus: bool,
+    /// How solid translucent menus are, 0.5 to 1.
+    #[serde(default = "default_menu_opacity")]
+    pub menu_opacity: f32,
     /// Appearance: tool icons in a colour per group instead of the
     /// theme's icon colour.
     #[serde(default)]
     pub colored_icons: bool,
+    /// Appearance: the panel tabs at the window's sides show their
+    /// pictures alone, the name in the tab's tip. Off (the default) they
+    /// show the picture and the name, the column sliding when the tabs
+    /// do not fit (#2902).
+    #[serde(default)]
+    pub docker_tabs_icons_only: bool,
     /// Customization > Appearance > Theme: "light", "medium_light",
     /// "medium_dark" or "dark".
     #[serde(default)]
@@ -194,6 +576,13 @@ pub struct Settings {
     /// Where the toolbox, palette, toolbars and status bar sit.
     #[serde(default)]
     pub bars: crate::ui::bars::BarLayout,
+    /// The buttons of the Standard and Zoom toolbars, by bar, when
+    /// changed (see ui/bar_items.rs).
+    #[serde(default)]
+    pub bar_items: std::collections::BTreeMap<String, Vec<String>>,
+    /// Customization > Context Menus: hidden rows for each right-click location.
+    #[serde(default, skip_serializing_if = "ContextMenuPreferences::is_default")]
+    pub context_menus: ContextMenuPreferences,
     /// The main window as it was left: maximized, else its inner size in
     /// points ([0, 0] until the first exit).
     #[serde(default = "default_true")]
@@ -213,18 +602,76 @@ pub struct Settings {
     /// collections.
     #[serde(default)]
     pub font_manager: crate::ui::font_manager::FontManagerPrefs,
+    /// TraceCut: shown or not (Options > General) and the tool picked
+    /// last.
+    #[serde(default)]
+    pub tracecut: crate::tracecut::TraceCutPrefs,
     #[serde(default)]
     pub hide_bbox_curve_tools: bool,
     /// Options > Display: the Pick tool selects and drags the nodes of a
     /// selected curve (node tracking).
     #[serde(default)]
     pub node_tracking: bool,
+    /// Options > Display: while the selection is moved, scaled, turned or
+    /// slanted, the objects themselves are drawn where they would go, not
+    /// only their outline (#3569). Off by default.
+    #[serde(default)]
+    pub live_transform_preview: bool,
+    /// Options > Display: with Show objects while transforming on, the
+    /// drag outline is drawn over the objects too (#3704: hide it).
+    #[serde(default = "default_true")]
+    pub transform_outline_over_objects: bool,
+    /// Options > Display: Shift, Ctrl, Alt and Delete on the drawing,
+    /// where there is a touch screen (#1996).
+    #[serde(default = "default_true")]
+    pub touch_keys: bool,
+    /// Options > Display: the touch bars beside the selection, where
+    /// there is a touch screen (#1691).
+    #[serde(default = "default_true")]
+    pub touch_selection_bar: bool,
+    /// Options > Display: the same bars with a mouse too, where no finger
+    /// touched the screen (#3456). Off at first.
+    #[serde(default)]
+    pub selection_bar_mouse: bool,
     #[serde(default = "default_true")]
     pub preview_page_border: bool,
+    /// Options > Display > Full-screen preview: the colour round the page
+    /// in the full-screen preview (F9), white at first (#3930).
+    #[serde(default = "default_preview_background")]
+    pub preview_background: [u8; 3],
+    /// Options > Display > Full-screen preview: F9 shows the whole page
+    /// filling the screen instead of the drawing at the zoom it has in
+    /// the window (#4239). Off at first.
+    #[serde(default)]
+    pub preview_fit_page: bool,
+    /// Document Setup > Layout > Margins: the four page margins linked,
+    /// so changing one sets all four to it (#4030).
+    #[serde(default)]
+    pub page_margins_linked: bool,
+    /// The preview's colour was picked: white too is then white, not the
+    /// colour round the page in the drawing window, which the unpicked
+    /// white stands for (a dark theme's grey, #4027).
+    #[serde(default)]
+    pub preview_background_custom: bool,
+    /// Options > Document > Page size: how the page's shadow and border
+    /// look on screen (#3078).
+    #[serde(default, skip_serializing_if = "PageLook::is_default")]
+    pub page_look: PageLook,
     /// Options > Edit: Ctrl constrains rotation and line angles to
     /// multiples of this angle (degrees).
     #[serde(default = "default_constrain_angle")]
     pub constrain_angle: f64,
+    /// The symmetry bar's Show symmetry lines (on at first).
+    #[serde(default = "default_true")]
+    pub symmetry_show_lines: bool,
+    /// The symmetry bar's Show full preview: copies drawn in full while a
+    /// symmetry is edited (off at first: outlines in red).
+    #[serde(default)]
+    pub symmetry_full_preview: bool,
+    /// The Corners docker's Preview: the result drawn on the page as a
+    /// dashed outline while the docker is open (on at first, #1759).
+    #[serde(default = "default_true")]
+    pub corners_preview: bool,
     /// Options > Edit: decimal places of distances in the property bar
     /// and the status bar.
     #[serde(default = "default_precision")]
@@ -242,6 +689,10 @@ pub struct Settings {
     /// many points.
     #[serde(default = "default_text_increment")]
     pub text_increment_pt: f64,
+    /// Options > Text > Paragraph Text: the distance between the default
+    /// tab stops of a paragraph with no stops of its own, mm (#1852).
+    #[serde(default = "default_tab_spacing")]
+    pub default_tab_mm: f64,
     /// Options > Tools > Pick: unfilled objects can be picked inside (on
     /// by default).
     #[serde(default = "default_true")]
@@ -268,6 +719,41 @@ pub struct Settings {
     /// touches (off by default; Alt does it either way round).
     #[serde(default)]
     pub marquee_touching: bool,
+    /// Options > Tools > Pick, Ctrl and Shift keys: off (Traditional,
+    /// the default) Ctrl constrains and Shift works from the centre; on
+    /// (Windows standard) Shift constrains and Ctrl held when a move is
+    /// let go leaves the original, a copy taking the new place (#1436).
+    #[serde(default)]
+    pub pick_windows_keys: bool,
+    /// Options > Tools > Eraser: the curves the Eraser leaves lose the
+    /// nodes they do not need (#1436).
+    #[serde(default)]
+    pub eraser_reduce_nodes: bool,
+    /// Options > Tools > Ellipse: new pies and arcs run clockwise from
+    /// the starting to the ending angle (#1436). The tool's stored arc is
+    /// always counterclockwise; with this on its angles are the other
+    /// way round.
+    #[serde(default)]
+    pub ellipse_clockwise: bool,
+    /// Options > Tools > Spiral and the property bar: how fast a
+    /// logarithmic spiral widens, 1 (almost even) to 100 (#1436).
+    #[serde(default = "default_spiral_expansion")]
+    pub spiral_expansion: u32,
+    /// Options > Tools > Angular Dimension: the decimals, degree sign,
+    /// prefix and suffix new angular dimensions take (#1436).
+    pub angular_dimension: crate::dimensions::AngularDefaults,
+    /// How far Object > Insert > Add Dimensions puts its dimension lines
+    /// from the measured box, mm (#3530).
+    pub add_dimensions_gap: f64,
+    /// Deleting an object deletes the dimensions that measure it too
+    /// (the dimension bar's more options, #4211). Off: they stay.
+    pub delete_dimensions_with_object: bool,
+    /// Options > Tools > Connector: an object's own nodes are anchors
+    /// too, besides its side midpoints and custom anchors (#1436).
+    pub connector_geometric_anchors: bool,
+    /// Options > Tools > Connector: how far new right-angle connectors
+    /// run straight out of an object before they turn, mm (#1436).
+    pub connector_gap: f64,
     /// The one-time changes already made to preferences saved by older
     /// versions (see `Settings::upgrade`); 0 in files that predate them.
     #[serde(default)]
@@ -275,6 +761,11 @@ pub struct Settings {
     /// Options > Tools > Pick: the Pick tool's pointer is a cross hair.
     #[serde(default)]
     pub crosshair_cursor: bool,
+    /// Options > Tools > Pick: the lines of the cross hair pointer (the
+    /// Pick tool's with the option above, and the drawing tools') run to
+    /// the edges of the drawing window. Off by default (#2996).
+    #[serde(default)]
+    pub crosshair_to_edges: bool,
     /// Options > Display > Ruler calibration: pixels per inch of the
     /// screen at the system's scaling, so that zoom 100% shows real sizes
     /// (96 by default; see `screen_points_per_inch`).
@@ -284,9 +775,80 @@ pub struct Settings {
     /// out (off: it opens the context menu).
     #[serde(default = "default_true")]
     pub zoom_right_click_out: bool,
+    /// Options > Tools > Zoom/Pan: zoom 100% is the real size at the
+    /// calibrated screen resolution (on, the default); off, it is 96 per
+    /// inch whatever the calibration.
+    #[serde(default = "default_true")]
+    pub zoom_relative_1to1: bool,
+    /// Options > Tools > Zoom/Pan: a wheel zoom brings the point under
+    /// the pointer to the middle of the view and moves the pointer there
+    /// (off by default: the point stays under the pointer).
+    #[serde(default)]
+    pub wheel_zoom_centers: bool,
+    /// Options > Tools > Zoom/Pan > Ctrl+wheel zooms: while the wheel
+    /// zooms, Ctrl+wheel zooms too instead of scrolling sideways (off by
+    /// default, #3473; #3087).
+    #[serde(default)]
+    pub ctrl_wheel_zooms: bool,
+    /// Options > Tools > Zoom/Pan > Smooth zoom: a wheel notch zooms in
+    /// a short glide, shorter for faster wheel turns (on by default);
+    /// off, each notch zooms at once (#1648, #895).
+    #[serde(default = "default_true")]
+    pub smooth_zoom: bool,
+    /// Options > Zoom, Pan: going to another page shows the same part of
+    /// it, at the same zoom, as the page left (the top right corner of
+    /// page 1 gives the top right corner of page 2); off (the default),
+    /// each page comes back where it was left, else centred.
+    #[serde(default)]
+    pub same_view_on_every_page: bool,
+    /// Options > Tools > Zoom/Pan > Light zoom: for slow computers. A
+    /// wheel notch zooms at once (no glide) and the drawing is drawn
+    /// anew once, after the zoom stops, instead of at every step; the
+    /// scaled picture shows meanwhile. Turned on by Help > Benchmark
+    /// when the score is low (`benchmark.rs`).
+    #[serde(default)]
+    pub light_zoom: bool,
+    /// The last Help > Benchmark results, one with hardware acceleration
+    /// on and one with it off, to compare them.
+    #[serde(default)]
+    pub benchmarks: Vec<crate::benchmark::Measured>,
+    /// Help > Benchmark asked for a start with or without the graphics
+    /// card: open the benchmark at the next start and run this test.
+    #[serde(default)]
+    pub benchmark_resume: Option<crate::benchmark::Level>,
+    /// Options > Tools > Zoom/Pan: how much one wheel notch zooms, in
+    /// percent (15 by default); see [`Settings::wheel_zoom_factor`].
+    #[serde(default = "default_wheel_zoom_step")]
+    pub wheel_zoom_step: f32,
+    /// Options > Tools > Zoom/Pan: a right click with the Pan tool zooms
+    /// out (off, the default: it opens the context menu).
+    #[serde(default)]
+    pub pan_right_click_out: bool,
+    /// Options > Tools > Zoom/Pan > Pan inertia: a pan let go while
+    /// moving slides on and eases out (off by default, #831).
+    #[serde(default)]
+    pub pan_inertia: bool,
     /// Options > Customization > Color Palette.
     #[serde(default)]
     pub palette: PalettePrefs,
+    /// The palette bars open besides the default one, in order, each
+    /// with its own place, rows and swatch size. Preferences written
+    /// before they existed have none: one palette at the bottom.
+    #[serde(default)]
+    pub palette_bars: Vec<PaletteBarPrefs>,
+    /// The palette the default palette bar shows ([`palette_id`]); empty
+    /// for the default palette.
+    #[serde(default)]
+    pub main_palette: String,
+    /// Names the user gave palettes, by [`palette_id`] (the document
+    /// palette by [`DOCUMENT_PALETTE`]); a palette missing here keeps
+    /// its own name. Built-in palettes' files are never changed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub palette_names: std::collections::BTreeMap<String, String>,
+    /// The palettes the user made in TraceDraw (New Palette, Duplicate),
+    /// which have no file: their names and colours, in the list's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_palettes: Vec<UserPalette>,
     /// Tool settings new objects take.
     #[serde(default)]
     pub tools: ToolPrefs,
@@ -302,7 +864,7 @@ pub struct Settings {
     /// File > Preflight: the checks to run and their thresholds.
     #[serde(default)]
     pub preflight: crate::preflight::PreflightPrefs,
-    /// File > Publish to PDF: the choices used last (never the passwords).
+    /// File > Export as PDF: the choices used last (never the passwords).
     #[serde(default)]
     pub publish_pdf: crate::ui::publish_pdf::PublishPrefs,
     /// What a fill or outline chosen with nothing selected changes.
@@ -317,12 +879,59 @@ pub struct Settings {
     /// (the default dockers then show).
     #[serde(default)]
     pub dockers: Option<DockerSetup>,
+    /// The image editing mode's panels as they were left (Bitmaps > Edit
+    /// Inside); none until it is first used (its default panels show).
+    #[serde(default)]
+    pub pixel_dockers: Option<DockerSetup>,
+    /// The image editing mode's Hints panel was put with the panels left
+    /// from before it came (once; closed after, it stays closed).
+    #[serde(default)]
+    pub pixel_hints_added: bool,
+    /// The image editing mode's layers stay after Finish while the
+    /// drawing is open: Edit Inside on the picture again opens them
+    /// (#4112). Turned off, they go and their memory is freed.
+    #[serde(default = "default_true")]
+    pub pixel_keep_layers: bool,
+    /// The image editing mode's layers are saved with the picture in the
+    /// drawing's file too (#4112), off by default: the file grows.
+    #[serde(default)]
+    pub pixel_save_layers: bool,
     /// The font lists' fonts used last, newest first.
     #[serde(default)]
     pub recent_fonts: Vec<String>,
+    /// The font lists' filter choices show beside the list: left open,
+    /// they show again the next time a font list opens (#867).
+    #[serde(default)]
+    pub font_filter_open: bool,
+    /// The font lists show a family's English name, light, beside a
+    /// name in another language (#1249); the EN button beside Filter
+    /// turns it off.
+    #[serde(default = "default_true")]
+    pub font_english_names: bool,
+    /// Options > Text > Fonts: the fonts used last shown at the top of
+    /// the font lists, and how many (1 to 20).
+    #[serde(default = "default_true")]
+    pub show_recent_fonts: bool,
+    #[serde(default = "default_recent_font_count")]
+    pub recent_font_count: usize,
     /// The Properties docker's sections closed ("outline", "fill" ...).
     #[serde(default)]
     pub properties_closed: Vec<String>,
+    /// The Properties docker in its classic layout: one section at a
+    /// time, picked by the tabs at the top, the outline in short rows.
+    #[serde(default)]
+    pub properties_classic: bool,
+    /// The section the classic layout shows ("outline", "fill" ...).
+    #[serde(default)]
+    pub properties_tab: String,
+    /// The Properties docker marks a section whose values come from the
+    /// object's linked object style (#1439).
+    #[serde(default = "default_true")]
+    pub style_indicators: bool,
+    /// Transparencies saved with Save as New in the Properties docker's
+    /// transparency picker (#1439), newest last.
+    #[serde(default)]
+    pub saved_transparencies: Vec<tracedraw_core::Fill>,
     /// The Text docker's sections closed ("character", "paragraph",
     /// "frame").
     #[serde(default)]
@@ -350,6 +959,33 @@ pub struct Settings {
     pub hyphens_when_typing: bool,
     #[serde(default = "default_true")]
     pub hyphens_when_pasting: bool,
+    /// The Objects docker's thumbnail size, interface points (16 to 96).
+    #[serde(default = "default_object_thumb")]
+    pub object_thumb_size: f32,
+    /// New master layers showing on all, odd or even pages are drawn in
+    /// front of the page's own layers (#1132, #1477).
+    #[serde(default)]
+    pub master_in_front: [bool; 3],
+    /// Objects moved or pasted wholly beside the page go onto the
+    /// desktop layer, shown from every page, and objects of the desktop
+    /// moved onto the page go back to the page's layer (#3100).
+    #[serde(default)]
+    pub desktop_takes_objects_beside_page: bool,
+    /// The Objects docker lists every page, not only the current one
+    /// (#1477).
+    #[serde(default = "default_true")]
+    pub objects_all_pages: bool,
+    /// Objects panel > Edit Across Layers: a click, a marquee and Select
+    /// All reach the objects of every layer; off, those of the active
+    /// layer alone (#3276).
+    #[serde(default = "default_true")]
+    pub edit_across_layers: bool,
+    /// Page size changes apply to every page (the page bar's All pages
+    /// and the Page Size dialog's Apply to all pages). Off by default so
+    /// a new size changes only the current page, and kept between
+    /// sessions (#2696).
+    #[serde(default)]
+    pub page_size_all: bool,
     /// The font lists' sample size, in points.
     #[serde(default = "default_font_sample")]
     pub font_sample_px: f32,
@@ -367,6 +1003,14 @@ pub struct Settings {
     /// or write (see `behavior/script-filters.md`).
     #[serde(default)]
     pub script_filters: Vec<crate::scripting::ScriptFilter>,
+    /// The plugins of Tools > Plugins, on or off (#1802, see
+    /// `behavior/plugins.md`).
+    #[serde(default)]
+    pub plugins: Vec<crate::scripting::Plugin>,
+    /// Minimize, Maximize and Close at the right end of the menu bar,
+    /// for windows without the desktop's title bar (#2574).
+    #[serde(default)]
+    pub window_buttons: bool,
     /// Options > Global > Bitmap Tracing.
     #[serde(default)]
     pub tracing: crate::prefs::TracePrefs,
@@ -380,6 +1024,15 @@ pub struct Settings {
     /// lines (else only the selected ones).
     #[serde(default = "default_true")]
     pub show_text_frames: bool,
+    /// The eyedroppers go back to sampling after each object they are
+    /// applied to ("Sample again after applying" on their bars, #2380).
+    #[serde(default)]
+    pub eyedropper_sample_after_apply: bool,
+    /// The Color Eyedropper hands over to the Pick tool once a colour it
+    /// sampled went onto the selected objects ("Pick tool after applying
+    /// to the selection" on its bar, #3995).
+    #[serde(default)]
+    pub eyedropper_pick_after_apply: bool,
     /// Text fitted to a path: a drag off the path moves the text away
     /// from it in steps of `path_tick_mm` (tick snapping).
     #[serde(default)]
@@ -387,6 +1040,43 @@ pub struct Settings {
     /// The step of tick snapping, mm.
     #[serde(default = "default_path_tick")]
     pub path_tick_mm: f64,
+    /// Options > Display, Screen margins (Android, #1917): the interface
+    /// keeps clear of the camera cutout and the screen's rounded corners.
+    #[serde(default)]
+    pub screen_margins: crate::ui::screen_margins::ScreenMargins,
+    /// The looks saved in the Effects docker's Presets (#2160).
+    #[serde(default)]
+    pub style_presets: Vec<crate::style_presets::StylePreset>,
+    /// The outlines saved in the Outline Pen dialog's Presets (#4090).
+    #[serde(default)]
+    pub outline_presets: Vec<crate::outline_presets::OutlinePreset>,
+    /// The settings saved in a bitmap effect's dialog, by effect (#1129).
+    #[serde(default)]
+    pub fx_presets: Vec<crate::ui::effect_dialog::FxPreset>,
+    /// The bitmap effect dialogs show their settings alone, the effect
+    /// seen on the drawing instead of in Before and After panes (#2799).
+    #[serde(default)]
+    pub fx_settings_only: bool,
+    /// A bitmap effect's settings open in the Effects docker beside the
+    /// drawing, the effect seen on the drawing, instead of in a dialog
+    /// (#4253). Off: the dialog, as before.
+    #[serde(default)]
+    pub fx_in_panel: bool,
+    /// The Shaping docker's Weld, Intersect and the two Minus operations
+    /// make a live combine that keeps the objects (#4266).
+    #[serde(default)]
+    pub shaping_live: bool,
+    /// The programs of Object > Insert > Insert Object, each opened with
+    /// one click (#1025).
+    pub object_apps: Vec<crate::insert_object::ObjectApp>,
+    /// Insert Object > Insert What It Saves: a program opened from the
+    /// list gets a blank picture to work on, and the picture comes into
+    /// the drawing when the program saves it (#3391). Off by default.
+    #[serde(default)]
+    pub object_apps_insert_saved: bool,
+    /// Bitmaps > Picture Captions, as last used (#2180).
+    #[serde(default)]
+    pub picture_captions: crate::captions::Captions,
 }
 
 fn default_path_tick() -> f64 {
@@ -395,8 +1085,10 @@ fn default_path_tick() -> f64 {
 
 /// The dockers as they were left: the default column's dockers, in
 /// order, and the one in front (by their name keys, "docker.hints" ...);
-/// the other column's, its front and whether it was open; and the
-/// floating ones with their windows.
+/// the other column's, its front and whether it was open; the second
+/// column on each side (between the column at the window's edge and the
+/// drawing), its front and whether it was open; and the floating ones
+/// with their windows.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct DockerSetup {
@@ -405,17 +1097,53 @@ pub struct DockerSetup {
     pub left: Vec<String>,
     pub left_front: String,
     pub left_shown: bool,
+    /// The second column on the default column's side.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inner: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub inner_front: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inner_shown: bool,
+    /// The second column on the other side.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub left_inner: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub left_inner_front: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub left_inner_shown: bool,
+    /// The dockers shown under the front one of a column (#2312).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stacks: Vec<StackSetup>,
+    /// The dockers locked in front of their column (#3953).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub locked: Vec<String>,
     pub floating: Vec<FloatingSetup>,
 }
 
+/// A docker stacked under the front one of a column: the column ("right",
+/// "left", "inner", "left_inner"), the docker's name key and the upper
+/// docker's share of the height.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct StackSetup {
+    pub column: String,
+    pub tab: String,
+    pub split: f32,
+}
+
 /// A floating docker as it was left: its name key, the window's top left
-/// corner and its size (screen points).
+/// corner and its size (screen points); whether it was in a window of its
+/// own (#2884) and where that window was on the desktop.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct FloatingSetup {
     pub tab: String,
     pub pos: [f32; 2],
     pub size: [f32; 2],
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub own_window: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<[f32; 2]>,
 }
 
 /// Which bars are shown (Window > Toolbars, the bars' menu). The palette
@@ -456,10 +1184,32 @@ fn default_desktop() -> [u8; 3] {
 }
 
 /// How many one-time upgrades `Settings::upgrade` knows.
-const UPGRADES: u32 = 4;
+const UPGRADES: u32 = 10;
 
 fn default_outline_units() -> String {
     "mm".into()
+}
+
+fn default_spiral_expansion() -> u32 {
+    100
+}
+
+/// TraceDraw's Save Drawing dialog is the default everywhere: it has the
+/// type (TraceDraw or `.cdr`) and the version of either, which the
+/// system's dialog does not offer (the macOS one shows no type list
+/// either), so on a Mac the `.cdr` versions could not be chosen (#3811).
+/// The system's dialog stays in Options > Global > File Formats.
+fn default_system_save_dialog() -> bool {
+    false
+}
+
+/// Translucent menus start at 85 % opacity.
+fn default_menu_opacity() -> f32 {
+    0.85
+}
+
+fn default_preview_background() -> [u8; 3] {
+    [255, 255, 255]
 }
 
 fn default_true() -> bool {
@@ -468,6 +1218,27 @@ fn default_true() -> bool {
 
 fn default_screen_ppi() -> f32 {
     96.0
+}
+
+/// The zoom of one wheel notch, percent: 15 % (a factor of 1.15).
+pub const DEFAULT_WHEEL_ZOOM_STEP: f32 = 15.0;
+
+fn default_wheel_zoom_step() -> f32 {
+    DEFAULT_WHEEL_ZOOM_STEP
+}
+
+impl Settings {
+    /// The factor one wheel notch zooms by: 1 plus the wheel zoom step,
+    /// kept between 1 and 100 percent (the default for a value that is
+    /// not a number).
+    pub fn wheel_zoom_factor(&self) -> f32 {
+        let step = if self.wheel_zoom_step.is_finite() {
+            self.wheel_zoom_step.clamp(1.0, 100.0)
+        } else {
+            DEFAULT_WHEEL_ZOOM_STEP
+        };
+        1.0 + step / 100.0
+    }
 }
 
 /// The calibrated screen resolution, kept within 48 to 400 per inch. It
@@ -489,6 +1260,17 @@ pub fn screen_points_per_inch(s: &Settings) -> f32 {
     screen_ppi(s) / crate::ui::ui_zoom(effective_ui_size(s))
 }
 
+/// Interface points per inch at zoom 100 %: the calibrated resolution, or
+/// 96 per inch when Options > Tools > Zoom/Pan > Zoom relative to 1:1 is
+/// off.
+pub fn zoom_points_per_inch(s: &Settings) -> f32 {
+    if s.zoom_relative_1to1 {
+        screen_points_per_inch(s)
+    } else {
+        96.0 / crate::ui::ui_zoom(effective_ui_size(s))
+    }
+}
+
 /// How much larger the Touch workspace draws the interface (bars,
 /// buttons, panels and text), for fingers.
 pub const TOUCH_SCALE: f32 = 1.4;
@@ -500,7 +1282,8 @@ pub fn effective_ui_size(s: &Settings) -> f32 {
 }
 
 /// The theme in use: the high contrast one while the desktop has high
-/// contrast on (unless turned off), else the one picked.
+/// contrast on (unless turned off), else the one picked; with none picked
+/// yet, the dark one while the desktop asks for dark windows (#2748).
 pub fn effective_theme(s: &Settings) -> String {
     effective_theme_with(s, crate::system_prefs::get())
 }
@@ -508,6 +1291,16 @@ pub fn effective_theme(s: &Settings) -> String {
 pub fn effective_theme_with(s: &Settings, sys: crate::system_prefs::SystemPrefs) -> String {
     if s.follow_high_contrast && sys.high_contrast.is_some() {
         crate::theme::Theme::HighContrast.id().to_string()
+    } else {
+        chosen_theme_with(s, sys)
+    }
+}
+
+/// The theme picked in Options, or the desktop's light or dark one while
+/// none was picked (#2748).
+pub fn chosen_theme_with(s: &Settings, sys: crate::system_prefs::SystemPrefs) -> String {
+    if s.theme.is_empty() && sys.dark {
+        crate::theme::Theme::Dark.id().to_string()
     } else {
         s.theme.clone()
     }
@@ -520,7 +1313,9 @@ pub fn effective_ui_size_with(s: &Settings, sys: crate::system_prefs::SystemPref
         1.0
     };
     let base = (crate::ui::interface_size(s.ui_size) * text).min(4.0);
-    if s.workspace == "touch" {
+    // Not on a phone: 1.4 times a 360 dp screen leaves too little room
+    // for any bar (#1301, #1691).
+    if s.workspace == "touch" && !crate::ui::phone::phone() {
         (base * TOUCH_SCALE).min(4.0)
     } else {
         base
@@ -541,6 +1336,57 @@ fn default_precision() -> u32 {
 
 fn default_text_increment() -> f64 {
     1.0
+}
+
+fn default_tab_spacing() -> f64 {
+    tracedraw_core::DEFAULT_TAB_STEP
+}
+
+/// The view a drawing opens in (Options > Display, #1134).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenView {
+    /// The whole page in the window.
+    #[default]
+    FitPage,
+    /// The objects on the page, or the page when it is empty.
+    FitObjects,
+    /// The page's width across the window.
+    PageWidth,
+    /// The page's height down the window.
+    PageHeight,
+    /// Real size, the page in the middle.
+    Actual,
+    /// The zoom set in `Settings::open_zoom_percent`, the page in the
+    /// middle (#1266).
+    Percent,
+    /// The page, place and zoom it was saved with (TraceDraw files), else
+    /// the whole page.
+    AsSaved,
+}
+
+impl OpenView {
+    pub const ALL: [OpenView; 7] = [
+        OpenView::FitPage,
+        OpenView::FitObjects,
+        OpenView::PageWidth,
+        OpenView::PageHeight,
+        OpenView::Actual,
+        OpenView::Percent,
+        OpenView::AsSaved,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            OpenView::FitPage => "options.open_view_page",
+            OpenView::FitObjects => "options.open_view_objects",
+            OpenView::PageWidth => "options.open_view_width",
+            OpenView::PageHeight => "options.open_view_height",
+            OpenView::Actual => "options.open_view_actual",
+            OpenView::Percent => "options.open_view_percent",
+            OpenView::AsSaved => "options.open_view_saved",
+        }
+    }
 }
 
 /// What opens when the application starts (Options > General).
@@ -591,11 +1437,62 @@ impl NodeSize {
         }
     }
 
+    /// Length of a control handle's arrow head, screen pixels: as long
+    /// as a node is wide, so a larger node size gives larger heads too
+    /// (#1643), and as wide.
+    pub fn handle_head(self) -> f32 {
+        self.px()
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             NodeSize::Small => "options.node_small",
             NodeSize::Medium => "options.node_medium",
             NodeSize::Large => "options.node_large",
+        }
+    }
+}
+
+/// How large the Pick tool's selection handles are drawn (#1285).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HandleSize {
+    Small,
+    Medium,
+    #[default]
+    Large,
+}
+
+impl HandleSize {
+    pub const ALL: [HandleSize; 3] = [HandleSize::Small, HandleSize::Medium, HandleSize::Large];
+
+    /// Side of a handle square, interface points.
+    pub fn px(self) -> f32 {
+        match self {
+            HandleSize::Small => 6.0,
+            HandleSize::Medium => 8.0,
+            HandleSize::Large => 10.0,
+        }
+    }
+
+    /// How large the Shape tool's control handle heads are drawn, as a
+    /// share of their size for the node size: the largest (the default)
+    /// keeps them as they were, the smaller sizes draw them smaller. The
+    /// setting changed only the Pick tool's handles, so on the Nodes and
+    /// Handles page it seemed to do nothing (#3003).
+    pub fn head_scale(self) -> f32 {
+        match self {
+            HandleSize::Small => 0.6,
+            HandleSize::Medium => 0.8,
+            HandleSize::Large => 1.0,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            HandleSize::Small => "options.node_small",
+            HandleSize::Medium => "options.node_medium",
+            HandleSize::Large => "options.node_large",
         }
     }
 }
@@ -616,6 +1513,8 @@ impl NodeShape {
 #[serde(default)]
 pub struct NodePrefs {
     pub size: NodeSize,
+    /// The Pick tool's selection handles (#1285).
+    pub handles: HandleSize,
     pub cusp: NodeShape,
     pub smooth: NodeShape,
     pub symmetrical: NodeShape,
@@ -625,40 +1524,116 @@ pub struct NodePrefs {
     pub secondary_rgb: [u8; 3],
     /// Unselected nodes are filled white (Ctrl+Shift+G).
     pub unselected_filled: bool,
-    /// An arrow at the start node shows the curve's direction.
+    /// The first node of every subpath and the last node of every open
+    /// one are triangles turned along the curve, showing its direction
+    /// (#3038). On by default, so the parts of a broken curve show which
+    /// way a cutting plotter follows them (#2578).
     pub show_direction: bool,
+    /// With the Pick tool, one selected object marks every node (a
+    /// picture its four corners, a clip frame its own outline) and a
+    /// selection of several marks each object once at its first node,
+    /// pictures and clip frames too (#3258). Off by default: only where
+    /// each outline starts is marked, as before (#1145).
+    pub mark_every_node: bool,
     /// How near, in screen pixels, a press must land on a node or a
     /// control handle to take it (Shape tool, and the curve tools'
     /// nodes).
     pub pick_distance: f32,
+    /// How far, in screen pixels, a click may land from an object's
+    /// outline and still pick it (Pick tool and the other tools that
+    /// pick objects by clicking them); 0 for none beyond the outline
+    /// itself (#1679).
+    pub object_pick_distance: f32,
+    /// The Shape tool shows a corner widget inside the corners of a curve
+    /// (or of the chosen nodes), dragged to round them (#635). On by
+    /// default; it can be turned off in Options > Nodes and Handles so it
+    /// does not get in the way of node editing (#884). Rectangles keep
+    /// their own corner rounding either way.
+    pub corner_widgets: bool,
+    /// Dragging a corner widget rounds its own corner, Ctrl+click
+    /// chooses corners to round together, Shift+drag rounds every
+    /// corner. Off: a drag rounds every corner, or the chosen nodes'
+    /// corners, as before.
+    pub corner_one_at_a_time: bool,
+    /// Rounded corners follow node edits (#3265): moving nodes, or
+    /// bending a segment, beside a rounded corner rounds it again with
+    /// its radius where its sides now run, so it stays a rounded corner
+    /// with its widget. Off: the arc stays as it was drawn, as before.
+    pub corners_follow_edits: bool,
+    /// Nodes are outlined in a colour for their type, cusp, smooth or
+    /// symmetrical, besides their shape (#3000). Off by default.
+    pub color_by_type: bool,
+    pub cusp_rgb: [u8; 3],
+    pub smooth_rgb: [u8; 3],
+    pub symmetrical_rgb: [u8; 3],
 }
 
 impl Default for NodePrefs {
     fn default() -> Self {
         NodePrefs {
             size: NodeSize::Small,
+            handles: HandleSize::Large,
             cusp: NodeShape::Square,
             smooth: NodeShape::Circle,
             symmetrical: NodeShape::Diamond,
             main_rgb: [0x00, 0x8C, 0xFF],
             secondary_rgb: [0xFF, 0x00, 0x00],
             unselected_filled: true,
-            show_direction: false,
+            show_direction: true,
+            mark_every_node: false,
             pick_distance: 6.0,
+            object_pick_distance: 3.0,
+            corner_widgets: true,
+            corner_one_at_a_time: true,
+            corners_follow_edits: true,
+            color_by_type: false,
+            cusp_rgb: [0xE0, 0x60, 0x00],
+            smooth_rgb: [0x10, 0x9A, 0x30],
+            symmetrical_rgb: [0x9B, 0x30, 0xD0],
         }
     }
 }
 
 impl NodePrefs {
     /// The pick distance in screen pixels, kept sensible and never less
-    /// than the node marker reaches.
+    /// than the node marker reaches, out to the corners of its square,
+    /// and a pixel more: larger nodes take a press on all of their marker
+    /// (#1935).
     pub fn pick_px(&self) -> f64 {
         let set = if self.pick_distance.is_finite() {
             self.pick_distance.clamp(2.0, 20.0)
         } else {
             6.0
         };
-        f64::from(set.max(self.size.px() / 2.0 + 1.0))
+        let corner = f64::from(self.size.px()) / 2.0 * std::f64::consts::SQRT_2;
+        f64::from(set).max(corner + 1.0)
+    }
+
+    /// How near a press must land on a control handle's end to take it:
+    /// the pick distance, and never less than the far corners of its
+    /// arrow head lie from its tip (the head is as long as a node is
+    /// wide and half as wide on each side, so they lie at the root of
+    /// 5/4 of its length) and a pixel more, so the whole head takes a
+    /// press and the reach grows with the node size (#1643, #1935).
+    pub fn handle_pick_px(&self) -> f64 {
+        let head = f64::from(self.control_head());
+        self.pick_px().max(head * 1.25f64.sqrt() + 1.0)
+    }
+
+    /// Length of a control handle's arrow head, screen pixels: the node
+    /// size's, scaled by the handle size (#1643, #3003).
+    pub fn control_head(&self) -> f32 {
+        self.size.handle_head() * self.handles.head_scale()
+    }
+
+    /// The object click distance in screen pixels, kept sensible
+    /// (#1679).
+    pub fn object_pick_px(&self) -> f64 {
+        if self.object_pick_distance.is_finite() {
+            f64::from(self.object_pick_distance.clamp(0.0, 20.0))
+        } else {
+            3.0
+        }
     }
 }
 
@@ -692,7 +1667,7 @@ impl Default for ClipFramePrefs {
 
 /// The colour palettes docked under the drawing window (Options >
 /// Customization > Color Palette).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PalettePrefs {
     /// Colours applied to objects join the document palette.
@@ -706,6 +1681,228 @@ pub struct PalettePrefs {
     pub show_document: bool,
     /// The default palette itself (Window > Toolbars, the bars' menu).
     pub show_palette: bool,
+    /// Rows of swatches the default palette shows (columns docked on a
+    /// side), 1 to [`MAX_ROWS`] (#610); [`ROWS_FIT`] for as many as
+    /// show every colour (at most [`MAX_ROWS`]).
+    pub rows: u8,
+    /// The side of a swatch (whole points), [`SWATCH_MIN`] to
+    /// [`SWATCH_MAX`]: Ctrl+wheel over a palette changes it by
+    /// [`SWATCH_STEP`] a notch. Preferences written before it existed
+    /// keep the 20 px swatches.
+    pub swatch_size: u8,
+    /// The side of a swatch of the document palette row, as
+    /// [`Self::swatch_size`] and set the same ways over that row, so
+    /// Ctrl+wheel over one palette leaves the other's size alone
+    /// (#2900). 0 (preferences written before it existed): the default
+    /// palette's, until either is sized.
+    pub document_swatch_size: u8,
+    /// The room asked for the floating palette's swatches (points, the
+    /// title left out): its rows or columns flow from it (see
+    /// `ui::palette::floating_flow`).
+    pub float_size: [f32; 2],
+    /// The colours' names beside their swatches in the palette opened
+    /// out by a strip's double arrow, a scrolling list (#3512). Off by
+    /// default: the swatches in a grid.
+    pub show_names: bool,
+}
+
+/// The most rows (or columns) a docked palette bar shows.
+pub const MAX_ROWS: u8 = 8;
+/// [`PalettePrefs::rows`] for "Fit": the rows every colour needs.
+pub const ROWS_FIT: u8 = 0;
+/// The swatch sizes the palette menu and the Palette Manager offer, with
+/// their names (points, all even so Ctrl+wheel reaches each from the
+/// first size): Medium is the first size.
+pub const SWATCH_STEPS: [(u8, &str); 5] = [
+    (10, "palette.size_xs"),
+    (14, "palette.size_s"),
+    (20, "palette.size_m"),
+    (28, "palette.size_l"),
+    (40, "palette.size_xl"),
+];
+/// The room a floating palette asks for at first.
+pub const FLOAT_SIZE: [f32; 2] = [460.0, 25.0];
+
+/// The smallest and the largest swatch, and the step a wheel notch
+/// changes the side by (points).
+pub const SWATCH_MIN: u8 = 8;
+pub const SWATCH_MAX: u8 = 48;
+pub const SWATCH_STEP: i32 = 2;
+/// The side the swatches have at first.
+pub const SWATCH_DEFAULT: u8 = 20;
+
+impl PalettePrefs {
+    /// [`Self::swatch_size`] brought into its range, as points.
+    pub fn swatch_size(&self) -> f32 {
+        f32::from(self.swatch_size.clamp(SWATCH_MIN, SWATCH_MAX))
+    }
+
+    /// The document palette row's swatch side setting: its own, or the
+    /// default palette's while it has none.
+    pub fn document_swatch(&self) -> u8 {
+        match self.document_swatch_size {
+            0 => self.swatch_size,
+            s => s,
+        }
+    }
+}
+
+/// The swatch side `steps` notches of Ctrl+wheel on from `size`: up
+/// larger, down smaller, [`SWATCH_STEP`] a notch, held between
+/// [`SWATCH_MIN`] and [`SWATCH_MAX`].
+/// A rows setting as rows: None for [`ROWS_FIT`], else 1 to
+/// [`MAX_ROWS`].
+pub fn rows_of(rows: u8) -> Option<usize> {
+    (rows != ROWS_FIT).then(|| rows.min(MAX_ROWS) as usize)
+}
+
+/// The named size of [`SWATCH_STEPS`] a swatch side is, if any.
+pub fn swatch_step_of(size: u8) -> Option<usize> {
+    SWATCH_STEPS.iter().position(|(s, _)| *s == size)
+}
+
+/// The palette's place in the Palette Manager's list stated so it holds
+/// across sessions: its file, else its built-in key, else its name.
+pub fn palette_id(p: &crate::palette::Palette) -> String {
+    match (&p.path, p.key) {
+        (Some(path), _) => path.display().to_string(),
+        (None, key) if !key.is_empty() => key.to_string(),
+        _ => p.name.clone(),
+    }
+}
+
+/// A palette made in TraceDraw (no file behind it), kept in the
+/// preferences: its name (its [`palette_id`]) and its colours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct UserPalette {
+    pub name: String,
+    pub colors: Vec<(String, tracedraw_core::Color)>,
+}
+
+/// [`PaletteBarPrefs::palette`] of a bar showing the document palette.
+pub const DOCUMENT_PALETTE: &str = "document";
+
+/// Where a docked palette bar lies among the other bars of its side of
+/// the window, from the edge inwards (live test of 0.41: a palette bar
+/// docked only at the window's edges). Along the left or the right: at
+/// the very edge, after the default palette's column there, after the
+/// toolbox, after the docker columns, or beside the drawing. Along the
+/// top or the bottom: under the toolbars (over the status bar), after
+/// the default palette's row there, after the toolbox, after the
+/// document palette row, or beside the drawing. Bars of one place lie
+/// side by side in their order (`palette_bars::docked`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BarSlot {
+    Outer,
+    AfterPalette,
+    AfterToolbox,
+    Inner,
+    Drawing,
+}
+
+impl BarSlot {
+    /// Where a bar docked at `dock` lies when no place was chosen (as
+    /// before places could be): outside the toolbox at the left and the
+    /// right, beside the drawing along the top and the bottom.
+    pub fn default_for(dock: crate::ui::bars::Dock) -> BarSlot {
+        if dock.horizontal() {
+            BarSlot::Drawing
+        } else {
+            BarSlot::AfterPalette
+        }
+    }
+}
+
+/// A palette bar besides the default one: which palette it shows, where
+/// it is, and its own rows and swatch size.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PaletteBarPrefs {
+    /// [`palette_id`] of its palette, or [`DOCUMENT_PALETTE`].
+    pub palette: String,
+    pub dock: crate::ui::bars::Dock,
+    /// Its window's top-left corner while floating (screen points).
+    pub pos: [f32; 2],
+    /// As [`PalettePrefs::float_size`].
+    pub float_size: [f32; 2],
+    /// As [`PalettePrefs::rows`].
+    pub rows: u8,
+    /// As [`PalettePrefs::swatch_size`].
+    pub swatch_size: u8,
+    /// Docked at the top among the toolbars: the row of toolbars it lies
+    /// over (an index into `BarLayout::rows_at(Dock::Top)`; past the last
+    /// one, under every toolbar). None: beside the drawing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolbar_row: Option<u32>,
+    /// Docked at a side: its place among that side's bars (None: the
+    /// side's usual place, [`BarSlot::default_for`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<BarSlot>,
+}
+
+impl Default for PaletteBarPrefs {
+    fn default() -> Self {
+        PaletteBarPrefs {
+            palette: String::new(),
+            dock: crate::ui::bars::Dock::Bottom,
+            pos: [320.0, 420.0],
+            float_size: FLOAT_SIZE,
+            rows: 1,
+            swatch_size: SWATCH_DEFAULT,
+            toolbar_row: None,
+            slot: None,
+        }
+    }
+}
+
+impl PaletteBarPrefs {
+    /// Out-of-range values of a hand-edited file brought back.
+    pub fn sanitize(&mut self) {
+        let d = PaletteBarPrefs::default();
+        if !self.pos.iter().all(|v| v.is_finite() && v.abs() <= 1.0e5) {
+            self.pos = d.pos;
+        }
+        if !self
+            .float_size
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0 && *v <= 1.0e5)
+        {
+            self.float_size = d.float_size;
+        }
+        self.rows = self.rows.min(MAX_ROWS);
+        self.swatch_size = self.swatch_size.clamp(SWATCH_MIN, SWATCH_MAX);
+        // Among the toolbars only at the top; past every row is under
+        // them all.
+        if self.dock != crate::ui::bars::Dock::Top {
+            self.toolbar_row = None;
+        }
+        self.toolbar_row = self.toolbar_row.map(|r| r.min(MAX_TOOLBAR_ROW));
+        // A place among the bars of a side only while docked at one.
+        if self.dock == crate::ui::bars::Dock::Floating {
+            self.slot = None;
+        }
+    }
+
+    /// Its place among the bars of its side.
+    pub fn slot_or_default(&self) -> BarSlot {
+        self.slot.unwrap_or_else(|| BarSlot::default_for(self.dock))
+    }
+
+    /// Whether the bar lies among the toolbars along the top.
+    pub fn among_toolbars(&self) -> bool {
+        self.dock == crate::ui::bars::Dock::Top && self.toolbar_row.is_some()
+    }
+}
+
+/// The furthest row index a palette bar among the toolbars keeps: more
+/// than the toolbars can make, so it means under every one of them.
+pub const MAX_TOOLBAR_ROW: u32 = 64;
+
+pub fn swatch_resized(size: u8, steps: i32) -> u8 {
+    let to = i32::from(size.clamp(SWATCH_MIN, SWATCH_MAX))
+        .saturating_add(steps.saturating_mul(SWATCH_STEP));
+    to.clamp(i32::from(SWATCH_MIN), i32::from(SWATCH_MAX)) as u8
 }
 
 impl Default for PalettePrefs {
@@ -716,6 +1913,11 @@ impl Default for PalettePrefs {
             show_no_color: true,
             show_document: true,
             show_palette: true,
+            rows: 1,
+            swatch_size: SWATCH_DEFAULT,
+            document_swatch_size: 0,
+            float_size: FLOAT_SIZE,
+            show_names: false,
         }
     }
 }
@@ -729,6 +1931,12 @@ pub struct TimeTrackerPrefs {
     pub show_bar: bool,
     /// The clock stops counting this many minutes after the last input.
     pub idle_minutes: u32,
+    /// The toolbar in its mini form: the stopwatch, the task's time, the
+    /// record button and its light only, to sit beside other bars (#3261).
+    pub mini: bool,
+    /// The clock starts on its own for every drawing opened or begun
+    /// (D#4282); pausing it holds for that drawing.
+    pub auto_start: bool,
 }
 
 impl Default for TimeTrackerPrefs {
@@ -736,6 +1944,8 @@ impl Default for TimeTrackerPrefs {
         TimeTrackerPrefs {
             show_bar: false,
             idle_minutes: 5,
+            mini: false,
+            auto_start: false,
         }
     }
 }
@@ -774,6 +1984,10 @@ impl Default for BackupPrefs {
     }
 }
 
+fn default_object_thumb() -> f32 {
+    crate::object_thumbs::DEFAULT_SIZE
+}
+
 fn default_font_sample() -> f32 {
     crate::ui::font_list::DEFAULT_SAMPLE
 }
@@ -796,15 +2010,38 @@ pub struct DocumentDefaults {
     /// The fill and outline new objects get.
     #[serde(default)]
     pub objects: tracedraw_core::ObjectDefaults,
+    /// The space between pages in the Multipage View, mm (`None`: the
+    /// default 30 mm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_spacing: Option<f64>,
+    /// The guidelines of the master page, which every page shows (#3522).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub master_guidelines: Vec<tracedraw_core::document::Guide>,
+    /// The guidelines of the page saved from, which a new drawing's
+    /// first page gets (#3522).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_guidelines: Vec<tracedraw_core::document::Guide>,
 }
 
 impl DocumentDefaults {
+    /// The defaults of `doc`, with the guidelines of its first page.
     pub fn of(doc: &tracedraw_core::Document) -> Self {
+        Self::of_page(doc, doc.pages.first().map(|p| p.id))
+    }
+
+    /// The defaults of `doc`, with the guidelines of `page`.
+    pub fn of_page(doc: &tracedraw_core::Document, page: Option<tracedraw_core::PageId>) -> Self {
         DocumentDefaults {
             grid: doc.metadata.grid,
             rulers: doc.metadata.rulers.clone(),
             guides: doc.metadata.guides,
             objects: doc.defaults.clone(),
+            page_spacing: doc.metadata.page_spacing,
+            master_guidelines: doc.master_guides.clone(),
+            page_guidelines: page
+                .and_then(|p| doc.page(p).ok())
+                .map(|p| p.guides.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -812,34 +2049,34 @@ impl DocumentDefaults {
         doc.metadata.grid = self.grid;
         doc.metadata.rulers = self.rulers.clone();
         doc.metadata.guides = self.guides;
+        doc.metadata.page_spacing = self.page_spacing;
+        // The guidelines saved as the default (#3522).
+        if doc.master_guides.is_empty() {
+            doc.master_guides = self.master_guidelines.clone();
+        }
+        if let Some(first) = doc.pages.first_mut() {
+            if first.guides.is_empty() {
+                first.guides = self.page_guidelines.clone();
+            }
+        }
         doc.defaults = defaults_for(&self.objects, doc.metadata.primary_color_mode);
     }
 }
 
-/// The stored object defaults as a drawing in `mode` takes them: a black
-/// text fill, RGB or CMYK, is the mode's black (new text is black in the
-/// drawing's own colour mode), whatever else the stored defaults hold
-/// (an earlier version's values, a paragraph style, an outline of one's
-/// own); any other colour stays as chosen.
+/// The stored object defaults as a drawing in `mode` takes them: a fill
+/// or outline that is still the untouched default black is the mode's
+/// black (new objects are black in the drawing's own colour mode),
+/// whatever else the stored defaults hold (a paragraph style, an outline
+/// width of one's own); a colour the user picked, a black included,
+/// stays exactly as saved. Settings saved before the mark existed: a
+/// black outline of graphics or black text fill, where the built-in
+/// defaults put one, counts as untouched
+/// ([`tracedraw_core::DefaultProperties::follows`]).
 fn defaults_for(
     stored: &tracedraw_core::ObjectDefaults,
     mode: tracedraw_core::document::PrimaryColorMode,
 ) -> tracedraw_core::ObjectDefaults {
-    use tracedraw_core::document::PrimaryColorMode;
-    use tracedraw_core::Fill;
-    let blacks = [
-        PrimaryColorMode::Cmyk.black(),
-        PrimaryColorMode::Rgb.black(),
-    ];
-    let mut out = stored.clone();
-    for props in [&mut out.artistic_text, &mut out.paragraph_text] {
-        if let Fill::Solid(c) = &mut props.fill {
-            if blacks.contains(c) {
-                *c = mode.black();
-            }
-        }
-    }
-    out
+    stored.in_mode(mode)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -896,6 +2133,26 @@ impl Default for SnapPrefs {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolPrefs {
+    /// The Common Shapes tool's shape, by the key of its name, and the
+    /// shape of My shapes picked instead: the choice went back to the
+    /// arrow at every start, as did the next ones.
+    pub common_shape: String,
+    pub my_shape: Option<u64>,
+    /// The Attributes eyedropper's groups and the colour eyedropper's
+    /// sample box (1, 2 or 5 pixels).
+    pub eyedropper_groups: crate::eyedropper::AttrGroups,
+    pub eyedropper_sample: u32,
+    /// The Free Transform tool's mode.
+    pub free_transform_mode: crate::app::FreeTransformMode,
+    /// The Shape tool's freehand marquee, and its Shift adding to the
+    /// nodes chosen.
+    pub node_lasso: bool,
+    pub node_lasso_keeps: bool,
+    /// The Blend tool's rotation and object and colour acceleration
+    /// (-1 to 1) for new blends; its steps were kept already.
+    pub blend_rotation: f64,
+    pub blend_accel_objects: f64,
+    pub blend_accel_colors: f64,
     pub polygon_points: u32,
     pub star_sharpness: f64,
     pub star_complex: bool,
@@ -910,11 +2167,19 @@ pub struct ToolPrefs {
     pub table_cols: u32,
     pub graph_rows: u32,
     pub graph_cols: u32,
+    /// Graph Paper as a radial grid, its rings and spokes.
+    pub graph_radial: bool,
+    pub graph_rings: u32,
+    pub graph_spokes: u32,
     pub blend_steps: u32,
     /// The Contour tool's and panel's values.
     pub contour: crate::contour_tool::ContourSettings,
     pub eraser_width: f64,
     pub eraser_square: bool,
+    /// On pictures (#3043): the share of the nib erased fully, and how
+    /// much it erases at most.
+    pub eraser_hardness: f64,
+    pub eraser_strength: f64,
     pub text_font: String,
     pub text_size_pt: f64,
     pub text_hyphenation: bool,
@@ -933,6 +2198,10 @@ pub struct ToolPrefs {
     pub smart_outline_mode: u8,
     pub smart_outline_width: f64,
     pub smart_outline_color: tracedraw_core::Color,
+    /// Smart Fill stops at the outlines' edges, their width (#3321).
+    pub smart_outline_edges: bool,
+    /// Smart Fill paints live fills of a group.
+    pub smart_fill_live: bool,
     /// The shaping brushes: nib radius (mm), Roughen's spike size (mm) and
     /// the rest of their bars.
     pub brush_radius: f64,
@@ -953,11 +2222,87 @@ pub struct ToolPrefs {
     pub sketch: crate::recognize::SketchSettings,
     /// The Knife's mode, gap and pieces.
     pub knife: crate::knife::KnifeSettings,
+    /// Segment Delete's drag is a freehand stroke, not a box (#1150).
+    pub segment_freehand: bool,
+    /// The Brush Strokes tool's mode and settings: they went back to
+    /// the first start's at every start, as did the next three.
+    pub media: MediaPrefs,
+    /// The Speech Balloon tool's style, tail width and bend.
+    pub balloon: BalloonPrefs,
+    /// The Action Lines tool's settings.
+    pub action_lines: crate::action_lines::ActionLines,
+    /// The Shape Generator panel's settings (#3412).
+    pub shape_gen: crate::shape_gen::ShapeGenSettings,
+    /// The Painterly Brush tool's brush and size.
+    pub painterly: crate::painterly_tool::PainterlySettings,
+}
+
+/// The Brush Strokes tool's bar, kept between sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MediaPrefs {
+    pub mode: crate::media::MediaMode,
+    pub preset: usize,
+    /// mm.
+    pub width: f64,
+    /// Calligraphic nib angle, degrees.
+    pub angle: f64,
+    /// Sprayer spacing, mm.
+    pub spacing: f64,
+    /// Expression: how much the width follows the pressure, 0 to 1.
+    pub pressure: f64,
+    /// Freehand smoothing of the stroke, 0 to 100.
+    pub smoothing: f64,
+}
+
+impl Default for MediaPrefs {
+    fn default() -> Self {
+        MediaPrefs {
+            mode: crate::media::MediaMode::Calligraphic,
+            preset: 0,
+            width: 3.0,
+            angle: 45.0,
+            spacing: 8.0,
+            pressure: 0.5,
+            smoothing: 25.0,
+        }
+    }
+}
+
+/// The Speech Balloon tool's bar, kept between sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BalloonPrefs {
+    pub style: crate::balloons::BalloonStyle,
+    /// Tail width, percent of the body's smaller side.
+    pub width: f64,
+    /// Tail bend, -100 to 100.
+    pub bend: f64,
+}
+
+impl Default for BalloonPrefs {
+    fn default() -> Self {
+        BalloonPrefs {
+            style: Default::default(),
+            width: 30.0,
+            bend: 0.0,
+        }
+    }
 }
 
 impl Default for ToolPrefs {
     fn default() -> Self {
         ToolPrefs {
+            common_shape: crate::tools2::CommonShape::RightArrow.key().into(),
+            my_shape: None,
+            eyedropper_groups: Default::default(),
+            eyedropper_sample: 1,
+            free_transform_mode: crate::app::FreeTransformMode::Rotation,
+            node_lasso: false,
+            node_lasso_keeps: false,
+            blend_rotation: 0.0,
+            blend_accel_objects: 0.0,
+            blend_accel_colors: 0.0,
             polygon_points: 5,
             star_sharpness: 0.5,
             star_complex: false,
@@ -972,10 +2317,15 @@ impl Default for ToolPrefs {
             table_cols: 4,
             graph_rows: 4,
             graph_cols: 3,
-            blend_steps: 5,
+            graph_radial: false,
+            graph_rings: 5,
+            graph_spokes: 8,
+            blend_steps: 20,
             contour: Default::default(),
             eraser_width: 6.35,
             eraser_square: false,
+            eraser_hardness: 0.5,
+            eraser_strength: 1.0,
             text_font: "Arial".into(),
             text_size_pt: 24.0,
             text_hyphenation: false,
@@ -989,6 +2339,8 @@ impl Default for ToolPrefs {
             smart_outline_mode: 0,
             smart_outline_width: 0.2,
             smart_outline_color: tracedraw_core::Color::BLACK,
+            smart_outline_edges: false,
+            smart_fill_live: false,
             brush_radius: 10.0,
             roughen_amount: 2.0,
             brush: Default::default(),
@@ -1000,6 +2352,12 @@ impl Default for ToolPrefs {
             recognize: Default::default(),
             sketch: Default::default(),
             knife: Default::default(),
+            segment_freehand: false,
+            media: Default::default(),
+            balloon: Default::default(),
+            action_lines: Default::default(),
+            shape_gen: Default::default(),
+            painterly: Default::default(),
         }
     }
 }
@@ -1012,8 +2370,12 @@ pub struct ViewPrefs {
     pub grid: bool,
     pub guides: bool,
     pub page_border: bool,
+    /// The page's shadow, apart from its border (#1906).
+    pub page_shadow: bool,
     pub bleed: bool,
     pub printable_area: bool,
+    /// View > Mask Outside Page (#615).
+    pub mask_outside_page: bool,
     pub pixel_grid: bool,
     pub baseline_grid: bool,
     pub non_printing: bool,
@@ -1024,6 +2386,9 @@ pub struct ViewPrefs {
     pub mode: String,
     /// The grid page shows lines per unit instead of their spacing.
     pub grid_frequency: bool,
+    /// View > Multipage View: kept on, the drawings opened next show
+    /// every page too, instead of only the first (#3724).
+    pub multipage: bool,
 }
 
 impl Default for ViewPrefs {
@@ -1032,8 +2397,10 @@ impl Default for ViewPrefs {
             grid: false,
             guides: true,
             page_border: true,
+            page_shadow: true,
             bleed: false,
             printable_area: false,
+            mask_outside_page: false,
             pixel_grid: true,
             baseline_grid: false,
             non_printing: false,
@@ -1042,6 +2409,7 @@ impl Default for ViewPrefs {
             rasterize_complex_effects: true,
             mode: "enhanced".into(),
             grid_frequency: false,
+            multipage: false,
         }
     }
 }
@@ -1059,6 +2427,8 @@ pub struct PanelPrefs {
     pub align_to: String,
     pub align_use_outline: bool,
     pub distribute_to: String,
+    /// Distribute with a set spacing: the distance, mm (#2005).
+    pub distribute_gap: f64,
     /// The Shaping docker's operation (`Shaping::id`) and what Weld,
     /// Trim and Intersect leave: [source objects, target] each.
     pub shaping_op: String,
@@ -1073,6 +2443,7 @@ impl Default for PanelPrefs {
             align_to: "active".into(),
             align_use_outline: false,
             distribute_to: "selection".into(),
+            distribute_gap: 1.0,
             shaping_op: "weld".into(),
             shaping_leave: [[false, false], [true, false], [true, true]],
         }
@@ -1204,9 +2575,111 @@ impl Default for FitPathPrefs {
     }
 }
 
+/// Options > Text > Spelling: what the spell checker skips, whether its
+/// replacements go to the Autocorrect table, and which dictionaries it
+/// uses.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpellingPrefs {
+    /// Skip words with digits ("B2B").
+    pub ignore_digits: bool,
+    /// Skip words in capitals ("NASA").
+    pub ignore_capitals: bool,
+    /// A word the spell checker replaces is added to the Autocorrect
+    /// replacements, so typing it wrong again corrects it.
+    pub add_to_autocorrect: bool,
+    /// A folder of Hunspell dictionaries besides TraceDraw's own.
+    pub dictionary_folder: Option<PathBuf>,
+    /// The dictionaries switched off, by name (`pt_BR`).
+    pub disabled_dictionaries: Vec<String>,
+    /// The dictionaries downloaded (Options > Text > Spelling), by their
+    /// code in the collection (`pt`, `en-GB`): a browser fetches them
+    /// again at each visit, as it has no folder to keep them in (#1405).
+    pub downloaded_dictionaries: Vec<String>,
+    /// Options > Text > Paragraph Text: the hyphenation pattern file used
+    /// (`hyph_pt_BR`, found where the dictionaries are), empty for the
+    /// built-in patterns.
+    pub hyphenation_patterns: String,
+}
+
+impl SpellingPrefs {
+    /// The dictionaries these options name, for the spell checker.
+    pub fn config(&self) -> crate::spell::SpellConfig {
+        crate::spell::SpellConfig {
+            folder: self.dictionary_folder.clone(),
+            disabled: self.disabled_dictionaries.clone(),
+        }
+    }
+}
+
+/// The fonts used last that the font lists show, by default.
+pub fn default_recent_font_count() -> usize {
+    5
+}
+
+/// How the page's shadow and border look on the drawing window (#3078):
+/// only on screen, never printed or exported. A colour left unset follows
+/// the theme.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PageLook {
+    /// The shadow's colour with its opacity (RGBA); the theme's when unset.
+    pub shadow_color: Option<[u8; 4]>,
+    /// How far the shadow lies right and down, screen pixels.
+    pub shadow_offset: [f32; 2],
+    /// How soft the shadow's edge is, screen pixels (0 = a hard edge).
+    pub shadow_softness: f32,
+    /// The border's colour with its opacity (RGBA); the theme's when unset.
+    pub border_color: Option<[u8; 4]>,
+    /// The border's width, screen pixels.
+    pub border_width: f32,
+}
+
+impl Default for PageLook {
+    fn default() -> Self {
+        PageLook {
+            shadow_color: None,
+            shadow_offset: [6.0, 4.0],
+            shadow_softness: 0.0,
+            border_color: None,
+            border_width: 1.0,
+        }
+    }
+}
+
+impl PageLook {
+    pub const MAX_OFFSET: f32 = 40.0;
+    pub const MAX_SOFTNESS: f32 = 40.0;
+    pub const MAX_BORDER: f32 = 8.0;
+
+    pub fn is_default(&self) -> bool {
+        *self == PageLook::default()
+    }
+
+    /// Every value usable: finite and within its range.
+    pub fn sanitized(mut self) -> PageLook {
+        let fix = |v: f32, lo: f32, hi: f32, or: f32| {
+            if v.is_finite() {
+                v.clamp(lo, hi)
+            } else {
+                or
+            }
+        };
+        let d = PageLook::default();
+        for (v, o) in self.shadow_offset.iter_mut().zip(d.shadow_offset) {
+            *v = fix(*v, -Self::MAX_OFFSET, Self::MAX_OFFSET, o);
+        }
+        self.shadow_softness = fix(self.shadow_softness, 0.0, Self::MAX_SOFTNESS, 0.0);
+        self.border_width = fix(self.border_width, 0.5, Self::MAX_BORDER, 1.0);
+        self
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            macros_keep_going: true,
+            similar_tolerance: 10,
             language: String::new(),
             recent_files: Vec::new(),
             asset_files: Vec::new(),
@@ -1214,37 +2687,72 @@ impl Default for Settings {
             fit_path: FitPathPrefs::default(),
             workspace: "default".into(),
             show_welcome_on_start: true,
+            mark_new_features: false,
+            last_run_version: String::new(),
+            welcome_tab_closed: false,
+            crop_picture_pixels: true,
             table: Default::default(),
             units: "mm".into(),
             nudge_mm: 2.54,
             super_nudge_mm: default_super_nudge(),
             micro_nudge_mm: default_micro_nudge(),
-            duplicate_offset_mm: [6.35, 6.35],
+            // In place: the next Duplicate repeats what is done to the
+            // copy (#1494).
+            duplicate_offset_mm: [0.0, 0.0],
             default_dpi: 300.0,
             snap: SnapPrefs::default(),
             shortcuts: Vec::new(),
+            node_shortcuts: Vec::new(),
+            command_icons: Vec::new(),
+            bitmap_editor: String::new(),
+            spreadsheet_editor: String::new(),
             last_dir: None,
+            pattern_folder: None,
+            last_export_dir: None,
+            folder_bookmarks: Vec::new(),
             color: ColorPrefs::default(),
             show_outline_flyout: false,
             wheel_zooms: true,
+            print_preview_rulers: true,
+            print_preview_strip: true,
+            print_preview_options: true,
+            open_view: OpenView::default(),
+            open_zoom_percent: default_open_zoom_percent(),
             toolbox: Vec::new(),
             custom_arrowheads: Vec::new(),
             custom_dashes: Vec::new(),
+            page_sizes: Vec::new(),
             outline_units: default_outline_units(),
+            text_units: default_outline_units(),
             document_defaults: DocumentDefaults::default(),
             startup: Startup::default(),
             undo_levels: default_undo_levels(),
             show_tooltips: true,
             font_manager: Default::default(),
+            tracecut: Default::default(),
             hide_bbox_curve_tools: false,
             node_tracking: false,
+            live_transform_preview: false,
+            transform_outline_over_objects: true,
+            touch_keys: true,
+            touch_selection_bar: true,
+            selection_bar_mouse: false,
             preview_page_border: true,
+            preview_background: default_preview_background(),
+            preview_fit_page: false,
+            preview_background_custom: false,
+            page_margins_linked: false,
+            page_look: PageLook::default(),
             constrain_angle: default_constrain_angle(),
+            symmetry_show_lines: true,
+            symmetry_full_preview: false,
+            corners_preview: true,
             precision: default_precision(),
             nodes: NodePrefs::default(),
             clip_frame: ClipFramePrefs::default(),
             backup: BackupPrefs::default(),
             text_increment_pt: default_text_increment(),
+            default_tab_mm: default_tab_spacing(),
             treat_all_filled: true,
             focus_visibility: default_focus_visibility(),
             focus_double_click: true,
@@ -1252,32 +2760,74 @@ impl Default for Settings {
             follow_text_size: true,
             follow_high_contrast: true,
             marquee_touching: false,
+            pick_windows_keys: false,
+            eraser_reduce_nodes: false,
+            ellipse_clockwise: false,
+            spiral_expansion: 100,
+            angular_dimension: Default::default(),
+            add_dimensions_gap: crate::dimensions::ADD_DIMENSIONS_GAP,
+            delete_dimensions_with_object: false,
+            connector_geometric_anchors: false,
+            connector_gap: 0.0,
             upgrades: UPGRADES,
             crosshair_cursor: false,
+            crosshair_to_edges: false,
             screen_ppi: default_screen_ppi(),
             zoom_right_click_out: true,
+            zoom_relative_1to1: true,
+            wheel_zoom_centers: false,
+            ctrl_wheel_zooms: false,
+            smooth_zoom: true,
+            same_view_on_every_page: false,
+            light_zoom: false,
+            benchmarks: Vec::new(),
+            benchmark_resume: None,
+            wheel_zoom_step: default_wheel_zoom_step(),
+            pan_right_click_out: false,
+            pan_inertia: false,
             palette: PalettePrefs::default(),
+            palette_bars: Vec::new(),
+            main_palette: String::new(),
+            palette_names: Default::default(),
+            user_palettes: Vec::new(),
             tools: ToolPrefs::default(),
             view: ViewPrefs::default(),
             panels: PanelPrefs::default(),
             autocorrect: crate::autocorrect::AutocorrectPrefs::default(),
+            spelling: SpellingPrefs::default(),
             thesaurus_file: None,
             show_new_document_dialog: true,
+            show_scrollbars: true,
             new_document: crate::new_document::NewDocSettings::default(),
             desktop_rgb: default_desktop(),
+            desktop_custom: false,
             status_info: crate::ui::status::StatusInfo::default(),
             toolbox_hidden: Vec::new(),
-            button_size: ButtonSize::Medium,
+            button_size: ButtonSize::Small,
             fit_page_margin: 0.0,
+            fit_page_preview: true,
             toolbox_button_size: None,
             toolbox_captions: Captions::ImageOnly,
             ui_size: 0.0,
             show_splash: true,
+            splash_seconds: 0.0,
+            hardware_acceleration: true,
+            gpu_adapter: String::new(),
+            gpu_effects: false,
+            working_renderer: String::new(),
+            gl_drawn: false,
+            system_title_bar: true,
+            system_save_dialog: default_system_save_dialog(),
             center_dialogs: true,
             ui_shadows: true,
+            translucent_menus: false,
+            menu_opacity: default_menu_opacity(),
             colored_icons: false,
+            docker_tabs_icons_only: false,
             theme: String::new(),
             bars: crate::ui::bars::BarLayout::default(),
+            bar_items: Default::default(),
+            context_menus: ContextMenuPreferences::default(),
             window_maximized: true,
             window_size: [0.0, 0.0],
             time_tracker: TimeTrackerPrefs::default(),
@@ -1286,8 +2836,20 @@ impl Default for Settings {
             defaults: crate::defaults::DefaultsPrefs::default(),
             shown_bars: None,
             dockers: None,
+            pixel_dockers: None,
+            pixel_hints_added: false,
+            pixel_keep_layers: true,
+            pixel_save_layers: false,
             recent_fonts: Vec::new(),
+            font_filter_open: false,
+            font_english_names: true,
+            show_recent_fonts: true,
+            recent_font_count: default_recent_font_count(),
             properties_closed: Vec::new(),
+            properties_classic: false,
+            properties_tab: String::new(),
+            style_indicators: true,
+            saved_transparencies: Vec::new(),
             text_sections_closed: Vec::new(),
             text_docker_from: 0,
             text_docker_checks: false,
@@ -1296,17 +2858,37 @@ impl Default for Settings {
             custom_hyphens: Vec::new(),
             hyphens_when_typing: true,
             hyphens_when_pasting: true,
+            object_thumb_size: default_object_thumb(),
+            master_in_front: [false; 3],
+            desktop_takes_objects_beside_page: false,
+            objects_all_pages: true,
+            edit_across_layers: true,
+            page_size_all: false,
             font_sample_px: default_font_sample(),
             workspace_parts: crate::workspace_file::WorkspaceParts::default(),
             printing: Default::default(),
             formats: Default::default(),
             script_filters: Vec::new(),
+            plugins: Vec::new(),
+            window_buttons: false,
             tracing: Default::default(),
             warnings: Default::default(),
             curves: Default::default(),
             show_text_frames: true,
+            eyedropper_sample_after_apply: false,
+            eyedropper_pick_after_apply: false,
             path_tick_snap: false,
             path_tick_mm: default_path_tick(),
+            screen_margins: crate::ui::screen_margins::ScreenMargins::default(),
+            style_presets: Vec::new(),
+            outline_presets: Vec::new(),
+            fx_presets: Vec::new(),
+            fx_settings_only: false,
+            fx_in_panel: false,
+            shaping_live: false,
+            object_apps: Vec::new(),
+            object_apps_insert_saved: false,
+            picture_captions: Default::default(),
         }
     }
 }
@@ -1321,6 +2903,23 @@ pub const PORTABLE_DIR: &str = "tracedraw-settings";
 pub fn portable_dir(exe: &std::path::Path) -> Option<PathBuf> {
     let dir = exe.parent()?.join(PORTABLE_DIR);
     dir.is_dir().then_some(dir)
+}
+
+/// The folder of TraceDraw's own working files called `name` (bitmaps
+/// out for editing, auto-backups): in a portable copy inside its
+/// `tracedraw-settings` folder, so it leaves nothing on the computer
+/// (#3908); else in the system's temporary folder.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn work_dir(name: &str) -> PathBuf {
+    work_dir_beside(std::env::current_exe().ok().as_deref(), name)
+}
+
+/// [`work_dir`] for the program `exe`.
+#[cfg(not(target_arch = "wasm32"))]
+fn work_dir_beside(exe: Option<&std::path::Path>, name: &str) -> PathBuf {
+    exe.and_then(portable_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(name)
 }
 
 pub fn config_dir() -> Option<PathBuf> {
@@ -1358,6 +2957,9 @@ impl Settings {
             asset_files: self.asset_files.clone(),
             saved_views: self.saved_views.clone(),
             last_dir: self.last_dir.clone(),
+            pattern_folder: self.pattern_folder.clone(),
+            last_export_dir: self.last_export_dir.clone(),
+            folder_bookmarks: self.folder_bookmarks.clone(),
             window_maximized: self.window_maximized,
             window_size: self.window_size,
             ..Settings::default()
@@ -1370,8 +2972,19 @@ impl Settings {
 
     /// Bring preferences saved by an older version up to date, once:
     /// 1. objects are treated as filled (a click inside an unfilled one
-    ///    selects it), which older versions saved switched off.
+    ///    selects it), which older versions saved switched off;
+    /// 2. new rectangles keep their corners; 3. the alignment and dynamic
+    ///    guides start off; 4. the last export's settings are remembered;
+    /// 5. Duplicate's old default offset (6.35 mm) becomes none; 6. the
+    ///    Crop tool cuts a picture's pixels; 7. File > Export shows its
+    ///    options again; 8. the window goes through XWayland on a
+    ///    Wayland desktop without title bars for programs (#2486); 9. Save
+    ///    As shows TraceDraw's Save Drawing dialog, with the type and the
+    ///    version, again (#3811); 10. the PDF/X output condition left at
+    ///    "FOGRA39", the old default, follows the drawing's CMYK profile
+    ///    (#3829).
     pub fn upgrade(mut self) -> Settings {
+        self.autocorrect.upgrade();
         if self.upgrades < 1 {
             self.treat_all_filled = true;
         }
@@ -1394,7 +3007,69 @@ impl Settings {
         if self.upgrades < 4 && self.outline_units == "pt" {
             self.outline_units = "mm".into();
         }
+        // Remember the settings of the last export came on for new
+        // preferences only (#617); files saved before kept the old off,
+        // so for everyone who had used an earlier version File > Export
+        // still started at SVG in each new session and the feature could
+        // not be found (#691). On once; switched off afterwards it stays.
+        if self.upgrades < 4 {
+            self.formats.remember_last = true;
+        }
+        // Duplicate placed its copy 6.35 mm off by default; the copy now
+        // stays in place to be moved, scaled or turned, and the next
+        // Duplicate repeats that (#1494). An offset of one's own stays.
+        if self.upgrades < 5 && self.duplicate_offset_mm == [6.35, 6.35] {
+            self.duplicate_offset_mm = [0.0, 0.0];
+        }
+        // The Crop tool put a picture in a clip frame of the area by
+        // default, keeping every pixel, which looked like a mask and not
+        // a crop (live test of 0.41): it now cuts an upright picture's
+        // pixels. On once; switched off afterwards it stays off.
+        if self.upgrades < 6 {
+            self.crop_picture_pixels = true;
+        }
+        // "Do not show filter dialog" was the preference itself, ticked
+        // in the Export dialog and kept even when the dialog was then
+        // cancelled, with nothing in Options to turn it back: File >
+        // Export went straight to the Save dialog for good, with no
+        // options (report on 0.42.1). The options show again once; the
+        // setting chosen afterwards (in the dialog on OK, or in Options >
+        // Global > File Formats) stays.
+        if self.upgrades < 7 {
+            self.formats.skip_export_dialog = false;
+        }
+        // On a Wayland desktop that draws no title bars for programs
+        // (GNOME), the native window took no file drops from the file
+        // manager (#2486). The window goes there through XWayland by
+        // default now, as "Use the desktop's title bar" did; on once,
+        // switched off afterwards (native Wayland) it stays off.
+        if self.upgrades < 8 {
+            self.system_title_bar = true;
+        }
+        // The system's save dialog was the default on macOS (#2965), and
+        // there it shows no type list and the system's dialog has no
+        // version: Save As offered no way to save a `.cdr`, nor to choose
+        // its version (#3811). TraceDraw's Save Drawing dialog comes back
+        // once; turned on again afterwards the system's dialog stays.
+        if self.upgrades < 9 {
+            self.system_save_dialog = false;
+        }
+        // The PDF/X output condition was "FOGRA39" by default, kept with
+        // the preferences at the first export, whatever CMYK profile the
+        // drawing had (#3829). Left at it, it follows the drawing now.
+        if self.upgrades < 10 {
+            for c in [
+                &mut self.formats.output_condition,
+                &mut self.publish_pdf.output_condition,
+            ] {
+                if c.trim() == "FOGRA39" {
+                    c.clear();
+                }
+            }
+        }
         self.upgrades = self.upgrades.max(UPGRADES);
+        migrate_command_keys(&mut self.shortcuts);
+        migrate_command_keys(&mut self.node_shortcuts);
         self
     }
 
@@ -1425,6 +3100,17 @@ impl Settings {
     }
 
     pub fn save(&self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Ok(s) = serde_json::to_string(self) {
+                // A refusal is told to the user; the settings stay in
+                // effect in this tab (#1414).
+                if let Err(full) = crate::web::storage_set(WEB_KEY, &s) {
+                    crate::storage_full::report(crate::storage_full::Kept::Settings, full);
+                }
+            }
+            return;
+        }
         #[allow(unreachable_code)]
         let Some(p) = Self::path() else {
             return;
@@ -1456,6 +3142,30 @@ impl Settings {
         self.recent_files.truncate(10);
     }
 }
+
+/// Command keys that earlier versions wrote into a shortcut list under
+/// another name, and the key they go by now. A key is renamed only when a
+/// name had to go; the menus keep their keys otherwise, so a saved
+/// shortcut keeps working whatever its command is called or where it sits.
+pub const RENAMED_COMMAND_KEYS: [(&str, &str); 1] = [("menu.text.grammatik", "menu.text.grammar")];
+
+/// Bring the command keys of a shortcut list (the preferences' or a
+/// workspace file's) up to date. Safe to run again.
+pub fn migrate_command_keys(shortcuts: &mut [(String, String)]) {
+    for (key, _) in shortcuts.iter_mut() {
+        if let Some((_, now)) = RENAMED_COMMAND_KEYS.iter().find(|(old, _)| *old == key) {
+            *key = (*now).to_string();
+        }
+    }
+}
+
+
+fn default_open_zoom_percent() -> f32 {
+    100.0
+}
+
+/// The zooms Options offers for a drawing to open at, in percent.
+pub const OPEN_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 1.0..=10000.0;
 
 fn default_focus_visibility() -> u8 {
     20
@@ -1501,6 +3211,127 @@ mod tests {
             doc.defaults.artistic_text.fill,
             Fill::Solid(PrimaryColorMode::Cmyk.black())
         );
+        // The CMYK black outline stored for graphics turns RGB black in
+        // an RGB drawing, a width of one's own stays (#1665).
+        let mut stored = ObjectDefaults::default();
+        if let Some(s) = stored.graphic.stroke.as_mut() {
+            s.width = 0.5;
+        }
+        let rgb = super::defaults_for(&stored, PrimaryColorMode::Rgb);
+        assert_eq!(
+            rgb.graphic.stroke.as_ref().map(|s| (s.color, s.width)),
+            Some((Color::BLACK, 0.5))
+        );
+    }
+
+    /// Saved defaults: the untouched default black follows the new
+    /// drawing's mode, a black the user picked stays exactly as saved,
+    /// and so does any other colour (#1665).
+    #[test]
+    fn saved_defaults_keep_chosen_blacks() {
+        use crate::defaults::DefaultChange;
+        use tracedraw_core::document::PrimaryColorMode;
+        use tracedraw_core::{Color, Fill};
+        let k100 = PrimaryColorMode::Cmyk.black();
+        let outline =
+            |d: &tracedraw_core::ObjectDefaults| d.graphic.stroke.as_ref().map(|s| s.color);
+        let open_in = |prefs: &super::DocumentDefaults, mode| {
+            let mut doc = tracedraw_core::Document::default();
+            doc.metadata.primary_color_mode = mode;
+            prefs.apply(&mut doc);
+            doc.defaults
+        };
+        // Untouched defaults saved from a CMYK drawing follow both modes.
+        let mut app = crate::app::App::headless();
+        app.settings.new_document.values.rgb = false;
+        app.new_document();
+        let untouched = super::DocumentDefaults::of(app.doc());
+        let rgb = open_in(&untouched, PrimaryColorMode::Rgb);
+        assert_eq!(outline(&rgb), Some(Color::BLACK));
+        assert_eq!(rgb.artistic_text.fill, Fill::Solid(Color::BLACK));
+        let cmyk = open_in(&untouched, PrimaryColorMode::Cmyk);
+        assert_eq!(outline(&cmyk), Some(k100));
+        // The user picks CMYK black for graphics' outline: it stays CMYK
+        // in an RGB drawing, the untouched text black still follows.
+        app.change_defaults(
+            &DefaultChange::OutlineColor(Some(k100)),
+            [true, false, false],
+        );
+        let chosen = super::DocumentDefaults::of(app.doc());
+        let json = serde_json::to_string(&chosen).unwrap();
+        let chosen: super::DocumentDefaults = serde_json::from_str(&json).unwrap();
+        let rgb = open_in(&chosen, PrimaryColorMode::Rgb);
+        assert_eq!(outline(&rgb), Some(k100));
+        assert_eq!(rgb.artistic_text.fill, Fill::Solid(Color::BLACK));
+        // A saved colour that is not black stays.
+        let blue = Color::rgb8(0, 0, 200);
+        app.change_defaults(
+            &DefaultChange::Fill(Fill::Solid(blue)),
+            [false, true, false],
+        );
+        let rgb = open_in(
+            &super::DocumentDefaults::of(app.doc()),
+            PrimaryColorMode::Rgb,
+        );
+        assert_eq!(rgb.artistic_text.fill, Fill::Solid(blue));
+        // Reset in the Object Styles panel makes the outline follow again.
+        app.set_default_properties(tracedraw_core::DefaultKind::Graphic, |p| {
+            *p = tracedraw_core::ObjectDefaults::for_mode(PrimaryColorMode::Cmyk).graphic
+        });
+        let rgb = open_in(
+            &super::DocumentDefaults::of(app.doc()),
+            PrimaryColorMode::Rgb,
+        );
+        assert_eq!(outline(&rgb), Some(Color::BLACK));
+    }
+
+    /// Settings saved before the mark existed: the stock CMYK black
+    /// outline and text black (the old built-in defaults) follow the
+    /// drawing's mode; a black elsewhere and other colours stay.
+    #[test]
+    fn old_settings_with_the_stock_blacks_follow() {
+        use tracedraw_core::document::PrimaryColorMode;
+        use tracedraw_core::{Color, Fill};
+        let k100 = PrimaryColorMode::Cmyk.black();
+        let mut stored = super::DocumentDefaults::default();
+        stored.objects.graphic.fill = Fill::Solid(k100);
+        stored.objects.paragraph_text.fill = Fill::Solid(Color::rgb8(0, 120, 0));
+        let mut json = serde_json::to_value(&stored).unwrap();
+        for kind in ["graphic", "artistic_text", "paragraph_text"] {
+            json["objects"][kind]
+                .as_object_mut()
+                .unwrap()
+                .remove("follow");
+        }
+        let old: super::DocumentDefaults = serde_json::from_value(json).unwrap();
+        assert!(old.objects.graphic.follow.is_none());
+        let mut doc = tracedraw_core::Document::default();
+        doc.metadata.primary_color_mode = PrimaryColorMode::Rgb;
+        old.apply(&mut doc);
+        let d = &doc.defaults;
+        assert_eq!(
+            d.graphic.stroke.as_ref().map(|s| s.color),
+            Some(Color::BLACK)
+        );
+        assert_eq!(d.artistic_text.fill, Fill::Solid(Color::BLACK));
+        assert_eq!(d.graphic.fill, Fill::Solid(k100), "a black of one's own");
+        assert_eq!(d.paragraph_text.fill, Fill::Solid(Color::rgb8(0, 120, 0)));
+    }
+
+    #[test]
+    fn the_page_spacing_is_saved_as_a_default_for_new_drawings() {
+        let mut doc = tracedraw_core::Document::default();
+        // Settings saved before the field existed keep the default.
+        let old: super::DocumentDefaults = serde_json::from_str("{}").unwrap();
+        old.apply(&mut doc);
+        assert_eq!(doc.metadata.page_spacing(), 30.0);
+        doc.metadata.page_spacing = Some(10.0);
+        let saved = super::DocumentDefaults::of(&doc);
+        let json = serde_json::to_string(&saved).unwrap();
+        let back: super::DocumentDefaults = serde_json::from_str(&json).unwrap();
+        let mut fresh = tracedraw_core::Document::default();
+        back.apply(&mut fresh);
+        assert_eq!(fresh.metadata.page_spacing(), 10.0);
     }
 
     #[test]
@@ -1511,6 +3342,9 @@ mod tests {
         let big = SystemPrefs {
             text_scale: 1.5,
             high_contrast: Some(ContrastColors::BLACK),
+            text_scale_known: true,
+            contrast_known: true,
+            dark: false,
         };
         assert!((effective_ui_size_with(&s, big) - 1.5).abs() < 1e-6);
         assert_eq!(effective_theme_with(&s, big), "high_contrast");
@@ -1538,6 +3372,28 @@ mod tests {
         assert_eq!(Settings::default().outline_units, "mm");
     }
 
+    /// #2748: with no theme picked, a dark desktop gives the dark theme;
+    /// a picked theme stays whatever the desktop asks.
+    #[test]
+    fn a_dark_desktop_gives_the_dark_theme_until_one_is_picked() {
+        use crate::system_prefs::SystemPrefs;
+        let mut s = Settings::default();
+        assert!(s.theme.is_empty());
+        let dark = SystemPrefs {
+            dark: true,
+            ..SystemPrefs::default()
+        };
+        assert_eq!(effective_theme_with(&s, dark), "dark");
+        assert_eq!(effective_theme_with(&s, SystemPrefs::default()), "");
+        s.theme = "light".into();
+        assert_eq!(effective_theme_with(&s, dark), "light");
+        s.theme = "medium_dark".into();
+        assert_eq!(
+            effective_theme_with(&s, SystemPrefs::default()),
+            "medium_dark"
+        );
+    }
+
     #[test]
     fn older_preferences_get_objects_treated_as_filled_once() {
         // Saved by an older version: switched off, no upgrades recorded.
@@ -1555,6 +3411,94 @@ mod tests {
         assert!(!again.upgrade().treat_all_filled);
         // New preferences start up to date.
         assert_eq!(Settings::default().upgrades, UPGRADES);
+    }
+
+    /// Duplicate's old default offset becomes none, once; an offset of
+    /// one's own stays, and none set again later stays (#1494).
+    #[test]
+    fn the_old_default_duplicate_offset_becomes_none_once() {
+        let old: Settings =
+            serde_json::from_str(r#"{"upgrades": 4, "duplicate_offset_mm": [6.35, 6.35]}"#)
+                .expect("old preferences");
+        let s = old.upgrade();
+        assert_eq!(s.duplicate_offset_mm, [0.0, 0.0]);
+        assert_eq!(s.upgrades, UPGRADES);
+        let own: Settings =
+            serde_json::from_str(r#"{"upgrades": 4, "duplicate_offset_mm": [5.0, 2.0]}"#)
+                .expect("old preferences");
+        assert_eq!(own.upgrade().duplicate_offset_mm, [5.0, 2.0]);
+        let mut s = Settings::default();
+        assert_eq!(s.duplicate_offset_mm, [0.0, 0.0]);
+        s.duplicate_offset_mm = [6.35, 6.35];
+        let saved = serde_json::to_string(&s).expect("saved");
+        let again: Settings = serde_json::from_str(&saved).expect("read back");
+        assert_eq!(again.upgrade().duplicate_offset_mm, [6.35, 6.35]);
+    }
+
+    /// The Crop tool cuts a picture's pixels by default, and preferences
+    /// saved with the old off get it on once; off again afterwards, it
+    /// stays off (live test of 0.41).
+    #[test]
+    fn older_preferences_get_picture_pixels_cropped_once() {
+        assert!(Settings::default().crop_picture_pixels);
+        let old: Settings =
+            serde_json::from_str(r#"{"upgrades": 5, "crop_picture_pixels": false}"#)
+                .expect("old preferences");
+        let mut s = old.upgrade();
+        assert!(s.crop_picture_pixels);
+        assert_eq!(s.upgrades, UPGRADES);
+        s.crop_picture_pixels = false;
+        let saved = serde_json::to_string(&s).expect("saved");
+        let again: Settings = serde_json::from_str(&saved).expect("read back");
+        assert!(!again.upgrade().crop_picture_pixels);
+    }
+
+    /// Preferences saved before the last export's settings were kept
+    /// between sessions stored the old off (the option existed with that
+    /// default), so File > Export went on starting at SVG every session
+    /// for anyone upgrading, and the feature of #617 seemed missing
+    /// (#691). The upgrade turns it on once; off again afterwards, it
+    /// stays off.
+    #[test]
+    fn older_preferences_get_the_last_export_remembered_once() {
+        let old: Settings = serde_json::from_str(
+            r#"{"upgrades": 3, "formats": {"remember_last": false, "export_format": 3}}"#,
+        )
+        .expect("old preferences");
+        assert!(!old.formats.remember_last);
+        let s = old.upgrade();
+        assert!(s.formats.remember_last);
+        assert_eq!(s.formats.export_format, 3, "the other choices stay");
+        assert_eq!(s.upgrades, UPGRADES);
+        let mut s = s;
+        s.formats.remember_last = false;
+        let saved = serde_json::to_string(&s).expect("saved");
+        let again: Settings = serde_json::from_str(&saved).expect("read back");
+        assert!(!again.upgrade().formats.remember_last);
+        assert!(Settings::default().formats.remember_last);
+    }
+
+    /// "Do not show filter dialog" could be left on by a tick in the
+    /// Export dialog that was then cancelled, with no way back in Options:
+    /// preferences of older versions show the export options again, once;
+    /// set again afterwards, the setting stays (report on 0.42.1).
+    #[test]
+    fn older_preferences_show_the_export_options_again_once() {
+        let old: Settings = serde_json::from_str(
+            r#"{"upgrades": 6, "formats": {"skip_export_dialog": true, "export_format": 2}}"#,
+        )
+        .expect("old preferences");
+        assert!(old.formats.skip_export_dialog);
+        let s = old.upgrade();
+        assert!(!s.formats.skip_export_dialog);
+        assert_eq!(s.formats.export_format, 2, "the other choices stay");
+        assert_eq!(s.upgrades, UPGRADES);
+        let mut s = s;
+        s.formats.skip_export_dialog = true;
+        let saved = serde_json::to_string(&s).expect("saved");
+        let again: Settings = serde_json::from_str(&saved).expect("read back");
+        assert!(again.upgrade().formats.skip_export_dialog);
+        assert!(!Settings::default().formats.skip_export_dialog);
     }
 
     #[test]
@@ -1583,6 +3527,159 @@ mod tests {
 
     use super::*;
 
+    /// Each button size draws a larger icon in a larger button than the
+    /// one before, and the padding around the toolbox's icon grows no
+    /// faster than the icon (#1701 follow-up: the icons stayed one
+    /// size). The property bar's does too up to Medium; at Large and
+    /// Extra Large its icons keep a wider margin on purpose
+    /// (`large_bar_icons_keep_a_margin`).
+    #[test]
+    fn each_button_size_has_a_larger_icon_and_proportional_padding() {
+        let m: Vec<ButtonMetrics> = ButtonSize::ALL.iter().map(|s| s.metrics()).collect();
+        assert_eq!(
+            m.iter().map(|m| m.icon).collect::<Vec<_>>(),
+            vec![16.0, 20.0, 24.0, 32.0, 40.0]
+        );
+        for (i, w) in m.windows(2).enumerate() {
+            assert!(w[1].icon > w[0].icon, "{w:?}");
+            assert!(w[1].button > w[0].button, "{w:?}");
+            assert!(w[1].prop_icon > w[0].prop_icon, "{w:?}");
+            assert!(w[1].prop_button > w[0].prop_button, "{w:?}");
+            // The padding around the icon grows by less than the icon.
+            let pad = |m: &ButtonMetrics| m.button - m.icon;
+            let prop_pad = |m: &ButtonMetrics| m.prop_button - m.prop_icon;
+            assert!(pad(&w[1]) >= pad(&w[0]), "{w:?}");
+            assert!(pad(&w[1]) - pad(&w[0]) < w[1].icon - w[0].icon, "{w:?}");
+            assert!(prop_pad(&w[1]) >= prop_pad(&w[0]), "{w:?}");
+            if i < 2 {
+                assert!(
+                    prop_pad(&w[1]) - prop_pad(&w[0]) < w[1].prop_icon - w[0].prop_icon,
+                    "{w:?}"
+                );
+            }
+        }
+        for m in &m {
+            // Whole, even pixel sizes: the icon sits centred on whole
+            // pixels in its button.
+            for v in [m.icon, m.button, m.bar_icon, m.prop_icon, m.prop_button] {
+                assert_eq!(v % 2.0, 0.0, "{m:?}");
+            }
+            assert!(m.icon < m.button && m.prop_icon < m.prop_button);
+            assert!(m.bar_icon < m.button);
+        }
+        // The bars' icons grow at every step too.
+        for w in m.windows(2) {
+            assert!(w[1].bar_icon > w[0].bar_icon, "{w:?}");
+        }
+        // Medium keeps the 32 px buttons it had.
+        assert_eq!(ButtonSize::Medium.metrics().button, 32.0);
+        assert_eq!(ButtonSize::Medium.metrics().prop_button, 28.0);
+    }
+
+    /// At Large and Extra Large the standard and property bars draw their
+    /// icons at about 5/6 of the toolbox's box, leaving 7 and 9 px of
+    /// margin each side; the smaller sizes and the toolbox are as before.
+    #[test]
+    fn large_bar_icons_keep_a_margin() {
+        let row = |s: ButtonSize| {
+            let m = s.metrics();
+            (m.icon, m.button, m.bar_icon, m.prop_icon, m.prop_button)
+        };
+        assert_eq!(row(ButtonSize::ExtraSmall), (16.0, 22.0, 16.0, 14.0, 20.0));
+        assert_eq!(row(ButtonSize::Small), (20.0, 26.0, 20.0, 18.0, 24.0));
+        assert_eq!(row(ButtonSize::Medium), (24.0, 32.0, 24.0, 22.0, 28.0));
+        assert_eq!(row(ButtonSize::Large), (32.0, 42.0, 28.0, 24.0, 38.0));
+        assert_eq!(row(ButtonSize::ExtraLarge), (40.0, 52.0, 34.0, 28.0, 46.0));
+        for (size, margin) in [(ButtonSize::Large, 7.0), (ButtonSize::ExtraLarge, 9.0)] {
+            let m = size.metrics();
+            assert_eq!((m.button - m.bar_icon) / 2.0, margin, "{size:?}");
+            assert_eq!((m.prop_button - m.prop_icon) / 2.0, margin, "{size:?}");
+            // About 5/6 of the toolbox's icon box.
+            let share = m.bar_icon / m.icon;
+            assert!((0.8..=0.9).contains(&share), "{size:?} {share}");
+        }
+        for size in [
+            ButtonSize::ExtraSmall,
+            ButtonSize::Small,
+            ButtonSize::Medium,
+        ] {
+            let m = size.metrics();
+            assert_eq!(m.bar_icon, m.icon, "{size:?}");
+        }
+    }
+
+    /// Settings saved with three sizes read as they did; the new sizes
+    /// round-trip.
+    #[test]
+    fn saved_button_sizes_keep_their_meaning() {
+        for (json, size) in [
+            ("\"small\"", ButtonSize::Small),
+            ("\"medium\"", ButtonSize::Medium),
+            ("\"large\"", ButtonSize::Large),
+            ("\"Medium\"", ButtonSize::Medium),
+            ("\"extra_small\"", ButtonSize::ExtraSmall),
+            ("\"extra_large\"", ButtonSize::ExtraLarge),
+        ] {
+            let read: ButtonSize = serde_json::from_str(json).expect(json);
+            assert_eq!(read, size, "{json}");
+        }
+        for size in ButtonSize::ALL {
+            let json = serde_json::to_string(&size).expect("write");
+            assert_eq!(serde_json::from_str::<ButtonSize>(&json).ok(), Some(size));
+        }
+        let s: Settings =
+            serde_json::from_str(r#"{"button_size": "medium", "toolbox_button_size": "large"}"#)
+                .expect("settings");
+        assert_eq!(s.button_size, ButtonSize::Medium);
+        assert_eq!(s.toolbox_button_size, Some(ButtonSize::Large));
+    }
+
+    /// Ctrl+wheel steps the button sizes and the swatch size within
+    /// their ranges; preferences written before the swatch size existed
+    /// keep the 20 px swatches.
+    #[test]
+    fn the_wheel_steps_the_button_and_swatch_sizes_within_their_ranges() {
+        assert_eq!(ButtonSize::Small.stepped(1), ButtonSize::Medium);
+        assert_eq!(ButtonSize::Small.stepped(2), ButtonSize::Large);
+        assert_eq!(ButtonSize::Small.stepped(3), ButtonSize::ExtraLarge);
+        assert_eq!(ButtonSize::Small.stepped(5), ButtonSize::ExtraLarge);
+        assert_eq!(ButtonSize::Large.stepped(-1), ButtonSize::Medium);
+        assert_eq!(ButtonSize::Small.stepped(-1), ButtonSize::ExtraSmall);
+        assert_eq!(ButtonSize::Small.stepped(-5), ButtonSize::ExtraSmall);
+        assert_eq!(ButtonSize::Medium.stepped(0), ButtonSize::Medium);
+        // One notch at a time walks through all five sizes and holds at
+        // the ends.
+        let mut size = ButtonSize::ExtraSmall;
+        let mut seen = vec![size];
+        for _ in 0..6 {
+            size = size.stepped(1);
+            seen.push(size);
+        }
+        assert_eq!(&seen[..5], &ButtonSize::ALL[..]);
+        assert_eq!(seen[5], ButtonSize::ExtraLarge);
+        assert_eq!(seen[6], ButtonSize::ExtraLarge);
+        for _ in 0..6 {
+            size = size.stepped(-1);
+        }
+        assert_eq!(size, ButtonSize::ExtraSmall);
+        assert_eq!(swatch_resized(20, 1), 22);
+        assert_eq!(swatch_resized(20, -1), 18);
+        assert_eq!(swatch_resized(20, 100), SWATCH_MAX);
+        assert_eq!(swatch_resized(20, -100), SWATCH_MIN);
+        assert_eq!(swatch_resized(47, 1), SWATCH_MAX);
+        assert_eq!(swatch_resized(0, 0), SWATCH_MIN);
+        assert_eq!(swatch_resized(20, i32::MAX), SWATCH_MAX);
+        let old: Settings = serde_json::from_str(r#"{"palette":{"rows":2}}"#).expect("old");
+        assert_eq!(old.palette.swatch_size, SWATCH_DEFAULT);
+        assert_eq!(old.palette.swatch_size(), 20.0);
+        assert_eq!(rows_of(old.palette.rows), Some(2));
+        let odd = PalettePrefs {
+            swatch_size: 200,
+            ..PalettePrefs::default()
+        };
+        assert_eq!(odd.swatch_size(), f32::from(SWATCH_MAX));
+    }
+
     #[test]
     fn recent_list_dedups_and_caps() {
         let mut s = Settings::default();
@@ -1592,6 +3689,37 @@ mod tests {
         s.touch_recent(std::path::Path::new("/f11.tdraw"));
         assert_eq!(s.recent_files.len(), 10);
         assert_eq!(s.recent_files[0], PathBuf::from("/f11.tdraw"));
+    }
+
+    /// A settings file of an older version keeps its language, whatever
+    /// the installer or the system say; a new one has none picked.
+    #[test]
+    fn old_settings_files_keep_their_language() {
+        for code in ["en", "de", "pt-BR"] {
+            let old: Settings =
+                serde_json::from_str(&format!("{{\"language\":\"{code}\"}}")).expect("old file");
+            assert_eq!(
+                crate::i18n::startup_language(&old.language, Some("ja"), &["fr-FR"]),
+                code
+            );
+        }
+        let fresh: Settings = serde_json::from_str("{}").expect("empty file");
+        assert_eq!(fresh.language, "");
+        assert_eq!(Settings::default().language, "");
+        assert_eq!(
+            crate::i18n::startup_language(&fresh.language, Some("ja"), &["fr-FR"]),
+            "ja"
+        );
+        assert_eq!(
+            crate::i18n::startup_language(&fresh.language, None, &["fr-FR"]),
+            "fr"
+        );
+        // System language picked in Options is saved as such.
+        let mut s = Settings::default();
+        s.language = crate::i18n::SYSTEM.into();
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&s).expect("json")).expect("back");
+        assert_eq!(back.language, crate::i18n::SYSTEM);
     }
 
     #[test]
@@ -1606,6 +3734,24 @@ mod tests {
             partial.wheel_zooms,
             "old settings files keep the zoom default"
         );
+        // Print Preview shows everything, as before (#3603).
+        assert!(
+            partial.print_preview_rulers
+                && partial.print_preview_strip
+                && partial.print_preview_options
+        );
+        assert!(partial.zoom_relative_1to1 && !partial.wheel_zoom_centers);
+        // Smooth zoom on, 15 % a notch, for settings from before (#1648).
+        assert!(partial.smooth_zoom);
+        assert_eq!(partial.wheel_zoom_step, 15.0);
+        assert!((partial.wheel_zoom_factor() - 1.15).abs() < 1e-6);
+        let mut odd = Settings::default();
+        odd.wheel_zoom_step = 500.0;
+        assert_eq!(odd.wheel_zoom_factor(), 2.0);
+        odd.wheel_zoom_step = f32::NAN;
+        assert!((odd.wheel_zoom_factor() - 1.15).abs() < 1e-6);
+        assert!(!partial.pan_right_click_out);
+        assert!(!partial.pan_inertia, "pan inertia is off at first (#831)");
         assert!(partial.snap.guides);
     }
 
@@ -1614,6 +3760,7 @@ mod tests {
         let mut s = Settings::default();
         s.recent_files = vec!["/a.tdraw".into()];
         s.last_dir = Some("/drawings".into());
+        s.last_export_dir = Some("/exports".into());
         s.window_maximized = false;
         s.window_size = [1200.0, 800.0];
         s.shortcuts = vec![("menu.file.export".into(), "Ctrl+Shift+X".into())];
@@ -1626,6 +3773,7 @@ mod tests {
         let r = s.reset_keeping_history();
         assert_eq!(r.recent_files, s.recent_files);
         assert_eq!(r.last_dir, s.last_dir);
+        assert_eq!(r.last_export_dir, s.last_export_dir);
         assert_eq!(
             (r.window_maximized, r.window_size),
             (false, [1200.0, 800.0])
@@ -1643,6 +3791,12 @@ mod tests {
         assert_eq!(portable_dir(&exe), None);
         std::fs::create_dir_all(base.join(PORTABLE_DIR)).expect("dir");
         assert_eq!(portable_dir(&exe), Some(base.join(PORTABLE_DIR)));
+        // Its working files stay in that folder too, not in the system's
+        // temporary folder (#3908).
+        assert_eq!(
+            work_dir_beside(Some(&exe), "tracedraw-edit"),
+            base.join(PORTABLE_DIR).join("tracedraw-edit")
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1677,9 +3831,76 @@ mod tests {
     }
 
     /// Preferences as an older version saved them, migrated as at start.
+    /// A first start snaps to guidelines, the page and objects, within
+    /// 10 screen pixels (objects were off at first from #1814 on); a
+    /// choice saved before is kept, either way, and the app takes it.
+    #[test]
+    fn new_installs_snap_to_objects_and_saved_choices_stay() {
+        let s = Settings::default();
+        assert!(s.snap.objects, "snapping to objects starts on");
+        assert!(s.snap.guides && s.snap.page && !s.snap.off);
+        assert_eq!(s.snap.threshold_px, 10.0);
+        let on = migrated(r#"{"upgrades": 5, "snap": {"objects": true, "page": true}}"#);
+        assert!(on.snap.objects);
+        let off = migrated(r#"{"upgrades": 5, "snap": {"objects": false, "page": true}}"#);
+        assert!(!off.snap.objects, "a saved choice of off stays");
+        let old = migrated(r#"{"snap": {"objects": true, "page": false}}"#);
+        assert!(old.snap.objects && !old.snap.page);
+        let mut app = crate::app::App::headless();
+        app.apply_settings(Settings::default());
+        assert!(app.snap.objects && app.snap.page && app.snap.guides);
+        app.apply_settings(off);
+        assert!(!app.snap.objects);
+        app.apply_settings(on);
+        assert!(app.snap.objects);
+    }
+
     fn migrated(json: &str) -> Settings {
         let s: Settings = serde_json::from_str(json).expect("old preferences");
         s.upgrade()
+    }
+
+    /// A shortcut saved for the grammar checker under its old key goes
+    /// by the new key; the other shortcuts, and one already under the new
+    /// key, stay as they are.
+    #[test]
+    fn a_shortcut_saved_under_the_old_grammar_key_moves_to_the_new_one() {
+        let s = migrated(
+            r#"{"shortcuts": [["menu.text.grammatik", "Ctrl+Shift+G"],
+                ["menu.file.open", "Ctrl+Shift+O"], ["menu.text.grammar", "F7"]]}"#,
+        );
+        assert_eq!(
+            s.shortcuts,
+            [
+                ("menu.text.grammar".to_string(), "Ctrl+Shift+G".to_string()),
+                ("menu.file.open".into(), "Ctrl+Shift+O".into()),
+                ("menu.text.grammar".into(), "F7".into()),
+            ]
+        );
+        // An empty shortcut (a built-in one taken away) moves too.
+        let s = migrated(r#"{"shortcuts": [["menu.text.grammatik", ""]]}"#);
+        assert_eq!(
+            s.shortcuts,
+            [("menu.text.grammar".to_string(), String::new())]
+        );
+        // Running the migration again changes nothing.
+        let mut list = s.shortcuts.clone();
+        migrate_command_keys(&mut list);
+        assert_eq!(list, s.shortcuts);
+        // Every renamed key names a command that exists now, not one that
+        // was itself renamed.
+        for (old, now) in RENAMED_COMMAND_KEYS {
+            assert_ne!(old, now);
+            assert!(!RENAMED_COMMAND_KEYS.iter().any(|(o, _)| *o == now));
+            assert!(
+                crate::i18n::english_keys().iter().any(|k| k == now),
+                "{now}"
+            );
+            assert!(
+                !crate::i18n::english_keys().iter().any(|k| k == old),
+                "{old}"
+            );
+        }
     }
 
     /// Preferences saved by a version with online features (AI services,
@@ -1704,5 +3925,223 @@ mod tests {
         ] {
             assert!(!saved.contains(gone), "{gone} written back");
         }
+    }
+
+    /// #3829: the PDF/X output condition kept at "FOGRA39", the old
+    /// default, follows the drawing's CMYK profile once; another typed
+    /// stays, and so does "FOGRA39" chosen again afterwards.
+    #[test]
+    fn the_old_default_output_condition_follows_the_drawing() {
+        let old = migrated(
+            r#"{"upgrades": 9, "formats": {"output_condition": "FOGRA39"}, "publish_pdf": {"output_condition": "FOGRA39"}}"#,
+        );
+        assert!(old.formats.output_condition.is_empty());
+        assert!(old.publish_pdf.output_condition.is_empty());
+        let typed = migrated(r#"{"upgrades": 9, "formats": {"output_condition": "FOGRA51"}}"#);
+        assert_eq!(typed.formats.output_condition, "FOGRA51");
+        let chosen = migrated(r#"{"upgrades": 10, "formats": {"output_condition": "FOGRA39"}}"#);
+        assert_eq!(chosen.formats.output_condition, "FOGRA39");
+    }
+
+    /// #3811: Save As shows TraceDraw's Save Drawing dialog, with the type
+    /// and the version, by default on every system, and once for
+    /// preferences that had the system's dialog on (the macOS default
+    /// before); chosen again afterwards, the system's dialog stays.
+    #[test]
+    fn save_as_offers_the_type_and_version_by_default() {
+        assert!(!Settings::default().system_save_dialog);
+        let old = migrated(r#"{"upgrades": 8, "system_save_dialog": true}"#);
+        assert!(!old.system_save_dialog);
+        let chosen = migrated(r#"{"upgrades": 9, "system_save_dialog": true}"#);
+        assert!(chosen.system_save_dialog, "a choice made since stays");
+        let mut app = crate::app::App::headless();
+        app.settings = Settings::default();
+        app.save_as_dialog();
+        assert!(matches!(app.dialog, crate::ui::dialogs::Dialog::SaveAs(_)));
+    }
+}
+
+#[cfg(test)]
+mod context_menu_preference_tests {
+    use super::{ContextMenuPreferences, Settings};
+
+    #[test]
+    fn older_settings_show_existing_and_future_context_menu_rows() {
+        let settings: Settings = serde_json::from_str("{}").expect("old settings");
+        assert!(settings.context_menus.is_default());
+        assert!(settings
+            .context_menus
+            .is_visible("canvas_object", "menu.edit.copy"));
+        assert!(settings
+            .context_menus
+            .is_visible("future_menu", "future.command"));
+    }
+
+    #[test]
+    fn hidden_context_menu_rows_survive_settings_serialization() {
+        let mut settings = Settings::default();
+        settings
+            .context_menus
+            .set_visible("canvas_object", "menu.edit.copy", false);
+        settings
+            .context_menus
+            .set_visible("page_tabs", "menu.layout.rename_page", false);
+        let encoded = serde_json::to_string(&settings).expect("saved settings");
+        let restored: Settings = serde_json::from_str(&encoded).expect("restored settings");
+        assert_eq!(settings.context_menus, restored.context_menus);
+        assert!(!restored
+            .context_menus
+            .is_visible("canvas_object", "menu.edit.copy"));
+        assert!(restored
+            .context_menus
+            .is_visible("canvas_text", "menu.edit.copy"));
+        assert!(restored
+            .context_menus
+            .is_visible("canvas_object", "new.command"));
+    }
+
+    #[test]
+    fn restoring_one_context_menu_keeps_other_hidden_rows() {
+        let mut prefs = ContextMenuPreferences::default();
+        prefs.set_visible("canvas_object", "menu.edit.copy", false);
+        prefs.set_visible("canvas_text", "menu.edit.copy", false);
+        prefs.reset_menu("canvas_object");
+        assert!(prefs.is_visible("canvas_object", "menu.edit.copy"));
+        assert!(!prefs.is_visible("canvas_text", "menu.edit.copy"));
+        prefs.reset_all();
+        assert!(prefs.is_default());
+        assert!(prefs.is_visible("canvas_text", "menu.edit.copy"));
+    }
+
+    #[test]
+    fn menu_overrides_include_unknown_operations_but_not_empty_sets() {
+        let mut prefs: ContextMenuPreferences = serde_json::from_str(
+            r#"{"canvas_page":["future.command"],"canvas_object":[],"future_menu":["future.other"]}"#,
+        )
+        .expect("preferences from a newer version");
+        assert!(prefs.has_overrides("canvas_page"));
+        assert!(prefs.has_overrides("future_menu"));
+        assert!(!prefs.has_overrides("canvas_object"));
+        assert!(!prefs.has_overrides("canvas_text"));
+        prefs.reset_menu("canvas_page");
+        assert!(!prefs.has_overrides("canvas_page"));
+        assert!(prefs.is_visible("canvas_page", "future.command"));
+        assert!(prefs.has_overrides("future_menu"));
+        assert!(!prefs.is_visible("future_menu", "future.other"));
+    }
+
+    #[test]
+    fn showing_the_last_hidden_row_removes_the_menu_override() {
+        let mut prefs = ContextMenuPreferences::default();
+        prefs.set_visible("canvas_object", "menu.edit.copy", true);
+        assert!(prefs.is_default());
+        prefs.set_visible("canvas_object", "menu.edit.copy", false);
+        prefs.set_visible("canvas_object", "menu.edit.copy", false);
+        assert_eq!(prefs.hidden_items("canvas_object").len(), 1);
+        prefs.set_visible("canvas_object", "menu.edit.copy", true);
+        assert!(prefs.is_default());
+        assert_eq!(serde_json::to_string(&prefs).expect("preferences"), "{}");
+    }
+
+    #[test]
+    fn stable_context_menu_action_keys_do_not_depend_on_target_names() {
+        let prefs: ContextMenuPreferences =
+            serde_json::from_str(r#"{"objects_object":["docker.move_to_layer"]}"#)
+                .expect("stable action keys");
+        assert!(!prefs.is_visible("objects_object", "docker.move_to_layer"));
+        assert!(prefs.is_visible("objects_object", "Layer 1"));
+        assert!(prefs.is_visible("objects_object", "Layer 2"));
+        assert!(prefs.is_visible("canvas_object", "docker.move_to_layer"));
+    }
+
+    #[test]
+    fn context_menu_orders_round_trip_without_changing_legacy_visibility() {
+        let mut prefs: ContextMenuPreferences =
+            serde_json::from_str(r#"{"canvas_object":["menu.edit.copy"]}"#)
+                .expect("legacy visibility preferences");
+        prefs.set_order("canvas_object", "", &["menu.edit.delete", "menu.edit.copy"]);
+        prefs.set_order(
+            "canvas_object",
+            "menu.object.order",
+            &["menu.object.back_one", "menu.object.forward_one"],
+        );
+        let encoded = serde_json::to_string(&prefs).expect("saved preferences");
+        let restored: ContextMenuPreferences = serde_json::from_str(&encoded).expect("preferences");
+        assert_eq!(prefs, restored);
+        assert!(!restored.is_visible("canvas_object", "menu.edit.copy"));
+        assert!(restored.is_visible("canvas_object", "menu.edit.delete"));
+        assert_eq!(
+            restored.order("canvas_object", ""),
+            ["menu.edit.delete", "menu.edit.copy"]
+        );
+        assert!(restored.has_order("canvas_object"));
+        assert!(!restored.has_order("canvas_text"));
+    }
+
+    #[test]
+    fn context_menu_sibling_order_is_isolated_by_complete_parent_path() {
+        let mut prefs = ContextMenuPreferences::default();
+        let first = "bars.customize/bars.default_button_size";
+        let second = "bars.customize/bars.toolbox_toolbar/bars.button_size";
+        let defaults = ["bars.size_small", "bars.size_medium", "bars.size_large"];
+        prefs.set_order(
+            "toolbar",
+            first,
+            &["bars.size_large", "bars.size_small", "bars.size_medium"],
+        );
+        assert_eq!(
+            prefs.ordered_items("toolbar", first, &defaults),
+            ["bars.size_large", "bars.size_small", "bars.size_medium"]
+        );
+        assert_eq!(prefs.ordered_items("toolbar", second, &defaults), defaults);
+        assert_eq!(prefs.ordered_items("palette", first, &defaults), defaults);
+        assert_eq!(prefs.menu_orders("toolbar").len(), 1);
+        assert!(prefs.has_overrides("toolbar"));
+    }
+
+    #[test]
+    fn context_menu_order_ignores_unknown_keys_and_keeps_new_rows_in_default_order() {
+        let mut prefs = ContextMenuPreferences::default();
+        prefs.set_order("menu", "", &["future.action", "c", "a", "c", ""]);
+        assert_eq!(prefs.order("menu", ""), ["future.action", "c", "a"]);
+        assert_eq!(
+            prefs.ordered_items("menu", "", &["a", "b", "c", "d"]),
+            ["c", "a", "b", "d"]
+        );
+        prefs.set_order("menu", "", &["a", "c", "b", "d"]);
+        assert!(prefs
+            .order("menu", "")
+            .contains(&"future.action".to_owned()));
+        prefs.set_order("menu", "", &[]);
+        assert!(prefs.is_default());
+    }
+
+    #[test]
+    fn context_menu_order_input_normalizes_duplicate_and_empty_entries() {
+        let prefs: ContextMenuPreferences = serde_json::from_str(
+            r#"{"hidden":{"empty":[]},"order":{"menu":{"": ["b","a","b",""]},"empty":{"":[]}}}"#,
+        )
+        .expect("preferences with redundant entries");
+        assert_eq!(prefs.order("menu", ""), ["b", "a"]);
+        assert!(!prefs.has_overrides("empty"));
+        assert_eq!(prefs.ordered_items("menu", "", &["a", "b"]), ["b", "a"]);
+    }
+
+    #[test]
+    fn resetting_context_menus_restores_order_and_visibility_together() {
+        let mut prefs = ContextMenuPreferences::default();
+        prefs.set_visible("first", "a", false);
+        prefs.set_order("first", "", &["b", "a"]);
+        prefs.set_order("first", "branch", &["d", "c"]);
+        prefs.set_visible("second", "x", false);
+        prefs.set_order("second", "", &["y", "x"]);
+        prefs.reset_menu("first");
+        assert!(!prefs.has_overrides("first"));
+        assert!(prefs.is_visible("first", "a"));
+        assert!(prefs.has_order("second"));
+        assert!(!prefs.is_visible("second", "x"));
+        prefs.reset_all();
+        assert!(prefs.is_default());
+        assert_eq!(serde_json::to_string(&prefs).expect("preferences"), "{}");
     }
 }

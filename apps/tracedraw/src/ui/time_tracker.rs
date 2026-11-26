@@ -2,11 +2,13 @@
 //! dialog (Tools > Time Tracker). The records and the clock are in
 //! `time_tracker.rs`.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::i18n::{tr, trf};
 use crate::theme::Tokens;
 use crate::time_tracker::{self as tt, hms};
 use crate::ui::dialogs::Dialog;
+use crate::ui::tips::RichTip;
 use egui::{pos2, vec2, Color32, Painter, Rect, RichText, Sense, Stroke, Ui};
 
 /// What the clock is doing, for its light and tooltip.
@@ -103,9 +105,15 @@ fn paint_play_pause(p: &Painter, r: Rect, running: bool, color: Color32) {
 pub fn toolbar(app: &mut App, ui: &mut Ui) {
     let doc = app.has_document() && !app.show_welcome;
     let now = ui.input(|i| i.time);
-    ui.horizontal(|ui| {
+    crate::ui::toolbar::bar_row(ui, |ui| {
         ui.set_height(28.0);
-        let (icon, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+        // A click on the stopwatch switches between the full bar and its
+        // mini form (#3261).
+        let mini = app.settings.time_tracker.mini;
+        let (icon, icon_resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+        if icon_resp.hovered() {
+            ui.painter().rect_filled(icon, 2.0, Tokens::hovered_row());
+        }
         paint_stopwatch(
             ui.painter(),
             icon,
@@ -115,6 +123,14 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
                 Tokens::icon_off()
             },
         );
+        let icon_resp = icon_resp.rich_tip(tr(if mini {
+            "tracker.full_bar"
+        } else {
+            "tracker.mini_bar"
+        }));
+        if icon_resp.clicked() {
+            app.settings.time_tracker.mini = !mini;
+        }
         ui.add_enabled_ui(doc, |ui| {
             let (names, active) = if doc {
                 let t = &app.doc().time_tracker;
@@ -130,24 +146,26 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
                 .unwrap_or_else(|| tr("tracker.no_task"));
             let mut pick = None;
             let mut add = false;
-            egui::ComboBox::from_id_salt("time_tracker_task")
-                .selected_text(shown)
-                .width(180.0)
-                .show_ui(ui, |ui| {
-                    for (i, name) in names.iter().enumerate() {
-                        if ui.selectable_label(active == Some(i), name).clicked() {
-                            pick = Some(i);
+            if !mini {
+                crate::ui::keynav::ComboBox::from_id_salt("time_tracker_task")
+                    .selected_text(shown)
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for (i, name) in names.iter().enumerate() {
+                            if ui.selectable_label(active == Some(i), name).clicked() {
+                                pick = Some(i);
+                            }
                         }
-                    }
-                    if !names.is_empty() {
-                        ui.separator();
-                    }
-                    if ui.selectable_label(false, tr("tracker.new_task")).clicked() {
-                        add = true;
-                    }
-                })
-                .response
-                .on_hover_text(tr("tracker.task"));
+                        if !names.is_empty() {
+                            ui.separator();
+                        }
+                        if ui.iselectable(false, "tracker.new_task").clicked() {
+                            add = true;
+                        }
+                    })
+                    .response
+                    .rich_tip(tr("tracker.task"));
+            }
             if let Some(i) = pick {
                 app.edit_time_tracker(|t| t.active = Some(i));
             }
@@ -180,7 +198,7 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
                 Tokens::icon_off()
             };
             paint_play_pause(ui.painter(), r, running, color);
-            let resp = resp.on_hover_text(tr(if running {
+            let resp = resp.rich_tip(tr(if running {
                 "tracker.pause"
             } else {
                 "tracker.record"
@@ -191,7 +209,10 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
             let state = ClockState::of(app, now);
             let (dot, dot_resp) = ui.allocate_exact_size(vec2(12.0, 22.0), Sense::hover());
             ui.painter().circle_filled(dot.center(), 4.0, state.color());
-            dot_resp.on_hover_text(tr(state.key()));
+            dot_resp.rich_tip(tr(state.key()));
+            if mini {
+                return;
+            }
             ui.add(egui::Separator::default().vertical().spacing(10.0));
             let total = if doc {
                 let t = &app.doc().time_tracker;
@@ -206,7 +227,7 @@ pub fn toolbar(app: &mut App, ui: &mut Ui) {
             };
             ui.label(trf("tracker.total_is", &[("t", &hms(total))]));
             ui.add(egui::Separator::default().vertical().spacing(10.0));
-            if ui.button(tr("tracker.tasks")).clicked() {
+            if ui.ibutton("tracker.tasks").clicked() {
                 app.dialog = Dialog::TimeTracker(TrackerDialog::default());
             }
         });
@@ -321,14 +342,14 @@ pub fn dialog(app: &mut App, ctx: &egui::Context, st: &mut TrackerDialog, close:
         table(app, ui, st);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.button(tr("tracker.new_task")).clicked() {
+            if ui.ibutton("tracker.new_task").clicked() {
                 st.select(app, None);
                 app.add_tracked_task();
                 st.selected = app.doc().time_tracker.tasks.len().checked_sub(1);
             }
             let has = st.selected.is_some();
             if ui
-                .add_enabled(has, egui::Button::new(tr("tracker.delete")))
+                .add_enabled(has, crate::ui::btn_icons::Ib::new("tracker.delete"))
                 .clicked()
             {
                 if let Some(i) = st.selected {
@@ -351,7 +372,7 @@ pub fn dialog(app: &mut App, ctx: &egui::Context, st: &mut TrackerDialog, close:
             if ui
                 .add_enabled(
                     has && active != st.selected,
-                    egui::Button::new(tr("tracker.make_active")),
+                    crate::ui::btn_icons::Ib::new("tracker.make_active"),
                 )
                 .clicked()
             {
@@ -359,7 +380,7 @@ pub fn dialog(app: &mut App, ctx: &egui::Context, st: &mut TrackerDialog, close:
                 app.edit_time_tracker(|t| t.active = sel);
             }
             if ui
-                .add_enabled(has, egui::Button::new(tr("tracker.reset")))
+                .add_enabled(has, crate::ui::btn_icons::Ib::new("tracker.reset"))
                 .clicked()
             {
                 if let Some(i) = st.selected {
@@ -379,12 +400,12 @@ pub fn dialog(app: &mut App, ctx: &egui::Context, st: &mut TrackerDialog, close:
             }
             ui.add_space(8.0);
             let state = ClockState::of(app, now);
-            let label = tr(if app.tracker.running {
+            let key = if app.tracker.running {
                 "tracker.pause"
             } else {
                 "tracker.record"
-            });
-            if ui.button(label).clicked() {
+            };
+            if ui.add(crate::ui::btn_icons::Ib::new(key)).clicked() {
                 st.select(app, st.selected);
                 app.toggle_time_clock();
             }
@@ -399,26 +420,33 @@ pub fn dialog(app: &mut App, ctx: &egui::Context, st: &mut TrackerDialog, close:
             ui.label(tr("tracker.idle_before"));
             let mut minutes = app.settings.time_tracker.idle_minutes;
             if ui
-                .add(egui::DragValue::new(&mut minutes).range(1..=120))
+                .add(crate::ui::field::NumField::new(&mut minutes).range(1..=120))
                 .changed()
             {
                 app.settings.time_tracker.idle_minutes = minutes;
             }
             ui.label(tr("tracker.idle_after"));
         });
+        // Start with every drawing (D#4282).
+        ui.checkbox(
+            &mut app.settings.time_tracker.auto_start,
+            tr("tracker.auto_start"),
+        )
+        .rich_tip(crate::ui::tips::keyed("tracker.auto_start"));
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            if ui.button(tr("tracker.export_csv")).clicked() {
+            if ui.ibutton("tracker.export_csv").clicked() {
                 st.select(app, st.selected);
                 export(app, Export::Csv);
             }
-            if ui.button(tr("tracker.export_text")).clicked() {
+            if ui.ibutton("tracker.export_text").clicked() {
                 st.select(app, st.selected);
                 export(app, Export::Text);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add_sized([100.0, 27.0], egui::Button::new(tr("dialog.close")))
+                    .rich_tip(crate::ui::tips::keyed("dialog.close"))
                     .clicked()
                 {
                     *close = true;
@@ -679,6 +707,7 @@ fn export(app: &mut App, kind: Export) {
 mod tests {
     use super::*;
     use tracedraw_core::{geometry::Size, Document};
+    use crate::ui::bars::Bar;
 
     fn app_with_tasks() -> App {
         let mut app = App::headless();
@@ -756,5 +785,51 @@ mod tests {
         }
         // The dialog picked the active task.
         assert_eq!(st.selected, Some(1));
+    }
+
+    /// The bar's mini form keeps the stopwatch, the task's time, the
+    /// record button and its light, and is narrow enough to sit beside
+    /// other bars; a click on the stopwatch switches it (#3261).
+    #[test]
+    fn the_toolbar_has_a_mini_form() {
+        let mut app = app_with_tasks();
+        let ctx = crate::theme::ui_context();
+        let width = |app: &mut App, click: Option<egui::Pos2>| {
+            let mut w = 0.0;
+            for pass in 0..3 {
+                let mut events = Vec::new();
+                if let (Some(at), 1) = (click, pass) {
+                    for pressed in [true, false] {
+                        events.push(egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                }
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1600.0, 100.0))),
+                    events,
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    ui.horizontal(|ui| {
+                        let r = ui.scope(|ui| toolbar(app, ui)).response.rect;
+                        w = r.width();
+                    });
+                });
+                out.textures_delta.clear();
+            }
+            w
+        };
+        let full = width(&mut app, None);
+        assert!(!app.settings.time_tracker.mini);
+        // The stopwatch is the bar's first thing, at its left.
+        width(&mut app, Some(egui::pos2(14.0, 16.0)));
+        assert!(app.settings.time_tracker.mini, "the stopwatch switched it");
+        let mini = width(&mut app, None);
+        assert!(mini < 200.0 && mini < full / 2.0, "mini {mini}, full {full}");
+        assert!(Bar::TimeTracker.floating_size(&app).x < 200.0);
     }
 }

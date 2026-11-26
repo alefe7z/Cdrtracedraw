@@ -1,5 +1,7 @@
 # Opsi kustomisasi
 
+> *Terjemahan mesin: halaman ini mungkin tertinggal dari versi bahasa Inggris.*
+
 [[menu.tools > menu.tools.options > menu.tools.options_customization]] mengatur
 tampilan antarmuka, pintasan keyboard Anda sendiri, bilah mana yang tampil, dan
 perilaku palet warna.
@@ -11,8 +13,12 @@ perilaku palet warna.
 - [[options.center_dialogs]]: kotak dialog terbuka di tengah jendela; bila
   nonaktif, kotak dialog terbuka di tempat terakhir Anda meninggalkannya.
 - [[options.ui_shadows]] (bayangan yang lebih sedikit membantu grafis yang
+- [[options.translucent_menus]]: open menus let the drawing show through them, at the [[options.menu_opacity]] beside the box (off by default).
   lebih lambat).
 - [[options.colored_icons]]: setiap kelompok alat mendapat warnanya sendiri.
+- [[options.docker_tabs_icons_only]]: tab panel di sisi jendela hanya
+  menampilkan gambarnya, dengan nama di tip. Jika mati, tab menampilkan
+  gambar dan nama, dan kolom yang tabnya tidak muat dapat digeser.
 - [[options.ui_size]]: seberapa besar menu, bilah, ikon, dan panel, relatif
   terhadap penskalaan yang diberikan sistem Anda untuk monitor (awalnya 100%).
   [[options.reset_to_default]] kembali ke 100%. Ukuran antarmuka tidak pernah
@@ -43,6 +49,14 @@ menghapusnya, dan mengatur ulang ke bawaan menghapus semuanya. Tombol alat
 berupa satu huruf atau <kbd>Shift</kbd> dan satu huruf. Lihat
 [Pintasan keyboard](../reference/keyboard-shortcuts.md).
 
+Sebuah perintah dapat memiliki beberapa pintasan: tombol baru bergabung dengan
+yang sudah ada (tombol bawaan tetap berfungsi di sampingnya), dan setiap tombol
+punya tombol hapus sendiri. Tombol bilah yang menjalankan perintah menu (Baru,
+Buka, Simpan, Batalkan, Perbesar, dan lainnya) juga menerima pintasan, sama
+dengan perintah menunya, begitu pula baris yang hanya kadang ditampilkan menu.
+Daftar **Tombol bilah alat** memuat semua tombol bilah Standar dan Zoom: seret
+dari sana kembali ke bilah tombol yang telah Anda hapus.
+
 ## Bilah Perintah {#command-bars}
 
 ![Halaman Bilah Perintah pada opsi kustomisasi](../../img/customize-customization-command-bars.png)
@@ -55,15 +69,32 @@ berupa satu huruf atau <kbd>Shift</kbd> dan satu huruf. Lihat
 [[options.reset]] mengembalikan bilah-bilah. Di bawah [[options.other]]:
 [[bars.lock]] dan [[options.show_outline_flyout]].
 
+[[options.toolbar_drag_hint]]
+
 ## Palet Warna {#color-palette}
 
 ![Halaman Palet Warna pada opsi kustomisasi](../../img/customize-customization-color-palette.png)
 
 - [[options.palette_auto_update]] dan [[options.palette_show_document]]
   (keduanya aktif).
+- [[options.palette_position]] (Atas, Bawah, Kiri, Kanan, atau Mengambang)
+  palet bawaan, seperti yang diatur menunya sendiri; tidak berubah selama
+  bilah alat terkunci.
 - [[options.palette_swatches]]: [[options.palette_no_color]] (aktif), dan apa
   yang dilakukan [[options.palette_right_button]]:
   [[options.palette_set_outline]] (bawaan) atau membuka
   [[options.palette_context_menu]].
 
 Lihat [Palet warna](../color/palettes.md).
+
+## Menu konteks {#context-menus}
+
+Di Personalisasi, pilih [[options.context_menus]] untuk mengelola 32 lokasi menu konteks secara terpisah. Pilih lokasi dengan [[options.context_menu_scene]], lalu gunakan [[options.context_menu_search]] untuk mencari operasi dan hapus centang kotaknya untuk menyembunyikannya di lokasi tersebut. Operasi tetap ada dalam daftar ini meskipun pilihan saat ini tidak dapat menggunakannya.
+
+Semua operasi ditampilkan secara default. Setiap lokasi memiliki pilihan sendiri: menyembunyikan operasi objek di kanvas tidak menyembunyikannya di panel Objek. Daftar dinamis seperti lapisan target serta koleksi font dikelola sebagai satu operasi, sehingga perubahan nama tidak mengatur ulang pilihan Anda.
+
+[[options.context_menu_reset]] memulihkan menu yang dipilih dan [[options.context_menu_reset_all]] memulihkan semua menu. [[dialog.ok]] menyimpan pilihan ke pengaturan aplikasi; [[dialog.cancel]], Escape, atau tombol tutup memulihkan pilihan saat Opsi dibuka. Menu utama, pintasan, dan pencarian perintah tetap menyediakan perintah aslinya.
+
+Perluas submenu untuk melihat item anak yang menjorok ke dalam. Seret pegangan baris, atau gunakan [[options.context_menu_move_up]] dan [[options.context_menu_move_down]], untuk mengurutkan item pada tingkat yang sama. Memindahkan menu induk juga memindahkan semua anaknya; item tidak dapat dipindahkan ke induk lain. Pencarian tetap menampilkan jalur induk item yang cocok. Memulihkan menu mengatur ulang visibilitas dan urutan; membatalkan Opsi mengembalikan keduanya ke keadaan saat dialog dibuka.
+
+Menu sampel palet dokumen dan entrinya di Pengelola Palet memiliki pengaturan terpisah. Target dinamis mempertahankan urutannya sendiri; daftar gaya dokumen tetap berada di antara tindakan statis dalam Gaya Objek. Operasi baru yang ditambahkan oleh versi berikutnya tetap terlihat dan ditempatkan setelah item tersimpan pada tingkat yang sama.

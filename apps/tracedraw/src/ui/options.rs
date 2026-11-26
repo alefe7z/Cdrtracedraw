@@ -1458,7 +1458,7 @@ fn path_field(ui: &mut Ui, dir: &mut Option<std::path::PathBuf>, fallback: Strin
             .add_enabled(true, egui::Button::new(tr("options.browse")))
             .clicked()
         {
-            if let Some(p) = crate::files::pick_folder() {
+            if let Some(p) = crate::files::pick_folder_now() {
                 *dir = Some(p);
             }
         }
@@ -1766,6 +1766,9 @@ pub struct ShortcutEditor {
     pub keys_tab: bool,
     /// Reset all shortcuts was pressed: the question is shown.
     pub confirm_reset_all: bool,
+    /// The list scrolls to the command picked once, next frame (a bar's
+    /// button clicked while the Customization pages are open).
+    pub scroll_to_selected: bool,
 }
 
 /// The Commands page's category for the toolbox's tools.
@@ -2494,6 +2497,7 @@ fn ellipse_page(app: &mut App, ui: &mut Ui) {
         start_deg: 90.0,
         end_deg: 90.0,
         pie: true,
+        inner: 0.0,
     });
     if kind != before {
         app.ellipse_arc = match kind {
@@ -2859,7 +2863,7 @@ fn file_locations_page(app: &mut App, ui: &mut Ui) {
                 .add_enabled(editable, egui::Button::new(tr("opt.edit")))
                 .clicked()
             {
-                if let Some(p) = crate::files::pick_folder() {
+                if let Some(p) = crate::files::pick_folder_now() {
                     if pick == 0 {
                         app.settings.backup.auto_dir = Some(p);
                     } else {
@@ -3573,4 +3577,85 @@ mod tests {
         assert!(app.shortcut_editor.capture.is_none());
         assert!(user_shortcut(&app, "menu.file.export").is_none());
     }
+}
+
+
+/// The Text page's tab with the Autocorrect (QuickCorrect) settings.
+pub const AUTOCORRECT_TAB: usize = 4;
+
+/// A page of the Options as Help > Search Commands finds it: the key of
+/// its name and the page (and tab) that shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingEntry {
+    pub key: String,
+    pub tip: Option<String>,
+    pub page: OptionsPage,
+    pub tab: usize,
+}
+
+/// The pages of every Options set, by name, for the command search
+/// (Commands left out: its rows are the menu commands, listed already).
+pub fn settings_index(_app: &mut App, _ctx: &egui::Context) -> Vec<SettingEntry> {
+    OptionsSet::ALL
+        .iter()
+        .flat_map(|set| set.pages().iter().copied())
+        .filter(|p| *p != OptionsPage::Commands)
+        .map(|page| SettingEntry {
+            key: page.key().to_string(),
+            tip: None,
+            page,
+            tab: 0,
+        })
+        .collect()
+}
+
+/// A setting found with Help > Search Commands, shown framed on its page
+/// for a moment when the Options open there.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingHighlight {
+    pub page: OptionsPage,
+    /// The setting's label as the page draws it.
+    pub label: String,
+    /// When the frame began (the input's time), once drawn.
+    pub since: Option<f64>,
+}
+
+/// Where a page lies, as the search shows it: "Options > Text".
+pub fn setting_place(page: OptionsPage) -> String {
+    format!("{} > {}", tr("menu.tools.options"), tr(page.key()))
+}
+
+/// Open the Options at `page` (and `tab` of the Text page).
+pub fn open_at_setting(app: &mut App, page: OptionsPage, tab: usize, key: &str) {
+    app.dialog = crate::ui::dialogs::Dialog::Options;
+    app.options_page = page;
+    app.options_text_tab = tab;
+    app.options_highlight = Some(SettingHighlight {
+        page,
+        label: tr(key).trim().to_string(),
+        since: None,
+    });
+}
+
+/// A click on a bar's button while the Customization pages are open
+/// picks that command in the Commands page's list, with its Shortcut
+/// Keys tab.
+pub(crate) fn pick_bar_item(app: &mut App, item: &str) {
+    if item == crate::ui::bar_items::SEP {
+        return;
+    }
+    let id = match crate::ui::bar_items::tool_of(item) {
+        Some(t) => t.id().to_string(),
+        None => item.to_string(),
+    };
+    let ed = &mut app.shortcut_editor;
+    ed.category = None;
+    ed.filter.clear();
+    ed.selected = Some(id);
+    ed.capture = None;
+    ed.note = None;
+    ed.confirm_reset_all = false;
+    ed.keys_tab = true;
+    ed.scroll_to_selected = true;
+    app.options_page = OptionsPage::Commands;
 }

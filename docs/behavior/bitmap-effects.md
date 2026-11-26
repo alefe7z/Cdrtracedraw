@@ -20,13 +20,14 @@ later, and removing the last one gives the original back.
 - The native `.tdraw` file stores the list; a bitmap without effects
   writes no `fx` field, and older files load unchanged.
 - Changes that rework the pixels themselves (colour modes, Resample,
-  Manually Inflate Bitmap, Straighten Image, Bitmap Color Mask, Update
+  Bitmap Padding > Custom, Straighten Image, Color Mask, Update
   From Link, Effects > Flatten Effects) keep what the bitmap shows and
   drop the list.
 
 ## Effects menu
 
-- Flatten Effects first, then a line, then the groups in alphabetical
+- Flatten Effects first, then Apply to Pictures on All Pages (see "All
+  pages"), then a line, then the groups in alphabetical
   order of their English names: 3D Effects, Adjust, Art Strokes, Blur,
   Camera, Color Transform, Contour, Correction, Creative, Custom,
   Distort, Noise, Sharpen, Texture, Transform. Each item shows the
@@ -46,14 +47,73 @@ later, and removing the last one gives the original back.
 
 ## Effect dialogs
 
-- Before and after previews of the first selected bitmap side by side:
-  a copy at most 240 pixels across, worked out again only when a setting
-  changes. Settings measured in pixels (radius, size, width, height,
+- Live preview on the drawing: while the dialog is open and its Preview
+  box is ticked (it starts ticked on the desktop and cleared in the
+  browser), every selected object shows the
+  effect with the values the dialog holds, from the moment it opens and
+  again each time a value changes, without any button. The preview is
+  made off the interface thread (the canvas keeps answering; a spinner
+  and "Updating the preview..." show beside the box meanwhile), starts
+  once a changed value has rested 80 ms (300 ms at most while a slider
+  keeps moving), one at a time (a value changed meanwhile follows when
+  the running one is done), and never again for the same values. Every
+  preview starts from the objects as they were without it, so previews
+  never stack. OK keeps what the drawing shows as one undo step ("Add
+  Effect" or "Edit Effect") without making it again; Cancel, Esc, the
+  close button or clearing the box put the drawing and the history back
+  exactly as they were (no undo step, redo kept). Editing from the FX
+  section previews nothing until a value differs from the effect as it
+  is. At most one preview is being made at a time: one dropped (the box
+  cleared, Cancel, the dialog closed) stops before its next effect and
+  the next one waits until it has, so toggling the box on a large
+  picture never runs several makings side by side. Values whose making
+  failed are not made again until a value changes. In the browser the
+  preview is made on the interface thread, so the box starts cleared
+  there and opening an effect never stalls the page.
+- Every effect dialog is a window the user sizes with the shared Before
+  and After preview of the first selected bitmap at the left
+  (`before-after-preview.md`: the Preview list with Before and After
+  stacked, side by side, Before or After, zoom and pan, the copy as
+  large as the panes show, at most 768 pixels across) and the settings
+  at the right; the result is worked out again only when a setting
+  changes (on a copy at most 240 pixels across while a slider is
+  dragged). Settings measured in pixels (radius, size, width, height,
   distance, period, amplitude, spacing and the like) are scaled with the
   copy, never below their minimum, so the preview looks like the result.
+  The before view is the bitmap without the effect being set up (its
+  effects so far on the copy), whether or not the live preview is on the
+  drawing.
 - Settings: sliders for numbers, a dial and a number for directions
   (degrees counter-clockwise from the right), lists, check boxes and
-  colour buttons. Reset puts every setting back to its default.
+  colour buttons, in the shared settings panel at the right (each
+  slider under its label, stretched to the panel's width;
+  `before-after-preview.md`). Under it the Reset, undo and redo row:
+  Reset puts every setting back to its default, the arrows step
+  through the settings states made in the dialog (a slider's drag is
+  one step on release, a list, a box, a colour, Reset), and the history
+  starts afresh when the dialog opens.
+- Settings only (#2799): a box under Preview. Ticked, every effect
+  dialog opens as a small window (380 x 600 points at first, 320 x 380
+  at least, sized by the user) with the settings alone and no Before and
+  After panes; the effect is seen on the drawing itself (ticking the box
+  ticks Preview). The choice is kept between sessions
+  (`fx_settings_only` in the settings). While any effect dialog is open
+  the wheel over the drawing outside it zooms the drawing, so the result
+  can be looked at closely. Eyedroppers that pick from the panes have
+  nothing to pick from in this window.
+- Show Original (#1129): a button beside Settings only, enabled with
+  Preview. While it is held down the drawing shows the objects without
+  the effect; let go, the preview made before comes back at once, not
+  made again (the last preview's steps are kept until the dialog
+  closes).
+- Presets (#1129): a list above Preview with the presets saved for this
+  effect; choosing one puts its settings in the dialog (the list shows
+  the preset whose settings the dialog holds, "(none)" otherwise). A
+  name box and Save keep the dialog's settings as a preset of the effect
+  (a blank name gets "Preset n", the first n free; the same name
+  replaces that preset's settings), and the cross deletes the preset
+  shown. Presets are kept in the settings (`fx_presets`, at most 300),
+  for every drawing.
 - Editing an effect from the FX section previews from what the effects
   before it made, and the after view also runs the visible effects after
   it; OK changes that effect in place ("Edit Effect").
@@ -82,19 +142,32 @@ later, and removing the last one gives the original back.
   channels draws the other curves thin behind, and Load... and Save keep
   every channel's curve in a JSON file of the settings.
 
+## Blur on the property bar
+
+- Gaussian Blur's dialog opens as the compact settings window (its one
+  value, Reset, presets, OK and Cancel; 360 x 330 at first, at least
+  300 x 260), the blur shown live on the drawing, with no preview panes
+  covering it (#4091, `ui::effect_dialog::compact_effect`).
+- With one object selected that has a Gaussian Blur among its effects,
+  the Pick tool's property bar shows Blur, its radius (0.1 to 250 px, a
+  logarithmic slider). The effect changes when the slider is let go or a
+  value is typed (not at every step of the drag, so a large radius does
+  not make the drag lag), one undo step ("Edit Effect"); the first
+  Gaussian Blur of the list is the one changed (`blur_bar.rs`,
+  `blur_bar::tests::the_bar_changes_the_blur_radius`).
+
 ## Image Adjustments
 
 Effects > Adjust > Image Adjustments opens a larger dialog instead of
 the plain one:
 
-- A 600 x 420 preview of a copy at most 720 pixels across. Tools above
-  it: Rotate left and Rotate right (the view, a quarter turn), Pan (drag;
-  the default tool), Zoom in and Zoom out (click a point to zoom by 1.5
-  about it), Zoom to fit, 100% (one bitmap pixel per screen point); the
-  wheel zooms about the pointer with any tool. Preview modes: Full
-  preview, Before and after full preview (side by side, same view) and
-  Before and after split preview (the original left of a dashed divider,
-  the result right; drag the divider).
+- The shared Before and After preview (`before-after-preview.md`),
+  showing After at first, with Before and After stacked, side by side,
+  Before, and Before and After split (the original left of a dashed
+  divider, the result right; drag the divider) in its Preview list;
+  Zoom to fit, Zoom out, Zoom in and Pan, then Rotate left and Rotate
+  right (the view, a quarter turn) and 100% (one bitmap pixel per
+  screen point); the wheel zooms about the pointer.
 - Auto adjust sets the black and white points to the levels that cut
   0.5 % of the opaque pixels at either end. Select white point and Select
   black point turn the preview into a picker: a click sets that point
@@ -110,6 +183,37 @@ the plain one:
 - OK adds one Image Adjustments effect (or changes the one being
   edited) with the settings, which the FX section can edit later.
 
+## All pages
+
+An effect can go to the pictures of every page at once (#1551):
+
+- Every effect dialog (Image Adjustments too) shows an All pages box
+  under Preview while an effect is being added (not edited from the FX
+  section), the drawing has more than one page and a picture (bitmap
+  object) is selected. It starts cleared. Ticked, OK gives the effect
+  with the dialog's values to every picture on every page and master
+  layer, in groups and clip frames too, that the selection left out;
+  locked pictures and pictures on locked layers are left as they are.
+  The pictures changed join the undo step of the selection ("Add
+  Effect", the live preview kept as before), so one Undo takes all of
+  it back; the status bar counts the other pictures
+  (`App::add_bitmap_effect_on_all_pages`).
+- Effects > Apply to Pictures on All Pages (below Flatten Effects; on
+  with more than one page and a selected picture that has effects)
+  gives every other picture on every page the effect list of the first
+  selected picture that has one, replacing their own list (their
+  original pixels kept), as one undo step "Effects on All Pages".
+  Pictures that already have the same list are not touched; with
+  nothing to change no step is recorded. This covers the effects that
+  apply at once without a dialog (Auto Adjust, Desaturate, Invert
+  Colors).
+- The other pictures are made on the interface thread when OK is
+  pressed (the live preview shows the selection only).
+- Checks: `fx::preview::tests::all_pages_gives_the_effect_to_every_picture_in_one_step`
+  (with and without the live preview; a locked picture stays; one Undo
+  takes both pages back),
+  `fx::preview::tests::the_selected_pictures_effects_go_to_all_pages`.
+
 ## Properties panel: FX
 
 A bitmap's Properties show an FX section listing its effects, first
@@ -120,8 +224,8 @@ the original pixels.
 
 ## Auto inflate
 
-Document Options > General > Auto inflate bitmaps for effects, also
-Bitmaps > Inflate Bitmap > Auto Inflate Bitmap (a check mark), is on by
+Document Setup > General > Pad bitmaps for effects automatically, also
+Image > Bitmap Padding > Automatic (a check mark), is on by
 default. When on, the visible effects that spread past the edges grow the
 original first by their reach (summed, at most the larger side), with a
 transparent margin, and the bitmap's place grows by the same amount in
@@ -130,9 +234,9 @@ millimetres, so a blur is not cut off at the edges. Reach: Gaussian Blur
 `Strength / 2` pixels. The switch is stored in the document and applies
 to effects rendered from then on.
 
-Bitmaps > Inflate Bitmap > Manually Inflate Bitmap grows the selected
-bitmaps' canvas by hand: for Width and Height, Inflate to (pixels, from
-the first selected bitmap) or Inflate by (100 to 1000 %, default 100),
+Image > Bitmap Padding > Custom grows the selected
+bitmaps' canvas by hand: for Width and Height, Pad to (pixels, from
+the first selected bitmap) or Pad by (100 to 1000 %, default 100),
 which follow each other; Maintain aspect ratio (on) moves both
 percentages together. Every selected bitmap grows by the percentages,
 centred, with transparent margins, keeping its resolution, in one undo
@@ -174,6 +278,7 @@ transparent areas.
 | Deinterlace | Remove: **Even lines**, Odd lines; Replace with: Duplication, **Interpolation** | Even or odd rows are replaced by the row above (Duplication) or the average of the rows above and below (Interpolation). |
 | Invert Colors | none | `255 - v` per channel. |
 | Posterize | Level 4 (2 to 32) | Each channel rounded to Level evenly spaced values. |
+| Broadcast Safe Colors | TV standard: **NTSC**, PAL | Luma limited to 16..235 and chroma (YIQ or YUV) reduced so that luma plus or minus chroma stays inside the signal range. |
 
 ### Correction
 
@@ -210,6 +315,23 @@ transparent areas.
 | Watercolor | Brush size 3 (1 to 10); Granulation 50 (1 to 100); Water 50 (1 to 100); Bleed 50 (1 to 100); Brightness 50 (0 to 100) | Colours washed by a median of Brush size and a blur (Bleed), lightened by Water with darker rims, Granulation noise and Brightness. |
 | Felt Marker | Variation: **Default**, Order, Random; Size 5 (1 to 20); Color variation 20 (0 to 100) | Rectangular marker strokes of Size that multiply where they overlap; Variation sets their angle (fixed, level or random) and Color variation jitters their colours. |
 | Paper Grain | Paint: **Color**, Black and white; Brush pressure 50 (1 to 100) | The image on paper with a wavy grain, stronger with Brush pressure, in colour or black and white. |
+| Paper Layers | Levels 4 (2 to 8); Smoothness 4 (0 to 10); Detail 5 (1 to 10) | The image softened by Smoothness and flattened by a median (smaller with more Detail), each channel then cut into Levels steps: flat shapes of a few colours, like layers of cut paper. |
+| Bristle Paint | Brush size 2 (1 to 10); Detail 8 (0 to 10); Texture 50 (0 to 100); Seed 1 | A median of Brush size flattens the colours (cut into more steps with more Detail); noise stretched along the stroke lightens and darkens it like the bristles of a dry brush, stronger with Texture. |
+| Mural | Brush size 2 (1 to 10); Detail 8 (0 to 10); Texture 50 (0 to 100); Seed 1 | Short thick strokes: a blur and median of Brush size, more contrast, the edges taken toward the darkest nearby colour (less with more Detail) and blotchy wall texture (Texture). |
+| Luminous Wash | Radius 5 (0 to 24); Brightness 15 (0 to 50); Light color (#2BC8FF) | The picture dimmed and the light colour screened over it where it is bright, the glow spread by Radius and stronger with Brightness. |
+| Inked Poster | Edge 2 (0 to 10); Intensity 1 (0 to 10); Levels 3 (2 to 8) | Each channel cut into Levels steps and the edges inked black, thicker with Edge, more of them with Intensity. |
+| Diagonal Smear | Length 4 (0 to 10); Highlights 0 (0 to 20); Intensity 10 (0 to 10) | The dark areas smeared along a 45° diagonal over 2 x Length + 1 pixels (Intensity how much); Highlights lifts the light areas. |
+| Blotted Color | Brush size 2 (0 to 10); Contrast 12 (0 to 25); Smoothness 5 (1 to 15); Seed 1 | Blots of about Brush size, their edges softened by Smoothness, lighten and darken the (median-flattened) colours by Contrast, as if dabbed on. |
+| Primed Canvas | Brush size 6 (0 to 40); Density 16 (0 to 40); Relief 4 (0 to 50); Angle 135° | A muted underlayer (blurred by Brush size, less saturated) shows through the paint as Density falls; the whole lit as a woven canvas from Angle, raised by Relief. |
+| Chalked Edges | Width 2 (1 to 14); Brightness 38 (0 to 50); Smoothness 5 (1 to 15) | The image softened by Smoothness with its edges (widened by Width) drawn over it: whitened like chalk when Brightness is above 25, darkened like ink below it. |
+| Diagonal Hatching | Midpoint 50 (0 to 100); Length 15 (3 to 50); Contrast 3 (0 to 10) | Areas lighter than Midpoint are stroked along 45°, darker ones along -45°, each stroke Length pixels; Contrast sharpens the result. |
+| Pencil Weave | Length 9 (3 to 50); Contrast 6 (0 to 20); Intensity 1 (1 to 3); Seed 1 | Pencil strokes of Length along 45° darken the picture where it is dark, a second set along -45° joins in the darkest areas, more with Intensity; Contrast raises the contrast underneath. |
+| Light and Shadow Strokes | Midpoint 5 (0 to 10); Highlights 2 (0 to 10); Shadows 6 (0 to 10) | Above Midpoint the picture is stroked with long light strokes along -45° (lighter with Highlights); below it with short dark strokes along 45° (darker with Shadows). |
+| Spray Streaks | Length 12 (0 to 20); Radius 7 (0 to 25); Angle 45°; Seed 1 | Each pixel takes the colour from a random point within Radius, then everything is streaked over Length pixels along Angle. |
+| Ink Wash | Brush size 10 (3 to 15); Pressure 2 (0 to 15); Contrast 16 (0 to 40); Paper color (#F4EFE2) | The darkness, softened by Brush size and steepened by Contrast, laid as black ink on the paper colour; Pressure lets the ink bleed outward; faint paper fibres show through. |
+| Copier Toner | Detail 7 (1 to 24); Intensity 8 (1 to 50) | Black toner where a pixel is darker than its surroundings (over Detail pixels, more with Intensity) and in the darkest areas, white elsewhere. |
+| Rubber Print | Threshold 50 (0 to 100); Smoothness 5 (1 to 50); Dark color (#000000); Paper color (#FFFFFF); Seed 1 | The brightness, smoothed by Smoothness, split at Threshold into the dark colour and the paper colour, with specks where the block took no ink. |
+| Wet Fiber Paper | Length 8 (3 to 50); Brightness 60 (0 to 100); Contrast 80 (0 to 100); Seed 1 | Each colour runs Length pixels along the direction of the fibres there (a smooth random field), over visible paper fibres; Brightness and Contrast adjust the result. |
 
 ### Blur
 
@@ -232,8 +354,10 @@ transparent areas.
 |---|---|---|
 | Colorize | Hue 30 (0 to 360); Saturation 50 (0 to 100) | Every pixel takes the hue and saturation, keeping its luminance as the lightness. |
 | Diffuse | Level 20 (1 to 100) | Pixels swapped with neighbours up to `1 + 4 level / 100` pixels away, then softened. |
+| Lens Correction | Distortion 0 (-100 to 100); Fringe 0 (-100 to 100); Corner light 0 (-100 to 100); Scale 100 (50 to 150) | Each pixel samples the picture at `c + v (1 + k r^2) / s` from the centre `c` (`r` the distance over half the diagonal, `k` Distortion / 200, `s` Scale / 100); red samples `1 + Fringe / 10000` farther and blue as much nearer; colours times `1 + Corner light / 100 r^2`. |
 | Photo Filter | Filter color (#EC8A00); Density 25 (1 to 100); Preserve luminosity (on) | `c (1 - d) + 2 c f d` per channel for filter colour `f` and density `d`; Preserve luminosity scales back to the old luminance. |
 | Sepia Toning | Level 50 (0 to 100) | The gray `L` moves toward `(1.07 L + 20 t, 0.87 L + 8 t, 0.6 L)` by Level `t`. |
+| Tilt Shift | Focus position 50 (0 to 100); Focus width 20 (0 to 100); Blur 8 (1 to 50); Angle 0 (0 to 180) | A band across the picture (horizontal at 0 degrees) centred at Focus position, a share of the way across it, Focus width wide, stays sharp; outside it the Gaussian blur of Blur sigma is mixed in, smoothstep over 15 % of the way across. |
 | Vintage Photo | Era: 1839 (daguerreotype), **1876 (albumen print)**, 1925 (sepia), 1945 (black and white), 1955 (cross-process), 1960 (faded print), 1965 (warm color); Intensity 70 (0 to 100) | Each era has its tint, contrast, fading, grain and vignette (1839 the strongest grain and vignette, the 1960s warm and faded), mixed in by Intensity. |
 
 ### Color Transform
@@ -244,6 +368,9 @@ transparent areas.
 | Halftone | Max. dot radius 4 (2 to 20); Cyan angle 105°; Magenta angle 75°; Yellow angle 90°; Black angle 45° | Cyan, magenta, yellow and black screens of round dots in cells of twice Max. dot radius at their angles, printed over one another; a dot's area follows its ink. |
 | Psychedelic | Level 128 (0 to 255) | Each channel shifted by Level (times 1, 2 and 3 for red, green and blue) and folded back. |
 | Solarize | Level 128 (0 to 255) | Levels at or above `255 - Level` are inverted. |
+| Riso Print | Inks: **pink and blue**, orange and teal, red and black, yellow and purple, custom (First ink #FF48B0, Second ink #0078BF); Size 6 (2 to 40); Angle 15°; Distance 3 (0 to 40); Grain 40 (0 to 100); Paper color #F5F0E4; Seed 1 | The picture is split into two inks by a least-squares fit of each pixel's optical density to the inks' densities, so each colour goes to the ink that makes it best; each ink is a screen of round dots (cells of Size pixels, the first at Angle, the second 30° from it) whose area follows its coverage, the second moved by Distance (out of register); Grain lays the ink unevenly (soft blotches, speckles of missing ink) and shows paper fibres; inks multiply over the paper. |
+| Newsprint | Inks: **black**, four colors; Size 5 (2 to 40); Angle 45°; Dot gain 30 (0 to 100); Distance 1 (0 to 20, four colours only); Grain 35 (0 to 100); Paper color #E8E2D2; Seed 1 | Black: the darkness as one screen of round dots at Angle. Four colors: cyan, magenta, yellow and black (black generation from the darkest channel) at Angle - 30°, Angle + 30°, Angle - 45° and Angle, cyan and magenta moved apart by Distance. Dot gain swells the middle tones as ink spreads; Grain shows paper fibres and blotchy ink; inks multiply over the paper. |
+| Grit Screen | Screen: **Fine dots**, Coarse dots, Grain, Short lines, Long lines, Strokes; Seed 1 | Each channel set to full or none by comparing it with a random screen (dots, grain, horizontal lines or diagonal strokes), so the tones become a pattern of pure colours. |
 
 ### Contour
 
@@ -252,6 +379,7 @@ transparent areas.
 | Edge Detect | Background: **White**, Black, Other; Other color (#808080); Sensitivity 5 (1 to 10) | Sobel edges of the brightness times Sensitivity / 5: dark lines on white or the other colour, light lines on black. |
 | Find Edges | Edge type: **Soft**, Solid; Level 50 (0 to 100) | Sobel edges in the pixels' own colours on white; Solid cuts them at 0.3. |
 | Trace Contour | Level 128 (0 to 255); Edge type: **Lower**, Upper | Pixels on the border of the area below (Lower) or above (Upper) Level keep their colour; everything else turns white. |
+| Neon Outline | Width 2 (1 to 14); Brightness 6 (0 to 20); Smoothness 5 (1 to 15) | The colour edges of the image (softened by Smoothness, widened by Width) glow on black, brighter with Brightness. |
 
 ### Creative
 
@@ -321,6 +449,11 @@ transparent areas.
 | Plastic | Highlight 50 (1 to 100); Depth 20 (1 to 100); Smoothness 50 (1 to 100); Light direction 135°; Light color (#FFFFFF) | The image blurred by Smoothness and lit as a glossy surface, with highlights in the light colour. |
 | Relief Sculpture | Detail 50 (1 to 100); Depth 50 (1 to 100); Smoothness 50 (1 to 100); Light direction 135°; Surface color (#C8C0B0) | The image's relief in the surface colour, lit from Light direction; Detail, Depth, Smoothness. |
 | Stone | Detail 50 (1 to 100); Density 50 (1 to 100); Light direction 135° | A fractal stone texture (Detail, Density) lit from Light direction over the image. |
+| Embossed Paper | Threshold 50 (0 to 100); Grain 10 (0 to 20); Relief 11 (0 to 25); Paper color (#EDEAE0) | Parts darker than Threshold are pressed up out of the paper colour (slightly darker), the sheet grainy with Grain and lit from the upper left by Relief. |
+| Gypsum Cast | Threshold 40 (0 to 100); Smoothness 2 (1 to 15); Angle 135°; Paper color (#F2F0EA) | Parts darker than Threshold are raised, rounded by Smoothness, and the cast in the paper colour is lit from Angle. |
+| Film Clumping | Density 12 (0 to 50); Black point 40 (0 to 50); White point 5 (0 to 50); Seed 1 | Gray grain that clumps where the picture is dark and opens where it is light, coarser with Density; Black point and White point lift the darkest and lower the lightest tones. |
+| Cracked Surface | Spacing 15 (2 to 100); Depth 6 (0 to 10); Brightness 9 (0 to 10); Seed 1 | Fine cracks between random cells about Spacing pixels across, darker and deeper with Depth, over the picture lit as a raised surface; Brightness sets its lightness. |
+| Quilt Squares | Size 8 (2 to 20); Relief 8 (0 to 25); Seed 1 | Squares of Size pixels, each in the colour at its centre, raised by random amounts with dark seams between them, lit by Relief. |
 
 ### Tone Curve settings
 
@@ -340,6 +473,9 @@ through the master curve, then its channel's curve.
 - Third-party plug-in filters are not supported.
 
 ## Checks
+
+- `fx::preview::tests::show_original_and_the_settings_only_window`
+- `ui::effect_dialog::tests::effect_presets_are_saved_by_effect_and_name`
 
 - Given any effect, when it runs with its defaults, its maximums or its
   minimums, then the image keeps its size and every name, setting and
@@ -381,15 +517,44 @@ through the master curve, then its channel's curve.
 - Given the Image Adjustments, then undo and redo walk the recorded
   steps and a new change drops the undone ones, snapshots are numbered
   from 1, Auto adjust finds 60 and 200 on columns of grays from 60 to
-  200 with two outliers, the pickers keep the points apart, and every
-  quarter turn maps preview points back to the same pixel
-  (`ui::lab_dialog::tests`).
+  200 with two outliers, the pickers keep the points apart
+  (`ui::lab_dialog::tests`), and every quarter turn of the shared
+  preview maps preview points back to the same point of the picture
+  (`ui::before_after::tests::turned_points_map_back`).
 - Given gray 64, then Contrast Enhancement with input high 128 doubles
   only red when Red is chosen and every channel for Master, and
   Target Color Balance from 64 to 128 changes only green when Green is
   chosen and all three with Always adjust all channels
   (`channel_lists_limit_levels_and_target_balance`); a preset file keeps
   only its numbers (`presets_keep_numbers_only`).
+- Given a selected bitmap and the Blur dialog, then the drawing shows
+  the blur as soon as the dialog opens and follows a changed radius
+  with no button pressed, idle frames make nothing again, the dialog
+  closed by Esc leaves the bitmap and the history as they were, and OK
+  keeps the preview shown as one "Add Effect" step
+  (`fx::preview::tests::the_effect_shows_on_the_drawing_while_its_dialog_is_open`).
+- Given the Preview box, when it is cleared, then the effect leaves the
+  drawing with no step left, ticked again it comes back, and OK with
+  the box cleared makes the effect then, still one step
+  (`the_preview_box_puts_the_effect_on_the_drawing_and_takes_it_off`).
+- Given an effect edited from the FX section, then nothing is made
+  until a value differs, the change then shows in the effect's place,
+  and OK is one "Edit Effect" step
+  (`editing_an_effect_previews_the_change_in_its_place`); a vector
+  object previews as its picture and is itself again on Cancel
+  (`a_vector_object_previews_its_picture`); a cancelled preview job
+  gives nothing (`a_cancelled_job_gives_nothing`), and a raised flag
+  stops the render before its next effect
+  (`a_raised_flag_stops_the_render`).
+- Given a dropped preview whose thread still runs, then no second one
+  starts beside it until it has ended, also when the Preview box is
+  cleared and ticked again
+  (`a_dropped_preview_still_running_holds_the_next_one_back`); given a
+  preview whose thread died, then the same values are not made again
+  frame after frame, and a changed value is made
+  (`a_failed_preview_is_not_made_again_until_a_value_changes`); the
+  box starts cleared in the browser
+  (`the_preview_box_starts_cleared_in_the_browser`).
 - Given a preview at a quarter of the size, then pixel settings are a
   quarter, never below their minimum, and other settings stay
   (`previews_scale_pixel_sizes_only`).
@@ -402,8 +567,9 @@ through the master curve, then its channel's curve.
 The Effects menu's bitmap effects work on any object, not only bitmaps.
 A vector object keeps its shape, fill and outlines; its effects are kept
 with it (`Shape::raster_fx`) and it is drawn as the picture they make:
-the object alone, drawn in its own space at 300 dpi (fewer pixels when it
-would pass 4 million) with a margin of 2 mm, its outline width and 8 % of
+the object alone, drawn in its own space at the drawing's rendering
+resolution (Page > Page Setup, 72 to 1200 dpi; 300 when none is set;
+fewer pixels when it would pass 16 million) with a margin of 2 mm, its outline width and 8 % of
 its size, then the visible effects in order. The picture is kept in the
 drawing, so the screen, PDF, SVG, EPS and EMF draw it without the
 effects' code; DXF and PLT draw the object itself.
@@ -413,7 +579,9 @@ effects' code; DXF and PLT draw the object itself.
   removes the effects as for a bitmap.
 - Any change to the object (nodes, colour, outline, a scale) makes the
   picture again as part of the same undo step; a move or a turn keeps
-  it (it lives in the object's own space).
+  it (it lives in the object's own space). A new rendering resolution
+  makes every such picture again at it, in the same step (#382,
+  `vector_effects_follow_the_rendering_resolution`).
 - Effects > Flatten Effects turns the object into the bitmap of its
   picture, in its place.
 
@@ -440,10 +608,38 @@ its default settings to a 64-pixel landscape, and its name below.
 
 The bitmap's context menu writes its pixels, the effects in its stack
 included, to a PNG file.
+The bitmap's context menu writes the picture to a PNG, JPEG or TIFF
+file (a download in the browser, of the kind offered first). The kind
+is the file name's extension (`.png`; `.jpg` or `.jpeg`; `.tif` or
+`.tiff`); the dialog offers first, and gives the name, the kind of the
+file the picture is linked to or was imported from (its name), else
+TIFF for a CMYK picture, else PNG (#1834).
 
-## Bitmap Mask docker
+- PNG: the pixels as the drawing keeps them, the effects in its stack
+  included (RGB, or grey for a Grayscale picture).
+- A CMYK picture (a `.cdr` CMYK image, or one in the CMYK colour mode)
+  as JPEG or TIFF is written in CMYK: the ink channels it keeps
+  (`Shape::picture_inks`, #1659) as they are, else its pixels through
+  the colour management, as its separation plates print them; a spot
+  ink it keeps goes in as its process mix. The TIFF is a separated
+  image, the JPEG a four-component file, both with the picture's
+  resolution and the CMYK profile in use (the writers of the CMYK
+  export, #1763). The TIFF of a picture with see-through pixels keeps
+  them: a fifth channel, an unassociated alpha (ExtraSamples 2), beside
+  each pixel's full inks (#1925); an opaque picture stays four
+  channels. The JPEG holds no transparency: a see-through pixel holds
+  that much less ink.
+- Any other picture as JPEG is RGB (grey for a Grayscale picture) at
+  quality 92 over white paper, with its resolution; as TIFF it is RGB,
+  with its alpha when a pixel is see-through.
 
-Bitmaps > Bitmap Mask opens the docker:
+`bitmap_file::tests::save_bitmap_as_keeps_the_inks_of_a_cmyk_picture`,
+`bitmap_file::tests::save_bitmap_as_writes_an_rgb_picture_as_jpeg_or_tiff`,
+`bitmap_file::tests::a_cmyk_picture_keeps_its_transparency_in_tiff_and_edit_bitmap`.
+
+## Color Mask docker
+
+Image > Color Mask opens the docker:
 
 - An eyedropper (the Color Eyedropper tool; each colour it samples
   fills the selected slot and ticks it) and "Select colours from

@@ -25,6 +25,26 @@ use tracedraw_core::{
 const PT_MM: f64 = 25.4 / 72.0;
 const MAX_OPS: u64 = 6_000_000;
 const MAX_DEPTH: usize = 200;
+/// How deep `{ ... }` procedures may nest in the program text. The
+/// reader of a procedure body calls itself once per level, so a file of
+/// nothing but opening braces (100 000 of them in 100 KB) ran the stack
+/// out, which cannot be caught, and closed the program. Real programs
+/// nest a handful of levels; procedures beyond this depth are read as
+/// empty.
+const MAX_PROC_NESTING: usize = 512;
+/// The stack the interpreter runs on (a thread of its own, outside the
+/// browser) and how much of it a program's recursion may use before it
+/// is stopped as nested too deeply. A counted depth alone cannot keep a
+/// hostile program from running the stack out: one nested `exec` takes
+/// some 70 KB of stack in a debug build (the operator match's frame),
+/// so 150 of them overflowed a 2 MB thread long before [`MAX_DEPTH`].
+#[cfg(not(target_arch = "wasm32"))]
+const INTERP_STACK: usize = 32 << 20;
+#[cfg(not(target_arch = "wasm32"))]
+const STACK_BUDGET: usize = 24 << 20;
+/// In the browser there is one thread, with a stack of about 1 MB.
+#[cfg(target_arch = "wasm32")]
+const STACK_BUDGET: usize = 384 << 10;
 const MAX_STACK: usize = 50_000;
 const MAX_STRING: usize = 64 << 20;
 
@@ -74,8 +94,36 @@ pub fn is_eps(bytes: &[u8]) -> bool {
         || head.starts_with(b"%!")
 }
 
-/// Parse an EPS (or plain PostScript) file into shapes.
+/// Parse an EPS (or plain PostScript) file into shapes. Outside the
+/// browser the program runs on a thread with a stack of its own
+/// ([`INTERP_STACK`]), so its recursion has a known room whatever
+/// thread asks for the import; when that thread cannot be started the
+/// program runs here.
 pub fn parse(bytes: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let spawned: Option<Result<Imported, String>> = std::thread::scope(|s| {
+            let handle = std::thread::Builder::new()
+                .name("eps-import".into())
+                .stack_size(INTERP_STACK)
+                .spawn_scoped(s, || parse_here(bytes, ids, STACK_BUDGET))
+                .ok()?;
+            Some(
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err("the PostScript reader stopped unexpectedly".into())),
+            )
+        });
+        if let Some(result) = spawned {
+            return result;
+        }
+    }
+    parse_here(bytes, ids, STACK_BUDGET)
+}
+
+/// [`parse`] on the current thread, the program's recursion allowed
+/// `stack_budget` bytes of its stack.
+fn parse_here(bytes: &[u8], ids: &mut IdSource, stack_budget: usize) -> Result<Imported, String> {
     // DOS EPS binary header: PostScript section offset and length.
     let ps: &[u8] = if bytes.starts_with(&[0xc5, 0xd0, 0xd3, 0xc6]) && bytes.len() >= 12 {
         let off = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
@@ -89,7 +137,17 @@ pub fn parse(bytes: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
     let start = postscript_start(ps).ok_or("not a PostScript file")?;
     let ps = &ps[start..];
     let bbox = bounding_box(ps);
+    // A classic Illustrator file that names no procedure set: its
+    // operators, defined first in PostScript (#1728).
+    let with_procs;
+    let ps = if classic_ai_without_procs(ps) {
+        with_procs = [CLASSIC_AI_PROCS.as_bytes(), b"\n", ps].concat();
+        &with_procs[..]
+    } else {
+        ps
+    };
     let mut interp = Interp::new(ps, ids, bbox);
+    interp.stack_budget = stack_budget;
     interp.install_systemdict();
     interp.run_main();
     let warnings = std::mem::take(&mut interp.warnings);
@@ -164,6 +222,73 @@ pub fn parse(bytes: &[u8], ids: &mut IdSource) -> Result<Imported, String> {
 }
 
 /// `%%HiResBoundingBox` or `%%BoundingBox` in points.
+/// The operators of the classic (PostScript-based) Illustrator format
+/// that TraceDraw writes, as the public format specification describes
+/// them, in PostScript: path construction (`m`, `l`, `L`, `c`, `C`,
+/// `v`, `V`, `y`, `Y`), painting (`f`, `F`, `s`, `S`, `b`, `B`, `n`,
+/// `N`), compound paths (`*u`, `*U`), clipping (`W` in a `q` ... `Q`
+/// group), groups (`u`, `U`), process, grey, RGB and custom colours for
+/// the fill (`k`, `g`, `Xa`, `x`, `Xx`) and the outline (`K`, `G`, `XA`,
+/// `X`, `XX`), outline settings and layers. A custom colour's tint runs
+/// from 0 (the whole colour) to 1 (none: white).
+/// The fill and outline colours are kept apart, as the format keeps
+/// them; the parts of a compound path are painted together at its end.
+const CLASSIC_AI_PROCS: &str = "\
+/_f {0 0 0 1 setcmykcolor} def /_s {0 0 0 1 setcmykcolor} def
+/_cp false def /_pp {} def /_clip false def
+/k {[ 5 1 roll /setcmykcolor load ] cvx /_f exch def} def
+/K {[ 5 1 roll /setcmykcolor load ] cvx /_s exch def} def
+/g {[ exch /setgray load ] cvx /_f exch def} def
+/G {[ exch /setgray load ] cvx /_s exch def} def
+/Xa {[ 4 1 roll /setrgbcolor load ] cvx /_f exch def} def
+/XA {[ 4 1 roll /setrgbcolor load ] cvx /_s exch def} def
+/_tc {/_t exch def pop [ 5 1 roll 4 {1 _t sub mul 4 1 roll} repeat /setcmykcolor load ] cvx} def
+/_tr {/_t exch def pop [ 4 1 roll 3 {1 exch sub 1 _t sub mul 1 exch sub 3 1 roll} repeat /setrgbcolor load ] cvx} def
+/x {_tc /_f exch def} def /X {_tc /_s exch def} def
+/Xx {1 eq {_tr} {_tc} ifelse /_f exch def} def
+/XX {1 eq {_tr} {_tc} ifelse /_s exch def} def
+/w {setlinewidth} def /j {setlinejoin} def /J {setlinecap} def
+/M {setmiterlimit} def /d {setdash} def
+/m {moveto} def /l {lineto} def /L {lineto} def /c {curveto} def /C {curveto} def
+/v {currentpoint 6 2 roll curveto} def /V {currentpoint 6 2 roll curveto} def
+/y {2 copy curveto} def /Y {2 copy curveto} def
+/_F {gsave _f fill grestore} def /_S {gsave _s stroke grestore} def
+/_done {_clip {clip /_clip false def} if newpath} def
+/_paint {_cp {/_pp exch def} {exec _done} ifelse} def
+/F {{_F} _paint} def /f {closepath F} def
+/S {{_S} _paint} def /s {closepath S} def
+/B {{_F _S} _paint} def /b {closepath B} def
+/N {{} _paint} def /n {closepath N} def
+/W {/_clip true def} def
+/*u {/_cp true def} def /*U {/_cp false def _pp _done /_pp {} def} def
+/u {.tdbegingroup} def /U {.tdendgroup} def /q {gsave} def /Q {grestore} def
+/Lb {clear} def /Ln {pop} def /LB {} def
+/A {pop} def /O {pop} def /R {pop} def /D {pop} def
+";
+
+/// The file is a classic Illustrator file (its header carries the
+/// format's version comments) that defines none of the format's
+/// operators itself: no procedure set in its prolog.
+fn classic_ai_without_procs(ps: &[u8]) -> bool {
+    let head = String::from_utf8_lossy(&ps[..ps.len().min(64 << 10)]);
+    let mut classic = false;
+    for line in head.lines() {
+        if line.starts_with("%AI5_FileFormat")
+            || line.starts_with("%%AI8_CreatorVersion")
+            || line.starts_with("%AI3_")
+        {
+            classic = true;
+        }
+        if line.starts_with("%%BeginResource") || line.starts_with("%%BeginProcSet") {
+            return false;
+        }
+        if line.starts_with("%%EndProlog") {
+            break;
+        }
+    }
+    classic
+}
+
 fn bounding_box(ps: &[u8]) -> Option<Rect> {
     let head = String::from_utf8_lossy(&ps[..ps.len().min(64 << 10)]);
     let mut lo: Option<Rect> = None;
@@ -752,6 +877,10 @@ struct Interp<'a> {
     shapes: Vec<Shape>,
     warnings: Vec<String>,
     fonts: HashMap<Rc<str>, Dict>,
+    /// Instances given to `defineresource`, by category and key, which
+    /// `findresource` hands back (#3556: shadings and colour spaces
+    /// kept as resources came back empty).
+    resources: HashMap<(Rc<str>, Rc<str>), Obj>,
     rand_state: u64,
     /// Device transform: PostScript points, y up (same as ours) to mm.
     base: Affine,
@@ -770,6 +899,21 @@ struct Interp<'a> {
     pages: Vec<(usize, Option<Size>)>,
     /// The page size `setpagedevice` set, mm.
     page_size: Option<Size>,
+    /// Where each open group of a classic Illustrator file (`u`) started
+    /// among the objects painted.
+    group_starts: Vec<usize>,
+    /// Where the stack stood when the program started running, and how
+    /// many bytes of it the program's recursion may use (see
+    /// [`STACK_BUDGET`]).
+    stack_base: usize,
+    stack_budget: usize,
+}
+
+/// Where the stack stands now: the address of a local variable.
+#[inline(never)]
+fn stack_mark() -> usize {
+    let probe = 0u8;
+    std::hint::black_box(&probe) as *const u8 as usize
 }
 
 impl<'a> Interp<'a> {
@@ -797,6 +941,7 @@ impl<'a> Interp<'a> {
             shapes: Vec::new(),
             warnings: Vec::new(),
             fonts: HashMap::new(),
+            resources: HashMap::new(),
             rand_state: 0x2545F4914F6CDD1D,
             base,
             bbox,
@@ -807,6 +952,9 @@ impl<'a> Interp<'a> {
             jpeg_files: Vec::new(),
             pages: Vec::new(),
             page_size: None,
+            group_starts: Vec::new(),
+            stack_base: stack_mark(),
+            stack_budget: usize::MAX,
         }
     }
 
@@ -886,6 +1034,8 @@ impl<'a> Interp<'a> {
             "stop",
             "stopped",
             "countexecstack",
+            "countdictstack",
+            "dictstack",
             "execstack",
             "quit",
             "forall",
@@ -969,6 +1119,9 @@ impl<'a> Interp<'a> {
             "resourcestatus",
             "setpagedevice",
             "currentpagedevice",
+            // the groups of classic Illustrator files (see CLASSIC_AI_PROCS)
+            ".tdbegingroup",
+            ".tdendgroup",
             "nulldevice",
             "echo",
             "setuserparams",
@@ -1174,7 +1327,7 @@ impl<'a> Interp<'a> {
             match self.scanner.next() {
                 Token::Eof => break,
                 Token::ProcStart => {
-                    let p = self.read_proc();
+                    let p = self.read_proc(0);
                     self.push(p);
                 }
                 Token::ProcEnd => {}
@@ -1188,13 +1341,34 @@ impl<'a> Interp<'a> {
     }
 
     /// Read a `{ ... }` body from the scanner into a procedure object.
-    fn read_proc(&mut self) -> Obj {
+    /// `depth` is how many bodies this one is inside; at
+    /// [`MAX_PROC_NESTING`] the body is skipped, braces counted, and an
+    /// empty procedure stands for it.
+    fn read_proc(&mut self, depth: usize) -> Obj {
+        if depth >= MAX_PROC_NESTING {
+            let mut open = 1usize;
+            loop {
+                match self.scanner.next() {
+                    Token::Eof => break,
+                    Token::ProcStart => open += 1,
+                    Token::ProcEnd => {
+                        open -= 1;
+                        if open == 0 {
+                            break;
+                        }
+                    }
+                    Token::Obj(_) => {}
+                }
+            }
+            self.warn("procedures nested too deeply; the innermost were left out");
+            return mk_array(Vec::new(), true);
+        }
         let mut items = Vec::new();
         loop {
             match self.scanner.next() {
                 Token::Eof | Token::ProcEnd => break,
                 Token::ProcStart => {
-                    let inner = self.read_proc();
+                    let inner = self.read_proc(depth + 1);
                     items.push(inner);
                 }
                 Token::Obj(o) => items.push(o),
@@ -1233,6 +1407,10 @@ impl<'a> Interp<'a> {
     fn exec_obj(&mut self, o: Obj) -> Flow {
         self.ops += 1;
         if self.ops > MAX_OPS {
+            return Flow::Stop;
+        }
+        if self.stack_base.abs_diff(stack_mark()) > self.stack_budget {
+            self.warn("procedures nested too deeply");
             return Flow::Stop;
         }
         match o {
@@ -1297,6 +1475,9 @@ impl<'a> Interp<'a> {
                 self.exec_obj(Obj::Array(items.clone(), true))
             }
             other => {
+                // Pushing counts as a step too, or `/a loop` (a literal
+                // name as its procedure) loops for ever.
+                self.ops += 1;
                 self.push(other.clone());
                 Flow::Normal
             }
@@ -1304,6 +1485,25 @@ impl<'a> Interp<'a> {
     }
 
     // ----- shapes -----
+
+    /// The objects painted since `start` become one group (two or more;
+    /// one object stays as it is). Page ends inside the group move to
+    /// its end.
+    fn close_group(&mut self, start: usize) {
+        if start > self.shapes.len() || self.shapes.len() - start < 2 {
+            return;
+        }
+        let children = self.shapes.split_off(start);
+        let mut group = self.new_shape(ShapeKind::Group { children });
+        group.fill = Fill::None;
+        group.stroke = None;
+        self.shapes.push(group);
+        for (at, _) in &mut self.pages {
+            if *at > start {
+                *at = start + 1;
+            }
+        }
+    }
 
     fn new_shape(&mut self, kind: ShapeKind) -> Shape {
         Shape::new(ShapeId(self.ids.shape().0), kind)
@@ -1352,6 +1552,7 @@ impl<'a> Interp<'a> {
         if path.elements().is_empty() {
             return;
         }
+        let nonzero = crate::nonzero_matters(&path);
         let closed = path
             .elements()
             .iter()
@@ -1370,6 +1571,9 @@ impl<'a> Interp<'a> {
         };
         if fill && even_odd {
             shape.data.push(("fill.rule".into(), "evenodd".into()));
+        } else if fill && nonzero {
+            // `fill` uses the nonzero rule, `eofill` even-odd (#3224).
+            shape.fill_rule = tracedraw_core::shaping::FillRule::NonZero;
         }
         shape.stroke = if stroke {
             let scale = self.device_scale();
@@ -1386,7 +1590,65 @@ impl<'a> Interp<'a> {
         } else {
             None
         };
+        // An outline painted over the fill just painted, on the same path
+        // (`gsave fill grestore stroke`, Illustrator's `B`), is that
+        // object's outline, not an object of its own.
+        if !fill && shape.stroke.is_some() {
+            let stroke = shape.stroke.clone();
+            if let (ShapeKind::Path { path: p, .. }, Some(last)) =
+                (&shape.kind, self.unoutlined_fill())
+            {
+                if matches!(&last.kind, ShapeKind::Path { path: q, .. } if q == p) {
+                    last.stroke = stroke;
+                    return;
+                }
+            }
+        }
         self.emit(shape);
+    }
+
+    /// The object painted last, when it is a filled path without an
+    /// outline (in a clip frame of its own when clipped) that no group
+    /// or page has begun since.
+    fn unoutlined_fill(&mut self) -> Option<&mut Shape> {
+        let floor = self
+            .group_starts
+            .last()
+            .copied()
+            .into_iter()
+            .chain(self.pages.last().map(|p| p.0))
+            .max()
+            .unwrap_or(0);
+        if self.shapes.len() <= floor {
+            return None;
+        }
+        let clip = self.gs.clip.as_ref();
+        let last = self.shapes.last_mut()?;
+        let framed = match &last.kind {
+            ShapeKind::ClipFrame { frame, contents } => {
+                let same = contents.len() == 1
+                    && matches!((&frame.kind, clip),
+                        (ShapeKind::Path { path, .. }, Some(c)) if path == c);
+                if !same {
+                    return None;
+                }
+                true
+            }
+            _ => false,
+        };
+        fn unoutlined(s: &mut Shape) -> Option<&mut Shape> {
+            (matches!(s.kind, ShapeKind::Path { .. })
+                && s.stroke.is_none()
+                && !matches!(s.fill, Fill::None))
+            .then_some(s)
+        }
+        if !framed {
+            return unoutlined(last);
+        }
+        match &mut last.kind {
+            ShapeKind::ClipFrame { contents, .. } => unoutlined(&mut contents[0]),
+            _ => None,
+        }
     }
 
     fn user_to_device(&self, p: Point) -> Point {
@@ -1885,6 +2147,20 @@ impl<'a> Interp<'a> {
                 }
             }
             "countexecstack" => self.push(Obj::Int(self.depth as i64)),
+            "countdictstack" => self.push(Obj::Int(self.dicts.len() as i64)),
+            "dictstack" => {
+                // array dictstack subarray: the dictionaries, bottom first.
+                let a = need!(self.pop());
+                let Obj::Array(items, exec) = a else {
+                    return Flow::Normal;
+                };
+                let n = self.dicts.len().min(items.borrow().len());
+                for (i, d) in self.dicts.iter().take(n).enumerate() {
+                    items.borrow_mut()[i] = Obj::Dict(d.clone());
+                }
+                let sub: Vec<Obj> = items.borrow()[..n].to_vec();
+                self.push(mk_array(sub, exec));
+            }
             "execstack" => {
                 let a = need!(self.pop());
                 self.push(a);
@@ -1935,8 +2211,9 @@ impl<'a> Interp<'a> {
                     }
                     (Obj::Dict(d), _) | (Obj::Font(d), _) => {
                         let key = need!(key_of(&k));
-                        match d.borrow().map.get(&key) {
-                            Some(v) => v.clone(),
+                        let found = d.borrow().map.get(&key).cloned();
+                        match found {
+                            Some(v) => self.dict_of_op(v),
                             None => {
                                 self.warn(format!("get: undefined key {key}"));
                                 Obj::Null
@@ -2081,7 +2358,10 @@ impl<'a> Interp<'a> {
                 let k = need!(self.pop());
                 let key = need!(key_of(&k));
                 match self.lookup(&key) {
-                    Some(v) => self.push(v),
+                    Some(v) => {
+                        let v = self.dict_of_op(v);
+                        self.push(v);
+                    }
                     None => self.warn(format!("load: undefined {key}")),
                 }
             }
@@ -2337,6 +2617,16 @@ impl<'a> Interp<'a> {
                 self.gs.ctm = self.base;
                 self.gs.path = path;
             }
+            ".tdbegingroup" => {
+                if self.group_starts.len() < 256 {
+                    self.group_starts.push(self.shapes.len());
+                }
+            }
+            ".tdendgroup" => {
+                if let Some(start) = self.group_starts.pop() {
+                    self.close_group(start);
+                }
+            }
             "showpage" | "copypage" => {
                 // A page ends (copypage keeps the marks on the device;
                 // here the next page starts empty).
@@ -2525,14 +2815,21 @@ impl<'a> Interp<'a> {
                     src = need!(self.pop());
                 }
                 if let Obj::File(f) = &src {
-                    if f.borrow().main && f.borrow().pending_filter.is_none() {
-                        // Lazy: decode when first read.
+                    if f.borrow().main {
+                        // Lazy: decode when first read. A filter stacked on
+                        // a still-lazy filter of the current file joins its
+                        // chain, so the data is not read before the
+                        // operator that consumes it runs.
+                        let chain: Rc<str> = match &f.borrow().pending_filter {
+                            Some(p) => Rc::from(format!("{p}|{fname}")),
+                            None => fname.clone(),
+                        };
                         let nf = Rc::new(RefCell::new(FileObj {
                             buf: Vec::new(),
                             pos: 0,
                             main: true,
                             closed: false,
-                            pending_filter: Some(fname.clone()),
+                            pending_filter: Some(chain),
                         }));
                         if fname.as_ref() == "DCTDecode" {
                             self.jpeg_files.push(Rc::as_ptr(&nf) as usize);
@@ -2606,6 +2903,11 @@ impl<'a> Interp<'a> {
                     self.push(key);
                     return self.operator("findfont");
                 }
+                if let Some(o) = key_of(&key).and_then(|k| self.resources.get(&(c.clone(), k))) {
+                    let o = o.clone();
+                    self.push(o);
+                    return Flow::Normal;
+                }
                 let d = mk_dict();
                 if let Some(k) = key_of(&key) {
                     d.borrow_mut()
@@ -2615,15 +2917,30 @@ impl<'a> Interp<'a> {
                 self.push(Obj::Dict(d));
             }
             "defineresource" => {
-                let _cat = self.pop();
+                let cat = self.pop();
                 let inst = need!(self.pop());
-                let _key = self.pop();
+                let key = self.pop();
+                if let (Some(c), Some(k)) =
+                    (cat.as_ref().and_then(key_of), key.as_ref().and_then(key_of))
+                {
+                    if self.resources.len() < 100_000 {
+                        self.resources.insert((c, k), inst.clone());
+                    }
+                }
                 self.push(inst);
             }
             "resourcestatus" => {
-                let _cat = self.pop();
-                let _key = self.pop();
-                self.push(Obj::Bool(false));
+                let cat = self.pop();
+                let key = self.pop();
+                let known = match (cat.as_ref().and_then(key_of), key.as_ref().and_then(key_of)) {
+                    (Some(c), Some(k)) => self.resources.contains_key(&(c, k)),
+                    _ => false,
+                };
+                if known {
+                    self.push(Obj::Int(0));
+                    self.push(Obj::Int(0));
+                }
+                self.push(Obj::Bool(known));
             }
             // ----- path construction -----
             "newpath" => {
@@ -3334,6 +3651,20 @@ impl<'a> Interp<'a> {
         Flow::Normal
     }
 
+    /// The standard dictionaries live in `systemdict` as operators that
+    /// push them. Their value, as `get` or `load` sees it, is the dictionary
+    /// itself, so `systemdict/globaldict get begin` opens a dictionary
+    /// instead of failing and leaving the dictionary stack one short at the
+    /// matching `end`.
+    fn dict_of_op(&self, v: Obj) -> Obj {
+        match v {
+            Obj::Op("systemdict") => Obj::Dict(self.systemdict.clone()),
+            Obj::Op("globaldict") => Obj::Dict(self.globaldict.clone()),
+            Obj::Op("userdict" | "statusdict" | "errordict") => Obj::Dict(self.userdict.clone()),
+            other => other,
+        }
+    }
+
     /// Replace executable names by operators inside a procedure (bind).
     fn bind(&mut self, items: &Arr, depth: usize) {
         if depth > 32 {
@@ -3568,6 +3899,7 @@ impl<'a> Interp<'a> {
                 (xstep.abs() * scale).max(tracedraw_core::Pattern::MIN_TILE_MM),
                 (ystep.abs() * scale).max(tracedraw_core::Pattern::MIN_TILE_MM),
             ),
+            placement: Default::default(),
         }));
     }
 
@@ -3615,7 +3947,7 @@ impl<'a> Interp<'a> {
                 let t = i as f64 / 8.0;
                 let comps = self.eval_function(&func, t, 0);
                 if let Some(c) = color_from(&comps, ncomp) {
-                    stops.push(Stop { pos: t, color: c });
+                    stops.push(Stop::new(t, c));
                 }
             }
         }
@@ -3625,7 +3957,7 @@ impl<'a> Interp<'a> {
                 .first()
                 .map(|s| s.color)
                 .unwrap_or(Color::Gray { v: 0.5 });
-            stops = vec![Stop { pos: 0.0, color: c }, Stop { pos: 1.0, color: c }];
+            stops = vec![Stop::new(0.0, c), Stop::new(1.0, c)];
         }
         let (kind, angle) = match (stype, coords.len()) {
             (2, 4) => {
@@ -3782,19 +4114,25 @@ impl<'a> Interp<'a> {
     /// Decode a lazy filter on the main file now (first read).
     fn materialize(&mut self, f: &Rc<RefCell<FileObj>>) {
         let pending = f.borrow().pending_filter.clone();
-        let Some(fname) = pending else { return };
-        let raw = self.file_raw_for_filter(f, &fname);
-        let decoded = match &*fname {
-            "ASCIIHexDecode" => decode_asciihex(&raw),
-            "ASCII85Decode" => decode_ascii85(&raw),
-            "RunLengthDecode" => decode_runlength(&raw),
-            "FlateDecode" => inflate(&raw),
-            "LZWDecode" => {
-                self.warn("LZWDecode filter is not supported; data skipped");
-                Vec::new()
-            }
-            _ => raw,
-        };
+        let Some(chain) = pending else { return };
+        // `chain` lists the filters in the order they decode, separated by
+        // `|`; the first one decides where the raw data ends.
+        let first = chain.split('|').next().unwrap_or("");
+        let raw = self.file_raw_for_filter(f, first);
+        let mut decoded = raw;
+        for fname in chain.split('|') {
+            decoded = match fname {
+                "ASCIIHexDecode" => decode_asciihex(&decoded),
+                "ASCII85Decode" => decode_ascii85(&decoded),
+                "RunLengthDecode" => decode_runlength(&decoded),
+                "FlateDecode" => inflate(&decoded),
+                "LZWDecode" => {
+                    self.warn("LZWDecode filter is not supported; data skipped");
+                    Vec::new()
+                }
+                _ => decoded,
+            };
+        }
         let mut fb = f.borrow_mut();
         fb.buf = decoded;
         fb.pos = 0;
@@ -3909,7 +4247,7 @@ impl<'a> Interp<'a> {
         if f.borrow().main {
             return match self.scanner.next() {
                 Token::Eof | Token::ProcEnd => None,
-                Token::ProcStart => Some(self.read_proc()),
+                Token::ProcStart => Some(self.read_proc(0)),
                 Token::Obj(o) => Some(o),
             };
         }
@@ -4232,7 +4570,7 @@ impl<'a> Interp<'a> {
             rect: Rect::new(0.0, 0.0, 1.0, 1.0),
             width_px: w,
             height_px: h,
-            png,
+            png: png.into(),
             fx: None,
         });
         shape.transform = transform;
@@ -4685,6 +5023,19 @@ mod tests {
         parse(ps.as_bytes(), &mut ids).expect("parse")
     }
 
+    /// `fill` is nonzero and `eofill` even-odd (#3224).
+    #[test]
+    fn fill_is_nonzero_and_eofill_even_odd() {
+        use tracedraw_core::shaping::FillRule;
+        let sq = "newpath 10 10 moveto 50 10 lineto 50 50 lineto 10 50 lineto closepath 30 30 moveto 70 30 lineto 70 70 lineto 30 70 lineto closepath";
+        let imp = run(&format!(
+            "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 200 100\n{sq} fill\n{sq} eofill\nshowpage\n"
+        ));
+        assert_eq!(imp.shapes.len(), 2, "{:?}", imp.warnings);
+        assert_eq!(imp.shapes[0].fill_rule, FillRule::NonZero);
+        assert_eq!(imp.shapes[1].fill_rule, FillRule::EvenOdd);
+    }
+
     #[test]
     fn paths_fills_strokes_and_bounding_box() {
         let imp = run(
@@ -4695,7 +5046,8 @@ mod tests {
             "{:?}",
             imp.size
         );
-        assert_eq!(imp.shapes.len(), 3, "{:?}", imp.warnings);
+        // The outline stroked over the fill is that object's outline.
+        assert_eq!(imp.shapes.len(), 2, "{:?}", imp.warnings);
         assert_eq!(
             imp.shapes[0].fill,
             Fill::Solid(Color::Rgb {
@@ -4704,7 +5056,7 @@ mod tests {
                 b: 1.0
             })
         );
-        let s = imp.shapes[1].stroke.as_ref().expect("stroke");
+        let s = imp.shapes[0].stroke.as_ref().expect("stroke");
         assert_eq!(
             s.color,
             Color::Rgb {
@@ -4714,7 +5066,7 @@ mod tests {
             }
         );
         assert!((s.width - 4.0 * PT_MM).abs() < 1e-9);
-        let b = imp.shapes[2].bounds();
+        let b = imp.shapes[1].bounds();
         assert!(
             (b.x0 - 100.0 * PT_MM).abs() < 1e-6 && (b.y1 - 80.0 * PT_MM).abs() < 1e-6,
             "{b:?}"
@@ -4870,12 +5222,96 @@ mod tests {
         }
     }
 
+    /// A shading stored with `defineresource` comes back whole from
+    /// `findresource`, so its colours reach the gradient (#3556: the
+    /// stripes came out flat grey because only a stub came back).
+    #[test]
+    fn shading_from_defineresource_keeps_its_colours() {
+        let ps = "%!PS\n%%BoundingBox: 0 0 100 100\n/sh0 << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> /Gradient defineresource pop\n/sh0 /Gradient resourcestatus { pop pop } { (missing) } ifelse\ngsave 0 0 100 50 rectclip /sh0 /Gradient findresource shfill grestore\n";
+        let imp = run(ps);
+        let f = imp
+            .shapes
+            .iter()
+            .find_map(|s| match &s.fill {
+                Fill::Fountain(f) => Some(f),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{:?}", imp.warnings));
+        assert_eq!(
+            f.stops.first().map(|s| s.color),
+            Some(Color::Rgb {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0
+            })
+        );
+        assert_eq!(
+            f.stops.last().map(|s| s.color),
+            Some(Color::Rgb {
+                r: 0.0,
+                g: 0.0,
+                b: 1.0
+            })
+        );
+    }
+
+    /// Two filters stacked on the current file decode together when the
+    /// image reads them, so the image dictionary written after the filters
+    /// is still read as program text (#3556: the stripe images vanished).
+    #[test]
+    fn stacked_filters_on_the_current_file_wait_for_the_image() {
+        // Run-length data: a literal run of 4 bytes, then end of data.
+        let rl = [3u8, 0x00, 0x80, 0xff, 0x40, 128];
+        let hex: String = rl.iter().map(|b| format!("{b:02x}")).collect();
+        let ps = format!(
+            "%!PS\n%%BoundingBox: 0 0 20 20\n/DeviceGray setcolorspace\n20 20 scale\n/src currentfile /ASCIIHexDecode filter /RunLengthDecode filter def\n<< /ImageType 1 /Width 2 /Height 2 /BitsPerComponent 8 /Decode [0 1] /ImageMatrix [2 0 0 -2 0 2] /DataSource src >> image\n{hex}>\n0 0 1 1 rectfill\n"
+        );
+        let imp = run(&ps);
+        let img = imp
+            .shapes
+            .iter()
+            .find(|s| matches!(s.kind, ShapeKind::Bitmap { .. }))
+            .unwrap_or_else(|| panic!("{:?}", imp.warnings));
+        match &img.kind {
+            ShapeKind::Bitmap { png, .. } => {
+                let pm = tiny_skia::Pixmap::decode_png(png).unwrap();
+                let px = pm.pixels();
+                assert_eq!(px[1].red(), 128);
+                assert_eq!(px[3].red(), 64);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(imp.shapes.len(), 2, "{:?}", imp.warnings);
+    }
+
+    /// `systemdict/globaldict get begin` opens a dictionary, and
+    /// `countdictstack array dictstack` lists the stack, so the matching
+    /// `end`s leave the dictionaries a prolog opened in place (#3556: a
+    /// helper defined by an earlier prolog section went missing and the
+    /// images of the file were never drawn).
+    #[test]
+    fn standard_dictionaries_and_dictstack_keep_the_dictionary_stack() {
+        let ps = "%!PS\n%%BoundingBox: 0 0 100 100\n/helpers 5 dict dup begin def /box { 0 0 40 40 rectfill } def\nsystemdict begin /globaldict where { /globaldict get begin } if end /globaldict where { pop end } if\ncountdictstack array dictstack 0 get begin end\nbox\n";
+        let imp = run(ps);
+        assert_eq!(imp.shapes.len(), 1, "{:?}", imp.warnings);
+    }
+
     #[test]
     fn garbage_and_runaway_programs_are_bounded() {
         let mut ids = IdSource::default();
         assert!(parse(b"hello world", &mut ids).is_err());
         let imp = parse(b"%!PS\n{ } loop\n", &mut ids).expect("parse");
         assert!(imp.warnings.iter().any(|w| w.contains("too long")));
+        // A literal name as the procedure of `loop` or `repeat` (a
+        // damaged file) stops too: it never ended.
+        for p in [
+            &b"%!PS\n/a loop\n"[..],
+            b"%!PS\n1000000000 /a repeat\n",
+            b"%!PS\n/m loop {moveto} def 10 10 m\n",
+        ] {
+            let imp = parse(p, &mut ids).expect("parse");
+            assert!(imp.warnings.iter().any(|w| w.contains("too long")), "{:?}", imp.warnings);
+        }
         let imp = parse(b"%!PS\n/r { r } def r\n", &mut ids).expect("parse");
         assert!(imp.warnings.iter().any(|w| w.contains("deeply")));
         let imp = parse(
@@ -4884,5 +5320,133 @@ mod tests {
         )
         .expect("parse");
         assert!(imp.shapes.is_empty());
+    }
+
+    /// Procedures nested 100 000 deep in the text (a hostile or damaged
+    /// file of 200 KB) are read without running the stack out: the
+    /// reader of a body called itself once per brace, which overflowed
+    /// the stack and closed the program. The innermost bodies are left
+    /// out with a warning; a program nested a few hundred deep still
+    /// runs whole.
+    #[test]
+    fn deeply_nested_procedures_are_bounded() {
+        let mut ids = IdSource::default();
+        let mut text = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100\n".to_vec();
+        text.extend(std::iter::repeat_n(b'{', 100_000));
+        text.extend(std::iter::repeat_n(b'}', 100_000));
+        text.extend_from_slice(b" exec 0 0 moveto 10 10 lineto stroke\n");
+        let imp = parse(&text, &mut ids).expect("parse");
+        assert!(
+            imp.warnings.iter().any(|w| w.contains("deeply")),
+            "{:?}",
+            imp.warnings
+        );
+        assert_eq!(imp.shapes.len(), 1, "{:?}", imp.warnings);
+        // Within the bound every level runs: 150 nested bodies, each
+        // running the one inside it, draw the line at the centre.
+        let mut text = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100\n".to_vec();
+        text.extend(std::iter::repeat_n(b'{', 150));
+        text.extend_from_slice(b" 0 0 moveto 10 10 lineto stroke ");
+        text.extend(std::iter::repeat_n(b"} exec ".as_slice(), 150).flatten());
+        let imp = parse(&text, &mut ids).expect("parse");
+        assert!(imp.warnings.is_empty(), "{:?}", imp.warnings);
+        assert_eq!(imp.shapes.len(), 1);
+        // The same program with a stack budget of 64 KB stops as nested
+        // too deeply instead of running the stack out: this is what
+        // keeps a program whose frames are bigger than the counted
+        // depth allows for from closing the program.
+        let imp = parse_here(&text, &mut ids, 64 << 10).expect("parse");
+        assert!(
+            imp.warnings.iter().any(|w| w.contains("deeply")),
+            "{:?}",
+            imp.warnings
+        );
+        assert!(imp.shapes.is_empty());
+    }
+
+    /// A classic Illustrator file as tracing programs write them: RGB
+    /// (`Xa`), custom (`x`, `Xx`) colours and groups (`u` ... `U`),
+    /// with no procedure set (d#2949: everything came in black and
+    /// ungrouped).
+    #[test]
+    fn classic_ai_rgb_and_custom_colours_and_groups() {
+        let imp = run("%!PS-Adobe-3.0\n%%Creator: tracer\n%AI5_FileFormat 3\n\
+            %%BoundingBox: 0 0 100 100\n%%EndProlog\n%%BeginSetup\n%%EndSetup\n\
+            u\n1 0 0 Xa\n0 0 m 10 0 L 10 10 L 0 10 L 0 0 L f\n\
+            0 0 1 XA 2 w\n20 0 m 30 0 L 30 10 L S\n\
+            U\n\
+            0 1 1 0 (Spot red) 0.25 x\n40 0 m 50 0 L 50 10 L f\n\
+            0 0.5 0 (Green) 0 1 Xx\n60 0 m 70 0 L 70 10 L f\n\
+            1 0 0 0 (Cyan) 0 0 Xx\n80 0 m 90 0 L 90 10 L f\n\
+            u\n0 0 m 1 0 L 1 1 L f\nU\n\
+            %%Trailer\n");
+        assert!(
+            imp.warnings.iter().all(|w| !w.contains("undefined")),
+            "{:?}",
+            imp.warnings
+        );
+        assert_eq!(imp.shapes.len(), 5, "{:?}", imp.shapes);
+        let ShapeKind::Group { children } = &imp.shapes[0].kind else {
+            panic!("the first two paths make a group: {:?}", imp.shapes[0].kind);
+        };
+        assert_eq!(children.len(), 2);
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        assert!(
+            matches!(children[0].fill, Fill::Solid(Color::Rgb { r, g, b }) if near(r, 1.0) && near(g, 0.0) && near(b, 0.0)),
+            "{:?}",
+            children[0].fill
+        );
+        let stroke = children[1].stroke.as_ref().expect("the line is stroked");
+        assert!(
+            matches!(stroke.color, Color::Rgb { r, g, b } if near(r, 0.0) && near(g, 0.0) && near(b, 1.0)),
+            "{:?}",
+            stroke.color
+        );
+        // A custom colour at tint 0.25 is three quarters of the colour.
+        assert!(
+            matches!(imp.shapes[1].fill, Fill::Solid(Color::Cmyk { c, m, y, k }) if near(c, 0.0) && near(m, 0.75) && near(y, 0.75) && near(k, 0.0)),
+            "{:?}",
+            imp.shapes[1].fill
+        );
+        // `Xx` with type 1 is RGB, type 0 CMYK.
+        assert!(
+            matches!(imp.shapes[2].fill, Fill::Solid(Color::Rgb { r, g, b }) if near(r, 0.0) && near(g, 0.5) && near(b, 0.0)),
+            "{:?}",
+            imp.shapes[2].fill
+        );
+        assert!(
+            matches!(imp.shapes[3].fill, Fill::Solid(Color::Cmyk { c, .. }) if near(c, 1.0)),
+            "{:?}",
+            imp.shapes[3].fill
+        );
+        // A group of one object is the object.
+        assert!(matches!(imp.shapes[4].kind, ShapeKind::Path { .. }));
+    }
+
+    /// An outline stroked over the fill just painted, on the same path,
+    /// is that object's outline: `gsave fill grestore stroke`, and a
+    /// classic Illustrator file's `B` (also inside a clipping group). A
+    /// stroke of another path, or one after a group began, stays an
+    /// object of its own.
+    #[test]
+    fn an_outline_over_its_fill_is_one_object() {
+        let imp = run("%!PS-Adobe-3.0\n%%Creator: tracer\n%AI5_FileFormat 3\n\
+             %%BoundingBox: 0 0 200 100\n%%EndComments\n\
+             0 1 1 0 k 0 0 1 0 K 2 w 10 10 m 60 10 L 60 40 L 10 40 L b\n\
+             q 0 0 m 100 0 L 100 50 L 0 50 L h W n\n\
+             1 0 0 0 k 20 20 m 140 20 L 140 60 L 20 60 L b Q\n\
+             0 0 0 1 k 150 10 m 190 10 L 190 40 L f 150 10 m 190 40 L S\n\
+             0.5 g 10 70 m 30 70 L 30 90 L f u 10 70 m 30 70 L 30 90 L s U\n");
+        assert_eq!(imp.shapes.len(), 6, "{:?}", imp.shapes);
+        let outlined = |s: &Shape| s.stroke.is_some() && !matches!(s.fill, Fill::None);
+        assert!(outlined(&imp.shapes[0]), "{:?}", imp.shapes[0]);
+        let ShapeKind::ClipFrame { contents, .. } = &imp.shapes[1].kind else {
+            panic!("clipped: {:?}", imp.shapes[1].kind)
+        };
+        assert!(outlined(&contents[0]), "{:?}", contents[0]);
+        // Another path's stroke and a stroke inside a group stay apart.
+        assert!(imp.shapes[2].stroke.is_none() && imp.shapes[3].stroke.is_some());
+        assert!(imp.shapes[4].stroke.is_none());
+        assert!(imp.shapes[5].stroke.is_some() && matches!(imp.shapes[5].fill, Fill::None));
     }
 }

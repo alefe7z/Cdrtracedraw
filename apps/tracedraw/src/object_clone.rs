@@ -188,6 +188,43 @@ fn walk<'a>(s: &'a Shape, out: &mut Vec<&'a Shape>) {
     }
 }
 
+/// Take the values a drawing read from another format holds as where
+/// each clone's link stands (#2879): the file keeps the link, but the
+/// fills and shapes come back written its way, so the hashes saved with
+/// the link no longer match and the first edit would have taken every
+/// followed property for the clone's own. A property the clone had made
+/// its own stays its own.
+pub fn rebase_clone_links(doc: &mut tracedraw_core::Document) {
+    let mut all = Vec::new();
+    for l in doc.all_layers() {
+        for s in &l.shapes {
+            walk(s, &mut all);
+        }
+    }
+    let updates: Vec<(ShapeId, Vec<(String, String)>)> = all
+        .iter()
+        .filter_map(|clone| {
+            let (master_id, state) = clone_link(&clone.data)?;
+            let master = all.iter().find(|s| s.id == master_id)?;
+            let state: Vec<(Prop, Follow)> = state
+                .into_iter()
+                .map(|(p, f)| match f {
+                    Follow::Own => (p, Follow::Own),
+                    Follow::Linked(..) => {
+                        (p, Follow::Linked(hash_prop(master, p), hash_prop(clone, p)))
+                    }
+                })
+                .collect();
+            Some((clone.id, link_data(&clone.data, master_id, &state)))
+        })
+        .collect();
+    for (id, data) in updates {
+        if let Some(s) = doc.find_shape_mut(id) {
+            s.data = data;
+        }
+    }
+}
+
 /// A copy of a container's kind with new ids for everything inside.
 fn fresh_kind(kind: &ShapeKind, engine: &mut tracedraw_core::Engine) -> ShapeKind {
     let mut tmp = Shape::new(ShapeId(0), kind.clone());
@@ -474,6 +511,98 @@ impl App {
             self.clone_sync_revision = self.engine.revision();
         }
     }
+
+    /// Replace with Object / Replace with Clones (#4220): the next click
+    /// picks the object the selected ones are replaced by.
+    pub fn start_replace_objects(&mut self, clones: bool) {
+        if self.selection.is_empty() {
+            return;
+        }
+        self.pending_replace = Some(clones);
+        self.status = tr("status.click_replacement");
+    }
+
+    /// Replace every selected object by a copy of `source`, or a clone of
+    /// it, each centred where the object was and in its place in the
+    /// stacking order (#4220); `fit` scales each to fit the object's box,
+    /// keeping its proportions. The source itself, when selected, stays.
+    /// One undo step; the replacements are selected.
+    pub fn replace_selection_with(&mut self, source: ShapeId, clones: bool, fit: bool) {
+        let Some(src) = self.doc().find_shape(source).cloned() else {
+            return;
+        };
+        // A clone's own master: clones of clones are not made.
+        let (master, src) = match clone_link(&src.data) {
+            Some((m, _)) if clones => match self.doc().find_shape(m).cloned() {
+                Some(ms) => (m, ms),
+                None => (source, src),
+            },
+            _ => (source, src),
+        };
+        let sb = src.bounds();
+        if !(sb.width().is_finite() && sb.height().is_finite()) {
+            return;
+        }
+        let targets: Vec<Shape> = self
+            .selected_shapes()
+            .into_iter()
+            .filter(|s| s.id != source && s.id != master)
+            .collect();
+        let mut replacements = Vec::new();
+        let mut ids = Vec::new();
+        for t in &targets {
+            let tb = t.bounds();
+            if !(tb.width().is_finite() && tb.height().is_finite()) {
+                continue;
+            }
+            let scale = if fit && sb.width() > 1e-9 && sb.height() > 1e-9 {
+                (tb.width() / sb.width()).min(tb.height() / sb.height())
+            } else {
+                1.0
+            };
+            let scale = if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            };
+            let id = self.engine.new_shape_id();
+            let mut shape = crate::app::reid_pub(src.clone(), id, &mut self.engine);
+            shape.transform = tracedraw_core::Affine::translate(tb.center().to_vec2())
+                * tracedraw_core::Affine::scale(scale)
+                * tracedraw_core::Affine::translate(-sb.center().to_vec2())
+                * shape.transform;
+            shape.uid = None;
+            if clones {
+                let state: Vec<(Prop, Follow)> = props_of(&src)
+                    .iter()
+                    .map(|p| (*p, Follow::Linked(hash_prop(&src, *p), hash_prop(&shape, *p))))
+                    .collect();
+                shape.data = link_data(&shape.data, master, &state);
+            } else {
+                shape.data = unlinked_data(&shape.data);
+            }
+            ids.push(id);
+            replacements.push((t.id, shape));
+        }
+        if replacements.is_empty() {
+            self.status = tr("status.cancelled");
+            return;
+        }
+        let label = if clones {
+            "Replace with Clones"
+        } else {
+            "Replace with Object"
+        };
+        if let Err(e) = self
+            .engine
+            .run_batch(label, &[Command::ReplaceShapes { replacements }])
+        {
+            self.status = e.to_string();
+            return;
+        }
+        self.clone_sync_revision = self.engine.revision();
+        self.select(ids);
+    }
 }
 
 #[cfg(test)]
@@ -505,6 +634,67 @@ mod tests {
         Fill::Solid(Color::rgb8(0, 0, 255))
     }
 
+    /// Replace with Object and Replace with Clones (#4220): each selected
+    /// object gives way to the picked one, centred where it was and in
+    /// its place in the order; clones follow the source's fill; fitted,
+    /// they take the object's size.
+    #[test]
+    fn selected_objects_are_replaced_by_copies_or_clones() {
+        let mut app = App::headless();
+        let a = rect(&mut app, 0.0);
+        let b = rect(&mut app, 100.0);
+        let star = app
+            .new_shape(ShapeKind::Ellipse {
+                rect: Rect::new(200.0, 0.0, 210.0, 10.0),
+                arc: None,
+            })
+            .expect("ellipse");
+        let c = rect(&mut app, 300.0);
+        app.sync_object_clones();
+        app.select(vec![a, b, star]);
+        app.start_replace_objects(true);
+        assert_eq!(app.pending_replace, Some(true));
+        app.pending_replace = None;
+        app.replace_selection_with(star, true, false);
+        assert!(app.doc().find_shape(a).is_none());
+        assert!(app.doc().find_shape(b).is_none());
+        assert!(app.doc().find_shape(star).is_some(), "the source stays");
+        let new = app.selection.clone();
+        assert_eq!(new.len(), 2);
+        for (id, cx) in new.iter().zip([10.0, 110.0]) {
+            let s = app.doc().find_shape(*id).expect("replacement");
+            let bb = s.bounds();
+            assert!((bb.center().x - cx).abs() < 1e-6, "{bb:?}");
+            assert!((bb.center().y - 20.0).abs() < 1e-6, "{bb:?}");
+            assert!((bb.width() - 10.0).abs() < 1e-6, "kept its size");
+            assert_eq!(app.clone_master_of(*id), Some(star));
+        }
+        // In the order of the ones they replaced: below the source and c.
+        let order: Vec<ShapeId> = app.doc().pages[0]
+            .layers
+            .iter()
+            .flat_map(|l| l.shapes.iter().map(|s| s.id))
+            .collect();
+        let pos = |id: ShapeId| order.iter().position(|x| *x == id).unwrap_or(99);
+        assert!(pos(new[0]) < pos(star) && pos(new[1]) < pos(c));
+        // The clones follow the source.
+        app.select(vec![star]);
+        app.run(Command::SetFill {
+            shapes: vec![star],
+            fill: red(),
+        });
+        app.sync_object_clones();
+        assert_eq!(fill_of(&app, new[0]), red());
+        // Plain copies, fitted to the object (20 x 20 from 10 x 10).
+        app.select(vec![c]);
+        app.replace_selection_with(star, false, true);
+        let r = app.selection[0];
+        assert_eq!(app.clone_master_of(r), None);
+        let bb = app.doc().find_shape(r).expect("copy").bounds();
+        assert!((bb.width() - 20.0).abs() < 1e-6, "{bb:?}");
+        assert!((bb.center().x - 310.0).abs() < 1e-6);
+    }
+
     fn cloned(app: &mut App, master: ShapeId) -> ShapeId {
         app.select(vec![master]);
         app.clone_selection();
@@ -512,6 +702,53 @@ mod tests {
         assert_ne!(clone, master);
         assert_eq!(app.clone_master_of(clone), Some(master));
         clone
+    }
+
+    /// A clone saved in a CorelDRAW 2018 file and opened again still
+    /// follows its master (#2879): the link came back without its data,
+    /// and with it hashes of values the file writes its own way.
+    #[test]
+    fn a_clone_saved_as_cdr_still_follows_its_master() {
+        if crate::files::WEB {
+            return;
+        }
+        let mut app = App::headless();
+        let master = rect(&mut app, 10.0);
+        app.run(Command::SetFill {
+            shapes: vec![master],
+            fill: red(),
+        });
+        let clone = cloned(&mut app, master);
+        // The clone's own outline: it stays its own after the file.
+        let own = Some(Stroke::hairline(Color::rgb8(0, 128, 0)));
+        app.run(Command::SetStroke {
+            shapes: vec![clone],
+            stroke: own.clone(),
+        });
+        let dir = std::env::temp_dir().join(format!("tracedraw-clone2879-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("clones.cdr");
+        let bytes = tracedraw_cdr::write::document_to_cdr_version(app.doc(), 20);
+        std::fs::write(&path, bytes).expect("write");
+        let mut back = App::headless();
+        back.open_path(path);
+        let pairs = back.object_clones();
+        assert_eq!(pairs.len(), 1, "one clone, linked");
+        let (clone, master) = pairs[0];
+        back.run(Command::SetFill {
+            shapes: vec![master],
+            fill: blue(),
+        });
+        assert_eq!(fill_of(&back, clone), blue(), "follows the master's fill");
+        let outline = |app: &App| app.doc().find_shape(clone).expect("clone").stroke.clone();
+        let before = outline(&back);
+        back.run(Command::SetStroke {
+            shapes: vec![master],
+            stroke: Some(Stroke::hairline(Color::rgb8(9, 9, 9))),
+        });
+        assert_eq!(outline(&back), before, "its own outline stays");
+        assert_eq!(back.clone_master_of(clone), Some(master));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -611,6 +848,55 @@ mod tests {
         app.clone_selection();
         assert_eq!(app.selection, vec![a]);
         assert_eq!(app.status, tr("status.clone_of_clone"));
+    }
+
+    /// The status bar and the Objects docker say what a clone, its master
+    /// and a symmetry are (#2877, #2997): before, each read as the plain
+    /// object it is made of.
+    #[test]
+    fn clones_masters_and_symmetries_say_what_they_are() {
+        use crate::i18n::trf;
+        let mut app = App::headless();
+        let master = rect(&mut app, 10.0);
+        let kind = crate::ui::dockers::kind_name(&app.doc().find_shape(master).expect("m").kind);
+        let a = cloned(&mut app, master);
+        let _b = cloned(&mut app, master);
+        app.select(vec![a]);
+        let info = crate::ui::status::object_info(&app);
+        assert!(
+            info.contains(&trf("status.clone_kind", &[("k", &kind)])),
+            "{info}"
+        );
+        let clone = app.doc().find_shape(a).expect("clone").clone();
+        assert_eq!(
+            crate::ui::objects_docker::object_label(&clone),
+            trf("status.clone_kind", &[("k", &kind)])
+        );
+        app.select(vec![master]);
+        let info = crate::ui::status::object_info(&app);
+        assert!(info.contains("(2"), "two clones follow the master: {info}");
+        // A symmetry.
+        let other = rect(&mut app, 80.0);
+        app.run(Command::SetEffects {
+            shape: other,
+            effects: vec![tracedraw_core::live::Effect::Symmetry {
+                center: tracedraw_core::geometry::Point::new(100.0, 20.0),
+                angle: 90.0,
+                lines: 1,
+                rotate: false,
+            }],
+        });
+        app.select(vec![other]);
+        let info = crate::ui::status::object_info(&app);
+        assert!(
+            info.contains(&trf("status.symmetry_kind", &[("k", &kind)])),
+            "{info}"
+        );
+        let sym = app.doc().find_shape(other).expect("sym").clone();
+        assert_eq!(
+            crate::ui::objects_docker::object_label(&sym),
+            trf("status.symmetry_kind", &[("k", &kind)])
+        );
     }
 
     #[test]

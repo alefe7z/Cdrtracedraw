@@ -18,10 +18,14 @@ use crate::text::{self, RunStyle, StyleRec};
 use std::collections::HashMap;
 use tracedraw_core::{
     document::{
-        Corners, EllipseArc, Layer, Page, ParagraphStyle, Shape, ShapeKind, TextAlign, TextSpan,
+        Corners, EllipseArc, Layer, LeadingUnit, Page, ParagraphStyle, Shape, ShapeKind, TextAlign,
+        TextSpan,
     },
     geometry::{Affine, BezPath, Point, Rect, Size},
-    style::{Arrowhead, Fountain, FountainKind, Pattern, PatternTile, Stop, Texture, TextureKind},
+    style::{
+        Arrowhead, Fountain, FountainKind, MeshHandle, Pattern, PatternTile, Stop, Texture,
+        TextureKind,
+    },
     Color, Document, Fill, LineCap, LineJoin, Stroke,
 };
 
@@ -34,6 +38,10 @@ pub struct ParseReport {
     pub shapes: usize,
     pub skipped_objects: usize,
     pub warnings: Vec<String>,
+    /// The chunk tags and `loda` argument types the reader left
+    /// uninterpreted, with their counts (RIFF files only; see
+    /// [`crate::open_bytes_keeping`] for the records themselves).
+    pub unknown: tracedraw_cdr_format::raw::UnknownTags,
 }
 
 impl ParseReport {
@@ -45,15 +53,71 @@ impl ParseReport {
     }
 }
 
-/// Farther than this from (0, 0), the coordinates of artistic text are
-/// not a place (see `build_text`).
-const MAX_TEXT_ORIGIN_MM: f64 = 10_000.0;
+/// Steps of a blend read from a file whose step count field holds no
+/// plausible count: the default of the program that saves them, which
+/// both sample files hold (#980).
+const BLEND_DEFAULT_STEPS: u32 = 20;
+
+/// The most steps all the blends of one file take together: 5000 blends
+/// of the default 20 steps. Each step is drawn from its own outline, so
+/// without a bound a file of many blends could take all the memory
+/// (#980).
+const FILE_BLEND_STEPS: u32 = 100_000;
+
+/// Longest page side read, mm: large format work (banners, wraps) has
+/// pages of 20 m and more, and a larger value means a misread record. The
+/// CMX reader takes the same bound.
+const MAX_PAGE_MM: f64 = 100_000.0;
 /// CDR coordinate unit (version 6 and later) to millimetres.
 const UNIT_MM: f64 = 25.4 / 254000.0;
 /// Coordinate unit of versions before 6 (1/1000 inch) to millimetres.
 const UNIT16_MM: f64 = 25.4 / 1000.0;
+/// A version 15+ rectangle radius above this is a length in coordinate
+/// units, at most this a share of half the shorter side (#2333).
+const RADIUS_LENGTH_FROM: f64 = 100.0;
 /// Byte offset of the point count in an `arrx` record.
 const ARRX_COUNT_AT: usize = 268;
+
+/// What this reader interprets, for the table of what it leaves (see
+/// [`tracedraw_cdr_format::raw`]): every chunk tag read anywhere in the
+/// tree, in any version. Lists are structure, not records, so they are
+/// not named here; `loda` and `lobj` are read argument by argument.
+pub(crate) const KNOWN_CHUNKS: &[[u8; 4]] = &[
+    *b"loda", *b"lobj", *b"trfd", *b"txsm", *b"flgs", *b"bbox", *b"spnd", *b"usdn", *b"ppdt",
+    *b"vrsn", *b"mcfg", *b"fild", *b"fill", *b"outl", *b"stlt", *b"bmp ", *b"bmpf", *b"arrw",
+    *b"arrx", *b"font", *b"ftbl", *b"ole2", *b"olel", *b"vpat", *b"imhd", *b"envd", *b"guid",
+    *b"ppid",
+];
+
+/// The `loda` argument types this reader interprets, in any version.
+pub(crate) const KNOWN_ARGS: &[u32] = &[
+    ARG_OUTLINE,
+    ARG_FILL,
+    ARG_COORDS,
+    ARG_LEGACY_TRANSFORM,
+    ARG_STYLE,
+    ARG_STYLE_STRING,
+    ARG_NAME,
+    ARG_OPACITY,
+    ARG_POLYGON,
+    ARG_CLIP_CONTENTS,
+    ARG_PAGE_SIZE,
+    ARG_PAGE_BACKGROUND,
+    ARG_HIDDEN,
+    ARG_WRAP_STYLE,
+    ARG_WRAP_OFFSET,
+    ARG_MESH,
+    ARG_GUIDE_LINE,
+    ARG_BLEND_STEPS,
+];
+
+/// What this reader interprets, for [`tracedraw_cdr_format::raw::collect`].
+pub fn known() -> tracedraw_cdr_format::raw::Known<'static> {
+    tracedraw_cdr_format::raw::Known {
+        chunks: KNOWN_CHUNKS,
+        args: KNOWN_ARGS,
+    }
+}
 
 /// Argument types of the `loda` argument table.
 pub(crate) const ARG_OUTLINE: u32 = 0x0a;
@@ -68,17 +132,115 @@ pub(crate) const ARG_STYLE_STRING: u32 = 201;
 pub(crate) const ARG_NAME: u32 = 1000;
 pub(crate) const ARG_OPACITY: u32 = 8000;
 const ARG_POLYGON: u32 = 11000;
-/// The contents of a clip container (version 12): the `spnd` number of a
-/// group in the document's `LIST clpt`, then three u32 (1, 0, 1 seen).
-const ARG_CLIP_CONTENTS: u32 = 8005;
+/// The contents of a clip container (versions 12, 25 and 27 seen): the
+/// `spnd` number of a group in the document's `LIST clpt`, then three
+/// u32 (1, 0, 1).
+pub(crate) const ARG_CLIP_CONTENTS: u32 = 8005;
 const ARG_PAGE_SIZE: u32 = 19130;
+/// A symbol definition's record in its `sytr` group's `loda`: an
+/// identifier and the symbol's name (#2177, a version 15 file).
+pub(crate) const ARG_SYMBOL: u32 = 19201;
 /// Master page `loda` argument holding the document's page background.
 const ARG_PAGE_BACKGROUND: u32 = 17000;
 /// Object argument 16016: 1 hides the object (version 21).
 const ARG_HIDDEN: u32 = 16016;
+/// Object argument 13001: the paragraph text wrap style around the
+/// object (u32; 1 to 3 along its outline, 4 to 7 along its box), and
+/// 13000: the room kept free around it (u32, coordinate units). Seen on
+/// a rectangle of a version 20 file (#4142).
+const ARG_WRAP_STYLE: u32 = 13001;
+const ARG_WRAP_OFFSET: u32 = 13000;
+/// Byte 0 of an object's `flgs`: the object is locked (#2347).
+pub(crate) const OBJECT_LOCKED: u8 = 0x10;
 
 /// Family and size used when neither the run nor its style names one.
 const DEFAULT_FAMILY: &str = "Arial";
+
+/// The names a family takes for a face of a weight other than regular
+/// and bold, the way installed fonts list such faces under their own
+/// family name (name ID 1).
+const WEIGHT_NAMES: [(u16, &str); 7] = [
+    (100, "Thin"),
+    (200, "ExtraLight"),
+    (300, "Light"),
+    (500, "Medium"),
+    (600, "SemiBold"),
+    (800, "ExtraBold"),
+    (900, "Black"),
+];
+
+/// Weight names a family name can end in, run together and in lower
+/// case, with their weights (the text engine reads the same names).
+const NAMED_WEIGHTS: [(&str, u16); 12] = [
+    ("thin", 100),
+    ("hairline", 100),
+    ("extralight", 200),
+    ("ultralight", 200),
+    ("light", 300),
+    ("medium", 500),
+    ("semibold", 600),
+    ("demibold", 600),
+    ("extrabold", 800),
+    ("ultrabold", 800),
+    ("black", 900),
+    ("heavy", 900),
+];
+
+/// A family name ending in a weight name (the last word, or the last two
+/// run together), split into the family and the weight: "Titillium Web
+/// SemiBold" is ("Titillium Web", 600).
+pub(crate) fn family_weight(family: &str) -> Option<(&str, u16)> {
+    let weight_of = |words: &[&str]| {
+        let key: String = words
+            .iter()
+            .flat_map(|w| w.chars())
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        NAMED_WEIGHTS
+            .iter()
+            .find(|(n, _)| *n == key)
+            .map(|(_, w)| *w)
+    };
+    let (head, last) = family.trim_end().rsplit_once(' ')?;
+    let head = head.trim_end();
+    if let Some(w) = weight_of(&[last]).filter(|_| !head.is_empty()) {
+        return Some((head, w));
+    }
+    let (head2, prev) = head.rsplit_once(' ')?;
+    let head2 = head2.trim_end();
+    weight_of(&[prev, last])
+        .filter(|_| !head2.is_empty())
+        .map(|w| (head2, w))
+}
+
+/// A span set in a face of a weight between or beyond regular and bold
+/// (a semibold, a light): the family takes the weight's name and the
+/// span is not bold, so the text draws with that face rather than the
+/// bold or regular one ("Titillium Web" at 600 is "Titillium Web
+/// SemiBold"). A family already named with a weight keeps its name, and
+/// is not bold when the name gives the code's weight.
+fn name_weight(span: &mut TextSpan, weight: Option<u16>) {
+    let Some(w) = weight else {
+        return;
+    };
+    if let Some((_, named)) = family_weight(&span.font_family) {
+        // The family names the face already ("Segoe UI Semibold" at
+        // 600): that face, not a bold one.
+        if named == w {
+            span.bold = false;
+        }
+        return;
+    }
+    if span.font_family.to_ascii_lowercase().ends_with("bold") {
+        return;
+    }
+    let Some(&(_, name)) = WEIGHT_NAMES.iter().find(|(n, _)| *n == w) else {
+        return;
+    };
+    span.font_family = format!("{} {name}", span.font_family.trim_end());
+    span.bold = false;
+}
 const DEFAULT_SIZE_PT: f64 = 24.0;
 
 /// Object types stored in the `loda` header.
@@ -87,25 +249,147 @@ pub(crate) const OBJ_ELLIPSE: u32 = 0x02;
 pub(crate) const OBJ_CURVE: u32 = 0x03;
 pub(crate) const OBJ_ARTISTIC_TEXT: u32 = 0x04;
 pub(crate) const OBJ_BITMAP: u32 = 0x05;
-const OBJ_PARAGRAPH_TEXT: u32 = 0x06;
+pub(crate) const OBJ_PARAGRAPH_TEXT: u32 = 0x06;
 const OBJ_POLYGON: u32 = 0x14;
 const OBJ_PATH: u32 = 0x25;
-/// A straight connector line whose ends are in its `ppdt` record.
+/// The uniform cubic B-spline steered by `points` as Bezier curves
+/// (#2723): closed, it runs round all of them; open, it starts at the
+/// first point and ends at the last (both ends repeated three times).
+/// Each piece between the knots is the Bezier curve from
+/// (a + 4b + c) / 6 to (b + 4c + d) / 6 with its handles at a third and
+/// two thirds of the way from b to c.
+fn b_spline_path(points: &[Point], closed: bool) -> BezPath {
+    let mut path = BezPath::new();
+    let n = points.len();
+    if n < 3 {
+        if let (Some(a), Some(b)) = (points.first(), points.last()) {
+            path.move_to(*a);
+            path.line_to(*b);
+            if closed {
+                path.close_path();
+            }
+        }
+        return path;
+    }
+    let ctrl: Vec<Point> = if closed {
+        points.to_vec()
+    } else {
+        let mut c = vec![points[0]; 2];
+        c.extend_from_slice(points);
+        c.extend([points[n - 1]; 2]);
+        c
+    };
+    let m = ctrl.len();
+    let at = |i: usize| ctrl[i % m].to_vec2();
+    let pieces = if closed { m } else { m - 3 };
+    for i in 0..pieces {
+        let (a, b, c, e) = (at(i), at(i + 1), at(i + 2), at(i + 3));
+        if i == 0 {
+            path.move_to(((a + b * 4.0 + c) / 6.0).to_point());
+        }
+        path.curve_to(
+            ((b * 2.0 + c) / 3.0).to_point(),
+            ((b + c * 2.0) / 3.0).to_point(),
+            ((b + c * 4.0 + e) / 6.0).to_point(),
+        );
+    }
+    if closed {
+        path.close_path();
+    }
+    path
+}
+
+/// A straight connector line whose ends are in its `ppdt` record. The
+/// type also marks the groups of a table (the table and each of its
+/// cells), whose records are in their `LIST npps` too.
 const OBJ_CONNECTOR: u32 = 0x26;
+/// The `ppid` naming a table's layout record (a `ppdt` starting with 1,
+/// the row count and the column count) in the table group's `LIST npps`.
+const PPID_TABLE: [u8; 16] = [
+    0xf8, 0xc3, 0x15, 0x2b, 0x26, 0x21, 0xa5, 0x40, 0x85, 0x15, 0x71, 0xea, 0x17, 0x43, 0xcd, 0x20,
+];
+/// The most rows or columns a table read from a file has.
+const TABLE_MAX_LINES: usize = 1000;
 /// An object embedded from another program (seen in version 12 files):
 /// its name argument names the storage of an `ole2` chunk, its coordinates
 /// hold its size and two opposite corners.
 const OBJ_EMBEDDED: u32 = 0x0a;
+/// A mesh fill object (seen in a version 11 file, #896): a curve (its
+/// coordinates argument) filled with the colour grid of [`ARG_MESH`].
+const OBJ_MESH: u32 = 0x20;
+/// The mesh of an [`OBJ_MESH`] object: its grid lines and node colours
+/// (see [`Ctx::read_mesh`]).
+const ARG_MESH: u32 = 19150;
+/// The merge mode a version 16+ style string's transparency `mode` names.
+/// The codes are those of the merge modes of the scripting interface
+/// (`cdrMergeMode` in `vg_model.js`), which the transparency record of
+/// versions 13 to 15 shares (9 multiplies there, #3222). In the car
+/// drawing of #1238 (version 27) the highlights hold 7 and 29, and the
+/// shades 8 and 9, and drawn so they match its reference picture, where
+/// drawn as Normal they lay over the paint as flat grey patches.
+fn style_merge_mode(code: i64) -> Option<tracedraw_core::live::MergeMode> {
+    use tracedraw_core::live::MergeMode as M;
+    Some(match code {
+        0 => M::Normal,
+        1 => M::And,
+        2 => M::Or,
+        3 => M::Xor,
+        6 => M::Invert,
+        7 => M::Add,
+        8 => M::Subtract,
+        9 => M::Multiply,
+        10 => M::Divide,
+        11 => M::IfLighter,
+        12 => M::IfDarker,
+        13 => M::Texturize,
+        14 => M::Color,
+        15 => M::Hue,
+        16 => M::Saturation,
+        17 => M::Lightness,
+        18 => M::Red,
+        19 => M::Green,
+        20 => M::Blue,
+        24 => M::Difference,
+        27 => M::Behind,
+        28 => M::Screen,
+        29 => M::Overlay,
+        30 => M::SoftLight,
+        31 => M::HardLight,
+        33 => M::ColorDodge,
+        34 => M::ColorBurn,
+        36 => M::Exclusion,
+        _ => return None,
+    })
+}
+
+/// The largest mesh read, in nodes.
+const MESH_MAX_NODES: usize = 250_000;
+/// The mark of mesh records whose node colours are sized records (150 in
+/// version 27 files; 100 in the older layout).
+const MESH_SIZED_COLOURS: u32 = 150;
 /// The tag of records added by version 24 and later at the start of fill
 /// records (a 16-byte id), which files saved for older versions carry too.
 const NEWER_RECORD_TAG: u32 = 2400;
 
-/// The width of the space character in ems, for character spacing.
-const SPACE_EM: f64 = 0.25;
 /// A guideline (seen in version 12 files on the guides layer).
-const OBJ_GUIDE: u32 = 0x16;
+pub(crate) const OBJ_GUIDE: u32 = 0x16;
 /// Argument of a guideline: its line (see [`Ctx::read_guide`]).
-const ARG_GUIDE_LINE: u32 = 16000;
+pub(crate) const ARG_GUIDE_LINE: u32 = 16000;
+/// The step count of a blend's linked group (its `lgob` `loda`, object
+/// type 7): the first u32 of this argument.
+pub(crate) const ARG_BLEND_STEPS: u32 = 3000;
+/// Object type of a contour's linked group (`LIST lnkg`).
+const OBJ_CONTOUR_GROUP: u32 = 15;
+/// Object type of a drop shadow's linked group (`LIST lnkg`, version 15).
+const OBJ_DROP_SHADOW: u32 = 23;
+/// Length of the drop shadow record (argument 3000 of its linked group).
+const DROP_SHADOW_RECORD_LEN: usize = 107;
+/// Millimetres of feathering for each unit of the record's feathering
+/// (its default, 15, as the 1.5 mm a new shadow takes here).
+const DROP_SHADOW_FEATHER_MM: f64 = 0.1;
+/// Length of the contour record (argument 3000 of a contour's linked
+/// group) in the one layout seen, version 9.
+const CONTOUR_RECORD_LEN: usize = 44;
 
 /// Little-endian cursor over a chunk payload. `v16` selects the 16-bit
 /// layouts of versions before 6 for integers, coordinates and angles.
@@ -209,16 +493,20 @@ struct OutlineDef {
 struct BitmapDef {
     width_px: u32,
     height_px: u32,
-    png: Vec<u8>,
+    png: tracedraw_core::SharedBytes,
+    /// A CMYK image (colour model 3, 32 bits): the object keeps that
+    /// colour mode (`Shape::cmyk_bitmap`, #1254).
+    cmyk: bool,
+    /// A CMYK image's ink bytes, which separations print (#1659).
+    inks: Option<tracedraw_core::picture_inks::PictureInks>,
+    /// A black and white (1-bit) image: its two palette colours, which
+    /// the object's outline and fill colour replace (#3410).
+    mono: Option<[[u8; 3]; 2]>,
 }
 
-/// One entry of a `loda` argument table: type, payload start and end.
-#[derive(Debug, Clone, Copy)]
-struct Arg {
-    ty: u32,
-    off: usize,
-    end: usize,
-}
+// One entry of a `loda` argument table (type, payload start and end) and
+// the table itself, decoded by the format crate.
+use tracedraw_cdr_format::loda::Arg;
 
 /// What a paragraph text's frame may be worked out from when its
 /// coordinates hold no size (version 16 and later).
@@ -232,10 +520,7 @@ struct FrameHints<'s> {
 }
 
 /// Decoded `loda` header and argument table.
-struct Loda {
-    kind: u32,
-    args: Vec<Arg>,
-}
+use tracedraw_cdr_format::loda::Table as Loda;
 
 /// Polygon parameters from the `loda` argument of type 11000.
 #[derive(Debug, Clone, Copy)]
@@ -259,6 +544,17 @@ struct Ctx<'a> {
     /// Pictures of objects embedded from other programs, by storage name
     /// (`ole2` chunks).
     embedded: HashMap<String, crate::ole::Picture>,
+    /// The metafile pictures embedded objects were last drawn as, by
+    /// storage name (`ole2` chunks), for those without a picture above.
+    embedded_metafiles: HashMap<String, Vec<u8>>,
+    /// Labels of embedded packages (wrapped files with no picture), by
+    /// storage name.
+    embedded_packages: HashMap<String, String>,
+    /// The `.tdraw` drawings packages wrap whole, by storage name.
+    embedded_package_files: HashMap<String, Vec<u8>>,
+    /// The object just read drew a metafile: its objects need ids from
+    /// the document's source.
+    pending_renumber: bool,
     /// Two-colour pattern tiles (`bmpf`), 1 bit per pixel: true = front.
     pattern_tiles: HashMap<u32, PatternBits>,
     /// Vector pattern drawings (`vpat`): an id, then a CMX file.
@@ -274,21 +570,52 @@ struct Ctx<'a> {
     arrows: HashMap<u32, Arrowhead>,
     /// Crop outline of the bitmap object being read (local coordinates).
     pending_crop: Option<BezPath>,
+    /// The bitmap object being read shows a CMYK image.
+    pending_cmyk: bool,
+    /// The ink channels of the CMYK image it shows.
+    pending_inks: Option<tracedraw_core::picture_inks::PictureInks>,
+    /// The palette of the 1-bit picture of the bitmap object just read.
+    pending_mono: Option<[[u8; 3]; 2]>,
     /// Groups of `LIST clpt` by their `spnd` number: the contents of clip
     /// containers.
     clip_groups: HashMap<u32, &'a Chunk>,
     /// The `clpt` group the object being read holds clipped inside it.
     pending_clip: Option<u32>,
+    /// The symbol table (`sblk`, #2177): each symbol's number, as its
+    /// instances (`LIST symb`) give it in their `spnd`, to the `spnd`
+    /// number of the `LIST sytr` group that defines it.
+    symbol_defs: HashMap<u32, u32>,
+    /// The groups of `LIST sytr`, the symbols' definitions, by their
+    /// `spnd` number.
+    symbol_groups: HashMap<u32, &'a Chunk>,
+    /// The symbols read so far, for the document.
+    symbols: Vec<tracedraw_core::document::Symbol>,
+    /// Each symbol read, by the `spnd` number of its `sytr` group: its
+    /// index in `symbols` and the inverse of the page placement its
+    /// definition was read with.
+    symbol_index: HashMap<u32, (usize, Affine)>,
+    /// The `spnd` numbers of the `sytr` groups in file order.
+    symbol_order: Vec<u32>,
+    /// The symbols whose definitions are being read (one that draws
+    /// itself ends there).
+    symbols_reading: std::collections::HashSet<u32>,
     /// Colours of spot colour libraries met: (library, number).
     library_inks: std::collections::BTreeSet<(u16, u16)>,
     /// The font names of a version 3 `ftbl`, in file order.
     v3_fonts: Vec<String>,
     v3_effect_warned: bool,
+    /// Said once: an envelope of a text or picture is not applied.
+    envelope_warned: bool,
     stand_in_warned: bool,
+    /// Blend steps the file's blends may still take together (#980).
+    blend_steps_left: u32,
     /// Guidelines of the page being read (objects of type 0x16).
     guides: Vec<tracedraw_core::document::Guide>,
     /// The last object read was a guideline, not a skipped object.
     last_was_guide: bool,
+    /// The object just read draws nothing (see [`Ctx::draws_nothing`]):
+    /// not an object left out.
+    last_drew_nothing: bool,
     /// The transform of the linked groups (`LIST lnkg`) being read, which
     /// their objects are drawn through.
     outer_transform: Affine,
@@ -304,14 +631,37 @@ struct Ctx<'a> {
     /// Facing pages (version 21 `mcfg` byte 26): objects are placed from
     /// the spine of the spread, not the page centre.
     facing_pages: bool,
+    /// The document's link table (`lnkt`): a linked group's number to the
+    /// number of the object it is linked to (see [`crate::artistic`]).
+    links: HashMap<u32, u32>,
+    /// While `links` has any: the objects read, by their numbers
+    /// (`spnd`), and the file's identities (`spid`) of each.
+    spnd_shapes: HashMap<u32, tracedraw_core::ShapeId>,
+    spids: HashMap<tracedraw_core::ShapeId, tracedraw_core::document::Uid>,
+    /// Paragraph text running through several frames (version 16+): each
+    /// frame's number (`spnd`) to the number of the frame holding the
+    /// text and its place in the run (#4104, #2018).
+    text_chains: HashMap<u32, (u32, usize)>,
+    /// The paragraph frames read, with their numbers, to mark the runs
+    /// once every frame is read.
+    frame_shapes: Vec<(u32, tracedraw_core::ShapeId)>,
+    /// The number of the paragraph frame being read.
+    pending_frame_number: Option<u32>,
 
     /// The node types a curve's node bytes give where its handles read
     /// otherwise, for the shape being read.
     pending_node_types: std::collections::BTreeMap<usize, tracedraw_core::nodes::NodeType>,
+    /// The corners of the rectangle being read whose radius the file
+    /// gives as a length (version 15+), by corner: a length the corner
+    /// measures on the page, not in the rectangle's own space (#4126).
+    pending_length_corners: [bool; 4],
     /// The CMYK profile the file carries, for CMYK bitmaps.
     cmyk_profile: Option<tracedraw_core::icc::Profile>,
     /// CMYK to RGB through that profile, built for the first CMYK bitmap.
     cmyk_lut: Option<tracedraw_core::icc::CmykLut>,
+    /// The shape each static id (`usdn`) was read as, gathered only when
+    /// the package names blends by them (#986).
+    static_ids: Option<HashMap<u32, tracedraw_core::ShapeId>>,
     report: ParseReport,
 }
 
@@ -344,6 +694,10 @@ impl<'a> Ctx<'a> {
             outlines: HashMap::new(),
             bitmaps: HashMap::new(),
             embedded: HashMap::new(),
+            embedded_metafiles: HashMap::new(),
+            embedded_packages: HashMap::new(),
+            embedded_package_files: HashMap::new(),
+            pending_renumber: false,
             pattern_tiles: HashMap::new(),
             vector_patterns: HashMap::new(),
             fonts: HashMap::new(),
@@ -351,23 +705,43 @@ impl<'a> Ctx<'a> {
             styles: HashMap::new(),
             arrows: HashMap::new(),
             pending_crop: None,
+            pending_cmyk: false,
+            pending_inks: None,
+            pending_mono: None,
             clip_groups: HashMap::new(),
             pending_clip: None,
+            symbol_defs: HashMap::new(),
+            symbol_groups: HashMap::new(),
+            symbols: Vec::new(),
+            symbol_index: HashMap::new(),
+            symbol_order: Vec::new(),
+            symbols_reading: std::collections::HashSet::new(),
             guides: Vec::new(),
             last_was_guide: false,
+            last_drew_nothing: false,
             outer_transform: Affine::IDENTITY,
             library_inks: Default::default(),
             v3_fonts: Vec::new(),
             v3_effect_warned: false,
+            envelope_warned: false,
             stand_in_warned: false,
+            blend_steps_left: FILE_BLEND_STEPS,
             pending_on_path: None,
             on_path: HashMap::new(),
             pending_text_transform: None,
             facing_pages: false,
+            links: HashMap::new(),
+            spnd_shapes: HashMap::new(),
+            spids: HashMap::new(),
+            text_chains: HashMap::new(),
+            frame_shapes: Vec::new(),
+            pending_frame_number: None,
 
             pending_node_types: Default::default(),
+            pending_length_corners: [false; 4],
             cmyk_profile: None,
             cmyk_lut: None,
+            static_ids: None,
             report: ParseReport::default(),
         }
     }
@@ -386,7 +760,41 @@ pub fn parse_document_with(
     version: Version,
     cmyk_profile: Option<&[u8]>,
 ) -> (Document, ParseReport) {
+    parse_document_kept(tree, main, version, cmyk_profile, &[], &[])
+}
+
+/// [`parse_document_with`] that turns the groups `kept` names back into
+/// live blends (see [`crate::kept_blends`]) and the objects
+/// `kept_effects` names back into objects with their effects and shadows
+/// (see [`crate::kept_effects`]).
+pub(crate) fn parse_document_kept(
+    tree: &Tree,
+    main: &[u8],
+    version: Version,
+    cmyk_profile: Option<&[u8]>,
+    kept: &[crate::kept_blends::KeptBlend],
+    kept_effects: &[crate::kept_effects::KeptEffect],
+) -> (Document, ParseReport) {
+    parse_document_kept_data(tree, main, version, cmyk_profile, (kept, kept_effects), &[])
+}
+
+/// [`parse_document_kept`] that also gives objects back the data
+/// `kept_data` holds for them (see [`crate::kept_data`]).
+pub(crate) fn parse_document_kept_data(
+    tree: &Tree,
+    main: &[u8],
+    version: Version,
+    cmyk_profile: Option<&[u8]>,
+    (kept, kept_effects): (
+        &[crate::kept_blends::KeptBlend],
+        &[crate::kept_effects::KeptEffect],
+    ),
+    kept_data: &[crate::kept_data::KeptData],
+) -> (Document, ParseReport) {
     let mut ctx = Ctx::new(main, tree, version.0);
+    if !kept.is_empty() || !kept_effects.is_empty() || !kept_data.is_empty() {
+        ctx.static_ids = Some(HashMap::new());
+    }
     ctx.report.version = Some(version);
     ctx.cmyk_profile = cmyk_profile
         .and_then(|b| tracedraw_core::icc::Profile::parse(b).ok())
@@ -437,14 +845,27 @@ pub fn parse_document_with(
             ctx.read_arrowhead_x(c);
         } else if c.is(b"font") {
             ctx.read_font(c);
+        } else if c.is(b"sblk") {
+            ctx.read_symbol_table(c);
         } else if c.is(b"ftbl") {
             // Version 3 font table: the font file names, NUL-terminated
             // runs of lowercase letters among other fields (assumed).
             let names = v3_font_names(ctx.data(c));
             ctx.v3_fonts = names;
+        } else if c.is(b"lnkt") {
+            let pairs = crate::artistic::links(ctx.data(c));
+            ctx.links.extend(pairs);
         } else if c.is(b"ole2") {
             let pictures = crate::ole::embedded_pictures(ctx.data(c));
             ctx.embedded.extend(pictures);
+            let metafiles = crate::ole::embedded_metafiles(ctx.data(c));
+            ctx.embedded_metafiles.extend(metafiles);
+            let packages = crate::ole::embedded_packages(ctx.data(c));
+            ctx.embedded_packages.extend(packages);
+            let drawings = crate::ole::embedded_package_files(ctx.data(c), |label| {
+                label.to_ascii_lowercase().ends_with(".tdraw")
+            });
+            ctx.embedded_package_files.extend(drawings);
         }
     });
     ctx.read_bitmaps(&bitmaps);
@@ -481,6 +902,16 @@ pub fn parse_document_with(
     let mut doc = Document::new("Untitled", page_size);
     doc.pages.clear();
 
+    // The symbols the file defines (#2177), in its order, used or not, as
+    // its program lists them; instances on the pages name them.
+    {
+        let mut ids = std::mem::take(doc.ids_mut());
+        for def in ctx.symbol_order.clone() {
+            ctx.symbol_def(def, &mut ids, page_size, 0);
+        }
+        doc.set_ids(ids);
+    }
+
     // Pass 2: pages. Files store a master page (desktop, guides and grid
     // layers) followed by the real pages. We keep every page that has
     // visible content, and always keep at least one.
@@ -496,18 +927,33 @@ pub fn parse_document_with(
 
     let mut master_flags: Vec<bool> = Vec::new();
     let mut master_background: Option<Fill> = None;
-    for (i, pc) in pages.iter().enumerate() {
+    // The master page is no page of its own when the file has others: its
+    // guidelines show on every page and the objects on its layers (its
+    // desktop layer) go to master layers, drawn on every page (#1775).
+    let has_pages = pages.iter().any(|pc| !ctx.page_is_master(pc));
+    let mut master_guides: Vec<tracedraw_core::document::Guide> = Vec::new();
+    // Version 7 keeps the guidelines every page shows in a `guid` chunk
+    // of the document, not on the master page's guides layer (#1775).
+    if ctx.v == 7 {
+        tree.root.walk(&mut |c, _| {
+            if c.is(b"guid") {
+                master_guides.extend(ctx.read_guid_chunk(c, page_size));
+            }
+        });
+    }
+    for pc in pages.iter() {
         let page_id = doc.ids_mut().page();
         let is_master = ctx.page_is_master(pc);
-        master_flags.push(is_master);
         if is_master {
             master_background = ctx.page_background(pc);
         }
         // A page may carry its own size in its `loda` (argument 19130).
         let size = ctx.page_own_size(pc).unwrap_or(page_size);
+        // A page the user named keeps the name in its `loda` (argument
+        // 1000); the others get "Page N" once the master page is dropped.
         let mut page = Page {
             id: page_id,
-            name: format!("Page {}", i + 1),
+            name: ctx.page_name(pc).unwrap_or_default(),
             size,
             layers: Vec::new(),
             guides: Vec::new(),
@@ -523,17 +969,24 @@ pub fn parse_document_with(
             let default_name = format!("Layer {}", page.layers.len() + 1);
             let name = ctx.layer_name(lc).unwrap_or(default_name);
             let mut layer = Layer::new(doc.ids_mut().layer(), name);
-            // Guides and grid layers hold no drawable content.
-            match ctx.layer_type(lc) {
-                Some(t) if t & 0x0f == 0x0a => {
-                    layer.visible = false;
-                    layer.printable = false;
-                }
-                _ => layer.visible = true,
+            if let Some(f) = ctx.modern_layer_flags(lc) {
+                layer.locked = f[0] & 0x10 != 0;
+                layer.printable = f[0] & 0x08 == 0;
             }
             let mut ids = std::mem::take(doc.ids_mut());
             layer.shapes = ctx.read_objects(lc, &mut ids, size, 0);
             doc.set_ids(ids);
+            // Guides and grid layers do not print. Empty, they are hidden;
+            // a guides layer holding artwork (a part of the drawing put
+            // there, one face of a cube in a version 16 file, #4331)
+            // shows as the file has it, as its preview draws it.
+            match ctx.layer_type(lc) {
+                Some(t) if t & 0x0f == 0x0a => {
+                    layer.visible = !layer.shapes.is_empty() && !ctx.layer_hidden(lc);
+                    layer.printable = false;
+                }
+                _ => layer.visible = !ctx.layer_hidden(lc),
+            }
             // Guides, grid and desktop layers, and the master page's layers
             // each page lists again, are no drawing of their own when
             // empty.
@@ -542,18 +995,22 @@ pub fn parse_document_with(
             }
             page.layers.push(layer);
         }
-        // Facing pages measure objects from the spine of the spread, half
-        // a page to the left or right of the page's centre; which way is
-        // not worked out yet, so the side holding more of the page's
-        // objects wins (version 21 files: the first page's objects lie
-        // right of the spine, later pages' mostly left of it).
-        if ctx.facing_pages && !is_master {
-            shift_onto_page(&mut page.layers, size.width);
-        }
         // Files list a page's layers front to back, as they list objects
         // (a version 21 file: the layer of the lettering first, then the
         // layer whose full-page background its preview shows under it).
         page.layers.reverse();
+        if is_master && has_pages {
+            master_guides.append(&mut ctx.guides);
+            // The master page's entries for the pages' own layers (before
+            // version 14) hold nothing: no master layer of their own.
+            for mut layer in page.layers.into_iter().filter(|l| !l.shapes.is_empty()) {
+                layer.scope = tracedraw_core::document::MasterScope::All;
+                layer.in_front = false;
+                doc.master.push(layer);
+            }
+            continue;
+        }
+        master_flags.push(is_master);
         if page.layers.is_empty() {
             page.layers
                 .push(Layer::new(doc.ids_mut().layer(), "Layer 1"));
@@ -564,22 +1021,143 @@ pub fn parse_document_with(
         doc.pages.push(page);
     }
 
-    // Drop a leading master page that carries nothing, keeping at least one page.
+    // Drop a leading master page that carries nothing, keeping at least one
+    // page; a flagged master page next to other pages was read above.
     let first_is_master = master_flags.first().copied().unwrap_or(false);
-    if doc.pages.len() > 1
+    let master_read = has_pages && pages.iter().any(|pc| ctx.page_is_master(pc));
+    if !master_read
+        && doc.pages.len() > 1
         && (first_is_master || doc.pages[0].layers.iter().all(|l| l.shapes.is_empty()))
         && doc.pages[0].layers.iter().all(|l| l.shapes.is_empty())
     {
-        // The master page's guidelines show on every page.
+        // The master page's guidelines show on every page (#1928).
         let master = doc.pages.remove(0);
-        for (i, p) in doc.pages.iter_mut().enumerate() {
+        master_guides.extend(master.guides);
+    }
+    // The master page's guidelines are the drawing's master guidelines,
+    // shown on every page and set once for all (#1928); a page's own
+    // copy of one is left to the master.
+    for g in master_guides {
+        if !doc.master_guides.contains(&g) {
+            doc.master_guides.push(g);
+        }
+    }
+    for p in doc.pages.iter_mut() {
+        p.guides.retain(|g| !doc.master_guides.contains(g));
+    }
+    for (i, p) in doc.pages.iter_mut().enumerate() {
+        if p.name.is_empty() {
             p.name = format!("Page {}", i + 1);
-            for g in &master.guides {
-                if !p.guides.contains(g) {
-                    p.guides.push(*g);
-                }
+        }
+    }
+    // Frames one text runs through are marked with their run and place,
+    // as a PDF import marks its paragraph frames, so the app links them
+    // and lets the text flow on from the first (#4104, #2018).
+    let frames = std::mem::take(&mut ctx.frame_shapes);
+    for (n, id) in frames {
+        if let Some((head, place)) = ctx.text_chains.get(&n).copied() {
+            if let Some(s) = doc.find_shape_mut(id) {
+                s.data.retain(|(k, _)| k != FLOW_KEY);
+                s.data.push((FLOW_KEY.to_string(), format!("{head}:{place}")));
             }
         }
+    }
+    // A book on facing pages keeps one page record per spread, its
+    // objects measured from the spine between its two pages: the first
+    // record is the first page alone on the right of the spine (or a
+    // whole spread when the book starts on the left), every record after
+    // it a left and a right page, and the last one the last page alone
+    // on the left when nothing of it is on the right. Each record is
+    // split into its pages here, the objects left of the spine to the
+    // left page and the others to the right one, each moved from the
+    // spine onto its page. Read as one page each, a book of 248 pages
+    // opened as 125, every spread's two pages on top of each other
+    // (#4104, also #2609, #2584, #2018, #3035).
+    if ctx.facing_pages {
+        let records = std::mem::take(&mut doc.pages);
+        let n = records.len();
+        // Whether the objects' centres of a record sit left of the spine,
+        // right of it, or both.
+        // Objects are placed from the record's left edge here, so the
+        // spine is half a page in.
+        let sides = |p: &Page| {
+            let spine = p.size.width / 2.0;
+            let (mut left, mut right) = (false, false);
+            for b in p
+                .layers
+                .iter()
+                .flat_map(|l| l.shapes.iter())
+                .map(|s| s.bounds())
+                .filter(|b| b.x0.is_finite() && b.x1.is_finite())
+            {
+                if (b.x0 + b.x1) / 2.0 < spine - SPINE_SLACK_MM {
+                    left = true;
+                } else {
+                    right = true;
+                }
+            }
+            (left, right)
+        };
+        let starts_right = records.first().is_none_or(|p| !sides(p).0);
+        let mut pages: Vec<Page> = Vec::with_capacity(n * 2);
+        for (i, mut record) in records.into_iter().enumerate() {
+            // The name the record was given for its place, not its own.
+            if record.name == format!("Page {}", i + 1) {
+                record.name.clear();
+            }
+            let right_of_spine = sides(&record).1;
+            let (has_left, has_right) = if i == 0 {
+                (!starts_right, true)
+            } else if i + 1 == n {
+                (true, right_of_spine)
+            } else {
+                (true, true)
+            };
+            for (k, on_left) in [(0, true), (1, false)] {
+                if (on_left && !has_left) || (!on_left && !has_right) {
+                    continue;
+                }
+                let first = k == 0 || !has_left;
+                let alone = !(has_left && has_right);
+                let w = record.size.width;
+                let dx = spine_shift(w, !on_left);
+                let mut page = record.clone();
+                if !first {
+                    page.id = doc.ids_mut().page();
+                    page.name.clear();
+                    page.guides.clear();
+                }
+                for l in page.layers.iter_mut() {
+                    if !first {
+                        l.id = doc.ids_mut().layer();
+                    }
+                    // A page alone keeps everything of its record.
+                    if !alone {
+                        l.shapes.retain(|s| {
+                            let b = s.bounds();
+                            let c = (b.x0 + b.x1) / 2.0;
+                            (c.is_finite() && c < w / 2.0 - SPINE_SLACK_MM) == on_left
+                        });
+                    }
+                    for s in l.shapes.iter_mut() {
+                        s.transform = Affine::translate((dx, 0.0)) * s.transform;
+                    }
+                }
+                pages.push(page);
+            }
+        }
+        for (i, p) in pages.iter_mut().enumerate() {
+            if p.name.is_empty() {
+                p.name = format!("Page {}", i + 1);
+            }
+        }
+        doc.pages = pages;
+        doc.metadata.facing_pages = doc.pages.len() > 1;
+        doc.metadata.facing_start = if starts_right {
+            tracedraw_core::spreads::PageSide::Right
+        } else {
+            tracedraw_core::spreads::PageSide::Left
+        };
     }
     if doc.pages.is_empty() {
         let pid = doc.ids_mut().page();
@@ -594,6 +1172,27 @@ pub fn parse_document_with(
         });
     }
 
+    if let Some(ids) = ctx.static_ids.take() {
+        // Objects first: a blend's end may be one, and the blend then
+        // takes its copy from the object put back.
+        let n = crate::kept_effects::restore(&mut doc, kept_effects, &ids);
+        if n < kept_effects.len() {
+            log::warn!(
+                "{} of the file's {} objects with effects open as drawn: they changed",
+                kept_effects.len() - n,
+                kept_effects.len()
+            );
+        }
+        let n = crate::kept_blends::restore(&mut doc, kept, &ids);
+        if n < kept.len() {
+            log::warn!(
+                "{} of the file's {} blends open as drawn: their groups changed",
+                kept.len() - n,
+                kept.len()
+            );
+        }
+        crate::kept_data::restore(&mut doc, kept_data, &ids);
+    }
     if !ctx.library_inks.is_empty() {
         let n = ctx.library_inks.len();
         for (palette, number) in &ctx.library_inks {
@@ -603,6 +1202,7 @@ pub fn parse_document_with(
             "{n} spot colour(s) from colour libraries: the file names them by number only"
         ));
     }
+    doc.symbols.extend(std::mem::take(&mut ctx.symbols));
     ctx.report.pages = doc.pages.len();
     ctx.report.layers = doc.pages.iter().map(|p| p.layers.len()).sum();
     ctx.report.shapes = doc
@@ -631,9 +1231,9 @@ impl<'a> Ctx<'a> {
         Reader::at(d, pos, self.v16())
     }
 
-    /// `flgs` of a `page` or `layr` list: 4 bytes, byte 3 is the record
-    /// type (0x90 page, 0x98 layer), byte 2 marks the master page, byte 0
-    /// is the layer type (0 normal, 8 desktop, 0x0a guides, 0x1a grid).
+    /// Four-byte state flags; byte 3 identifies the record (0x90 page,
+    /// 0x98 layer), and byte 2 marks master-page entries. Modern layers
+    /// identify their kind in `loda`; byte 0 also holds state bits.
     fn flags(&self, list: &Chunk) -> Option<[u8; 4]> {
         let f = list.find(b"flgs")?;
         let d = self.data(f);
@@ -641,18 +1241,67 @@ impl<'a> Ctx<'a> {
         Some([s[0], s[1], s[2], s[3]])
     }
 
+    /// An object locked in the program that saved the file: bit 0x10 of
+    /// byte 0 of its `flgs` ([0x10, 2, 0, 8] for a locked text of a
+    /// version 21 file, [0, 2, 0, 8] for the object beside it, #2347).
+    fn object_locked(&self, oc: &Chunk) -> bool {
+        matches!(self.flags(oc), Some(f) if f[3] & 0xf8 == 0x08 && f[0] & OBJECT_LOCKED != 0)
+    }
+
+    /// Modern object and group records share byte 1's hidden bit. A
+    /// hidden text has [0, 3, 0, 8], its visible neighbour [0, 2, 0, 8];
+    /// groups use record type 0x10 and keep their children's own state.
+    fn shape_hidden(&self, oc: &Chunk) -> bool {
+        self.v >= 16
+            && matches!(self.flags(oc), Some(f) if (f[3] & 0xf8 == 0x08 || f[3] == 0x10) && f[1] & 1 != 0)
+    }
+
     fn page_is_master(&self, pc: &Chunk) -> bool {
         matches!(self.flags(pc), Some(f) if f[3] == 0x90 && f[2] != 0)
     }
 
     fn layer_type(&self, lc: &Chunk) -> Option<u8> {
+        // Modern `loda` kinds distinguish an ordinary excluded layer
+        // from the desktop: both can have byte-0 flag 0x08 (#2850).
+        if self.v >= 16 {
+            if let Some(kind) = self
+                .own_loda(lc)
+                .and_then(|c| tracedraw_cdr_format::loda::table(self.data(c), self.v))
+                .map(|l| l.kind)
+            {
+                match kind {
+                    0 => return Some(0),
+                    11 => return Some(0x1a),
+                    12 => return Some(0x0a),
+                    17 => return Some(0x08),
+                    _ => {}
+                }
+            }
+        }
         self.flags(lc).filter(|f| f[3] == 0x98).map(|f| f[0])
+    }
+
+    fn modern_layer_flags(&self, lc: &Chunk) -> Option<[u8; 4]> {
+        (self.v >= 16)
+            .then(|| self.flags(lc))
+            .flatten()
+            .filter(|f| f[3] == 0x98)
+    }
+
+    /// Modern hidden layers carry bit 0 of byte 1, observed in version
+    /// 27 as [0x40, 1, 0, 0x98] beside [0, 0, 0, 0x98] (#2862).
+    fn layer_hidden(&self, lc: &Chunk) -> bool {
+        self.modern_layer_flags(lc).is_some_and(|f| f[1] & 1 != 0)
     }
 
     /// A guides, grid or desktop layer (type byte not 0), or a page's
     /// entry for a layer of the master page (byte 2 set).
     fn is_structural_layer(&self, lc: &Chunk) -> bool {
-        matches!(self.flags(lc), Some(f) if f[3] == 0x98 && (f[0] != 0 || f[2] != 0))
+        let Some(f) = self.flags(lc).filter(|f| f[3] == 0x98) else {
+            return false;
+        };
+        let kind = self.layer_type(lc).unwrap_or(0);
+        kind != 0 || f[2] != 0
     }
 
     /// The `loda`/`lobj` chunk of a list: a direct child, or (version 16+,
@@ -675,6 +1324,90 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// A page's own name: argument 1000 of its `loda` (in its `lgob` in
+    /// the files seen, versions 15 and 27), UTF-16LE ending in a line feed
+    /// and a NUL. Only pages the user named carry it.
+    fn page_name(&mut self, pc: &Chunk) -> Option<String> {
+        let name = self.layer_name(pc)?;
+        let name = name.trim_end_matches(['\n', '\r', '\0']);
+        (!name.trim().is_empty()).then(|| name.to_string())
+    }
+
+    /// A group's name from its own `lgob` (not a child object's).
+    fn group_name(&mut self, gc: &Chunk) -> Option<String> {
+        let lgob = gc.children.iter().find(|k| k.is(b"lgob"))?;
+        let loda = lgob.children.iter().find(|k| k.is(b"loda"))?;
+        let d = self.data(loda);
+        let l = self.read_loda(d)?;
+        let arg = l.args.iter().find(|a| a.ty == ARG_NAME)?;
+        let name = self.read_name(d.get(arg.off..arg.end)?);
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// A group's vector pattern transparency (a version 27 file): the
+    /// group's own `loda` holds argument 8000, a record tagged 1300 of
+    /// 117 bytes whose body starts with the byte 5 and the record's
+    /// number, with the type (u16 10, a vector pattern) at byte 37 and a
+    /// fill id at byte 105 that names a vector pattern fill. The
+    /// pattern's drawing is the mask (luminance the opacity) over all the
+    /// group holds, one tile over the group's box. `None` for other
+    /// records and for a fill that is no vector pattern.
+    fn group_pattern_transparency(&mut self, gc: &Chunk) -> Option<Fill> {
+        if self.v < 16 {
+            return None;
+        }
+        let lgob = gc.children.iter().find(|k| k.is(b"lgob"))?;
+        let loda = lgob.children.iter().find(|k| k.is(b"loda"))?;
+        let d = self.data(loda);
+        let l = self.read_loda(d)?;
+        let arg = l.args.iter().find(|a| a.ty == ARG_OPACITY)?;
+        if arg.end.checked_sub(arg.off)? < 8 + 117 {
+            return None;
+        }
+        let data = d.get(..arg.end)?;
+        let mut r = self.reader_at(data, arg.off);
+        if r.u32()? != 0x514 || r.u32()? != 117 || r.u8()? != 5 {
+            return None;
+        }
+        let body = r.pos - 1;
+        if self.reader_at(data, body + 37).u16()? != 10 {
+            return None;
+        }
+        let fill_id = self.reader_at(data, body + 105).u32()?;
+        match self.fills.get(&fill_id).map(|f| &f.fill) {
+            Some(mask @ Fill::Pattern(tracedraw_core::style::Pattern::Vector { .. })) => {
+                Some(mask.clone())
+            }
+            _ => {
+                self.report.warn(format!(
+                    "group transparency names fill {fill_id}, not a vector pattern; group drawn opaque"
+                ));
+                None
+            }
+        }
+    }
+
+    /// A symbol's name (#2177): in argument 19201 of its `sytr` group's
+    /// `loda`, a UTF-16 string ending in a zero at byte 548 of the
+    /// argument, after an identifier (one version 15 file seen; its
+    /// thirteen names match its `syms` records).
+    fn symbol_name(&mut self, gc: &Chunk) -> Option<String> {
+        let lgob = gc.children.iter().find(|k| k.is(b"lgob"))?;
+        let loda = lgob.children.iter().find(|k| k.is(b"loda"))?;
+        let d = self.data(loda);
+        let l = self.read_loda(d)?;
+        let arg = l.args.iter().find(|a| a.ty == ARG_SYMBOL)?;
+        let b = d.get(arg.off + 548..arg.end)?;
+        let units: Vec<u16> = b
+            .chunks_exact(2)
+            .map(|u| u16::from_le_bytes([u[0], u[1]]))
+            .take_while(|&u| u != 0)
+            .take(256)
+            .collect();
+        let name = String::from_utf16(&units).ok()?;
+        (!name.trim().is_empty() && !name.chars().any(char::is_control)).then_some(name)
+    }
+
     fn page_own_size(&mut self, pc: &Chunk) -> Option<Size> {
         let loda = self.own_loda(pc)?;
         let d = self.data(loda);
@@ -683,7 +1416,7 @@ impl<'a> Ctx<'a> {
         let mut r = self.reader_at(d, arg.off);
         let w = r.coord()?;
         let h = r.coord()?;
-        if w > 1.0 && h > 1.0 && w < 10_000.0 && h < 10_000.0 {
+        if w > 1.0 && h > 1.0 && w < MAX_PAGE_MM && h < MAX_PAGE_MM {
             Some(Size::new(w, h))
         } else {
             None
@@ -741,7 +1474,7 @@ impl<'a> Ctx<'a> {
         } else {
             (r.coord()?, r.coord()?)
         };
-        if w > 1.0 && h > 1.0 && w < 10_000.0 && h < 10_000.0 {
+        if w > 1.0 && h > 1.0 && w < MAX_PAGE_MM && h < MAX_PAGE_MM {
             Some(Size::new(w, h))
         } else {
             self.report.warn(format!(
@@ -913,6 +1646,13 @@ impl<'a> Ctx<'a> {
     /// 8 bytes, that box again and the id of the `vpat` that holds the
     /// drawing as a CMX file. The tile is that part of the drawing
     /// stretched to the tile's size.
+    ///
+    /// A version 27 file holds another layout: the 1600 record is all
+    /// zeros, and the 1300 record holds the tile's width and height, 8
+    /// zero bytes, a u16 (4), the box (four i32, as above) and the id of
+    /// the `vpat`, two bytes past the record's stated length of 36. The
+    /// layout whose id names a `vpat` of the file is taken, and the 1300
+    /// record's box where the 1600 record gives none.
     fn read_vector_pattern_fill(&mut self, body: &'a [u8]) -> Option<Fill> {
         let mut r = self.reader(body);
         let mut part: Option<[i32; 4]> = None;
@@ -922,12 +1662,31 @@ impl<'a> Ctx<'a> {
             let len = r.u32()? as usize;
             let start = r.pos;
             match tag {
-                1600 if len >= 16 => part = Some([r.i32()?, r.i32()?, r.i32()?, r.i32()?]),
+                1600 if len >= 16 => {
+                    let b = [r.i32()?, r.i32()?, r.i32()?, r.i32()?];
+                    if b[0] != b[2] && b[1] != b[3] {
+                        part = Some(b);
+                    }
+                }
                 1300 if len >= 36 => {
                     let w = r.u32()?;
                     let h = r.u32()?;
-                    let id = self.reader_at(body, start + 32).u32()?;
+                    // (the box's place, the id's place) in the record.
+                    let layout = [(16, 32), (18, 34)].into_iter().find(|&(_, at)| {
+                        self.reader_at(body, start + at)
+                            .u32()
+                            .is_some_and(|id| self.vector_patterns.contains_key(&id))
+                    });
+                    let (box_at, id_at) = layout.unwrap_or((16, 32));
+                    let id = self.reader_at(body, start + id_at).u32()?;
                     tile = Some((w, h, id));
+                    if part.is_none() {
+                        let mut b = self.reader_at(body, start + box_at);
+                        let own = [b.i32()?, b.i32()?, b.i32()?, b.i32()?];
+                        if own[0] != own[2] && own[1] != own[3] {
+                            part = Some(own);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -964,6 +1723,7 @@ impl<'a> Ctx<'a> {
         Some(Fill::Pattern(tracedraw_core::style::Pattern::Vector {
             shapes,
             tile,
+            placement: Default::default(),
         }))
     }
 
@@ -1023,7 +1783,7 @@ impl<'a> Ctx<'a> {
             r.skip(2);
         }
         let _mode = r.uint()?;
-        let _mid_point = r.u8()?;
+        let mid_point = r.u8()?;
         r.skip(1);
         let num_stops = (r.uint()? & 0xffff) as usize;
         if v >= 13 {
@@ -1032,31 +1792,30 @@ impl<'a> Ctx<'a> {
         let mut stops = Vec::with_capacity(num_stops.min(64));
         for _ in 0..num_stops.min(64) {
             let color = self.read_color(&mut r)?;
-            r.skip(if v >= 15 {
-                26
-            } else if v >= 13 {
-                5
-            } else {
-                0
-            });
+            if v >= 13 {
+                // The colour's palette id (property 7, 16 bytes) follows
+                // in files of versions 14 and 15 saved by newer releases
+                // and in every file from 15; version 13 files and version
+                // 14 files of that version's own release have none.
+                let id_follows = r.b.get(r.pos) == Some(&7)
+                    && r.b.get(r.pos + 1..r.pos + 5) == Some(&[16, 0, 0, 0]);
+                if id_follows || v >= 15 {
+                    r.skip(21);
+                }
+                r.skip(5);
+            }
             let pos = (r.uint()? & 0xffff) as f64 / 100.0;
             if v >= 13 {
                 r.skip(3);
             }
-            stops.push(Stop {
-                pos: pos.clamp(0.0, 1.0),
-                color,
-            });
+            stops.push(Stop::new(pos.clamp(0.0, 1.0), color));
         }
         if stops.is_empty() {
             return None;
         }
         if stops.len() == 1 {
             let only = stops[0];
-            stops.push(Stop {
-                pos: 1.0,
-                color: only.color,
-            });
+            stops.push(Stop::new(1.0, only.color));
             stops[0].pos = 0.0;
         }
         stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
@@ -1066,6 +1825,13 @@ impl<'a> Ctx<'a> {
             4 => FountainKind::Square,
             _ => FountainKind::Linear,
         };
+        // A two-colour linear fill mixes its colours half and half at the
+        // mid point (percent of the way from the first, #1257).
+        if kind == FountainKind::Linear && num_stops == 2 && (1..=99).contains(&mid_point) {
+            if let Some(first) = stops.first_mut() {
+                first.mid = f64::from(mid_point) / 100.0;
+            }
+        }
         let mut offset = Point::new(
             (cx as f64 / 100.0).clamp(-1.0, 1.0),
             (cy as f64 / 100.0).clamp(-1.0, 1.0),
@@ -1073,8 +1839,14 @@ impl<'a> Ctx<'a> {
         let mut edge_pad = (edge as f64 / 100.0).clamp(0.0, 0.49);
         // version 16+: four doubles relative to the object (centre x, centre y,
         // width, height) follow when the body is long enough.
+        let mut object_handles = None;
         if v >= 16 {
             r.skip(3);
+            if kind == FountainKind::Linear {
+                object_handles = linear_frame(body.get(r.pos..).unwrap_or(&[]));
+            } else if kind == FountainKind::Radial {
+                object_handles = radial_frame(body.get(r.pos..).unwrap_or(&[]));
+            }
             if r.remaining() >= 32 {
                 let (Some(ox), Some(oy), Some(w), Some(h)) = (r.f64(), r.f64(), r.f64(), r.f64())
                 else {
@@ -1095,12 +1867,16 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
+        if object_handles.is_some() {
+            edge_pad = 0.0;
+        }
         let mut fountain = Fountain {
             kind,
             stops,
             angle,
             offset,
             edge_pad,
+            handles: object_handles,
             ..Default::default()
         };
         crate::mirror_centred_stops(&mut fountain);
@@ -1212,6 +1988,7 @@ impl<'a> Ctx<'a> {
             width_px: bm.width_px,
             height_px: bm.height_px,
             size_mm,
+            placement: Default::default(),
         }))
     }
 
@@ -1256,10 +2033,11 @@ impl<'a> Ctx<'a> {
                 rgba.extend_from_slice(&[c[0], c[1], c[2], 255]);
             }
             return Some(Fill::Pattern(Pattern::Bitmap {
-                png: encode_png(tile.width, tile.height, &rgba),
+                png: encode_png(tile.width, tile.height, &rgba).into(),
                 width_px: tile.width,
                 height_px: tile.height,
                 size_mm,
+                placement: Default::default(),
             }));
         }
         self.report.warn(format!(
@@ -1270,6 +2048,7 @@ impl<'a> Ctx<'a> {
             front,
             back,
             size_mm,
+            placement: Default::default(),
         }))
     }
 
@@ -1391,7 +2170,7 @@ impl<'a> Ctx<'a> {
             };
             pts.push(Point::new(f64::from(x), f64::from(y)));
         }
-        self.add_arrowhead(id, &pts, &types);
+        self.add_placed_arrowhead(id, &pts, &types);
     }
 
     /// `arrw` of versions 3 and 4: the id (u32; version 4 a u16 and the
@@ -1462,11 +2241,30 @@ impl<'a> Ctx<'a> {
             };
             pts.push(Point::new(f64::from(x), f64::from(y)));
         }
-        self.add_arrowhead(id, &pts, &types);
+        self.add_placed_arrowhead(id, &pts, &types);
     }
 
-    /// Classifies an arrowhead outline into a preset, or keeps it as a
-    /// custom head.
+    /// An arrowhead outline in head units (versions 5 and later, `arrw`
+    /// and `arrx`): 127 000 to one outline width, the line's end at the
+    /// origin, the line coming in from -x. Kept as the file draws it, its
+    /// shape, size and place, open parts stroked one outline width wide,
+    /// as the exchange format's heads are; it was sorted into one of our
+    /// presets, redrawn at our size (#3436).
+    fn add_placed_arrowhead(&mut self, id: u32, pts: &[Point], types: &[u8]) {
+        let units = crate::cmx::HEAD_UNITS_PER_WIDTH;
+        let (path, _) = build_path(pts, types);
+        let shape = crate::cmx::stroke_open_subpaths(&path, units);
+        let head = Arrowhead::from_placed_path(&shape, format!("Arrowhead {id}"), units);
+        if head == Arrowhead::None {
+            self.report.warn(format!(
+                "arrowhead {id}: unreadable outline; drawn without arrowhead"
+            ));
+        }
+        self.arrows.insert(id, head);
+    }
+
+    /// Classifies an arrowhead outline of versions 3 and 4 (whose head
+    /// units are not known) into a preset, or keeps it as a custom head.
     fn add_arrowhead(&mut self, id: u32, pts: &[Point], types: &[u8]) {
         let (path, _) = build_path(pts, types);
         let mut head = classify_arrowhead(&path, pts, types);
@@ -1521,7 +2319,9 @@ impl<'a> Ctx<'a> {
 
     /// The text of a run with its style resolved: before version 12 its
     /// bytes in the code page of its character set, the style's or else its
-    /// font's (a non-Latin set wins: a Latin one tells nothing).
+    /// font's (a non-Latin set wins: a Latin one tells nothing), unless
+    /// the run is Latin text in a font of another script
+    /// ([`text::decode_run`]).
     fn run_text(&self, run: &text::TextRun, style: &text::RunStyle) -> String {
         let Some(raw) = &run.raw else {
             return run.text.clone();
@@ -1535,7 +2335,7 @@ impl<'a> Ctx<'a> {
             .flatten()
             .find(|cs| text::is_non_latin_charset(*cs));
         match charset {
-            Some(cs) => text::decode_charset(raw, cs),
+            Some(cs) => text::decode_run(raw, cs),
             None => run.text.clone(),
         }
     }
@@ -1553,6 +2353,14 @@ impl<'a> Ctx<'a> {
             self.report.warn(w);
         }
         for (id, rec) in recs {
+            log::debug!(
+                "style {id}: parent {} font {:?} size {:?} align {:?} fill {:?}",
+                rec.parent,
+                rec.style.font_id,
+                rec.style.size_pt,
+                rec.style.align,
+                rec.style.fill_id
+            );
             self.styles.insert(id, rec);
         }
     }
@@ -1597,30 +2405,37 @@ impl<'a> Ctx<'a> {
             .filter(|s| s.is_finite() && *s > 0.0 && *s < 10_000.0)
             .unwrap_or(DEFAULT_SIZE_PT);
         let mut span = TextSpan::new(text, family, size_pt);
+        let mut weight = None;
         if let Some(f) = style.flags {
             span.bold = f.bold();
             span.italic = f.italic();
-            span.underline = f.underline();
-            span.strikethrough = f.strikethrough();
+            span.underline = f.underline().into();
+            span.strikethrough = f.strikethrough().into();
+            weight = f.weight();
         }
         if let Some(b) = style.bold {
             span.bold = b;
+            weight = style.weight;
         }
+        name_weight(&mut span, weight);
         if let Some(i) = style.italic {
             span.italic = i;
         }
         if let Some(u) = style.underline {
-            span.underline = u;
+            span.underline = u.into();
         }
         if let Some(t) = style.strikethrough {
-            span.strikethrough = t;
+            span.strikethrough = t.into();
         }
-        if let Some(cs) = style.char_spacing {
-            if cs != 0.0 {
-                // The file counts character spacing in widths of the
-                // space character, taken here as a quarter of the em.
-                span.tracking_pct = cs * 100.0 * SPACE_EM;
-            }
+        if let Some(c) = style.char_shift {
+            span.angle_deg = c.angle_deg;
+            span.offset_x_pct = c.x_pct;
+            span.baseline_shift_pt = c.y_pct / 100.0 * size_pt;
+        }
+        // The characters' own outline (version 16+ style strings,
+        // #4055); width 0 leaves the object's outline on them.
+        if let Some(Some(st)) = &style.outline {
+            span.outline = Some(st.clone());
         }
         if let Some(inline) = style.fill_color {
             // Version 16+ files describe the run's colour inline.
@@ -1670,16 +2485,17 @@ impl<'a> Ctx<'a> {
                     frame = Some(Size::new(w.abs(), h.abs()));
                     origin = Point::new(0.0, -h.abs());
                 }
-            } else if self.v >= 16 {
-                let o = Point::new(r.coord()?, r.coord()?);
-                if o.x.abs() <= MAX_TEXT_ORIGIN_MM && o.y.abs() <= MAX_TEXT_ORIGIN_MM {
-                    origin = o;
-                }
             }
-            // Before version 16 the argument holds record ids, not a
+            // Artistic text starts at the origin and the transform places
+            // it. Before version 16 the argument holds record ids, not a
             // place (files of versions 7 to 12; in 13 to 15 (0, 0) or
-            // (0, a record id), read as a point 9 to 40 m away): the text
-            // starts at the origin and the transform places it.
+            // (0, a record id), read as a point 9 to 40 m away). From 16
+            // it holds a point a few hundredths of a millimetre from
+            // (0, 0), growing by 0.0002 mm from one object to the next,
+            // that the program which writes the files does not draw the
+            // text at: its 108 texts of a version 18 file sit where its
+            // transform alone puts them, and taken as a place they rose
+            // by up to 0.046 mm and were saved there (#2359).
         }
         let mut txsm = None;
         oc.walk(&mut |c, _| {
@@ -1687,18 +2503,64 @@ impl<'a> Ctx<'a> {
                 txsm = Some(c);
             }
         });
+        let frame_number = (kind_code == OBJ_PARAGRAPH_TEXT)
+            .then(|| {
+                oc.children
+                    .iter()
+                    .find(|k| k.is(b"spnd"))
+                    .and_then(|k| self.reader(self.data(k)).u32())
+            })
+            .flatten();
+        self.pending_frame_number = frame_number;
         let Some(tc) = txsm else {
-            self.report
-                .warn("text object without a txsm chunk; skipped");
+            // A frame the text of another frame continues in keeps no text
+            // record: it opens empty, and the text flows into it once the
+            // frames are linked (#4104, #2018). So does a paragraph frame
+            // left empty (#4330): an empty text box, not an object that
+            // could not be read.
+            if kind_code == OBJ_PARAGRAPH_TEXT {
+                if frame.is_none() {
+                    if let Some((o, size)) = self.frame_from_hints(&hints) {
+                        origin = o;
+                        frame = Some(size);
+                    }
+                }
+                if let Some((t, o, s)) =
+                    frame.and_then(|f| unscaled_frame(hints.transform, origin, f))
+                {
+                    origin = o;
+                    frame = Some(s);
+                    self.pending_text_transform = Some(t);
+                }
+                if frame.is_some() {
+                    return Some(ShapeKind::Text {
+                        spans: Vec::new(),
+                        origin,
+                        frame,
+                        align: TextAlign::Left,
+                        para: ParagraphStyle::default(),
+                        on_path: None,
+                    });
+                }
+            }
+            // Text with no text record holds no letters: it draws
+            // nothing, and nothing of the drawing is lost (#4330).
+            log::debug!("text object without a txsm chunk: no text, draws nothing");
+            self.last_drew_nothing = true;
             return None;
         };
         let td = self.data(tc);
         let mut warnings = Vec::new();
-        let parsed = text::read_txsm(td, self.v, &mut |w| warnings.push(w));
+        let parsed = text::read_txsm(td, self.v, self.name_charset, &mut |w| warnings.push(w));
         for w in warnings {
             self.report.warn(w);
         }
         let parsed = parsed?;
+        if let (Some(head), true) = (frame_number, parsed.frame_ids.len() > 1) {
+            for (place, n) in parsed.frame_ids.iter().enumerate() {
+                self.text_chains.insert(*n, (head, place));
+            }
+        }
         self.pending_on_path = parsed.on_path.then_some(OnPathText {
             settings: parsed.path_settings,
             page_box: None,
@@ -1766,7 +2628,22 @@ impl<'a> Ctx<'a> {
             } else {
                 None
             });
-            let fmt = paragraph_spacing(&base, &para_fmt);
+            let mut fmt = paragraph_spacing(&base, &para_fmt);
+            // Character and word spacing given on the paragraph's first
+            // run rather than on the paragraph (they are paragraph
+            // settings in CorelDRAW).
+            if let Some(first) = para.runs.first().map(|r| r.style.over(&base)) {
+                if base.char_spacing.is_none() {
+                    if let Some(cs) = first.char_spacing {
+                        fmt.char_spacing_pct = (cs * 100.0).clamp(-100.0, 2000.0);
+                    }
+                }
+                if base.word_spacing.is_none() {
+                    if let Some(ws) = first.word_spacing {
+                        fmt.word_spacing_pct = (ws * 100.0).clamp(0.0, 2000.0);
+                    }
+                }
+            }
             if i == 0 {
                 // The first paragraph sets the object's formatting.
                 para_fmt = fmt.clone();
@@ -1774,30 +2651,105 @@ impl<'a> Ctx<'a> {
             own.push((chars, own_align, fmt));
             for (k, run) in para.runs.iter().enumerate() {
                 let style = run.style.over(&base);
-                let mut text = text::line_breaks(&self.run_text(run, &style));
+                let raw = self.run_text(run, &style);
+                // A carriage return inside a paragraph of paragraph text
+                // (version 16+, whose paragraphs are records of their
+                // own) is the line break inside the paragraph
+                // (Shift+Enter): the lines of a verse kept together, the
+                // space between paragraphs only after the verse (#4162).
+                let raw = if kind_code == OBJ_PARAGRAPH_TEXT && self.v >= 16 {
+                    text::soft_line_breaks(&raw)
+                } else {
+                    raw
+                };
+                let mut text = text::line_breaks(&raw);
                 if i + 1 < n && k + 1 == para.runs.len() {
                     text.push('\n');
                 }
                 chars += text.chars().count();
-                let span = self.make_span(text, &style, object_fill);
-                match spans.last_mut() {
-                    Some(last)
-                        if last.font_family == span.font_family
-                            && last.size_pt == span.size_pt
-                            && last.bold == span.bold
-                            && last.italic == span.italic
-                            && last.underline == span.underline
-                            && last.strikethrough == span.strikethrough
-                            && last.fill == span.fill =>
-                    {
-                        last.text.push_str(&span.text)
+                // East Asian letters take the style's East Asian font
+                // when it is another one (a version 14 file sets its
+                // Chinese titles in a 54 pt script font with Arial at
+                // 12 pt in the Latin slot, #955).
+                // Arabic, Persian and Hebrew letters take its right-to-left
+                // font the same way (#2886).
+                let asian = style.asian.as_ref().is_some_and(|a| a.differs_from(&style));
+                let rtl = style.rtl.as_ref().is_some_and(|a| a.differs_from(&style));
+                let pieces = if asian || rtl {
+                    text::split_scripts(&text, asian, rtl)
+                } else {
+                    vec![(text, text::Script::Latin)]
+                };
+                for (piece, script) in pieces {
+                    let span = match script {
+                        text::Script::EastAsian => {
+                            self.make_span(piece, &style.for_east_asian(), object_fill)
+                        }
+                        text::Script::Rtl => self.make_span(piece, &style.for_rtl(), object_fill),
+                        text::Script::Latin => self.make_span(piece, &style, object_fill),
+                    };
+                    match spans.last_mut() {
+                        Some(last)
+                            if last.font_family == span.font_family
+                                && last.size_pt == span.size_pt
+                                && last.bold == span.bold
+                                && last.italic == span.italic
+                                && last.underline == span.underline
+                                && last.strikethrough == span.strikethrough
+                                && last.fill == span.fill
+                                && last.outline == span.outline
+                                && last.angle_deg == span.angle_deg
+                                && last.offset_x_pct == span.offset_x_pct
+                                && last.baseline_shift_pt == span.baseline_shift_pt =>
+                        {
+                            last.text.push_str(&span.text)
+                        }
+                        _ => spans.push(span),
                     }
-                    _ => spans.push(span),
+                }
+            }
+        }
+        // Artistic text whose first lines are empty shows its first line
+        // with letters at its origin, its box that line's alone (#3215: a
+        // version 14 title starting with a paragraph break, which the
+        // same drawing saved as version 13 holds as curves on that
+        // baseline): the empty lines are dropped rather than pushing the
+        // letters down a line each.
+        if frame.is_none() && kind_code == OBJ_ARTISTIC_TEXT {
+            let lead = text::leading_breaks(&spans);
+            if lead > 0 && lead < spans.iter().map(|s| s.text.chars().count()).sum::<usize>() {
+                text::drop_leading_chars(&mut spans, lead);
+                // Paragraphs that started among the dropped lines start at
+                // the text's start; the last of them is the one shown.
+                let first = own
+                    .iter()
+                    .rposition(|(start, _, _)| *start <= lead)
+                    .unwrap_or(0);
+                own.drain(..first);
+                for (start, _, _) in own.iter_mut() {
+                    *start = start.saturating_sub(lead);
+                }
+                if let Some((_, _, fmt)) = own.first() {
+                    para_fmt = fmt.clone();
                 }
             }
         }
         if spans.is_empty() {
-            self.report.warn("text object with no content; skipped");
+            // An empty text box (#4330): a paragraph frame opens as an
+            // empty frame to type in; artistic text with no letters draws
+            // nothing. Neither is an object that could not be read.
+            if kind_code == OBJ_PARAGRAPH_TEXT && frame.is_some() {
+                return Some(ShapeKind::Text {
+                    spans: Vec::new(),
+                    origin,
+                    frame,
+                    align: TextAlign::Left,
+                    para: ParagraphStyle::default(),
+                    on_path: None,
+                });
+            }
+            log::debug!("text object with no content: draws nothing");
+            self.last_drew_nothing = true;
             return None;
         }
         // 0 none, 1 left, 2 centre, 3 right, 4 full and 5 forced justify
@@ -1835,6 +2787,19 @@ impl<'a> Ctx<'a> {
                     Some((*start, *start)),
                     |f| *f = target.clone(),
                 );
+            }
+        }
+        // A frame of several columns (its record's settings, version 16+,
+        // or its frame block before).
+        if kind_code == OBJ_PARAGRAPH_TEXT {
+            let columns = parsed
+                .frame_style
+                .as_deref()
+                .and_then(text::frame_columns)
+                .or(parsed.columns);
+            if let (Some((n, gap)), ShapeKind::Text { para, .. }) = (columns, &mut kind) {
+                para.columns = n;
+                para.gutter = gap * 25.4 / 254000.0;
             }
         }
         Some(kind)
@@ -1973,6 +2938,19 @@ impl<'a> Ctx<'a> {
 
     /// `trfd`: object transform (2x3 matrix). Returns identity when unreadable.
     fn read_transform(&mut self, c: &Chunk) -> Affine {
+        self.read_transform_chain(c, &[]).matrices()
+    }
+
+    /// A `trfd`'s entries in order: its matrices and, from version 15,
+    /// its envelopes (entry type 1), each taking its frame from the next
+    /// of `envds` (the `envd` chunks after the `trfd`, in the same order).
+    /// An envelope that cannot be read, or has no `envd`, is left out.
+    /// Version 15 envelopes are laid out as version 16's (#3222: 1087 of
+    /// them in a version 15 file, the box at byte 14 of the entry and the
+    /// corner indexes 0 to 3 after it; its reference pictures show the
+    /// dance pads and panels bent as the envelopes then draw them).
+    fn read_transform_chain(&mut self, c: &Chunk, envds: &[&Chunk]) -> TransformChain {
+        let identity = TransformChain::default();
         let d = self.data(c);
         let v = self.v;
         let mut r = self.reader(d);
@@ -1981,10 +2959,11 @@ impl<'a> Ctx<'a> {
         let num_args = r.uint().unwrap_or(0) as usize;
         let start_args = r.uint().unwrap_or(0) as usize;
         if num_args == 0 {
-            return Affine::IDENTITY;
+            return identity;
         }
         let step = if self.v16() { 2 } else { 4 };
-        let mut result: Option<Affine> = None;
+        let mut chain = TransformChain::default();
+        let mut envds = envds.iter();
         for i in 0..num_args.min(16) {
             let Some(off) = self.reader_at(d, start_args + i * step).uint() else {
                 break;
@@ -1993,9 +2972,83 @@ impl<'a> Ctx<'a> {
             if v >= 13 {
                 tr.skip(8);
             }
-            // Record type 0x08 is an affine matrix; others are ignored.
-            if tr.u16() != Some(0x08) {
-                continue;
+            // Record type 0x08 is an affine matrix, 0x01 (version 15+) an
+            // envelope, 0x10 (version 16+) a distortion; others are
+            // ignored.
+            match tr.u16() {
+                Some(0x08) => {}
+                Some(0x10) if v >= 16 => {
+                    match distortion_entry(d, tr.pos) {
+                        Some(_) if chain.projective.is_some() => {
+                            self.report
+                                .warn("a distortion after a perspective is not applied");
+                        }
+                        Some(_) if !chain.warps.is_empty() => {
+                            self.report
+                                .warn("a distortion after an envelope is not applied");
+                        }
+                        // A distortion applied again over the ones before
+                        // (#1824): they all stay, in order.
+                        Some(entry) => {
+                            chain.distortions.push(Distortion {
+                                entry,
+                                after: Affine::IDENTITY,
+                            });
+                        }
+                        None => self
+                            .report
+                            .warn("a distortion could not be read; not applied"),
+                    }
+                    continue;
+                }
+                // A perspective (#2691): the box it maps from and the
+                // four corners it maps that box onto.
+                Some(0x02) if v >= 16 => {
+                    match perspective_entry(d, tr.pos) {
+                        Some(_) if !chain.warps.is_empty() || !chain.distortions.is_empty() => {
+                            self.report.warn(
+                                "a perspective with an envelope or a distortion is not applied",
+                            );
+                        }
+                        Some((rect, corners)) => chain.perspective(rect, corners),
+                        None => self
+                            .report
+                            .warn("a perspective could not be read; not applied"),
+                    }
+                    continue;
+                }
+                Some(0x01) if v >= 15 => {
+                    if chain.projective.is_some() {
+                        self.report
+                            .warn("an envelope after a perspective is not applied");
+                        continue;
+                    }
+                    if !chain.distortions.is_empty() {
+                        self.report
+                            .warn("an envelope after a distortion is not applied");
+                        continue;
+                    }
+                    let Some(envd) = envds.next() else {
+                        self.report
+                            .warn("an envelope without its outline record is not applied");
+                        continue;
+                    };
+                    let envd = self.data(envd);
+                    match envelope_entry(d, tr.pos)
+                        .and_then(|(rect, corners)| Some((rect, envelope_frame(envd, &corners)?)))
+                    {
+                        Some((rect, frame)) => chain.warps.push(Warp {
+                            rect,
+                            frame,
+                            after: Affine::IDENTITY,
+                        }),
+                        None => self
+                            .report
+                            .warn("an envelope could not be read; not applied"),
+                    }
+                    continue;
+                }
+                _ => continue,
             }
             if v >= 6 {
                 tr.skip(6);
@@ -2005,7 +3058,7 @@ impl<'a> Ctx<'a> {
             if v < 5 {
                 // Several matrices apply one after the other.
                 match fixed_matrix(&mut tr) {
-                    Some(m) => result = Some(m * result.unwrap_or(Affine::IDENTITY)),
+                    Some(m) => chain.then(m),
                     None => self.report.warn("trfd too short; identity used"),
                 }
                 continue;
@@ -2019,19 +3072,186 @@ impl<'a> Ctx<'a> {
                 tr.f64_coord(),
             ) else {
                 self.report.warn("trfd too short; identity used");
-                return Affine::IDENTITY;
+                return identity;
             };
             // Rows are (a c e; b d f): x' = a x + c y + e, y' = b x + d y + f.
             if ![a, b, c_, d_, e, f].iter().all(|x| x.is_finite()) {
-                return Affine::IDENTITY;
+                return identity;
             }
             // Several matrices apply one after the other (seen in a
             // version 5 file whose labels are placed by a second, moving
             // matrix after a first, scaling one).
-            let m = Affine::new([a, b, c_, d_, e, f]);
-            result = Some(m * result.unwrap_or(Affine::IDENTITY));
+            chain.then(Affine::new([a, b, c_, d_, e, f]));
         }
-        result.unwrap_or(Affine::IDENTITY)
+        chain
+    }
+
+    /// The `trfd` of a group list's own `lgob` with the `envd` chunks
+    /// after it (the list's objects are not searched); None without an
+    /// `envd`.
+    fn own_transform_chain(&mut self, list: &Chunk) -> Option<TransformChain> {
+        let lgob = list.children.iter().find(|k| k.is(b"lgob"))?;
+        let (trfd, envds) = transform_chunks(lgob);
+        // Without an envelope outline there is nothing to bend (and a
+        // group's own matrices are already in its objects).
+        if envds.is_empty() {
+            return None;
+        }
+        Some(self.read_transform_chain(trfd?, &envds))
+    }
+
+    /// The `trfd` of a version 16+ group list's own `lgob` when it holds a
+    /// perspective (#2691); None otherwise.
+    fn own_perspective_chain(&mut self, list: &Chunk) -> Option<TransformChain> {
+        if self.v < 16 {
+            return None;
+        }
+        let lgob = list.children.iter().find(|k| k.is(b"lgob"))?;
+        let (trfd, envds) = transform_chunks(lgob);
+        let chain = self.read_transform_chain(trfd?, &envds);
+        chain.projective.is_some().then_some(chain)
+    }
+
+    /// Put `shape` (drawn through `pre` first, in page space) in the
+    /// perspective of a group (#2691): `rest` is the projective map the
+    /// group's perspectives make of the file's space its objects are in
+    /// (from the page centre); the matrices after the last perspective
+    /// become the objects' transform. Each object takes a live
+    /// perspective: the corners of its box (or of the perspective it has
+    /// already) carried through that map.
+    fn perspective_group_object(
+        &mut self,
+        shape: &mut Shape,
+        pre: Affine,
+        rest: &[f64; 9],
+        after: Affine,
+        page_size: Size,
+    ) {
+        use tracedraw_core::geometry::Shape as _;
+        let m = pre * shape.transform;
+        let outer = Affine::translate((page_size.width / 2.0, page_size.height / 2.0))
+            * self.outer_transform;
+        match &mut shape.kind {
+            ShapeKind::Group { children } => {
+                for c in children.iter_mut() {
+                    self.perspective_group_object(c, m, rest, after, page_size);
+                }
+                shape.transform = Affine::IDENTITY;
+                return;
+            }
+            ShapeKind::ClipFrame { frame, contents } => {
+                self.perspective_group_object(frame, m, rest, after, page_size);
+                for c in contents.iter_mut() {
+                    self.perspective_group_object(c, m, rest, after, page_size);
+                }
+                shape.transform = Affine::IDENTITY;
+                return;
+            }
+            _ => {}
+        }
+        let to_file = outer.inverse() * m;
+        let own = shape
+            .effects
+            .iter()
+            .position(|e| matches!(e, tracedraw_core::live::Effect::Perspective { .. }));
+        let start = match own.map(|i| &shape.effects[i]) {
+            Some(tracedraw_core::live::Effect::Perspective { corners }) => *corners,
+            _ => {
+                let b = shape.local_path().bounding_box();
+                if b.width() < 1e-9 || b.height() < 1e-9 {
+                    shape.transform = outer * after * to_file;
+                    return;
+                }
+                [
+                    Point::new(b.x0, b.y0),
+                    Point::new(b.x1, b.y0),
+                    Point::new(b.x1, b.y1),
+                    Point::new(b.x0, b.y1),
+                ]
+            }
+        };
+        let corners = start.map(|p| map3(rest, to_file * p));
+        if !corners.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+            return;
+        }
+        let effect = tracedraw_core::live::Effect::Perspective { corners };
+        match own {
+            Some(i) => shape.effects[i] = effect,
+            None => shape.effects.push(effect),
+        }
+        shape.transform = outer * after;
+    }
+
+    /// Bend `shape` (drawn through `pre` first, in page space) through the
+    /// envelopes of a group's `chain`, from its first envelope on: the
+    /// group's objects already carry the matrices before it. Groups and
+    /// clip frames bend their objects; text and pictures are only moved
+    /// by the matrices after the envelopes, with a warning.
+    fn bend_group_object(
+        &mut self,
+        shape: &mut Shape,
+        pre: Affine,
+        chain: &TransformChain,
+        page_size: Size,
+    ) {
+        let m = pre * shape.transform;
+        // From the file's space (page centre origin) to the page.
+        let outer = Affine::translate((page_size.width / 2.0, page_size.height / 2.0))
+            * self.outer_transform;
+        match &mut shape.kind {
+            ShapeKind::Group { children } => {
+                for c in children.iter_mut() {
+                    self.bend_group_object(c, m, chain, page_size);
+                }
+                shape.transform = Affine::IDENTITY;
+                return;
+            }
+            ShapeKind::ClipFrame { frame, contents } => {
+                self.bend_group_object(frame, m, chain, page_size);
+                for c in contents.iter_mut() {
+                    self.bend_group_object(c, m, chain, page_size);
+                }
+                shape.transform = Affine::IDENTITY;
+                return;
+            }
+            _ => {}
+        }
+        match bendable(&shape.kind) {
+            Some(closed) => {
+                use tracedraw_core::geometry::Shape as _;
+                let local = Shape::new(shape.id, shape.kind.clone()).local_path();
+                let path = chain.bend(&(outer.inverse() * m * local.clone()));
+                let transform = outer * chain.last_after();
+                // A fill placed by its own frame stays where the matrices
+                // take it, as for an object's own envelope.
+                if let Fill::Fountain(f) = &mut shape.fill {
+                    if let Some(h) = f.handles {
+                        let before = (m * local).bounding_box();
+                        let after = (transform * path.clone()).bounding_box();
+                        let carry = outer * chain.after_first() * outer.inverse();
+                        let place = |p: Point| {
+                            Fountain::page_to_rel(after, carry * Fountain::rel_to_page(before, p))
+                        };
+                        let placed = tracedraw_core::style::FountainHandles {
+                            start: place(h.start),
+                            end: place(h.end),
+                            skew: place(h.skew),
+                        };
+                        f.set_handles(after, placed);
+                    }
+                }
+                shape.kind = ShapeKind::Path { path, closed };
+                shape.transform = transform;
+            }
+            None => {
+                if !self.envelope_warned {
+                    self.envelope_warned = true;
+                    self.report
+                        .warn("an envelope of a text or picture is not applied");
+                }
+                shape.transform = outer * chain.after_first() * outer.inverse() * m;
+            }
+        }
     }
 
     /// `loda` header and argument table. Header fields are u16 before
@@ -2055,16 +3275,26 @@ impl<'a> Ctx<'a> {
         Some(if self.v < 17 {
             text::decode_utf16le(s)
         } else {
-            String::from_utf8_lossy(s).into_owned()
+            // UTF-8, else the code page of the file's fonts (#898).
+            text::decode_style_bytes(s, self.name_charset)
         })
     }
 
     /// The object's `bbox` chunk: its box on the page (file coordinates,
     /// origin at the page centre).
-    /// Object type 0x26 (a version 22 file): a connector line. Its
-    /// `LIST npps` holds a `ppdt` record: u32 0, u32 1, then the start and
-    /// the end point (coordinates), then what the ends attach to. The
-    /// file's preview draws each as a straight line between the two points.
+    /// Object type 0x26 (version 22 files) keeps its points in the `ppdt`
+    /// record of its `LIST npps`, in one of two layouts:
+    /// - a connector line: u32 0, u32 1, then the start and the end point
+    ///   (coordinates), then what the ends attach to. The file's preview
+    ///   draws each as a straight line between the two points;
+    /// - a list of points: u16 count, u32 1 (closed; 0 open), the points
+    ///   (coordinates), then a u32 for each point (0 or 1), 6 + 12 bytes a
+    ///   point in all. The points are the control points of a B-spline
+    ///   (the B-spline tool, #2723): the shape is the smooth uniform cubic
+    ///   B-spline they steer, inside the polygon through them, not that
+    ///   polygon. Seen too as the outlines of clip frames, closed outlines
+    ///   of some hundred points close together. The u32 a point is not
+    ///   read.
     fn read_connector(&mut self, oc: &Chunk) -> Option<ShapeKind> {
         let mut found = None;
         oc.walk(&mut |c, _| {
@@ -2073,6 +3303,22 @@ impl<'a> Ctx<'a> {
             }
         });
         let d = self.data(found?);
+        let n = u16::from_le_bytes([*d.first()?, *d.get(1)?]) as usize;
+        let closed = d.get(2..6) == Some(&[1, 0, 0, 0][..]);
+        let open = d.get(2..6) == Some(&[0, 0, 0, 0][..]);
+        if n >= 2 && d.len() == 6 + 12 * n && (closed || open) {
+            let mut r = self.reader_at(d, 6);
+            let mut points = Vec::with_capacity(n);
+            for _ in 0..n {
+                let p = Point::new(r.coord()?, r.coord()?);
+                if !(p.x.is_finite() && p.y.is_finite()) {
+                    return None;
+                }
+                points.push(p);
+            }
+            let path = b_spline_path(&points, closed);
+            return Some(ShapeKind::Path { path, closed });
+        }
         let mut r = self.reader_at(d, 8);
         let a = Point::new(r.coord()?, r.coord()?);
         let b = Point::new(r.coord()?, r.coord()?);
@@ -2088,6 +3334,366 @@ impl<'a> Ctx<'a> {
         })
     }
 
+    /// The record named `id` in a list's own `LIST npps`: the `ppdt`
+    /// that follows that `ppid`.
+    fn own_property<'c>(&self, list: &'c Chunk, id: &[u8; 16]) -> Option<&'c Chunk> {
+        let npps = list
+            .children
+            .iter()
+            .find(|k| k.list_type == Some(*b"npps"))?;
+        let at = npps
+            .children
+            .iter()
+            .position(|k| k.is(b"ppid") && self.data(k).get(..16) == Some(&id[..]))?;
+        npps.children.get(at + 1).filter(|k| k.is(b"ppdt"))
+    }
+
+    /// The matrices of a group's own `trfd` (in its `lgob`, not those of
+    /// its objects).
+    fn own_matrices(&mut self, list: &Chunk) -> Affine {
+        let trfd = list
+            .children
+            .iter()
+            .find(|k| k.list_type == Some(*b"lgob"))
+            .and_then(|lgob| transform_chunks(lgob).0);
+        match trfd {
+            Some(t) => self.read_transform(t),
+            None => Affine::IDENTITY,
+        }
+    }
+
+    /// A table (versions 14 on, #2170): a group whose own `loda` is of
+    /// type 0x26 and whose `LIST npps` holds the table's layout record.
+    /// Each cell is a group of the same type inside it: its `loda`'s
+    /// coordinates are the cell's outline (a rectangle from its top left
+    /// corner, as a curve), its `trfd` places that corner, its fill and
+    /// outline ids are the cell's, and its one object is the cell's
+    /// paragraph text. The grid comes from the cells' rectangles taken
+    /// back through the table's own matrices, so a cell over several
+    /// columns or rows spans them.
+    fn read_table(
+        &mut self,
+        gc: &Chunk,
+        ids: &mut tracedraw_core::id::IdSource,
+        page_size: Size,
+    ) -> Option<Shape> {
+        self.own_property(gc, &PPID_TABLE)?;
+        let own = self.own_loda(gc)?;
+        let own_data = self.data(own);
+        let own_table = self.read_loda(own_data)?;
+        if own_table.kind != OBJ_CONNECTOR {
+            return None;
+        }
+        let name = own_table
+            .args
+            .iter()
+            .find(|a| a.ty == ARG_NAME)
+            .and_then(|a| own_data.get(a.off..a.end))
+            .map(|b| self.read_name(b))
+            .filter(|n| !n.is_empty());
+        let place = self.own_matrices(gc);
+        if !(place.determinant().is_finite() && place.determinant().abs() > 1e-12) {
+            return None;
+        }
+        let back = place.inverse();
+
+        struct CellRead {
+            rect: Rect,
+            fill: Option<Fill>,
+            border: Option<Stroke>,
+            text: Vec<TextSpan>,
+            align: TextAlign,
+            /// From the cell's edge to its text, left and top.
+            inset: Option<(f64, f64)>,
+        }
+        let mut read: Vec<CellRead> = Vec::new();
+        for c in gc.children.iter().filter(|c| c.is(b"grp ")) {
+            let Some(loda) = self.own_loda(c) else {
+                continue;
+            };
+            let d = self.data(loda);
+            let Some(l) = self.read_loda(d) else {
+                continue;
+            };
+            let Some(coords) = l.args.iter().find(|a| a.ty == ARG_COORDS).copied() else {
+                continue;
+            };
+            if l.kind != OBJ_CONNECTOR {
+                continue;
+            }
+            let outline = self.read_geometry(OBJ_CURVE, d, coords, None);
+            self.pending_node_types.clear();
+            let Some(ShapeKind::Path { path, .. }) = outline else {
+                continue;
+            };
+            let cell_place = self.own_matrices(c);
+            let rect = {
+                use tracedraw_core::geometry::Shape as _;
+                (back * cell_place * path).bounding_box()
+            };
+            let sound = [rect.x0, rect.y0, rect.x1, rect.y1]
+                .iter()
+                .all(|v| v.is_finite());
+            if !sound || rect.width() <= 0.0 || rect.height() <= 0.0 {
+                continue;
+            }
+            let id_of = |ty: u32| {
+                let a = l.args.iter().find(|a| a.ty == ty)?;
+                Some(u32::from_le_bytes(
+                    d.get(a.off..a.off.checked_add(4)?)?.try_into().ok()?,
+                ))
+            };
+            let fill = id_of(ARG_FILL)
+                .and_then(|f| self.fills.get(&f))
+                .map(|f| f.fill.clone())
+                .filter(|f| !matches!(f, Fill::None));
+            let border = id_of(ARG_OUTLINE)
+                .and_then(|o| self.outlines.get(&o))
+                .and_then(|o| o.stroke.clone());
+            // The cell's text: an empty cell holds a text of no letters,
+            // which is not a text left out.
+            let mut text = Vec::new();
+            let mut align = TextAlign::Left;
+            let mut inset = None;
+            if let Some(oc) = c.children.iter().find(|k| k.is(b"obj ")) {
+                let warned = self.report.warnings.len();
+                let shape = self.read_object(oc, ids.shape(), page_size);
+                self.pending_clip = None;
+                self.pending_crop = None;
+                self.pending_on_path = None;
+                self.last_was_guide = false;
+                // Where the text's frame starts in the cell.
+                let frame = oc
+                    .children
+                    .iter()
+                    .find(|k| k.list_type == Some(*b"lgob"))
+                    .and_then(|g| transform_chunks(g).0);
+                if let Some(t) = frame {
+                    let p = back * self.read_transform(t) * Point::ZERO;
+                    let (dx, dy) = (p.x - rect.x0, rect.y1 - p.y);
+                    if (0.0..=rect.width() / 2.0).contains(&dx)
+                        && (0.0..=rect.height() / 2.0).contains(&dy)
+                    {
+                        inset = Some((dx, dy));
+                    }
+                }
+                match shape {
+                    Some(Shape {
+                        kind:
+                            ShapeKind::Text {
+                                spans, align: a, ..
+                            },
+                        ..
+                    }) => {
+                        // (A text of no letters can come as an empty run.)
+                        if spans.iter().any(|s| !s.text.is_empty()) {
+                            text = spans;
+                        }
+                        align = a;
+                    }
+                    Some(_) => {}
+                    None => {
+                        // An empty cell's text draws nothing: no mark left
+                        // for the next object read (#4330).
+                        self.last_drew_nothing = false;
+                        let empty = "text object with no content; skipped";
+                        if self.report.warnings.len() > warned
+                            && self.report.warnings.last().map(String::as_str) == Some(empty)
+                        {
+                            self.report.warnings.pop();
+                        }
+                    }
+                }
+            }
+            read.push(CellRead {
+                rect,
+                fill,
+                border,
+                text,
+                align,
+                inset,
+            });
+        }
+        if read.is_empty() {
+            return None;
+        }
+
+        // The grid lines: every edge of a cell, those closer than a
+        // hundredth of a millimetre taken as one.
+        const SAME: f64 = 0.01;
+        let lines = |mut v: Vec<f64>| {
+            v.sort_by(f64::total_cmp);
+            v.dedup_by(|b, a| (*b - *a).abs() < SAME);
+            v
+        };
+        let xs = lines(read.iter().flat_map(|c| [c.rect.x0, c.rect.x1]).collect());
+        // Rows count down from the top edge.
+        let mut ys = lines(read.iter().flat_map(|c| [c.rect.y0, c.rect.y1]).collect());
+        ys.reverse();
+        if xs.len() < 2 || ys.len() < 2 || xs.len() > TABLE_MAX_LINES || ys.len() > TABLE_MAX_LINES
+        {
+            return None;
+        }
+        let line = |v: &[f64], x: f64| v.iter().position(|l| (*l - x).abs() < SAME);
+        let (cols, rows) = (xs.len() - 1, ys.len() - 1);
+
+        // The border most cells have is the table's; the others keep
+        // their own on all four sides.
+        let mut border: Option<Stroke> = None;
+        let mut most = 0;
+        for c in &read {
+            let n = read.iter().filter(|o| o.border == c.border).count();
+            if n > most {
+                most = n;
+                border = c.border.clone();
+            }
+        }
+        let inset = read.iter().find_map(|c| c.inset);
+
+        let mut taken = vec![false; rows * cols];
+        let mut cells: Vec<tracedraw_core::document::TableCell> = Vec::new();
+        for c in read {
+            let (Some(col), Some(col_end), Some(row), Some(row_end)) = (
+                line(&xs, c.rect.x0),
+                line(&xs, c.rect.x1),
+                line(&ys, c.rect.y1),
+                line(&ys, c.rect.y0),
+            ) else {
+                continue;
+            };
+            let Some(place) = taken.get_mut(row * cols + col) else {
+                continue;
+            };
+            if col_end <= col || row_end <= row || *place {
+                continue;
+            }
+            *place = true;
+            let mut cell = tracedraw_core::table::blank_cell(row as u32, col as u32);
+            cell.row_span = (row_end - row) as u32;
+            cell.col_span = (col_end - col) as u32;
+            cell.text = c.text;
+            cell.align = c.align;
+            cell.fill = c.fill;
+            if c.border != border {
+                let side = match c.border {
+                    Some(s) => tracedraw_core::table::EdgeBorder::Stroke(Box::new(s)),
+                    None => tracedraw_core::table::EdgeBorder::None,
+                };
+                cell.borders = tracedraw_core::table::CellBorders {
+                    top: side.clone(),
+                    right: side.clone(),
+                    bottom: side.clone(),
+                    left: side,
+                };
+            }
+            cells.push(cell);
+        }
+        if cells.is_empty() {
+            return None;
+        }
+        // Every place of the grid has a cell, those under a wider or
+        // taller cell too.
+        for (at, taken) in taken.iter().enumerate() {
+            if !taken {
+                cells.push(tracedraw_core::table::blank_cell(
+                    (at / cols) as u32,
+                    (at % cols) as u32,
+                ));
+            }
+        }
+        cells.sort_by_key(|c| (c.row, c.col));
+
+        let (Some(left), Some(right), Some(top), Some(bottom)) =
+            (xs.first(), xs.last(), ys.first(), ys.last())
+        else {
+            return None;
+        };
+        let rect = Rect::new(*left, *bottom, *right, *top);
+        let mut table = tracedraw_core::document::Table::new(rect, 1, 1, border);
+        table.col_widths = xs.windows(2).map(|w| w[1] - w[0]).collect();
+        table.row_heights = ys.windows(2).map(|w| w[0] - w[1]).collect();
+        table.cells = cells;
+        if let Some((left, top)) = inset {
+            table.padding = left;
+            if (left - top).abs() > SAME {
+                table.margins = Some(tracedraw_core::table::CellMargins {
+                    left,
+                    right: left,
+                    top,
+                    bottom: top,
+                });
+            }
+        }
+        let recenter = Affine::translate((page_size.width / 2.0, page_size.height / 2.0));
+        let mut shape = Shape::new(ids.shape(), ShapeKind::Table(table));
+        shape.transform = recenter * self.outer_transform * place;
+        shape.fill = Fill::None;
+        shape.stroke = None;
+        shape.name = name;
+        Some(shape)
+    }
+
+    /// The objects of the `.tdraw` drawing the package `name` wraps: those
+    /// of its first page, at their own size on the page, centred on the
+    /// object's rectangle `place` (in the object's own space, which
+    /// `on_page` takes to the page) (#3600). Style references are the
+    /// drawing's own, so they are let go and each object keeps the look
+    /// it has.
+    fn embedded_drawing(
+        &self,
+        name: &str,
+        place: Option<Rect>,
+        on_page: Affine,
+    ) -> Option<Vec<Shape>> {
+        let bytes = self.embedded_package_files.get(name)?;
+        let label = self
+            .embedded_packages
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        let doc = match tracedraw_core::Document::from_tdraw_bytes(bytes) {
+            Ok(doc) => doc,
+            Err(e) => {
+                // It is then shown as a box like any other package.
+                log::warn!("embedded drawing \"{label}\" could not be read: {e}");
+                return None;
+            }
+        };
+        let mut shapes: Vec<Shape> = doc
+            .pages
+            .into_iter()
+            .next()?
+            .layers
+            .into_iter()
+            .filter(|l| l.visible)
+            .flat_map(|l| l.shapes)
+            .collect();
+        let bounds = shapes
+            .iter()
+            .map(Shape::bounds)
+            .filter(|b| b.width().is_finite() && b.height().is_finite())
+            .reduce(|a, b| a.union(b))?;
+        let place = place?;
+        if on_page.determinant().abs() < 1e-12 {
+            return None;
+        }
+        // Placed on the page, then brought into the object's own space,
+        // which the object's transform takes back to the page.
+        let shift =
+            on_page.inverse() * Affine::translate(on_page * place.center() - bounds.center());
+        fn let_style_go(s: &mut Shape) {
+            s.style = None;
+            if let ShapeKind::Group { children } = &mut s.kind {
+                children.iter_mut().for_each(let_style_go);
+            }
+        }
+        for s in &mut shapes {
+            let_style_go(s);
+            s.absorb(shift);
+        }
+        Some(shapes)
+    }
+
     /// An embedded object drawn as its picture: coordinates are the size
     /// (two coordinates) and two opposite corners.
     fn read_embedded(
@@ -2095,6 +3701,7 @@ impl<'a> Ctx<'a> {
         d: &[u8],
         coords: Option<Arg>,
         name: Option<&str>,
+        on_page: Affine,
     ) -> Option<ShapeKind> {
         let Some(name) = name else {
             // Version 21 files keep such objects in `embed/` members that
@@ -2103,23 +3710,71 @@ impl<'a> Ctx<'a> {
                 .warn("an object embedded from another program is not shown");
             return None;
         };
-        let Some((w, h, png)) = self.embedded.get(name).cloned() else {
-            self.report.warn(format!(
-                "embedded object \"{name}\" has no picture we can show"
-            ));
-            return None;
+        let rect = || -> Option<Rect> {
+            let mut r = self.reader_at(d, coords?.off + 8);
+            let (x0, y0, x1, y1) = (r.coord()?, r.coord()?, r.coord()?, r.coord()?);
+            let rect = Rect::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
+            (rect.width() > 0.0 && rect.height() > 0.0).then_some(rect)
         };
-        let mut r = self.reader_at(d, coords?.off + 8);
-        let (x0, y0, x1, y1) = (r.coord()?, r.coord()?, r.coord()?, r.coord()?);
-        let rect = Rect::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
-        if !(rect.width() > 0.0 && rect.height() > 0.0) {
-            return None;
-        }
+        let Some((w, h, png)) = self.embedded.get(name).cloned() else {
+            // The picture the object's program last drew, a metafile
+            // (barcodes, #1131), stretched over the object's rectangle.
+            let drawn = self.embedded_metafiles.get(name).and_then(|m| {
+                let mut ids = tracedraw_core::id::IdSource::default();
+                tracedraw_core::document::metafile::play(m, &mut ids)
+            });
+            let Some((mut shapes, size)) = drawn else {
+                // A TraceDraw drawing wrapped whole (#3600): its objects,
+                // at their own size, centred on the object's place.
+                if let Some(children) = self.embedded_drawing(name, rect(), on_page) {
+                    self.pending_renumber = true;
+                    return Some(ShapeKind::Group { children });
+                }
+                // A package (a wrapped file, #3083) has no picture: keep
+                // its place as a grey box named after the file.
+                if let Some(label) = self.embedded_packages.get(name).cloned() {
+                    let rect = rect()?;
+                    let mut ids = tracedraw_core::id::IdSource::default();
+                    let mut b = Shape::new(
+                        ids.shape(),
+                        ShapeKind::Rect {
+                            rect,
+                            radius: 0.0,
+                            corners: None,
+                        },
+                    );
+                    b.fill = Fill::Solid(Color::rgb8(0xEE, 0xEE, 0xEE));
+                    b.stroke = Some(Stroke::hairline(Color::rgb8(0x80, 0x80, 0x80)));
+                    b.name = Some(label.clone());
+                    self.report.warn(format!(
+                        "embedded file \"{label}\" has no picture; shown as a box"
+                    ));
+                    self.pending_renumber = true;
+                    return Some(ShapeKind::Group { children: vec![b] });
+                }
+                self.report.warn(format!(
+                    "embedded object \"{name}\" has no picture we can show"
+                ));
+                return None;
+            };
+            let rect = rect()?;
+            if !(size.width > 0.0 && size.height > 0.0) {
+                return None;
+            }
+            let fit = Affine::translate((rect.x0, rect.y0))
+                * Affine::scale_non_uniform(rect.width() / size.width, rect.height() / size.height);
+            for s in &mut shapes {
+                s.absorb(fit);
+            }
+            self.pending_renumber = true;
+            return Some(ShapeKind::Group { children: shapes });
+        };
+        let rect = rect()?;
         Some(ShapeKind::Bitmap {
             rect,
             width_px: w,
             height_px: h,
-            png,
+            png: png.into(),
             fx: None,
         })
     }
@@ -2163,6 +3818,36 @@ impl<'a> Ctx<'a> {
         Some(Guide::from(line))
     }
 
+    /// The `guid` chunk of a version 7 file (#1775: one drawing a user
+    /// saved in each version from 7 to 21, whose four guidelines around
+    /// the page sit on the master page's guides layer from version 8):
+    /// the number of guidelines (u32), a second u32 (the same number in
+    /// the file seen), then a 40-byte record for each, laid out as
+    /// argument 16000 ([`Self::read_guide`]): 12 bytes not used, the
+    /// angle and three points from the page centre.
+    fn read_guid_chunk(&self, c: &Chunk, page_size: Size) -> Vec<tracedraw_core::document::Guide> {
+        const RECORD: usize = 40;
+        let d = self.data(c);
+        let Some(n) = d
+            .get(..4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        else {
+            return Vec::new();
+        };
+        let n = (n as usize).min(d.len().saturating_sub(8) / RECORD);
+        (0..n)
+            .filter_map(|i| {
+                let off = 8 + i * RECORD;
+                let arg = Arg {
+                    ty: ARG_GUIDE_LINE,
+                    off,
+                    end: off + RECORD,
+                };
+                self.read_guide(d, arg, page_size)
+            })
+            .collect()
+    }
+
     fn object_bbox(&self, oc: &Chunk) -> Option<Rect> {
         let c = oc.find(b"bbox")?;
         let d = self.data(c);
@@ -2170,6 +3855,18 @@ impl<'a> Ctx<'a> {
         let (x0, y0, x1, y1) = (r.coord()?, r.coord()?, r.coord()?, r.coord()?);
         let b = Rect::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
         (b.x0.is_finite() && b.y0.is_finite() && b.width() > 0.0 && b.height() > 0.0).then_some(b)
+    }
+
+    /// The object's box is the empty one, (-2, 2, 2, -2) in coordinate
+    /// units, which files from version 14 give what covers nothing (the
+    /// master page, and objects that only carry a name and a style,
+    /// #2022).
+    fn draws_nothing(&self, oc: &Chunk) -> bool {
+        let Some(c) = oc.find(b"bbox") else {
+            return false;
+        };
+        let mut r = Reader::at(self.data(c), 0, false);
+        [-2, 2, 2, -2].iter().all(|v| r.i32() == Some(*v))
     }
 
     /// A paragraph frame from the object's box and style, for paragraph
@@ -2350,16 +4047,7 @@ impl<'a> Ctx<'a> {
                     } else {
                         FountainKind::Linear
                     },
-                    stops: vec![
-                        Stop {
-                            pos: 0.0,
-                            color: from,
-                        },
-                        Stop {
-                            pos: 1.0,
-                            color: to,
-                        },
-                    ],
+                    stops: vec![Stop::new(0.0, from), Stop::new(1.0, to)],
                     angle,
                     ..Default::default()
                 })
@@ -2409,10 +4097,11 @@ impl<'a> Ctx<'a> {
                 rgba.extend_from_slice(&[c[0], c[1], c[2], 255]);
             }
             return Fill::Pattern(Pattern::Bitmap {
-                png: encode_png(tile.width, tile.height, &rgba),
+                png: encode_png(tile.width, tile.height, &rgba).into(),
                 width_px: tile.width,
                 height_px: tile.height,
                 size_mm,
+                placement: Default::default(),
             });
         }
         self.report
@@ -2422,6 +4111,7 @@ impl<'a> Ctx<'a> {
             front,
             back,
             size_mm,
+            placement: Default::default(),
         })
     }
 
@@ -2446,6 +4136,7 @@ impl<'a> Ctx<'a> {
             front: Color::cmyk_pct(0.0, 0.0, 0.0, 40.0),
             back: Color::cmyk_pct(0.0, 0.0, 0.0, 0.0),
             size_mm: 4.0,
+            placement: Default::default(),
         })
     }
 
@@ -2497,40 +4188,208 @@ impl<'a> Ctx<'a> {
     }
 
     fn read_loda(&mut self, d: &'a [u8]) -> Option<Loda> {
-        let mut r = self.reader(d);
-        let _len = r.uint()?;
-        let num_args = r.uint()? as usize;
-        let start_args = r.uint()? as usize;
-        let start_types = r.uint()? as usize;
-        let mut kind = r.uint()?;
+        let mut l = tracedraw_cdr_format::loda::table(d, self.v)?;
         // Version 3 numbers the object types from 0 (rectangle, ellipse,
         // curve, text, bitmap), one below the later codes.
-        if self.v < 4 && kind <= 4 {
-            kind += 1;
+        if self.v < 4 && l.kind <= 4 {
+            l.kind += 1;
         }
-        let step = if self.v16() { 2 } else { 4 };
-        let n = num_args.min(64);
-        let mut offsets = Vec::with_capacity(n + 1);
-        for i in 0..=n {
-            match self.reader_at(d, start_args + i * step).uint() {
-                Some(o) => offsets.push(o as usize),
-                None if i == n => offsets.push(d.len()),
-                None => return None,
+        Some(l)
+    }
+
+    /// The mesh of a mesh fill object (argument 19150, a version 11 file,
+    /// #896): its byte length, 100, the number of column lines `C` and of
+    /// row lines `R`; the `C + R` grid lines, each 100, a point count `n`,
+    /// the `n` points and their `n` node types as a curve has them, then
+    /// for each point the (row, column) of the mesh node it is (-1, -1
+    /// for control points and points between nodes), for each point its
+    /// place along the line (0 to 1, -1 for control points), the line's
+    /// place across the grid (f64) and 1 for a column line, 0 for a row
+    /// line; the object's transform (six f64, as in its `trfd`); then
+    /// 100, `R`, `C` and the `R x C` node colours, column by column
+    /// (12-byte colour records: the `R` colours of the first column, then
+    /// the next column's). Nodes take their places from the lines
+    /// through them and their handles from the control points next to
+    /// them on those lines, so the cells keep the lines' curves. Also the
+    /// mesh's edge (the first and last row and column lines), the
+    /// object's outline. A record marked 150 instead of 100 (version 27,
+    /// #1238) holds the colours as sized records.
+    fn read_mesh(
+        &mut self,
+        d: &'a [u8],
+        arg: Arg,
+    ) -> Option<(tracedraw_core::Mesh, Option<BezPath>)> {
+        let data = d.get(..arg.end)?;
+        let mut r = self.reader_at(data, arg.off);
+        // The record's own length: the argument may run a little past it.
+        let len = r.u32()? as usize;
+        let end = arg.off.checked_add(len)?.min(arg.end);
+        let tag = r.u32()?;
+        let cols = r.u32()? as usize;
+        let rows = r.u32()? as usize;
+        if cols < 2 || rows < 2 || cols.saturating_mul(rows) > MESH_MAX_NODES {
+            return None;
+        }
+        let mut pos: Vec<Option<Point>> = vec![None; rows * cols];
+        // The handles of the grid lines at each node (see
+        // `MeshNode::handles`), from the control points next to it.
+        let mut handles: Vec<Option<[Point; 4]>> = vec![None; rows * cols];
+        // Each line's curve, and whether it runs from its last node back
+        // to its first.
+        let mut lines: Vec<(BezPath, bool)> = Vec::with_capacity(rows + cols);
+        for _ in 0..rows + cols {
+            let _tag = r.u32()?;
+            let n = r.u32()? as usize;
+            // Each point takes 8 bytes, a type byte, 8 for its node and 8
+            // for its place.
+            if n == 0 || n > r.remaining() / 25 {
+                return None;
+            }
+            let (pts, types) = self.read_points(&mut r, n)?;
+            let mut first: Option<usize> = None;
+            let mut last: Option<usize> = None;
+            // The nodes along the line: (point index, row, column).
+            let mut nodes_on_line: Vec<(usize, usize, usize)> = Vec::new();
+            for (k, p) in pts.iter().enumerate() {
+                let row = r.i32()?;
+                let col = r.i32()?;
+                if (0..rows as i32).contains(&row) && (0..cols as i32).contains(&col) {
+                    let i = row as usize * cols + col as usize;
+                    pos.get_mut(i)?.get_or_insert(*p);
+                    first.get_or_insert(i);
+                    last = Some(i);
+                    nodes_on_line.push((k, row as usize, col as usize));
+                }
+            }
+            r.skip(8 * n + 8 + 4);
+            // Between two nodes in a row the control points next to each
+            // are its handles towards the other (a segment of one cubic
+            // in the file; a longer run keeps the outer control points).
+            let is_control = |k: usize| types.get(k).is_some_and(|t| t >> 6 == 0b11);
+            for pair in nodes_on_line.windows(2) {
+                let ((i, r0, c0), (j, r1, c1)) = (pair[0], pair[1]);
+                if j < i + 2 || !is_control(i + 1) || !is_control(j - 1) {
+                    continue;
+                }
+                let (fwd, back) = match (r1 as i64 - r0 as i64, c1 as i64 - c0 as i64) {
+                    (0, 1) => (MeshHandle::Right, MeshHandle::Left),
+                    (0, -1) => (MeshHandle::Left, MeshHandle::Right),
+                    (1, 0) => (MeshHandle::Down, MeshHandle::Up),
+                    (-1, 0) => (MeshHandle::Up, MeshHandle::Down),
+                    _ => continue,
+                };
+                let (Some(&h0), Some(&h1)) = (pts.get(i + 1), pts.get(j - 1)) else {
+                    continue;
+                };
+                let set = |hs: &mut Option<[Point; 4]>, at: Point, h: MeshHandle, p: Point| {
+                    hs.get_or_insert([at; 4])[h as usize] = p;
+                };
+                let (Some(&Some(p0)), Some(&Some(p1))) =
+                    (pos.get(r0 * cols + c0), pos.get(r1 * cols + c1))
+                else {
+                    continue;
+                };
+                set(handles.get_mut(r0 * cols + c0)?, p0, fwd, h0);
+                set(handles.get_mut(r1 * cols + c1)?, p1, back, h1);
+            }
+            lines.push((build_path(&pts, &types).0, first > last));
+        }
+        let mut colours = Vec::with_capacity(rows * cols);
+        if tag >= MESH_SIZED_COLOURS {
+            // Records marked 150: the transform (six f64), the mark and the
+            // counts follow the lines, then each node's colour as a sized
+            // record (see `read_mesh_sized_colour`); 12 bytes close it.
+            r.skip(48);
+            let _tag = r.u32()?;
+            if r.u32()? as usize != rows || r.u32()? as usize != cols {
+                return None;
+            }
+            for _ in 0..rows * cols {
+                let size = r.u32()? as usize;
+                let at = r.pos;
+                if at.checked_add(size)? > end {
+                    return None;
+                }
+                let mut c = self.reader_at(data, at);
+                colours.push(self.read_mesh_sized_colour(&mut c, size)?);
+                r.skip(size);
+            }
+        } else {
+            // The colour grid closes the record.
+            let grid = end.checked_sub(12 + rows * cols * 12)?;
+            if grid < r.pos {
+                return None;
+            }
+            let mut g = self.reader_at(data, grid);
+            let _tag = g.u32()?;
+            if g.u32()? as usize != rows || g.u32()? as usize != cols {
+                return None;
+            }
+            for _ in 0..rows * cols {
+                colours.push(self.read_color(&mut g)?);
             }
         }
-        let mut args = Vec::with_capacity(n);
-        for i in 0..n {
-            let ty = self.reader_at(d, start_types + (n - 1 - i) * step).uint()?;
-            let off = offsets[i].min(d.len());
-            let next = offsets[i + 1];
-            let end = if next > off && next <= d.len() {
-                next
-            } else {
-                d.len()
-            };
-            args.push(Arg { ty, off, end });
+        let mut nodes = Vec::with_capacity(rows * cols);
+        for (i, handles) in handles.into_iter().enumerate() {
+            // A node with handles on some lines only (the others left on
+            // the node) draws straight thirds on the others.
+            nodes.push(tracedraw_core::MeshNode {
+                pos: (*pos.get(i)?)?,
+                color: *colours.get((i % cols) * rows + i / cols)?,
+                alpha: 1.0,
+                handles,
+            });
         }
-        Some(Loda { kind, args })
+        // The edge: the first row, the last column, the last row and the
+        // first column, round in that order (rows follow the columns).
+        let edge = [
+            (lines.get(cols), false),
+            (lines.get(cols - 1), false),
+            (lines.get(cols + rows - 1), true),
+            (lines.first(), true),
+        ];
+        let mut path = BezPath::new();
+        for (line, back) in edge {
+            let (curve, reversed) = line?;
+            let mut segs: Vec<tracedraw_core::geometry::PathSeg> = curve.segments().collect();
+            if back != *reversed {
+                segs.reverse();
+                for s in segs.iter_mut() {
+                    *s = s.reverse();
+                }
+            }
+            for s in segs {
+                if path.elements().is_empty() {
+                    path.move_to(tracedraw_core::geometry::ParamCurve::start(&s));
+                }
+                path.push(s.as_path_el());
+            }
+        }
+        path.close_path();
+        let edge = (path.elements().len() > 2).then_some(path);
+        Some((
+            tracedraw_core::Mesh {
+                rows: rows as u32 - 1,
+                cols: cols as u32 - 1,
+                nodes,
+                smooth: false,
+            },
+            edge,
+        ))
+    }
+
+    /// A mesh node's colour in a record marked 150: byte 1, the colour's
+    /// length (12) and the colour as everywhere else; what follows (byte 7,
+    /// a length of 16 and 16 bytes, zeros in the samples) is not read.
+    fn read_mesh_sized_colour(&mut self, r: &mut Reader, size: usize) -> Option<Color> {
+        if size < 17 {
+            return None;
+        }
+        let _kind = r.u8()?;
+        if r.u32()? != 12 {
+            return None;
+        }
+        self.read_color(r)
     }
 
     fn read_polygon_info(&mut self, d: &'a [u8], arg: Arg) -> Option<PolygonInfo> {
@@ -2562,6 +4421,170 @@ impl<'a> Ctx<'a> {
         })
     }
 
+    /// The step count of a blend's linked group (`LIST lnkg` whose own
+    /// `lgob` holds a `loda` of object type 7): the first u16 of its
+    /// argument of type 3000 (the u16 after it is 0 in versions 9 and 13
+    /// and holds another value in version 25). `None` for other linked
+    /// groups (a contour's is of type 15, and a type 7 record with a style
+    /// string is an object of its own). Read from two files saved by
+    /// versions 9 and 13 with the default 20 steps and the version 25 file
+    /// of #980 (see CLEANROOM.md).
+    ///
+    /// A value outside 1..=999 is no step count the program can save: the
+    /// field holds something else in this file (another version's layout),
+    /// so the blend gets the default 20 steps with a warning naming the
+    /// value. It used to be kept to 999, which drew such blends with 999
+    /// steps each and could take all the memory (#980).
+    fn blend_steps(&mut self, group: &Chunk) -> Option<(u32, crate::blend_record::Settings)> {
+        let lgob = group.children.iter().find(|k| k.is(b"lgob"))?;
+        let loda = lgob.children.iter().find(|k| k.is(b"loda"))?;
+        let d = self.data(loda);
+        let l = self.read_loda(d)?;
+        if l.kind != 7 {
+            return None;
+        }
+        // A record with a style string of its own, as the drawing's
+        // objects have, is an object the file counts, not the record of a
+        // blend between its neighbours: drawn as one, it floods the
+        // picture (a version 25 file, #980).
+        if l.args.iter().any(|a| a.ty == ARG_STYLE_STRING) {
+            return None;
+        }
+        let arg = l.args.iter().find(|a| a.ty == ARG_BLEND_STEPS)?;
+        // The count is the low 16 bits: versions 9 and 13 leave the high
+        // ones 0, version 25 keeps another value there (#980).
+        let raw = self.reader_at(d, arg.off).u16().map(u32::from);
+        // The accelerations, rotation and colour direction (#1192).
+        let settings = d
+            .get(arg.off..arg.end)
+            .and_then(|a| crate::blend_record::decode(a, self.v))
+            .unwrap_or_default();
+        let steps = match raw {
+            Some(n @ 1..=tracedraw_core::live::MAX_BLEND_STEPS) => n,
+            other => {
+                let value = other.map_or_else(|| "nothing".to_owned(), |n| n.to_string());
+                log::warn!(
+                    "blend step count of a version {} file reads {value}; {BLEND_DEFAULT_STEPS} steps used",
+                    self.v
+                );
+                self.report.warn(format!(
+                    "a blend's step count reads {value}, not 1 to {}; drawn with {BLEND_DEFAULT_STEPS} steps",
+                    tracedraw_core::live::MAX_BLEND_STEPS
+                ));
+                BLEND_DEFAULT_STEPS
+            }
+        };
+        Some((steps, settings))
+    }
+
+    /// The drop shadow of a linked group whose own `lgob` holds a `loda`
+    /// of object type 23 ([`OBJ_DROP_SHADOW`]): an empty group that
+    /// follows the object it shadows (version 15, #3222; later versions
+    /// keep a picture of the shadow in the group, drawn as it is). Its
+    /// argument of type 3000 is a record of 119 bytes starting with u32
+    /// 0x514 and u32 111 (offsets from the record's start): the offset
+    /// as two i32 in the units of the coordinates at 8 and 12, the
+    /// opacity as a u32 out of 255 at 16, the feathering as a u32 at 20,
+    /// the colour at 57 and the merge code at 103 (9 multiplies, 0
+    /// Normal, as the transparency record's). The other fields are not
+    /// read; the shadow is flat, feathered in the middle.
+    fn drop_shadow_record(&mut self, group: &Chunk) -> Option<tracedraw_core::document::Shadow> {
+        let lgob = group.children.iter().find(|k| k.is(b"lgob"))?;
+        let loda = lgob.children.iter().find(|k| k.is(b"loda"))?;
+        let d = self.data(loda);
+        let l = self.read_loda(d)?;
+        if l.kind != OBJ_DROP_SHADOW {
+            return None;
+        }
+        let arg = l.args.iter().find(|a| a.ty == ARG_BLEND_STEPS)?;
+        let rec = d.get(arg.off..arg.end)?;
+        if rec.len() < DROP_SHADOW_RECORD_LEN || rec[..8] != [0x14, 0x05, 0, 0, 0x6f, 0, 0, 0] {
+            return None;
+        }
+        let mut r = self.reader_at(rec, 8);
+        let dx = f64::from(r.i32()?) * UNIT_MM;
+        let dy = f64::from(r.i32()?) * UNIT_MM;
+        let opacity = f64::from(r.u32()?.min(255)) / 255.0;
+        let feather = f64::from(r.u32()?.min(500));
+        let mut r = self.reader_at(rec, 57);
+        let color = self.read_color(&mut r)?;
+        let merge = match self.reader_at(rec, 103).u32()? {
+            9 => tracedraw_core::live::MergeMode::Multiply,
+            0 => tracedraw_core::live::MergeMode::Normal,
+            code => {
+                self.report.warn(format!(
+                    "drop shadow merge mode {code} not read; the shadow multiplies"
+                ));
+                tracedraw_core::live::MergeMode::Multiply
+            }
+        };
+        Some(tracedraw_core::document::Shadow {
+            offset: tracedraw_core::geometry::Vec2::new(dx, dy),
+            opacity,
+            blur: feather * DROP_SHADOW_FEATHER_MM,
+            color,
+            merge,
+            ..Default::default()
+        })
+    }
+
+    /// The offset (mm) of a contour's linked group (`LIST lnkg` whose own
+    /// `lgob` holds a `loda` of object type 15): the u32 at the start of
+    /// its argument of type 3000, in the units of the coordinates. The
+    /// argument is 44 bytes in the one file seen (version 9, #597): the
+    /// offset, the step count (u16), a u16 of flags whose bits are not
+    /// known yet (0x2f there) and three colours. `None` for other linked
+    /// groups and other layouts, whose steps then stay plain objects.
+    fn contour_record(&mut self, group: &Chunk) -> Option<f64> {
+        let lgob = group.children.iter().find(|k| k.is(b"lgob"))?;
+        let loda = lgob.children.iter().find(|k| k.is(b"loda"))?;
+        let d = self.data(loda);
+        let l = self.read_loda(d)?;
+        if l.kind != OBJ_CONTOUR_GROUP {
+            return None;
+        }
+        let arg = l.args.iter().find(|a| a.ty == ARG_BLEND_STEPS)?;
+        if arg.end.checked_sub(arg.off)? != CONTOUR_RECORD_LEN {
+            return None;
+        }
+        let raw = self.reader_at(d, arg.off).u32()?;
+        let offset = raw as f64 * UNIT_MM;
+        (offset > 1e-4 && offset.is_finite()).then_some(offset)
+    }
+
+    /// Remember that the object list `c` was read as `shape`, by its
+    /// static id (`usdn`), when the package names blends (#986).
+    fn note_static_id(&mut self, c: &Chunk, shape: tracedraw_core::ShapeId) {
+        if self.static_ids.is_none() {
+            return;
+        }
+        let Some(k) = c.children.iter().find(|k| k.is(b"usdn")) else {
+            return;
+        };
+        let Some(u) = self.reader_at(self.data(k), 0).uint() else {
+            return;
+        };
+        if let Some(m) = self.static_ids.as_mut() {
+            m.insert(u, shape);
+        }
+    }
+
+    /// `steps` for the next blend of the file, within what the file's
+    /// blends may still take together ([`FILE_BLEND_STEPS`]); past that
+    /// each blend gets one step, with a warning, so a file of thousands
+    /// of blends opens without filling the memory (#980).
+    fn budget_blend_steps(&mut self, steps: u32) -> u32 {
+        let granted = steps.min(self.blend_steps_left).max(1);
+        if granted < steps {
+            log::warn!("blend steps past {FILE_BLEND_STEPS} in one file; a blend drawn with {granted} of its {steps}");
+            self.report.warn(format!(
+                "the file's blends ask for more than {FILE_BLEND_STEPS} steps together; the later ones are drawn with fewer"
+            ));
+        }
+        self.blend_steps_left = self.blend_steps_left.saturating_sub(granted);
+        granted
+    }
+
     /// `obj `: one object, built from its `loda` (attributes) and `trfd`.
     fn read_object(
         &mut self,
@@ -2571,23 +4594,32 @@ impl<'a> Ctx<'a> {
     ) -> Option<Shape> {
         let mut loda = None;
         let mut trfd = None;
+        let mut envds: Vec<&Chunk> = Vec::new();
         oc.walk(&mut |c, _| {
             if (c.is(b"loda") || c.is(b"lobj")) && loda.is_none() {
                 loda = Some(c);
             } else if c.is(b"trfd") && trfd.is_none() {
                 trfd = Some(c);
+            } else if c.is(b"envd") && trfd.is_some() {
+                envds.push(c);
             }
         });
         let loda = loda?;
         self.pending_clip = None;
         self.pending_on_path = None;
         self.pending_text_transform = None;
+        self.pending_frame_number = None;
+        self.pending_length_corners = [false; 4];
         let mut v3_envelope_of: Option<(Affine, Rect, tracedraw_core::envelope::Frame, Affine)> =
             None;
-        let mut transform = self.outer_transform
-            * trfd
-                .map(|t| self.read_transform(t))
-                .unwrap_or(Affine::IDENTITY);
+        let chain = trfd
+            .map(|t| self.read_transform_chain(t, &envds))
+            .unwrap_or_default();
+        let mut transform = self.outer_transform * chain.matrices();
+        // The matrix a fountain fill's angle turns with (see below): all
+        // of them, also when an envelope bends the outline.
+        let mut fill_axes: Option<Affine> = None;
+        let mut unbent: Option<BezPath> = None;
 
         let d = self.data(loda);
         let l = self.read_loda(d)?;
@@ -2620,20 +4652,53 @@ impl<'a> Ctx<'a> {
         let mut stroke: Option<Stroke> = None;
         let mut name: Option<String> = None;
         let mut hidden = false;
+        let mut wrap_style: Option<u32> = None;
+        let mut wrap_offset: Option<u32> = None;
         let mut coords: Option<Arg> = None;
         let mut polygon: Option<PolygonInfo> = None;
         let mut style_id: Option<u32> = None;
         let mut style_string: Option<String> = None;
         let mut opacity = 1.0;
         let mut lens: Option<tracedraw_core::live::Lens> = None;
+        let mut mesh: Option<Arg> = None;
+        // A graded transparency of a version 11 or 15 file (a mask and its
+        // target).
+        let mut v11_mask: Option<(Fill, u8)> = None;
+        // Where a version 15 graded transparency starts and ends, in the
+        // object's own space.
+        let mut v15_mask_axis: Option<(Point, Point)> = None;
+        // A version 16+ uniform transparency held in argument 8000 (#1706).
+        let mut record_opacity: Option<f64> = None;
+        // A version 16+ transparency record read on its own, for a style
+        // string that does not say what the transparency is (#2960).
+        let mut record_transparency: Option<RecordTransparency> = None;
+        // How a version 13 to 15 transparency mixes with what lies beneath.
+        let mut record_merge = tracedraw_core::live::MergeMode::Normal;
 
         for arg in &l.args {
             match arg.ty {
                 ARG_STYLE => style_id = self.reader_at(d, arg.off).uint(),
                 ARG_STYLE_STRING => style_string = self.read_object_style_string(d, *arg),
                 ARG_OPACITY => {
+                    if let Some(axis) = self.read_graded_transparency_axis(d, *arg) {
+                        v15_mask_axis = Some(axis);
+                    }
+                    record_transparency = self.read_transparency_record_v16(d, *arg);
+                    record_merge = self.read_transparency_merge(d, *arg);
                     if let Some(l) = self.read_lens(d, *arg) {
                         lens = Some(l);
+                    } else if let Some((o, m)) = self.read_transparency_v11(d, *arg) {
+                        opacity = o;
+                        v11_mask = m;
+                    } else if let Some((m, axis)) = self.read_graded_transparency_v15(d, *arg) {
+                        v11_mask = Some(m);
+                        v15_mask_axis = axis;
+                    } else if let Some(o) = self.read_uniform_transparency_record(d, *arg) {
+                        record_opacity = Some(o);
+                    } else if self.v < 16 && record_transparency.is_some() {
+                        // Versions 13 to 15: the record read above is the
+                        // transparency, not the bytes the oldest files
+                        // keep their amount in (#3222).
                     } else if let Some(o) = self.read_opacity(d, *arg) {
                         opacity = o;
                     }
@@ -2674,6 +4739,9 @@ impl<'a> Ctx<'a> {
                 ARG_POLYGON => polygon = self.read_polygon_info(d, *arg),
                 ARG_CLIP_CONTENTS => self.pending_clip = self.reader_at(d, arg.off).u32(),
                 ARG_HIDDEN => hidden = self.reader_at(d, arg.off).u32().is_some_and(|h| h != 0),
+                ARG_WRAP_STYLE => wrap_style = self.reader_at(d, arg.off).u32(),
+                ARG_WRAP_OFFSET => wrap_offset = self.reader_at(d, arg.off).u32(),
+                ARG_MESH if kind_code == OBJ_MESH => mesh = Some(*arg),
                 _ => {}
             }
         }
@@ -2694,7 +4762,7 @@ impl<'a> Ctx<'a> {
                 stroke = o.stroke.clone();
             }
         }
-        let kind = match kind_code {
+        let mut kind = match kind_code {
             OBJ_ARTISTIC_TEXT if self.v < 4 => coords.and_then(|a| self.read_text_v3(d, a)),
             OBJ_ARTISTIC_TEXT | OBJ_PARAGRAPH_TEXT => {
                 let frame = FrameHints {
@@ -2705,15 +4773,48 @@ impl<'a> Ctx<'a> {
                 self.build_text(kind_code, d, coords, oc, style_id, &fill, frame)
             }
             OBJ_CONNECTOR => self.read_connector(oc),
-            OBJ_EMBEDDED => self.read_embedded(d, coords, name.as_deref()),
+            OBJ_EMBEDDED => {
+                let storage = name.clone().or_else(|| ole_link_storage(self, oc));
+                // Where the object's own space lands on the page.
+                let on_page =
+                    Affine::translate((page_size.width / 2.0, page_size.height / 2.0)) * transform;
+                self.read_embedded(d, coords, storage.as_deref(), on_page)
+            }
+            // A mesh fill object's outline is a curve.
+            OBJ_MESH => coords.and_then(|a| self.read_geometry(OBJ_CURVE, d, a, polygon)),
             _ => coords.and_then(|a| self.read_geometry(kind_code, d, a, polygon)),
         };
+        // Its fill is the mesh and its outline the mesh's edge (the
+        // coordinates can keep the outline the object had before its
+        // nodes were moved); one that cannot be read keeps the curve and
+        // the fill record's colour.
+        if kind_code == OBJ_MESH && kind.is_some() {
+            match mesh.and_then(|a| self.read_mesh(d, a)) {
+                Some((m, edge)) => {
+                    fill = Fill::Mesh(m);
+                    if let Some(path) = edge {
+                        self.pending_node_types.clear();
+                        kind = Some(ShapeKind::Path { path, closed: true });
+                    }
+                }
+                None => self
+                    .report
+                    .warn("a mesh fill could not be read; the object keeps a plain fill"),
+            }
+        }
+        if let (Some(n), Some(_)) = (self.pending_frame_number.take(), &kind) {
+            self.frame_shapes.push((n, id));
+        }
         let mut kind = match kind {
             Some(k) => k,
             None => {
                 // (A bitmap whose picture is missing has said so already.)
                 match kind_code {
                     OBJ_ARTISTIC_TEXT | OBJ_PARAGRAPH_TEXT | OBJ_EMBEDDED | OBJ_BITMAP => {}
+                    other if coords.is_none() && self.draws_nothing(oc) => {
+                        log::debug!("object type 0x{other:02x} with the empty box: draws nothing");
+                        self.last_drew_nothing = true;
+                    }
                     other => self
                         .report
                         .warn(format!("object type 0x{other:02x} not modelled yet")),
@@ -2746,41 +4847,390 @@ impl<'a> Ctx<'a> {
                 None => self.warn_v3_envelope(),
             }
         }
+        let mut live_envelope = None;
+        // A version 16+ envelope bends the outline the same way: through
+        // the matrices before it, each envelope and the matrices between
+        // them; the matrices after the last stay the object's transform.
+        if !chain.warps.is_empty() {
+            match bendable(&kind) {
+                Some(closed) => {
+                    let local = Shape::new(id, kind.clone()).local_path();
+                    let path = chain.bend(&(chain.before * local.clone()));
+                    kind = ShapeKind::Path { path, closed };
+                    fill_axes = Some(transform);
+                    unbent = Some(local);
+                    transform = self.outer_transform * chain.last_after();
+                }
+                // Artistic text keeps its letters and takes the envelope
+                // as a live one (#2368): one envelope after matrices that
+                // only move and scale, so the frame can be carried into
+                // the text's own space, its box mapped onto it there as
+                // the file maps the box of the letters. The matrices
+                // stay the text's transform.
+                None => match text_envelope(&kind, &chain) {
+                    Some(effect) => live_envelope = Some(effect),
+                    None => {
+                        if !self.envelope_warned {
+                            self.envelope_warned = true;
+                            self.report
+                                .warn("an envelope of a text or picture is not applied");
+                        }
+                    }
+                },
+            }
+        }
+        // A version 16+ distortion (#1715) becomes TraceDraw's live
+        // distortion, in the space the matrices before it make: the
+        // object keeps its kind when they only turn, move and scale it
+        // evenly (the distortion is applied in its own space, the centre
+        // taken back there), else it becomes its outline through them.
+        // Distortions applied one over another (#1824) are baked into the
+        // outline in order, each about its own centre in the space the
+        // matrices before it make, and the last stays live on the result.
+        let mut distortion = None;
+        if let Some((dist, earlier)) = chain.distortions.split_last() {
+            use tracedraw_core::geometry::Shape as _;
+            let local = Shape::new(id, kind.clone()).local_path();
+            match bendable(&kind) {
+                Some(closed) if !earlier.is_empty() => {
+                    let mut path = chain.before * local;
+                    for e in earlier {
+                        match live_distortion(&e.entry, e.entry.center, path.bounding_box()) {
+                            Some(d) => path = tracedraw_core::distort::distort(&path, d),
+                            None => self.report.warn(format!(
+                                "a distortion of kind {} is not read; the object opens without it",
+                                e.entry.kind
+                            )),
+                        }
+                        path = e.after * path;
+                    }
+                    distortion =
+                        live_distortion(&dist.entry, dist.entry.center, path.bounding_box());
+                    kind = ShapeKind::Path { path, closed };
+                    fill_axes = Some(transform);
+                    transform = self.outer_transform * dist.after;
+                }
+                Some(_) if even_scale(chain.before).is_some() => {
+                    let center = chain.before.inverse() * dist.entry.center;
+                    distortion = live_distortion(&dist.entry, center, local.bounding_box());
+                }
+                Some(closed) => {
+                    let path = chain.before * local;
+                    distortion =
+                        live_distortion(&dist.entry, dist.entry.center, path.bounding_box());
+                    if distortion.is_some() {
+                        kind = ShapeKind::Path { path, closed };
+                        fill_axes = Some(transform);
+                        transform = self.outer_transform * dist.after;
+                    }
+                }
+                None => self
+                    .report
+                    .warn("a distortion of a text or picture is not applied"),
+            }
+            if distortion.is_none() && bendable(&kind).is_some() {
+                self.report.warn(format!(
+                    "a distortion of kind {} is not read; the object opens undistorted",
+                    dist.entry.kind
+                ));
+            }
+        }
+
+        // Version 16+ perspectives (#2691) become TraceDraw's live
+        // perspective: the matrices and perspectives up to the last one
+        // make one projective map from the object's own space, which takes
+        // the corners of its box where the file puts them; the matrices
+        // after it stay the object's transform.
+        let mut perspective = None;
+        if let Some(g) = chain.projective {
+            use tracedraw_core::geometry::Shape as _;
+            let b = Shape::new(id, kind.clone()).local_path().bounding_box();
+            if b.width() > 1e-9 && b.height() > 1e-9 {
+                let corners = [
+                    Point::new(b.x0, b.y0),
+                    Point::new(b.x1, b.y0),
+                    Point::new(b.x1, b.y1),
+                    Point::new(b.x0, b.y1),
+                ]
+                .map(|p| map3(&g, p));
+                if corners.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+                    perspective = Some(tracedraw_core::live::Effect::Perspective { corners });
+                    fill_axes = Some(transform);
+                    transform = self.outer_transform * chain.after_perspective;
+                }
+            }
+        }
+
+        // Version 16+: the outline's mitre limit is in the object's style
+        // string (the outline record leaves it out, #384).
+        if let (Some(s), Some(a)) = (
+            stroke.as_mut(),
+            style_string.as_deref().and_then(text::object_miter_limit),
+        ) {
+            s.miter_limit = a;
+        }
 
         // Version 16+: a graded transparency in the object's style string
         // becomes a mask; otherwise its uniform transparency an opacity.
-        let mask = style_string
+        let style_fill_type = style_string
             .as_deref()
-            .and_then(text::object_transparency_mask);
+            .and_then(text::object_transparency_fill_type);
+        // A transparency section whose fill is of type 0 (none, as in fill
+        // sections) on an object without a transparency record is a
+        // transparency that was taken off: its amounts are leftovers
+        // (#1238: a version 27 mesh object left with "uniformTransparency 1"
+        // is drawn whole in its reference picture).
+        let transparency_off = self.v >= 16
+            && style_fill_type == Some(0)
+            && !l.args.iter().any(|a| a.ty == ARG_OPACITY);
+        let style_transparency = style_string.as_deref().filter(|_| !transparency_off);
+        // Version 16+: how the transparency mixes with what lies beneath
+        // is the style string's `mode` (see `style_merge_mode`); a code
+        // without a mode here is named, so a report can say which one
+        // the file uses (#1666).
+        if let Some(code) = style_transparency.and_then(text::object_transparency_merge_code) {
+            match style_merge_mode(code) {
+                Some(m) => record_merge = m,
+                None => self.report.warn(format!(
+                    "transparency merge mode {code} not read; object merged as Normal"
+                )),
+            }
+        }
+        let style_merges = self.v >= 16 && record_merge != tracedraw_core::live::MergeMode::Normal;
+        let mut mask =
+            v11_mask.or_else(|| style_transparency.and_then(text::object_transparency_mask));
+        // A pattern transparency in the style string (a fill type other
+        // than uniform or fountain) is the pattern its record names, not
+        // the mean of its two amounts (#2960).
+        if mask.is_none() && style_fill_type.is_some_and(|t| !matches!(t, 0..=2)) {
+            if let Some(RecordTransparency::Mask(m @ (Fill::Pattern(_), _))) = &record_transparency
+            {
+                mask = Some(m.clone());
+            }
+        }
+        // A fountain transparency the style string names without nodes
+        // this reader takes is the fountain its record names, not the
+        // mean of its two amounts drawn uniform (#3095).
+        if mask.is_none() && style_fill_type == Some(2) {
+            if let Some(RecordTransparency::Mask(m @ (Fill::Fountain(_), _))) = &record_transparency
+            {
+                mask = Some(m.clone());
+            }
+        }
         if opacity >= 1.0 && mask.is_none() {
-            if let Some(o) = style_string.as_deref().and_then(text::object_opacity) {
+            if let Some(o) = style_transparency.and_then(text::object_opacity) {
                 opacity = o;
+            } else if let Some(o) = record_opacity.filter(|_| {
+                style_string
+                    .as_deref()
+                    .is_some_and(text::object_transparency_is_uniform_fill)
+            }) {
+                // The style string names a uniform transparency without its
+                // amount; the record in argument 8000 holds it (#1706).
+                opacity = o;
+            }
+        }
+        // The style string does not give the transparency (a pattern
+        // transparency, a fountain of colours other than greys, or no
+        // transparency section at all, #2960): the record's own type,
+        // amount and fill.
+        // An empty transparency section is no transparency (#1706).
+        if opacity >= 1.0
+            && mask.is_none()
+            && !style_string
+                .as_deref()
+                .is_some_and(text::object_transparency_is_empty)
+        {
+            match record_transparency {
+                Some(RecordTransparency::Mask(m)) => mask = Some(m),
+                Some(RecordTransparency::Opacity(o)) => opacity = o,
+                None => {}
             }
         }
 
         // The page origin is the page centre; ours is the bottom-left.
         let recenter = Affine::translate((page_size.width / 2.0, page_size.height / 2.0));
-        let transform = self.pending_text_transform.take().unwrap_or(transform);
+        let mut transform = self.pending_text_transform.take().unwrap_or(transform);
+        // Text set in a font named with a leading `@` (the vertical form of
+        // an East Asian face, #1544) is vertical text.
+        if let Some(turn) = vertical_font_text(&mut kind) {
+            transform *= turn;
+        }
+        // The fill's angle is measured from the object's x axis (#1257).
+        if let Fill::Fountain(f) = &mut fill {
+            crate::turn_fountain(f, fill_axes.unwrap_or(transform), 1.0);
+        }
         let mut shape = Shape::new(id, kind);
         if matches!(shape.kind, ShapeKind::Path { .. }) {
             shape.node_types = std::mem::take(&mut self.pending_node_types);
         }
         shape.transform = recenter * transform;
+        // A linear fill placed by its own frame in the object's box
+        // (version 16+): the same places in the box on the page. An
+        // envelope's object keeps the fill of its outline before the
+        // envelope, through all its matrices.
+        if let Fill::Fountain(f) = &mut fill {
+            if let Some(h) = f.handles {
+                use tracedraw_core::geometry::Shape as _;
+                let local = shape.local_path();
+                let pb = (shape.transform * local.clone()).bounding_box();
+                let (lb, m) = match (&unbent, fill_axes) {
+                    (Some(u), Some(t)) => (u.bounding_box(), recenter * t),
+                    _ => (local.bounding_box(), shape.transform),
+                };
+                // The bands run along the fill frame's second axis, in
+                // units of the object's box like the first.
+                let start = Fountain::rel_to_page(lb, h.start);
+                let end = Fountain::rel_to_page(lb, h.end);
+                let skew = Fountain::rel_to_page(lb, h.skew);
+                let place = |p: Point| Fountain::page_to_rel(pb, m * p);
+                let placed = tracedraw_core::style::FountainHandles {
+                    start: place(start),
+                    end: place(end),
+                    skew: place(skew),
+                };
+                f.set_handles(pb, placed);
+            }
+        }
         // A hidden object (a version 21 template: the white page-sized
         // rectangle its preview leaves out, over the page's dark
         // background) is kept but not drawn.
         shape.visible = !hidden;
+        // Paragraph text keeps away from an object that wraps it (#4142):
+        // the text ran under such objects.
+        if let Some(code) = wrap_style.filter(|&c| c != 0) {
+            use tracedraw_core::text_flow::{TextWrap, WrapMode, WrapSide};
+            // 1 to 3 along the outline, 4 to 7 along the bounding box;
+            // round both sides, then the left, then the right, then above
+            // and below (1, 2 and 4 seen, #4142 and #4162).
+            let (mode, side) = match code {
+                1 => (WrapMode::Contour, WrapSide::Straddle),
+                2 => (WrapMode::Contour, WrapSide::Left),
+                3 => (WrapMode::Contour, WrapSide::Right),
+                4 => (WrapMode::Square, WrapSide::Straddle),
+                5 => (WrapMode::Square, WrapSide::Left),
+                6 => (WrapMode::Square, WrapSide::Right),
+                7 => (WrapMode::Square, WrapSide::AboveBelow),
+                _ => {
+                    self.report.warn(format!(
+                        "text wrap style {code} not read; the text wraps round both sides"
+                    ));
+                    (WrapMode::Contour, WrapSide::Straddle)
+                }
+            };
+            shape.wrap_text = true;
+            shape.wrap_style = TextWrap {
+                mode,
+                side,
+                offset: wrap_offset
+                    .map(|o| f64::from(o) * UNIT_MM)
+                    .unwrap_or(TextWrap::default().offset),
+            };
+        }
         shape.fill = fill;
         shape.stroke = stroke;
+        // A drawn embedded object's objects carry their own colours.
+        if matches!(shape.kind, ShapeKind::Group { .. }) {
+            shape.fill = Fill::None;
+            shape.stroke = None;
+        }
+        // A corner the file gives as a length measures that on the page,
+        // whatever the rectangle's transform scales it by: a rectangle
+        // enlarged with its corners kept opened with corners enlarged
+        // with it (#4126).
+        let lengths = std::mem::take(&mut self.pending_length_corners);
+        if lengths.contains(&true) {
+            let (sx, sy) = tracedraw_core::document::axis_scale(shape.transform);
+            let k = sx.min(sy);
+            if let (Some((rect, mut c)), true) = (shape.kind.rect_corners(), k > 1e-12) {
+                if !c.fixed {
+                    for (r, length) in c.radii.iter_mut().zip(lengths) {
+                        if length {
+                            *r /= k;
+                        }
+                    }
+                    shape.kind = ShapeKind::rect_with_corners(rect, c);
+                }
+            }
+        }
+        // Rounded corners keep their size when the rectangle is resized,
+        // as new rectangles do, rather than stretch with it (#619); after
+        // the outline, which decides whether the stretch may move.
+        shape.keep_corner_size();
         shape.name = name;
         shape.opacity = opacity;
-        if let Some((mask, target)) = mask {
+        if let Some(style) = style_string.as_deref() {
+            crate::bitmap_effects::apply(style, self.v, &mut shape, &mut self.report);
+        }
+        // Version 16+: the fill's winding (#1919): "1" fills nonzero.
+        if style_string.as_deref().and_then(text::object_fill_winding) == Some(true) {
+            shape.fill_rule = tracedraw_core::shaping::FillRule::NonZero;
+        }
+        if let Some(d) = distortion {
+            shape.effects.push(tracedraw_core::live::Effect::Distort(d));
+        }
+        if let Some(e) = live_envelope {
+            shape.effects.push(e);
+        }
+        if let Some(e) = perspective {
+            shape.effects.push(e);
+        }
+        // A version 15 graded transparency runs between its record's two
+        // points: they become the mask's nodes on the page.
+        // A version 16+ record's points place the linear mask of the
+        // style string the same way (#1544).
+        let mask_axis = v15_mask_axis.filter(
+            |_| matches!(&mask, Some((Fill::Fountain(f), _)) if f.kind == FountainKind::Linear),
+        );
+        if let (Some((Fill::Fountain(f), _)), Some((start, end))) = (&mut mask, mask_axis) {
+            use tracedraw_core::geometry::Shape as _;
+            let pb = (shape.transform * shape.local_path()).bounding_box();
+            let (s, e) = (shape.transform * start, shape.transform * end);
+            let place = |p: Point| Fountain::page_to_rel(pb, p);
+            f.edge_pad = 0.0;
+            f.set_handles(
+                pb,
+                tracedraw_core::style::FountainHandles {
+                    start: place(s),
+                    end: place(e),
+                    skew: place(s + (e - s).turn_90()),
+                },
+            );
+        }
+        if let Some((mut mask, target)) = mask {
+            // A pattern transparency's tiles start at the bottom-left
+            // corner of the object's box, at their own size (#2960: the
+            // tiles of the file's bitmap and vector patterns lie so in its
+            // page preview; from the page's corner they did not).
+            if let Fill::Pattern(p) = &mut mask {
+                use tracedraw_core::geometry::Shape as _;
+                let b = (shape.transform * shape.local_path()).bounding_box();
+                let pl = p.placement_mut();
+                pl.offset_x = b.x0;
+                pl.offset_y = b.y0;
+            }
             shape
                 .effects
                 .push(tracedraw_core::live::Effect::Transparency {
                     mask,
-                    merge: tracedraw_core::live::MergeMode::Normal,
+                    merge: record_merge,
                     target,
+                });
+        } else if record_merge != tracedraw_core::live::MergeMode::Normal
+            && (shape.opacity < 1.0 || style_merges)
+        {
+            // A uniform transparency that does not merge as Normal: a
+            // mask of one grey, whose lightness is the opacity.
+            let grey = Color::Gray {
+                v: shape.opacity as f32,
+            };
+            shape.opacity = 1.0;
+            shape
+                .effects
+                .push(tracedraw_core::live::Effect::Transparency {
+                    mask: Fill::Solid(grey),
+                    merge: record_merge,
+                    target: 2,
                 });
         }
         if let Some(l) = lens {
@@ -2796,7 +5246,96 @@ impl<'a> Ctx<'a> {
         Some(shape)
     }
 
-    /// Index the groups of `LIST clpt` by the number in their `spnd`.
+    /// The symbol table `sblk` (#2177): 12-byte entries of a u32 (0 in
+    /// the file seen), the symbol's number and the `spnd` number of the
+    /// `LIST sytr` group that defines it.
+    fn read_symbol_table(&mut self, c: &Chunk) {
+        let d = self.data(c);
+        for e in d.chunks_exact(12) {
+            let id = u32::from_le_bytes([e[4], e[5], e[6], e[7]]);
+            let def = u32::from_le_bytes([e[8], e[9], e[10], e[11]]);
+            self.symbol_defs.insert(id, def);
+        }
+    }
+
+    /// The document symbol of symbol number `sym` (#2177), read from its
+    /// `sytr` group the first time an instance names it: its index and
+    /// the inverse of the page placement its definition was read with.
+    /// `None` (with a warning) when the file lacks the definition, it is
+    /// empty or it draws itself.
+    fn symbol(
+        &mut self,
+        sym: u32,
+        ids: &mut tracedraw_core::id::IdSource,
+        page_size: Size,
+        depth: usize,
+    ) -> Option<(usize, Affine)> {
+        // The table names the definition; a number it lacks is taken as
+        // the definition's own (assumed).
+        let def = self.symbol_defs.get(&sym).copied().unwrap_or(sym);
+        self.symbol_def(def, ids, page_size, depth)
+    }
+
+    /// [`Self::symbol`] by the `spnd` number of its `sytr` group.
+    fn symbol_def(
+        &mut self,
+        def: u32,
+        ids: &mut tracedraw_core::id::IdSource,
+        page_size: Size,
+        depth: usize,
+    ) -> Option<(usize, Affine)> {
+        let sym = def;
+        if let Some(found) = self.symbol_index.get(&def) {
+            return Some(*found);
+        }
+        let Some(group) = self.symbol_groups.get(&def).copied() else {
+            self.report
+                .warn(format!("symbol {sym:#x} has no definition in the file"));
+            return None;
+        };
+        if !self.symbols_reading.insert(sym) {
+            self.report
+                .warn(format!("symbol {sym:#x} draws itself; left out there"));
+            return None;
+        }
+        // The definition stands in the file at its own place: read it
+        // without the matrices of the instance that named it.
+        let saved = self.outer_transform;
+        self.outer_transform = Affine::IDENTITY;
+        let mut children = self.read_objects(group, ids, page_size, depth + 1);
+        self.outer_transform = saved;
+        self.symbols_reading.remove(&sym);
+        let mut shape = match children.len() {
+            0 => {
+                self.report
+                    .warn(format!("symbol {sym:#x} draws nothing; left out"));
+                return None;
+            }
+            1 => children.remove(0),
+            _ => {
+                let mut g = Shape::new(ids.shape(), ShapeKind::Group { children });
+                g.fill = Fill::None;
+                g.stroke = None;
+                g
+            }
+        };
+        shape.id = tracedraw_core::id::ShapeId(0);
+        let index = self.symbols.len();
+        let name = self
+            .symbol_name(group)
+            .or_else(|| self.group_name(group))
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| format!("Symbol {}", index + 1));
+        self.symbols
+            .push(tracedraw_core::document::Symbol { name, shape });
+        let placed = Affine::translate((page_size.width / 2.0, page_size.height / 2.0));
+        let found = (index, placed.inverse());
+        self.symbol_index.insert(def, found);
+        Some(found)
+    }
+
+    /// Index the groups of `LIST clpt` and of `LIST sytr` by the number
+    /// in their `spnd`.
     fn index_clip_groups(&mut self) {
         let tree = self.tree;
         let mut found = Vec::new();
@@ -2813,11 +5352,34 @@ impl<'a> Ctx<'a> {
                 self.clip_groups.insert(n, g);
             }
         }
+        // The symbols' definitions (#2177), kept the same way.
+        let mut found = Vec::new();
+        tree.root.walk(&mut |c, _| {
+            if c.is(b"sytr") {
+                found.extend(c.children.iter().filter(|g| g.is(b"grp ")));
+            }
+        });
+        for g in found {
+            let Some(sp) = g.children.iter().find(|c| c.is(b"spnd")) else {
+                continue;
+            };
+            if let Some(n) = self.reader(self.data(sp)).u32() {
+                self.symbol_groups.insert(n, g);
+                self.symbol_order.push(n);
+            }
+        }
     }
 
     /// A clip container: `shape` with the objects of the `clpt` group
     /// numbered `clip` drawn inside it (the container's fill under them,
     /// its outline over them). A number naming no group leaves the shape.
+    ///
+    /// A transparency read on the container is the frame's alone
+    /// (#4360): the clip frame takes its amount, so the property bar
+    /// shows it, and is marked so that the objects inside keep their own
+    /// opacity, as the program that saves the files draws them; a graded
+    /// transparency stays on the frame inside and fades its fill. (Taken
+    /// at first, without a file, as the whole container's, #2515.)
     fn with_clip_contents(
         &mut self,
         shape: Shape,
@@ -2833,7 +5395,18 @@ impl<'a> Ctx<'a> {
             ));
             return shape;
         };
-        let contents = self.read_objects(group, ids, page_size, depth + 1);
+        let mut contents = self.read_objects(group, ids, page_size, depth + 1);
+        // The contents' group may carry an envelope of its own (version
+        // 15+), as other groups do.
+        if self.v >= 15 {
+            if let Some(chain) = self.own_transform_chain(group) {
+                if !chain.warps.is_empty() {
+                    for child in contents.iter_mut() {
+                        self.bend_group_object(child, Affine::IDENTITY, &chain, page_size);
+                    }
+                }
+            }
+        }
         self.clip_groups.insert(clip, group);
         if contents.is_empty() {
             return shape;
@@ -2847,6 +5420,18 @@ impl<'a> Ctx<'a> {
         outer.name = shape.name.clone();
         outer.fill = Fill::None;
         outer.stroke = None;
+        // The frame keeps the amount as well, as a frame made in the
+        // application does, so Extract Contents gives it back.
+        outer.opacity = shape.opacity;
+        // The amount fades the frame's own fill and outline, not the
+        // objects inside, which keep their own (#4360); a graded
+        // transparency stays on the frame for the same reason.
+        if outer.opacity < 1.0 {
+            outer.data.push((
+                tracedraw_core::document::CLIP_CONTENTS_OPAQUE.into(),
+                "1".into(),
+            ));
+        }
         outer.kind = ShapeKind::ClipFrame {
             frame: Box::new(shape),
             contents,
@@ -2888,23 +5473,67 @@ impl<'a> Ctx<'a> {
                 .warn("group nesting deeper than 64; inner objects skipped");
             return;
         }
+        // Blends found in this list: where their linked group stood among
+        // the objects read, and their step count (see `blend_steps`).
+        let first = out.len();
+        let mut blends: Vec<(usize, u32, crate::blend_record::Settings)> = Vec::new();
+        // Contours found in this list: where their steps start and end
+        // among the objects read, and their offset (see `contour_record`).
+        let mut contours: Vec<(usize, usize, f64)> = Vec::new();
+        // Brush strokes: where their objects start and end, and
+        // their linked group's number (see `crate::artistic`).
+        let mut strokes: Vec<(usize, usize, u32)> = Vec::new();
         for c in &list.children {
             if c.is(b"obj ") {
                 let id = ids.shape();
                 match self.read_object(c, id, page_size) {
                     Some(mut shape) => {
+                        // Both the older hidden-object argument and the
+                        // modern flag apply to the whole object, also
+                        // when a crop or clip wraps it in a new shape.
+                        let visible = shape.visible && !self.shape_hidden(c);
+                        if std::mem::take(&mut self.pending_renumber) {
+                            renumber(&mut shape, ids);
+                        }
+                        if std::mem::take(&mut self.pending_cmyk) {
+                            shape.cmyk_bitmap = true;
+                        }
+                        if let Some(inks) = self.pending_inks.take() {
+                            if matches!(shape.kind, ShapeKind::Bitmap { .. }) {
+                                shape.picture_inks = Some(Box::new(inks));
+                            }
+                        }
+                        if let Some(palette) = self.pending_mono.take() {
+                            colour_mono_bitmap(&mut shape, palette);
+                        }
                         if let Some(crop) = self.pending_crop.take() {
                             shape = crop_to_clip_frame(shape, crop, ids);
                         }
                         if let Some(clip) = self.pending_clip.take() {
                             shape = self.with_clip_contents(shape, clip, ids, page_size, depth);
                         }
+                        // Locked in the file: locked here (#2347).
+                        if self.object_locked(c) {
+                            shape.locked = true;
+                        }
+                        shape.visible &= visible;
+                        self.note_static_id(c, shape.id);
+                        self.note_link_number(c, shape.id);
                         out.push(shape);
                     }
                     None if std::mem::take(&mut self.last_was_guide) => {}
+                    None if std::mem::take(&mut self.last_drew_nothing) => {}
                     None => self.report.skipped_objects += 1,
                 }
             } else if c.is(b"grp ") {
+                let hidden = self.shape_hidden(c);
+                // A table (versions 14 on) is a group of cell groups.
+                if let Some(mut table) = self.read_table(c, ids, page_size) {
+                    table.visible = !hidden;
+                    self.note_static_id(c, table.id);
+                    out.push(table);
+                    continue;
+                }
                 // Version 3: the group's own `lobj` holds a matrix that
                 // places all its objects; later versions store whole
                 // transforms.
@@ -2922,17 +5551,95 @@ impl<'a> Ctx<'a> {
                 if let Some(m) = own {
                     self.outer_transform = saved * m;
                 }
-                let children = self.read_objects(c, ids, page_size, depth + 1);
+                let mut children = self.read_objects(c, ids, page_size, depth + 1);
+                // A version 15+ group with an envelope (#3222 for version
+                // 15): its objects carry the matrices before the envelope;
+                // the envelope and the matrices after it are the group's
+                // own.
+                if self.v >= 15 {
+                    if let Some(chain) = self.own_transform_chain(c) {
+                        if !chain.warps.is_empty() {
+                            for child in children.iter_mut() {
+                                self.bend_group_object(child, Affine::IDENTITY, &chain, page_size);
+                            }
+                        }
+                    }
+                }
+                // A version 16+ group in perspective (#2691): its objects
+                // carry the matrices before the first perspective; the
+                // perspectives and the matrices after them are the group's.
+                if let Some(chain) = self.own_perspective_chain(c) {
+                    if let Some(g) = chain.projective {
+                        let rest = mul3(&g, &affine3(chain.before.inverse()));
+                        for child in children.iter_mut() {
+                            self.perspective_group_object(
+                                child,
+                                Affine::IDENTITY,
+                                &rest,
+                                chain.after_perspective,
+                                page_size,
+                            );
+                        }
+                    }
+                }
                 self.outer_transform = saved;
+                // A vector pattern transparency over the group: a mask
+                // over all it holds, so the group stays a group.
+                let mask = self.group_pattern_transparency(c);
                 match children.len() {
                     0 => {}
-                    1 => out.extend(children),
+                    1 if mask.is_none() && !hidden => out.extend(children),
                     _ => {
                         let mut g = Shape::new(ids.shape(), ShapeKind::Group { children });
+                        g.visible = !hidden;
                         g.fill = Fill::None;
                         g.stroke = None;
+                        if let Some(mask) = mask {
+                            g.effects.push(pattern_mask_over(&g, mask));
+                        }
+                        // The group's own name (argument 1000 of its
+                        // `loda`), as objects carry theirs.
+                        g.name = self.group_name(c);
+                        self.note_static_id(c, g.id);
                         out.push(g);
                     }
+                }
+            } else if c.is(b"symb") {
+                // An instance of a symbol (#2177): its `spnd` names the
+                // symbol, its `trfd` places the definition.
+                let sym = c
+                    .children
+                    .iter()
+                    .find(|k| k.is(b"spnd"))
+                    .and_then(|k| self.reader(self.data(k)).u32());
+                let Some(sym) = sym else {
+                    self.report.warn("a symbol instance without its symbol");
+                    continue;
+                };
+                let own = c
+                    .children
+                    .iter()
+                    .find(|k| k.is(b"lgob"))
+                    .and_then(|lgob| {
+                        let mut t = None;
+                        lgob.walk(&mut |k, _| {
+                            if k.is(b"trfd") && t.is_none() {
+                                t = Some(k);
+                            }
+                        });
+                        t
+                    })
+                    .map(|t| self.read_transform(t))
+                    .unwrap_or(Affine::IDENTITY);
+                if let Some((index, unplace)) = self.symbol(sym, ids, page_size, depth) {
+                    let placed = Affine::translate((page_size.width / 2.0, page_size.height / 2.0));
+                    let mut inst = Shape::new(ids.shape(), ShapeKind::SymbolInstance { index });
+                    inst.transform = placed * self.outer_transform * own * unplace;
+                    inst.fill = Fill::None;
+                    inst.stroke = None;
+                    inst.name = self.group_name(c);
+                    self.note_static_id(c, inst.id);
+                    out.push(inst);
                 }
             } else if c.is(b"lnkg") {
                 // A linked group (the strokes an artistic brush makes from
@@ -2954,10 +5661,51 @@ impl<'a> Ctx<'a> {
                     })
                     .map(|t| self.read_transform(t))
                     .unwrap_or(Affine::IDENTITY);
+                // In perspective (#2691), its objects are drawn through
+                // the perspectives as well, after they are read.
+                let perspective = self.own_perspective_chain(c);
                 let saved = self.outer_transform;
-                self.outer_transform = saved * own;
+                if perspective.is_none() {
+                    self.outer_transform = saved * own;
+                }
+                let before = out.len();
                 self.collect_objects(c, ids, page_size, depth + 1, out);
+                if let Some(g) = perspective.as_ref().and_then(|p| p.projective) {
+                    let after = perspective
+                        .as_ref()
+                        .map_or(Affine::IDENTITY, |p| p.after_perspective);
+                    for child in out[before..].iter_mut() {
+                        self.perspective_group_object(
+                            child,
+                            Affine::IDENTITY,
+                            &g,
+                            after,
+                            page_size,
+                        );
+                    }
+                }
                 self.outer_transform = saved;
+                // A blend keeps no steps of its own: an empty linked group
+                // between its two end objects, its `loda` of object type 7
+                // holding the step count (#597).
+                if out.len() == before {
+                    // A version 15 drop shadow: an empty linked group
+                    // after its object, its record holding the settings.
+                    if let Some(shadow) = self.drop_shadow_record(c) {
+                        if let Some(owner) = out.last_mut() {
+                            owner.shadow = Some(shadow);
+                        }
+                    } else if let Some((steps, settings)) = self.blend_steps(c) {
+                        let steps = self.budget_blend_steps(steps);
+                        blends.push((before, steps, settings));
+                    }
+                } else if let Some(offset) = self.contour_record(c) {
+                    // A contour keeps its steps as objects of its linked
+                    // group, which stands just before its object (#1031).
+                    contours.push((before, out.len(), offset));
+                } else if let Some(number) = self.artistic_group(c) {
+                    strokes.push((before, out.len(), number));
+                }
             } else if c.list_type.is_some() {
                 // Other lists (`lgob`, `spnd`, ...) are not objects, but
                 // older files nest the object lists one level down.
@@ -2973,6 +5721,144 @@ impl<'a> Ctx<'a> {
                     );
                 }
             }
+        }
+        for (at, steps, set) in blends {
+            // The objects on either side of the group are its ends.
+            if at <= first || at >= out.len() {
+                self.report
+                    .warn("a blend without both end objects; left out");
+                continue;
+            }
+            // The steps pair the two outlines from their first nodes, as
+            // the file's program draws them (twists and folds included),
+            // and lie between the two (#597). The record counts the
+            // steps, their accelerations and their turn from the lower
+            // object (#1192), read later: that object is the start and
+            // holds the blend, its steps drawn above it.
+            let end = out[at - 1].clone();
+            let end_id = end.id;
+            let map_nodes = match (blend_nodes(&out[at]), blend_nodes(&end)) {
+                (Some(start), Some(end)) => Some(tracedraw_core::live::BlendNodes { start, end }),
+                _ => None,
+            };
+            out[at].effects.push(tracedraw_core::live::Effect::Blend {
+                end: Box::new(end),
+                steps,
+                accel_objects: set.accel_objects,
+                accel_colors: set.accel_colors,
+                rotation: set.rotation,
+                path: None,
+                rotate_on_path: false,
+                end_id: Some(end_id),
+                options: tracedraw_core::live::BlendOptions {
+                    map_nodes,
+                    loop_rotation: set.loop_rotation,
+                    accel_sizing: set.accel_sizing,
+                    color_blend: set.color_blend,
+                    ..Default::default()
+                },
+            });
+        }
+        self.mark_brush_strokes(out, first, &strokes);
+        self.make_contours_live(out, &contours);
+    }
+
+    /// Keep the number (`spnd`) and identity (`spid`) of the object list
+    /// `c` read as `shape`, while the file links objects (`lnkt`).
+    fn note_link_number(&mut self, c: &Chunk, shape: tracedraw_core::ShapeId) {
+        if self.links.is_empty() {
+            return;
+        }
+        if let Some(n) = c
+            .children
+            .iter()
+            .find(|k| k.is(b"spnd"))
+            .and_then(|k| self.reader(self.data(k)).u32())
+        {
+            self.spnd_shapes.insert(n, shape);
+        }
+        if let Some(u) = c
+            .children
+            .iter()
+            .find(|k| k.is(b"spid"))
+            .and_then(|k| crate::artistic::uid_of_spid(self.data(k)))
+        {
+            self.spids.insert(shape, u);
+        }
+    }
+
+    /// The number (`spnd`) of a linked group that is a brush
+    /// stroke (its own `lgob` holds a `loda` of object type 28) linked
+    /// to a guide in the link table.
+    fn artistic_group(&mut self, group: &Chunk) -> Option<u32> {
+        if self.links.is_empty() {
+            return None;
+        }
+        let lgob = group.children.iter().find(|k| k.is(b"lgob"))?;
+        let loda = lgob.children.iter().find(|k| k.is(b"loda"))?;
+        let l = self.read_loda(self.data(loda))?;
+        if l.kind != crate::artistic::OBJ_ARTISTIC_GROUP {
+            return None;
+        }
+        let sp = group.children.iter().find(|k| k.is(b"spnd"))?;
+        let n = self.reader(self.data(sp)).u32()?;
+        self.links.contains_key(&n).then_some(n)
+    }
+
+    /// Mark the guide of each brush stroke of `strokes` (its
+    /// objects `out[start..end]`) with them, the guide being among the
+    /// objects of this list read from `first` (see `crate::artistic`).
+    /// The objects stay as the file draws them.
+    fn mark_brush_strokes(&mut self, out: &mut [Shape], first: usize, strokes: &[(usize, usize, u32)]) {
+        for &(start, end, number) in strokes {
+            let guide = self
+                .links
+                .get(&number)
+                .and_then(|g| self.spnd_shapes.get(g))
+                .and_then(|id| {
+                    out.iter()
+                        .enumerate()
+                        .skip(first)
+                        .find(|(i, s)| (*i < start || *i >= end) && s.id == *id)
+                        .map(|(i, _)| i)
+                })
+                .filter(|&i| matches!(out[i].kind, ShapeKind::Path { .. }));
+            let Some(gi) = guide else {
+                continue;
+            };
+            let all_known = out[start..end].iter().all(|s| self.spids.contains_key(&s.id));
+            if end - start < 2 || !all_known || !self.spids.contains_key(&out[gi].id) {
+                continue;
+            }
+            for i in (start..end).chain(std::iter::once(gi)) {
+                if out[i].uid.is_none() {
+                    out[i].uid = self.spids.get(&out[i].id).copied();
+                }
+            }
+            let objects = out[start..end].to_vec();
+            if crate::artistic::mark(&mut out[gi], &objects) {
+                log::debug!("Brush stroke of {} objects on a guide", objects.len());
+            }
+        }
+    }
+
+    /// Make each contour of `contours` live: the object right after its
+    /// steps gets the contour, and the steps the file keeps go (the
+    /// effect draws them). Taken from the last so the places of the
+    /// earlier ones stay right.
+    fn make_contours_live(&mut self, out: &mut Vec<Shape>, contours: &[(usize, usize, f64)]) {
+        for &(start, end, offset) in contours.iter().rev() {
+            let Some(effect) = out
+                .get(end)
+                .zip(out.get(start..end))
+                .and_then(|(object, steps)| contour_effect(object, steps, offset))
+            else {
+                self.report
+                    .warn("a contour whose object or steps were not found; kept as drawn");
+                continue;
+            };
+            out[end].effects.push(effect);
+            out.drain(start..end);
         }
     }
 
@@ -3071,6 +5957,288 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// The 120-byte transparency record of a version 11 file (#896): u32
+    /// 5, the record's number, 8 zero bytes, the object's box (four i32,
+    /// zeros for a uniform transparency), u32 1 for a graded transparency
+    /// (0 uniform), the fountain's number and type and its start and end
+    /// points (two i32 pairs), u32 0, the start and end transparency in
+    /// percent (two f64; the end 100 in every record seen), u32 0 or 9,
+    /// u32 2, 24 zero bytes, a fill id and u32 0. The fill id names a
+    /// `fild` record of the fill table: for a uniform transparency the
+    /// object's own fill; for a graded one a fountain fill whose grey
+    /// stops are the transparency (model 9: 255 opaque, 0 see-through,
+    /// as the reporter's screenshot of the drawing's shadow shows), read
+    /// here as a mask whose luminance is the opacity. Returns the opacity
+    /// and the mask.
+    fn read_transparency_v11(
+        &mut self,
+        d: &'a [u8],
+        arg: Arg,
+    ) -> Option<(f64, Option<(Fill, u8)>)> {
+        // Seen in a version 11 file only; version 12 is not checked.
+        if self.v != 11 || arg.end.checked_sub(arg.off)? != 120 {
+            return None;
+        }
+        let data = d.get(..arg.end)?;
+        let mut r = self.reader_at(data, arg.off);
+        if r.u32()? != 5 {
+            return None;
+        }
+        r.skip(28);
+        let graded = r.u32()? == 1;
+        r.skip(28);
+        let start = r.f64()?;
+        let _end = r.f64()?;
+        r.skip(32);
+        let fill_id = r.u32()?;
+        if !graded {
+            if !(0.0..=100.0).contains(&start) {
+                self.report.warn(format!(
+                    "transparency value {start} out of range; object drawn opaque"
+                ));
+                return None;
+            }
+            return Some((1.0 - start / 100.0, None));
+        }
+        let Some(Fill::Fountain(f)) = self.fills.get(&fill_id).map(|f| &f.fill) else {
+            self.report.warn(format!(
+                "graded transparency names fill {fill_id}, not a fountain fill; object drawn opaque"
+            ));
+            return None;
+        };
+        Some((1.0, Some((grey_mask(f), 2))))
+    }
+
+    /// The graded transparency record of a version 15 file (#1257, two
+    /// files saved by the program that wrote them, a sky blue to white and
+    /// a red to white background): argument 8000 holds a record tagged
+    /// 1300 of 117 bytes, the version 11 record with a one-byte head (the
+    /// byte 5, then the record's number): the object's box at byte 13, u32
+    /// 1 at 29, the fountain's number at 33, its type (u16) at 37, its
+    /// start and end points at 41 and 49 (coordinates in the object's own
+    /// space: the opaque end first), the start and end transparency in
+    /// percent (f64, 0 and 100) at 61 and 69, u32 2 at 81, the fill id
+    /// at 105 (20 zero bytes before it, 8 after), which names a fountain
+    /// fill of greys (255 to 0), the transparency, as in version 11. The points place the fountain
+    /// (the fill's own angle and edge pad only approximate them: the
+    /// files' previews draw the band between the points). Returns the
+    /// mask and, for a linear fountain, its start and end, when the
+    /// record names such a fill; other records (not seen in version 15)
+    /// keep the reading of the opacity argument. Version 13 files hold the
+    /// same record (#1257, pages 1 and 2 of the reporter's version 13
+    /// file, a fountain of greys in colour model 9).
+    fn read_graded_transparency_v15(
+        &mut self,
+        d: &'a [u8],
+        arg: Arg,
+    ) -> Option<(Mask, Option<(Point, Point)>)> {
+        // Seen in versions 13 and 15 alike; no version 14 file seen.
+        if !matches!(self.v, 13 | 15) || arg.end.checked_sub(arg.off)? < 8 + 117 {
+            return None;
+        }
+        let data = d.get(..arg.end)?;
+        let mut r = self.reader_at(data, arg.off);
+        if r.u32()? != 0x514 || r.u32()? != 117 || r.u8()? != 5 {
+            return None;
+        }
+        r.skip(28);
+        if r.u32()? != 1 {
+            return None;
+        }
+        r.skip(8);
+        let start = Point::new(r.coord()?, r.coord()?);
+        let end = Point::new(r.coord()?, r.coord()?);
+        r.skip(48);
+        let fill_id = r.u32()?;
+        let Some(Fill::Fountain(f)) = self.fills.get(&fill_id).map(|f| &f.fill) else {
+            return None;
+        };
+        let axis = (f.kind == FountainKind::Linear
+            && (end - start).hypot() > 1e-6
+            && [start.x, start.y, end.x, end.y]
+                .iter()
+                .all(|x| x.is_finite()))
+        .then_some((start, end));
+        Some(((grey_mask(f), 2), axis))
+    }
+
+    /// Where a version 16+ graded transparency runs (#1544, a version 22
+    /// file): argument 8000 holds the record of versions 13 and 15 (see
+    /// `read_graded_transparency_v15`), u32 1 at byte 29 of the body, the
+    /// type u16 1 (linear) at 37 and the start and end points in the
+    /// object's own space at 41 and 49, the opaque end first. The style
+    /// string holds the mask's greys, angle and a centred run that does
+    /// not say where the run lies (a bitmap fading out over the top third
+    /// of its height in the file's page preview; read from the style
+    /// string alone it faded over the middle fifth). `None` for other
+    /// records and versions.
+    fn read_graded_transparency_axis(&mut self, d: &'a [u8], arg: Arg) -> Option<(Point, Point)> {
+        if self.v < 16 || arg.end.checked_sub(arg.off)? < 8 + 117 {
+            return None;
+        }
+        let data = d.get(..arg.end)?;
+        let mut r = self.reader_at(data, arg.off);
+        if r.u32()? != 0x514 || r.u32()? != 117 || r.u8()? != 5 {
+            return None;
+        }
+        r.skip(28);
+        if r.u32()? != 1 {
+            return None;
+        }
+        r.skip(4);
+        if r.u16()? != 1 {
+            return None;
+        }
+        r.skip(2);
+        let start = Point::new(r.coord()?, r.coord()?);
+        let end = Point::new(r.coord()?, r.coord()?);
+        let finite = [start.x, start.y, end.x, end.y]
+            .iter()
+            .all(|x| x.is_finite());
+        (finite && (end - start).hypot() > 1e-6).then_some((start, end))
+    }
+
+    /// The uniform transparency record of a version 16+ object (#1706, a
+    /// version 24 file): argument 8000 holds a record tagged 1300 of 117
+    /// bytes whose body starts with the byte 5 and the record's number,
+    /// with the transparency in percent as an f64 at byte 61 of the body
+    /// (50 in all eight records of the file, whose preview draws those
+    /// objects at half their colour over what lies beneath). The object's
+    /// style string then has a `transparency` fill of type 1 and no amount
+    /// of its own; the caller only uses the value then. Returns the
+    /// opacity, `None` for other records.
+    fn read_uniform_transparency_record(&mut self, d: &'a [u8], arg: Arg) -> Option<f64> {
+        if self.v < 16 || arg.end.checked_sub(arg.off)? < 8 + 117 {
+            return None;
+        }
+        let data = d.get(..arg.end)?;
+        let mut r = self.reader_at(data, arg.off);
+        if r.u32()? != 0x514 || r.u32()? != 117 || r.u8()? != 5 {
+            return None;
+        }
+        r.skip(60);
+        let percent = r.f64()?;
+        if !(0.0..=100.0).contains(&percent) {
+            self.report.warn(format!(
+                "transparency value {percent} out of range; object drawn opaque"
+            ));
+            return None;
+        }
+        Some(1.0 - percent / 100.0)
+    }
+
+    /// A version 16+ object's transparency record on its own (#2960, a
+    /// version 18 file with each kind of transparency): argument 8000
+    /// holds the record tagged 1300 of 117 bytes read for versions 13 and
+    /// 15 (`read_graded_transparency_v15`), the byte 5 and the record's
+    /// number first, the transparency's type (u16) at byte 37 of the
+    /// body, its start amount in percent (f64) at 61 and a fill id at 105.
+    /// Type 0 is a uniform transparency of the start amount (the fill id
+    /// then names the object's own fill, as in version 11); otherwise the
+    /// fill id names the transparency's fill: a fountain of greys (as in
+    /// version 15), whose lightness is the opacity, or a pattern (types
+    /// 7, 9 and 10: two-colour, bitmap and vector), whose lightness runs
+    /// the transparency from the end amount (at f64 69; black) to the
+    /// start amount (white): 100 and 0 in the file of #2960, whose page
+    /// preview shows the pattern's light parts see-through and its dark
+    /// ones nearly solid, at the pattern's own tile size. Versions 16 and later
+    /// mostly say the same in the object's style string, which wins;
+    /// this is for a style string that does not. `None` for other
+    /// records.
+    ///
+    /// Versions 13 to 15 have no style string, and the record is all
+    /// there is (#3222, a version 15 file of 19 pages whose reference
+    /// pictures show its panels and pads see-through): a uniform type 0
+    /// with its amount (33, 44 and 66 percent in that file, which before
+    /// came out solid; 0 at byte 29 marks it) and patterns of type 9
+    /// read the same way.
+    fn read_transparency_record_v16(
+        &mut self,
+        d: &'a [u8],
+        arg: Arg,
+    ) -> Option<RecordTransparency> {
+        if self.v < 13 || arg.end.checked_sub(arg.off)? < 8 + 117 {
+            return None;
+        }
+        let data = d.get(..arg.end)?;
+        let mut r = self.reader_at(data, arg.off);
+        if r.u32()? != 0x514 || r.u32()? != 117 || r.u8()? != 5 {
+            return None;
+        }
+        let body = r.pos - 1;
+        let mut kind = self.reader_at(data, body + 37).u16()?;
+        // Versions 13 to 15 mark a uniform transparency with 0 at byte
+        // 29 (1 for the others), whatever byte 37 holds.
+        if self.v < 16 && self.reader_at(data, body + 29).u32()? == 0 {
+            kind = 0;
+        }
+        let percent = self.reader_at(data, body + 61).f64()?;
+        let end = self.reader_at(data, body + 69).f64()?;
+        let fill_id = self.reader_at(data, body + 105).u32()?;
+        if kind == 0 {
+            return ((0.0..=100.0).contains(&percent) && percent > 0.0)
+                .then(|| RecordTransparency::Opacity(1.0 - percent / 100.0));
+        }
+        match self.fills.get(&fill_id).map(|f| &f.fill) {
+            Some(Fill::Fountain(f)) => Some(RecordTransparency::Mask((grey_mask(f), 2))),
+            Some(Fill::Pattern(p)) => {
+                let (start, end) = (percent, end);
+                if !(0.0..=100.0).contains(&start) || !(0.0..=100.0).contains(&end) {
+                    return None;
+                }
+                Some(RecordTransparency::Mask((
+                    Fill::Pattern(pattern_mask(p, start, end)),
+                    2,
+                )))
+            }
+            _ => {
+                self.report.warn(format!(
+                    "transparency of type {kind} names fill {fill_id}, not a fountain or pattern; object drawn opaque"
+                ));
+                None
+            }
+        }
+    }
+
+    /// The merge mode of a version 13 to 15 transparency record (see
+    /// `read_transparency_record_v16`): a u32 at byte 77 of the body
+    /// (#3222). Code 0 is Normal. Code 9 darkens what lies beneath by
+    /// the object's colour: the version 15 file of #3222 holds it on
+    /// two light grey panels at 50 percent over teal, and its reference
+    /// pictures show them as a darker teal of the same hue (each channel
+    /// about 0.89 of the teal beneath, which a 50 percent multiply by a
+    /// grey of 0.78 gives; a Normal mix gave a pale grey). Other codes
+    /// are named in a warning and merge as Normal. Later versions keep
+    /// the mode in the style string.
+    fn read_transparency_merge(
+        &mut self,
+        d: &'a [u8],
+        arg: Arg,
+    ) -> tracedraw_core::live::MergeMode {
+        use tracedraw_core::live::MergeMode;
+        if !(13..16).contains(&self.v) || arg.end.saturating_sub(arg.off) < 8 + 117 {
+            return MergeMode::Normal;
+        }
+        let Some(data) = d.get(..arg.end) else {
+            return MergeMode::Normal;
+        };
+        let mut r = self.reader_at(data, arg.off);
+        if r.u32() != Some(0x514) || r.u32() != Some(117) || r.u8() != Some(5) {
+            return MergeMode::Normal;
+        }
+        let body = r.pos - 1;
+        match self.reader_at(data, body + 77).u32() {
+            None | Some(0) => MergeMode::Normal,
+            Some(9) => MergeMode::Multiply,
+            Some(code) => {
+                self.report.warn(format!(
+                    "transparency merge mode {code} not read; object merged as Normal"
+                ));
+                MergeMode::Normal
+            }
+        }
+    }
+
     fn read_opacity(&mut self, d: &'a [u8], arg: Arg) -> Option<f64> {
         let data = d.get(..arg.end)?;
         let mut r = self.reader_at(data, arg.off);
@@ -3143,7 +6311,14 @@ impl<'a> Ctx<'a> {
                     // half of it): a version 22 file's preview shows a
                     // 0.0929 corner on a 369.8 x 499.0 mm frame drawn at
                     // 17.2 mm, and a version 17 file's 2.7604 on a 36.8 mm
-                    // side is exactly 2 inches.
+                    // side is exactly 2 inches. Or it is a length in
+                    // coordinate units, as the width: the version 15 form
+                    // of #2333 (its flag after the scale set) holds 20000
+                    // (2 mm) on boxes 7 to 70 mm high, drawn with 2 mm
+                    // corners in the program that saved it, and read as a
+                    // share it gave capsules. A share past 100 or a length
+                    // under 100 units (0.01 mm) means nothing, so the size
+                    // of the number tells which it is.
                     let w = r.f64_coord()?;
                     let h = r.f64_coord()?;
                     let _sx = r.f64();
@@ -3154,12 +6329,21 @@ impl<'a> Ctx<'a> {
                     // Each radius is followed by 16 bytes of corner data
                     // (corner type and unknown fields) except the last.
                     let mut radii = Vec::new();
+                    let mut lengths = Vec::new();
                     for gap in [16usize, 16, 16, 0] {
                         let Some(raw) = r.f64() else { break };
                         if raw.is_finite() {
-                            radii.push(raw * half);
+                            let length = raw > RADIUS_LENGTH_FROM;
+                            radii.push(if length { raw * UNIT_MM } else { raw * half });
+                            lengths.push(if length { 1.0 } else { 0.0 });
                         }
                         r.skip(gap);
+                    }
+                    // A length is the corner's size on the page: a
+                    // rectangle the file scales keeps it (#4126).
+                    if lengths.contains(&1.0) {
+                        let mask = file_corners(&lengths, w, h);
+                        self.pending_length_corners = mask.radii.map(|m| m > 0.5);
                     }
                     (w, h, radii)
                 };
@@ -3207,6 +6391,7 @@ impl<'a> Ctx<'a> {
                         start_deg: a1,
                         end_deg: a2,
                         pie,
+                        inner: 0.0,
                     })
                 } else {
                     None
@@ -3290,6 +6475,7 @@ impl<'a> Ctx<'a> {
                     sharpness,
                     complex: None,
                     twist: 0.0,
+                    bend: 0.0,
                 })
             }
             // Bitmap: two corners, 32 unknown bytes, image id, a version
@@ -3311,6 +6497,9 @@ impl<'a> Ctx<'a> {
                         .warn(format!("bitmap object refers to unknown image {image_id}"));
                     return None;
                 };
+                self.pending_cmyk = bm.cmyk;
+                self.pending_inks = bm.inks.clone();
+                self.pending_mono = bm.mono;
                 Some(ShapeKind::Bitmap {
                     rect,
                     width_px: bm.width_px,
@@ -3363,6 +6552,9 @@ impl<'a> Ctx<'a> {
                     self.pending_crop = None;
                     return None;
                 };
+                self.pending_cmyk = bm.cmyk;
+                self.pending_inks = bm.inks.clone();
+                self.pending_mono = bm.mono;
                 Some(ShapeKind::Bitmap {
                     rect,
                     width_px: bm.width_px,
@@ -3440,6 +6632,19 @@ fn bitmap_header(d: &[u8], v: u16) -> Option<BitmapHeader> {
     } else {
         50
     });
+    // From version 7 the u32 at byte 20 is where the image block starts
+    // (counted from byte 8), 32 for most pictures; a picture printed in a
+    // spot ink keeps the ink's description before it, and starts later
+    // (#3996).
+    if v >= 7 {
+        let place = d
+            .get(20..24)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+            .unwrap_or(32);
+        if place > 32 && 8 + place + 14 < d.len() {
+            r.skip(place - 32);
+        }
+    }
     let model = r.u32()?;
     r.skip(4);
     let width = r.u32()?;
@@ -3480,7 +6685,11 @@ fn decode_bitmap(
     let mut r = Reader::new(d, v < 6);
     r.pos = h.body;
     let mut palette: Vec<[u8; 3]> = Vec::new();
-    if bpp < 24 && h.model != 5 && h.model != 6 {
+    // Model 99 is a grey picture of one byte per pixel with no palette,
+    // as transparency bitmaps and masks are stored (#2691); a palette is
+    // only read where the chunk has room for it before the pixels.
+    let palette_room = d.len().saturating_sub(h.body) >= h.size as usize + 4;
+    if bpp < 24 && h.model != 5 && h.model != 6 && h.model != BITMAP_GREY_MASK && palette_room {
         r.skip(2);
         let n = r.u16().unwrap_or(0) as usize;
         let n = n.min(r.remaining() / 3).min(256);
@@ -3507,6 +6716,14 @@ fn decode_bitmap(
     }
     let cmyk = h.model == BITMAP_CMYK && bpp == 32;
     let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    // A CMYK image's inks, plane after plane (cyan, magenta, yellow,
+    // black), for separations (#1659).
+    let plane = width as usize * height as usize;
+    let mut planes = if cmyk {
+        vec![0u8; plane * 4]
+    } else {
+        Vec::new()
+    };
     for row in 0..height as usize {
         // Bottom-up rows.
         let src = &pixels[(height as usize - 1 - row) * stride..][..stride];
@@ -3514,6 +6731,12 @@ fn decode_bitmap(
             let px: [u8; 4] = match bpp {
                 32 if cmyk => {
                     let ink = [src[x * 4], src[x * 4 + 1], src[x * 4 + 2], src[x * 4 + 3]];
+                    let at = row * width as usize + x;
+                    for (i, v) in ink.iter().enumerate() {
+                        if let Some(p) = planes.get_mut(i * plane + at) {
+                            *p = *v;
+                        }
+                    }
                     cmyk_pixel(ink, lut)
                 }
                 32 => [src[x * 4 + 2], src[x * 4 + 1], src[x * 4], 255],
@@ -3545,17 +6768,74 @@ fn decode_bitmap(
         }
     }
     let png = encode_png(width, height, &rgba);
+    let inks = cmyk.then(|| {
+        let planes = encode_gray_png(width, height.saturating_mul(4), &planes);
+        tracedraw_core::picture_inks::PictureInks::cmyk(&png, planes.into())
+    });
     Some(Ok((
         image_id,
         BitmapDef {
             width_px: width,
             height_px: height,
-            png,
+            png: png.into(),
+            cmyk,
+            inks,
+            mono: (bpp == 1).then(|| {
+                let at = |i: usize, dflt: u8| palette.get(i).copied().unwrap_or([dflt; 3]);
+                [at(0, 0), at(1, 255)]
+            }),
         },
     )))
 }
 
-/// `f` over `items` in order, on up to four threads.
+/// A black and white (1-bit) picture takes the colours its object was
+/// given, as the other program colours such a picture: the outline
+/// colour for its dark pixels, the fill colour for its light ones, each
+/// kept from the picture when not set. Neither is drawn as an outline
+/// or a fill of its own: a coloured 1-bit picture opened black, framed
+/// by an outline of the colour it had (#3410).
+fn colour_mono_bitmap(shape: &mut Shape, palette: [[u8; 3]; 2]) {
+    let ShapeKind::Bitmap { png, .. } = &mut shape.kind else {
+        return;
+    };
+    let ink = shape.stroke.as_ref().map(|s| s.color.to_rgb8());
+    let paper = match &shape.fill {
+        Fill::Solid(c) => Some(c.to_rgb8()),
+        _ => None,
+    };
+    shape.stroke = None;
+    shape.fill = Fill::None;
+    if ink.is_none() && paper.is_none() {
+        return;
+    }
+    let luma = |c: [u8; 3]| 299 * c[0] as u32 + 587 * c[1] as u32 + 114 * c[2] as u32;
+    // The darker palette colour is the picture's ink.
+    let dark = usize::from(luma(palette[1]) < luma(palette[0]));
+    let mut to = palette;
+    if let Some(c) = ink {
+        to[dark] = c;
+    }
+    if let Some(c) = paper {
+        to[1 - dark] = c;
+    }
+    let Ok(pm) = tiny_skia::Pixmap::decode_png(png) else {
+        return;
+    };
+    let mut rgba = Vec::with_capacity(pm.data().len());
+    for p in pm.pixels() {
+        let c = p.demultiply();
+        let rgb = [c.red(), c.green(), c.blue()];
+        let near = |q: [u8; 3]| -> u32 {
+            (0..3).map(|i| (rgb[i] as i32 - q[i] as i32).unsigned_abs()).sum()
+        };
+        let i = usize::from(near(palette[1]) < near(palette[0]));
+        rgba.extend_from_slice(&[to[i][0], to[i][1], to[i][2], c.alpha()]);
+    }
+    *png = encode_png(pm.width(), pm.height(), &rgba).into();
+}
+
+/// `f` over `items` in order, on up to four threads where the platform
+/// has them (a browser does not).
 fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     {
         let threads = std::thread::available_parallelism()
@@ -3594,6 +6874,56 @@ fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Ve
         }
     }
     items.iter().map(f).collect()
+}
+
+/// Text whose fonts all carry a leading `@` (the name a system gives the
+/// vertical form of an East Asian face) is stored as a horizontal line
+/// turned a quarter clockwise by its transform, the face itself standing
+/// the ideographs back up (a version 22 file of #1544: two titles in
+/// `@` and the face's name, each a column of upright ideographs in the
+/// page preview). It becomes vertical text in the face of that name:
+/// the fonts lose the `@`, the frame (if any) turns with the text, and
+/// the matrix returned, to be applied after the object's transform,
+/// takes back the quarter turn the vertical layout now makes itself.
+/// `None` (nothing changed) for other text and shapes.
+fn vertical_font_text(kind: &mut ShapeKind) -> Option<Affine> {
+    let ShapeKind::Text {
+        spans,
+        origin,
+        frame,
+        para,
+        on_path: None,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    let marked = |s: &TextSpan| s.font_family.starts_with('@') && s.font_family.len() > 1;
+    let mut written = spans
+        .iter()
+        .filter(|s| !s.text.trim().is_empty())
+        .peekable();
+    if para.vertical || written.peek().is_none() || !written.all(marked) {
+        return None;
+    }
+    for s in spans.iter_mut() {
+        if let Some(name) = s.font_family.strip_prefix('@').filter(|n| !n.is_empty()) {
+            s.font_family = name.to_string();
+        }
+    }
+    let turn = tracedraw_core::document::vertical_line_frame();
+    match frame {
+        // The frame's box turned: its top left becomes the top right
+        // where the first column starts.
+        Some(f) => {
+            *origin = Point::new(origin.y, -origin.x - f.width);
+            *f = Size::new(f.height, f.width);
+        }
+        None => *origin = turn * *origin,
+    }
+    para.vertical = true;
+    para.vertical_columns = tracedraw_core::document::VerticalColumns::default();
+    Some(turn.inverse())
 }
 
 /// A paragraph frame (`origin` its lower left, `size`) under `transform`
@@ -3664,6 +6994,10 @@ fn bitmap_mask(d: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
 /// The bitmap colour model of CMYK images.
 const BITMAP_CMYK: u32 = 3;
 
+/// The bitmap colour model of grey pictures with no palette: the masks
+/// of pictures and the pictures of bitmap transparencies (#2691).
+const BITMAP_GREY_MASK: u32 = 99;
+
 /// One CMYK pixel (ink bytes, 255 = full ink) as opaque RGBA: through
 /// `lut` when given, else one minus the ink times one minus the black.
 fn cmyk_pixel(ink: [u8; 4], lut: Option<&tracedraw_core::icc::CmykLut>) -> [u8; 4] {
@@ -3685,6 +7019,38 @@ fn cmyk_pixel(ink: [u8; 4], lut: Option<&tracedraw_core::icc::CmykLut>) -> [u8; 
 
 /// A bitmap with a crop outline becomes a clip frame whose frame is that
 /// outline.
+/// The storage of an embedded object named by its `olel` chunk (version
+/// 26: no name argument): byte 4 holds n of "Embedding n". The u32 before
+/// it (256) and the bytes after it are not known.
+fn ole_link_storage(ctx: &Ctx, oc: &Chunk) -> Option<String> {
+    let mut found = None;
+    oc.walk(&mut |c, _| {
+        if c.is(b"olel") && found.is_none() {
+            found = Some(c);
+        }
+    });
+    let mut r = ctx.reader(ctx.data(found?));
+    r.skip(4);
+    let n = r.u32()?;
+    Some(format!("Embedding {n}"))
+}
+
+/// New ids for the objects inside a shape, from the document's source.
+fn renumber(shape: &mut Shape, ids: &mut tracedraw_core::id::IdSource) {
+    let mut each = |c: &mut Shape| {
+        c.id = ids.shape();
+        renumber(c, ids);
+    };
+    match &mut shape.kind {
+        ShapeKind::Group { children } => children.iter_mut().for_each(&mut each),
+        ShapeKind::ClipFrame { frame, contents } => {
+            each(frame);
+            contents.iter_mut().for_each(each);
+        }
+        _ => {}
+    }
+}
+
 fn crop_to_clip_frame(
     mut shape: Shape,
     crop: BezPath,
@@ -3746,6 +7112,7 @@ fn text_on(
     path: BezPath,
     fitted: &OnPathText,
     per_mm: f64,
+    from_start: bool,
 ) -> (tracedraw_core::TextOnPath, TextAlign, f64) {
     let Some(s) = fitted.settings else {
         let tp = tracedraw_core::TextOnPath {
@@ -3774,13 +7141,58 @@ fn text_on(
     if mirror {
         at = total - at;
     }
-    if s.placement == 4 {
+    if s.placement == 4 && !from_start {
         tp.offset = at - total / 2.0;
         (tp, TextAlign::Center, at)
     } else {
         tp.offset = at;
         (tp, TextAlign::Left, at)
     }
+}
+
+/// Whether the fitted text of placement 4 starts at the point its offset
+/// names rather than having its middle there, told by the text's box
+/// (the box of the fitted letters): the stretch of the baseline that
+/// stays inside the box runs on from that point but hardly back from it.
+/// A version 18 text (#2431) starts at its offset, its letters' angles
+/// (the 24 bytes per letter) giving the same places; the two texts of
+/// the version 21 file of 2026-10-11 have their middles there.
+fn text_starts_at_offset(page_path: BezPath, fitted: &OnPathText) -> bool {
+    let (Some(s), Some(pb)) = (fitted.settings, fitted.page_box) else {
+        return false;
+    };
+    if s.placement != 4 {
+        return false;
+    }
+    let (tp, _, at) = text_on(page_path, fitted, 1.0, false);
+    let base = tp.baseline();
+    let total = base.length();
+    if total <= 0.0 {
+        return false;
+    }
+    let grow = 1.0 + 0.02 * pb.width().max(pb.height());
+    let b = pb.inflate(grow, grow);
+    let step = total / 1000.0;
+    // How far the baseline stays in the box from `at` going `sign`-wards.
+    let run = |sign: f64| {
+        let mut d = 0.0;
+        while d < total {
+            let s = at + sign * (d + step);
+            if !base.is_closed() && !(0.0..=total).contains(&s) {
+                break;
+            }
+            match base.at(s) {
+                Some((p, _)) if b.contains(p) => d += step,
+                _ => break,
+            }
+        }
+        d
+    };
+    let (back, on) = (run(-1.0), run(1.0));
+    if back + on >= 0.99 * total && base.is_closed() {
+        return false;
+    }
+    back < 0.25 * (back + on)
 }
 
 /// The curve among `curves` that a fitted text follows: the one whose
@@ -3799,7 +7211,7 @@ fn path_for_text(shapes: &[Shape], curves: &[usize], fitted: &OnPathText) -> Opt
         let Some(curve) = shapes.get(ci) else {
             continue;
         };
-        let (tp, _, at) = text_on(text_path_of(curve), fitted, 1.0);
+        let (tp, _, at) = text_on(text_path_of(curve), fitted, 1.0, false);
         let Some((p, _)) = tp.baseline().at(at) else {
             continue;
         };
@@ -4021,8 +7433,10 @@ fn fit_text(t: &mut Shape, curve: &Shape, fitted: &OnPathText) -> bool {
         return false;
     }
     let to_local = Affine::translate(-origin.to_vec2()) * t.transform.inverse();
-    let path = to_local * text_path_of(curve);
-    let (tp, fitted_align, _) = text_on(path, fitted, 1.0 / det.abs().sqrt());
+    let on_page = text_path_of(curve);
+    let from_start = text_starts_at_offset(on_page.clone(), fitted);
+    let path = to_local * on_page;
+    let (tp, fitted_align, _) = text_on(path, fitted, 1.0 / det.abs().sqrt(), from_start);
     t.kind = ShapeKind::Text {
         spans,
         origin,
@@ -4036,6 +7450,140 @@ fn fit_text(t: &mut Shape, curve: &Shape, fitted: &OnPathText) -> bool {
         on_path: Some(tp),
     };
     true
+}
+
+/// The live contour of `object` whose steps the file keeps as `steps`
+/// (#1031), `offset` mm apart. The side comes from where the steps lie:
+/// all within the object's box, inside; all around it, outside. The
+/// end colours are those of the step farthest from the object (the
+/// program that wrote the file draws the last step in them; in the
+/// version 9 file of #597 the steps run evenly in RGB from the object's
+/// colours to them, as the effect draws them). `None` when the steps
+/// are on neither side, or are not plain curves, or the object is a
+/// group or a text.
+fn contour_effect(
+    object: &Shape,
+    steps: &[Shape],
+    offset: f64,
+) -> Option<tracedraw_core::live::Effect> {
+    if steps.is_empty()
+        || matches!(
+            object.kind,
+            ShapeKind::Group { .. } | ShapeKind::ClipFrame { .. } | ShapeKind::Text { .. }
+        )
+        || !steps
+            .iter()
+            .all(|s| matches!(s.kind, ShapeKind::Path { closed: true, .. }))
+    {
+        return None;
+    }
+    let own = object.bounds();
+    let boxes: Vec<Rect> = steps.iter().map(|s| s.bounds()).collect();
+    let all = boxes.iter().copied().reduce(|a, b| a.union(b))?;
+    let finite = |r: Rect| [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite());
+    if !finite(own) || !finite(all) {
+        return None;
+    }
+    let tol = (offset * 0.5).max(0.01);
+    let within = |inner: Rect, outer: Rect| {
+        inner.x0 >= outer.x0 - tol
+            && inner.y0 >= outer.y0 - tol
+            && inner.x1 <= outer.x1 + tol
+            && inner.y1 <= outer.y1 + tol
+    };
+    let area = |r: &Rect| r.width() * r.height();
+    let (outside, farthest) = if within(all, own) {
+        let i = (0..boxes.len()).min_by(|a, b| area(&boxes[*a]).total_cmp(&area(&boxes[*b])))?;
+        (false, i)
+    } else if boxes.iter().all(|b| within(own, *b)) {
+        let i = (0..boxes.len()).max_by(|a, b| area(&boxes[*a]).total_cmp(&area(&boxes[*b])))?;
+        (true, i)
+    } else {
+        return None;
+    };
+    let last = steps.get(farthest)?;
+    let fill_to = last
+        .fill
+        .preview_color()
+        .or_else(|| object.fill.preview_color())
+        .unwrap_or(Color::BLACK);
+    let outline_to = last.stroke.as_ref().map(|s| s.color);
+    // The corners: an object of straight sides whose steps have straight
+    // sides only has mitred steps (the pentagon of #597); steps with
+    // curves around such an object are round. An object with curves
+    // tells nothing, and keeps the round corners of older contours.
+    let straight = |p: &BezPath| {
+        use tracedraw_core::geometry::PathEl;
+        p.elements()
+            .iter()
+            .all(|e| matches!(e, PathEl::MoveTo(_) | PathEl::LineTo(_) | PathEl::ClosePath))
+    };
+    let corners = if straight(&object.local_path()) {
+        if steps.iter().all(|s| straight(&s.local_path())) {
+            Some(tracedraw_core::shaping::Join::Miter)
+        } else {
+            Some(tracedraw_core::shaping::Join::Round)
+        }
+    } else {
+        None
+    };
+    Some(tracedraw_core::live::Effect::Contour {
+        steps: u32::try_from(steps.len()).ok()?,
+        offset,
+        outside,
+        to_center: false,
+        both: false,
+        fill_to,
+        outline_to,
+        fill_end_to: None,
+        color_blend: 0,
+        corners,
+        accel_objects: 0.0,
+        accel_colors: 0.0,
+    })
+}
+
+/// Where a blend's steps start on an end object, in its own coordinates:
+/// its first node and a point after it along the outline. A rectangle
+/// runs from its corner at the origin (where the file's transform places
+/// it) along its height first: the steps of the two blends attached to
+/// issue #597 turn and fold as they do only from there. Other objects
+/// run from their own first node, as their outline is built (a polygon
+/// from its top vertex, clockwise, as the file stores it). `None` when
+/// the outline has fewer than two distinct points.
+fn blend_nodes(s: &Shape) -> Option<[Point; 2]> {
+    if let ShapeKind::Rect { rect, .. } = &s.kind {
+        let near = |a: f64, b: f64| if a.abs() <= b.abs() { a } else { b };
+        let far = |a: f64, b: f64| if a.abs() <= b.abs() { b } else { a };
+        let first = Point::new(near(rect.x0, rect.x1), near(rect.y0, rect.y1));
+        let next = Point::new(first.x, far(rect.y0, rect.y1));
+        return ((next - first).hypot() > 1e-9).then_some([first, next]);
+    }
+    use tracedraw_core::geometry::PathEl;
+    // A whole ellipse runs, like a rectangle, from the side of its box
+    // nearest the origin: from the middle of its top or bottom (the one
+    // at the origin's height) toward its left or right (the one at the
+    // origin's side). Run from its right as its outline is built, the
+    // steps of the blends of #1192 (version 27, a rectangle into an
+    // ellipse) twisted and pinched in the middle where the file's
+    // picture shows none.
+    if let ShapeKind::Ellipse { rect, arc: None } = &s.kind {
+        let near = |a: f64, b: f64| if a.abs() <= b.abs() { a } else { b };
+        let c = rect.center();
+        let first = Point::new(c.x, near(rect.y0, rect.y1));
+        let next = Point::new(near(rect.x0, rect.x1), c.y);
+        return ((next - first).hypot() > 1e-9).then_some([first, next]);
+    }
+    let path = s.local_path();
+    let mut nodes = path.elements().iter().filter_map(|el| match el {
+        PathEl::MoveTo(p) | PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => {
+            Some(*p)
+        }
+        PathEl::ClosePath => None,
+    });
+    let first = nodes.next()?;
+    let next = nodes.find(|p| (*p - first).hypot() > 1e-6)?;
+    Some([first, next])
 }
 
 fn bounds_of(pts: &[Point]) -> Option<Rect> {
@@ -4140,6 +7688,498 @@ pub(crate) fn color_from_model(model: u16, b: [u8; 4]) -> Option<Color> {
         // Spot, Lab, HSB, HLS, YIQ and others.
         _ => return None,
     })
+}
+
+/// The frame of a version 16+ radial fountain (#3805): the same eight
+/// doubles as [`linear_frame`], the centre and then a matrix whose two
+/// axes are the ellipse's half axes in box units of a full side (1.0
+/// across the whole width), so a fill of 1.0 by 1.0 runs from the centre
+/// out to the object's edges, not to its corners. Its frame in half
+/// sizes: the centre twice over, the axes as they are.
+fn radial_frame(d: &[u8]) -> Option<tracedraw_core::style::FountainHandles> {
+    let f = |k: usize| {
+        let b = d.get(8 * k..8 * k + 8)?;
+        let v = f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+        v.is_finite().then_some(v)
+    };
+    let (ox, oy) = (f(0)?, f(1)?);
+    let (xa, xb, ya, yb) = (f(2)?, f(5)?, f(3)?, f(6)?);
+    f(4)?;
+    f(7)?;
+    let (lx, ly) = (xa.hypot(xb), ya.hypot(yb));
+    let ok = |l: f64| (1e-6..=1e3).contains(&l);
+    if !ok(lx) || !ok(ly) || ox.abs() > 1e3 || oy.abs() > 1e3 {
+        return None;
+    }
+    let start = Point::new(2.0 * ox, 2.0 * oy);
+    Some(tracedraw_core::style::FountainHandles {
+        start,
+        end: Point::new(start.x + xa, start.y + xb),
+        skew: Point::new(start.x + ya, start.y + yb),
+    })
+}
+
+/// The run of a version 16+ linear fill from the tail after its stops
+/// (`d`): eight f64, the centre of the fill (x, y) and a matrix (a, c, e,
+/// b, d, f; the offsets zero) in units of the object box's width and
+/// height from its centre, y upwards. The fill runs along the matrix's x
+/// axis `(a, b)`, from the centre less half of it (the first colour) to
+/// the centre plus half of it (the last); the bands run along its y axis
+/// `(c, d)`, which a skewed fill turns away from square (#1238). As
+/// [`FountainHandles`](tracedraw_core::style::FountainHandles) in the
+/// object's box (half sizes), the skew handle one y axis from the start;
+/// None when the tail is shorter or the x axis has no length.
+fn linear_frame(d: &[u8]) -> Option<tracedraw_core::style::FountainHandles> {
+    let f = |k: usize| {
+        let b = d.get(8 * k..8 * k + 8)?;
+        let v = f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+        v.is_finite().then_some(v)
+    };
+    let (ox, oy, a, b) = (f(0)?, f(1)?, f(2)?, f(5)?);
+    // The matrix's y axis: the way the bands run. One that is not a
+    // number counts as one of no length.
+    let (c, d2) = (f(3).unwrap_or(0.0), f(6).unwrap_or(0.0));
+    // The offsets are read only to know the tail is whole.
+    f(4)?;
+    f(7)?;
+    let len = a.hypot(b);
+    if !(1e-6..=1e3).contains(&len) || ox.abs() > 1e3 || oy.abs() > 1e3 {
+        return None;
+    }
+    // Half sizes: twice the box units.
+    let start = Point::new(2.0 * ox - a, 2.0 * oy - b);
+    let end = Point::new(2.0 * ox + a, 2.0 * oy + b);
+    // A y axis without length (not seen) leaves the bands square.
+    let along = if (1e-6..=1e3).contains(&c.hypot(d2)) {
+        (c, d2)
+    } else {
+        (-b, a)
+    };
+    Some(tracedraw_core::style::FountainHandles {
+        start,
+        end,
+        skew: Point::new(start.x + along.0, start.y + along.1),
+    })
+}
+
+/// A `trfd`'s matrices and envelopes in order: the matrices before the
+/// first envelope, then each envelope with the matrices after it.
+#[derive(Debug, Clone, Default)]
+struct TransformChain {
+    before: Affine,
+    warps: Vec<Warp>,
+    /// The distortions (version 16+, #1715) after `before`, each with
+    /// the matrices after it, in order: more than one when an object was
+    /// distorted again over its distortion (#1824); never with
+    /// envelopes.
+    distortions: Vec<Distortion>,
+    /// The perspectives (version 16+, #2691) with the matrices between
+    /// and before them, as one projective map (a 3 by 3 matrix, rows
+    /// first) from the object's own space to the space the last
+    /// perspective maps into; never with envelopes or distortions.
+    projective: Option<[f64; 9]>,
+    /// The matrices after the last perspective.
+    after_perspective: Affine,
+    /// The matrices after the first perspective, one after the other
+    /// (the perspectives left out).
+    perspective_matrices: Affine,
+}
+
+/// The distortion entry of a version 16+ `trfd` (type 0x10) and the
+/// matrices after it.
+#[derive(Debug, Clone, Copy)]
+struct Distortion {
+    entry: DistortEntry,
+    after: Affine,
+}
+
+/// What a distortion entry holds (see docs/cdr-format.md, `trfd`
+/// transforms): its kind (1 Push and Pull, 2 Zipper, 3 Twister), its
+/// centre (file space, millimetres from the page centre, in the space the
+/// matrices before it make), the option bits (1 Smooth for a Zipper) and
+/// two values: a Push and Pull's amount (-200 to 200, then 0), a
+/// Zipper's amplitude (0 to 100) and frequency, a Twister's angle in
+/// degrees (counterclockwise when positive).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DistortEntry {
+    kind: u16,
+    center: Point,
+    flags: u32,
+    first: i32,
+    second: i32,
+}
+
+/// An envelope of a version 16+ `trfd`: the box it maps from, the frame
+/// it maps onto (both in file space, millimetres from the page centre),
+/// and the matrices after it up to the next envelope.
+#[derive(Debug, Clone)]
+struct Warp {
+    rect: Rect,
+    frame: tracedraw_core::envelope::Frame,
+    after: Affine,
+}
+
+impl TransformChain {
+    /// `m` after everything so far.
+    fn then(&mut self, m: Affine) {
+        if self.projective.is_some() {
+            self.after_perspective = m * self.after_perspective;
+            self.perspective_matrices = m * self.perspective_matrices;
+            return;
+        }
+        if let Some(d) = self.distortions.last_mut() {
+            d.after = m * d.after;
+            return;
+        }
+        match self.warps.last_mut() {
+            Some(w) => w.after = m * w.after,
+            None => self.before = m * self.before,
+        }
+    }
+
+    /// All the matrices one after the other, the envelopes and the
+    /// distortions left out.
+    fn matrices(&self) -> Affine {
+        if self.projective.is_some() {
+            return self.perspective_matrices * self.before;
+        }
+        let m = self.warps.iter().fold(self.before, |m, w| w.after * m);
+        self.distortions.iter().fold(m, |m, d| d.after * m)
+    }
+
+    /// A perspective taking `rect` onto `corners` (bottom-left, top-left,
+    /// top-right, bottom-right) after everything so far.
+    fn perspective(&mut self, rect: Rect, corners: [Point; 4]) {
+        let src = [
+            Point::new(rect.x0, rect.y0),
+            Point::new(rect.x0, rect.y1),
+            Point::new(rect.x1, rect.y1),
+            Point::new(rect.x1, rect.y0),
+        ];
+        let Some(h) = tracedraw_core::live::homography(&src, &corners) else {
+            return;
+        };
+        let h = [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1.0];
+        let so_far = match self.projective {
+            Some(p) => mul3(&affine3(self.after_perspective), &p),
+            None => affine3(self.before),
+        };
+        self.projective = Some(mul3(&h, &so_far));
+        self.after_perspective = Affine::IDENTITY;
+    }
+
+    /// The matrices after the first envelope, one after the other.
+    fn after_first(&self) -> Affine {
+        self.warps.iter().fold(Affine::IDENTITY, |m, w| w.after * m)
+    }
+
+    /// The matrices after the last envelope.
+    fn last_after(&self) -> Affine {
+        self.warps.last().map_or(self.before, |w| w.after)
+    }
+
+    /// `path` (in the space the first envelope's box is in) through each
+    /// envelope and the matrices between them, up to the last envelope.
+    fn bend(&self, path: &BezPath) -> BezPath {
+        let mut p = path.clone();
+        for (i, w) in self.warps.iter().enumerate() {
+            if i > 0 {
+                p = self.warps[i - 1].after * p;
+            }
+            p = tracedraw_core::envelope::apply_in(
+                &p,
+                w.rect,
+                &w.frame,
+                false,
+                tracedraw_core::envelope::Mapping::Putty,
+            );
+        }
+        p
+    }
+}
+
+/// The live envelope an artistic text takes for the one envelope of
+/// `chain` (#2368): its frame carried back through the matrices before
+/// it into the text's own space. `None` for other objects, several
+/// envelopes, or matrices before it that turn or slant (the box the
+/// file maps would not be the text's own box there).
+fn text_envelope(kind: &ShapeKind, chain: &TransformChain) -> Option<tracedraw_core::live::Effect> {
+    if !matches!(kind, ShapeKind::Text { frame: None, .. }) || chain.warps.len() != 1 {
+        return None;
+    }
+    let [a, b, c, d, _, _] = chain.before.as_coeffs();
+    if b.abs() > 1e-9 || c.abs() > 1e-9 || a.abs() < 1e-12 || d.abs() < 1e-12 {
+        return None;
+    }
+    let back = chain.before.inverse();
+    let w = chain.warps.first()?;
+    let frame = tracedraw_core::envelope::Frame {
+        nodes: w.frame.nodes.iter().map(|p| back * *p).collect(),
+        handles: w
+            .frame
+            .handles
+            .iter()
+            .map(|[h1, h2]| [back * *h1, back * *h2])
+            .collect(),
+        corners: w.frame.corners,
+    };
+    Some(tracedraw_core::live::Effect::from_envelope(
+        &frame,
+        false,
+        tracedraw_core::envelope::Mapping::Putty,
+    ))
+}
+
+/// Whether an object can be bent by an envelope, and then whether its
+/// outline is closed.
+fn bendable(kind: &ShapeKind) -> Option<bool> {
+    match kind {
+        ShapeKind::Path { closed, .. } => Some(*closed),
+        ShapeKind::Rect { .. } | ShapeKind::Ellipse { .. } | ShapeKind::Polygon { .. } => {
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
+/// The first `trfd` in `lgob` (an object's `trfl` list) and the `envd`
+/// chunks after it.
+fn transform_chunks(lgob: &Chunk) -> (Option<&Chunk>, Vec<&Chunk>) {
+    let mut trfd = None;
+    let mut envds = Vec::new();
+    lgob.walk(&mut |c, _| {
+        if c.is(b"trfd") && trfd.is_none() {
+            trfd = Some(c);
+        } else if c.is(b"envd") && trfd.is_some() {
+            envds.push(c);
+        }
+    });
+    (trfd, envds)
+}
+
+/// The distortion entry of a version 16+ `trfd` whose body starts at `at`
+/// (after its type): 6 zero bytes, the kind (u16), the centre (two i32),
+/// the option bits (u32), two values (i32) and a u32 the Zipper's
+/// random teeth seem to start from (#1715). `None` when it is cut short.
+fn distortion_entry(d: &[u8], at: usize) -> Option<DistortEntry> {
+    let bytes = |k: usize| d.get(at + k..at + k + 4).map(|b| [b[0], b[1], b[2], b[3]]);
+    let int = |k: usize| bytes(k).map(i32::from_le_bytes);
+    let kind = d
+        .get(at + 6..at + 8)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))?;
+    Some(DistortEntry {
+        kind,
+        center: Point::new(f64::from(int(8)?) * UNIT_MM, f64::from(int(12)?) * UNIT_MM),
+        flags: bytes(16).map(u32::from_le_bytes)?,
+        first: int(20)?,
+        second: int(24)?,
+    })
+}
+
+/// The Zipper's amplitude in millimetres for the amplitude value `a` of
+/// a distortion entry (0 to 100) and the box of the outline it bends:
+/// `a` percent of an eighth of the box's longer side. The Zipper files
+/// of #1715 and #1671 (lines 133.39 and 118.42 mm long) have teeth that
+/// reach `a / 800` of the line's length to either side for every value
+/// (the longer side for other outlines is assumed).
+fn zipper_amplitude(a: i32, b: Rect) -> f64 {
+    f64::from(a.clamp(0, 100)) / 100.0 * b.width().max(b.height()) / 8.0
+}
+
+/// TraceDraw's live distortion for a distortion entry, applied to an
+/// outline whose box is `b`, in the space where the centre is `center`;
+/// `None` for a kind not known.
+fn live_distortion(
+    e: &DistortEntry,
+    center: Point,
+    b: Rect,
+) -> Option<tracedraw_core::effects::Distort> {
+    use tracedraw_core::effects::Distort;
+    match e.kind {
+        // Push and Pull (#1824): the first value is the amount in percent,
+        // -200 to 200, negative pulling (petals) and positive pushing
+        // (spikes), as TraceDraw's own amount.
+        1 => Some(Distort::PushPull {
+            amount: f64::from(e.first.clamp(-200, 200)),
+            center: Some(center),
+        }),
+        2 => Some(Distort::Zipper {
+            amplitude: zipper_amplitude(e.first, b),
+            frequency: u32::try_from(e.second.clamp(0, 100)).unwrap_or(0),
+            center: Some(center),
+            random: false,
+            smooth: e.flags & 1 != 0,
+            local: false,
+            tilt_deg: 0.0,
+            shifted_tips: true,
+        }),
+        3 => Some(Distort::Twister {
+            angle_deg: f64::from(e.first),
+            center: Some(center),
+        }),
+        _ => None,
+    }
+}
+
+/// `m` turns, moves and scales evenly, without a mirror: a distortion
+/// before it may be applied in the space it maps from.
+fn even_scale(m: Affine) -> Option<f64> {
+    let [a, b, c, d, _, _] = m.as_coeffs();
+    let det = a * d - b * c;
+    let tol = 1e-9 * (a.abs() + b.abs() + c.abs() + d.abs()).max(1e-12);
+    ((a - d).abs() <= tol && (b + c).abs() <= tol && det > 1e-18).then(|| det.sqrt())
+}
+
+/// An affine matrix as a 3 by 3 one, rows first.
+fn affine3(m: Affine) -> [f64; 9] {
+    let [a, b, c, d, e, f] = m.as_coeffs();
+    [a, c, e, b, d, f, 0.0, 0.0, 1.0]
+}
+
+/// `a` after `b`, both 3 by 3 matrices, rows first.
+fn mul3(a: &[f64; 9], b: &[f64; 9]) -> [f64; 9] {
+    let mut out = [0.0; 9];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r * 3 + c] = (0..3).map(|k| a[r * 3 + k] * b[k * 3 + c]).sum();
+        }
+    }
+    out
+}
+
+/// `p` through the projective map `m` (3 by 3, rows first).
+fn map3(m: &[f64; 9], p: Point) -> Point {
+    let w = m[6] * p.x + m[7] * p.y + m[8];
+    let w = if w.abs() < 1e-12 { 1e-12 } else { w };
+    Point::new(
+        (m[0] * p.x + m[1] * p.y + m[2]) / w,
+        (m[3] * p.x + m[4] * p.y + m[5]) / w,
+    )
+}
+
+/// The perspective entry of a version 16+ `trfd` whose body starts at
+/// `at` (after the entry type): 6 zero bytes, u32 1, the box it maps
+/// from (four i32: left, top, right, bottom, from the page centre, y
+/// upwards), then the four corners that box goes to (i32 pairs:
+/// bottom-left, top-left, top-right, bottom-right; the first again after
+/// them), in millimetres. `None` when it is cut short or flat.
+fn perspective_entry(d: &[u8], at: usize) -> Option<(Rect, [Point; 4])> {
+    let int = |k: usize| {
+        d.get(at + k..at + k + 4)
+            .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let mm = |v: i32| v as f64 * UNIT_MM;
+    let (x0, y0, x1, y1) = (mm(int(10)?), mm(int(14)?), mm(int(18)?), mm(int(22)?));
+    let rect = Rect::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
+    if rect.width() < 1e-6 || rect.height() < 1e-6 {
+        return None;
+    }
+    let mut corners = [Point::ZERO; 4];
+    for (k, c) in corners.iter_mut().enumerate() {
+        *c = Point::new(mm(int(26 + 8 * k)?), mm(int(30 + 8 * k)?));
+    }
+    Some((rect, corners))
+}
+
+/// The envelope entry of a version 16+ `trfd` whose body starts at `at`
+/// (after the entry type): 8 unknown bytes and 6 zero bytes, the box it
+/// maps from (four i32: left, top, right, bottom, from the page centre),
+/// then the indexes of its four corners among the points of the `envd`
+/// outline (four u32: bottom-left, top-left, top-right, bottom-right).
+fn envelope_entry(d: &[u8], at: usize) -> Option<(Rect, [usize; 4])> {
+    let int = |k: usize| {
+        d.get(at + k..at + k + 4)
+            .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let mm = |v: i32| v as f64 * UNIT_MM;
+    let (x0, y0, x1, y1) = (mm(int(14)?), mm(int(18)?), mm(int(22)?), mm(int(26)?));
+    let rect = Rect::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
+    let mut corners = [0usize; 4];
+    for (k, c) in corners.iter_mut().enumerate() {
+        *c = usize::try_from(int(30 + 4 * k)?).ok()?;
+    }
+    (rect.width() > 0.0 && rect.height() > 0.0).then_some((rect, corners))
+}
+
+/// The frame of an `envd` record (version 16+): a header like a `loda`'s
+/// (length, 2, the offsets table at 60, the types table at 72) with the
+/// outline's point count at byte 16; the first argument holds the node
+/// types (one byte each, as a curve's), the second the points (i32 pairs,
+/// from the page centre). The outline is the first `count` of them: a
+/// closed path running clockwise from the bottom-left corner up the left
+/// side; more points follow it that are not read. `corners` are point
+/// indexes, bottom-left, top-left, top-right, bottom-right.
+fn envelope_frame(d: &[u8], corners: &[usize; 4]) -> Option<tracedraw_core::envelope::Frame> {
+    let u = |k: usize| {
+        d.get(k..k + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    };
+    let start = u(8)?;
+    let (types_at, points_at) = (u(start)?, u(start + 4)?);
+    let count = u(16)?;
+    if !(4..=3 * tracedraw_core::envelope::MAX_NODES + 1).contains(&count) {
+        return None;
+    }
+    let types = d.get(types_at..types_at.checked_add(count)?)?;
+    let pts: Vec<Point> = (0..count)
+        .map(|i| {
+            let at = points_at.checked_add(8 * i)?;
+            let b = d.get(at..at + 8)?;
+            let x = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            let y = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+            Some(Point::new(x as f64 * UNIT_MM, y as f64 * UNIT_MM))
+        })
+        .collect::<Option<_>>()?;
+    // The nodes and, for each segment to the next node, its handles, in
+    // the file's (clockwise) order; the node number of each point.
+    let mut nodes: Vec<Point> = Vec::new();
+    let mut segs: Vec<[Point; 2]> = Vec::new();
+    let mut node_of = vec![0usize; count];
+    let mut ctrl: Vec<Point> = Vec::new();
+    for (i, (p, t)) in pts.iter().zip(types).enumerate() {
+        match t >> 6 {
+            0b00 if i == 0 => nodes.push(*p),
+            0b00 => return None,
+            0b11 => {
+                ctrl.push(*p);
+                continue;
+            }
+            op => {
+                let a = *nodes.last()?;
+                segs.push(match (op, ctrl.as_slice()) {
+                    (0b10, [h1, h2]) => [*h1, *h2],
+                    _ => [a.lerp(*p, 1.0 / 3.0), a.lerp(*p, 2.0 / 3.0)],
+                });
+                ctrl.clear();
+                nodes.push(*p);
+            }
+        }
+        node_of[i] = nodes.len() - 1;
+    }
+    // The last node closes the outline on the first.
+    let k = nodes.len().checked_sub(1)?;
+    if k < 4 || (nodes[k] - nodes[0]).hypot() > 1e-6 || segs.len() != k {
+        return None;
+    }
+    nodes.truncate(k);
+    // Turn the clockwise list round, as for version 3 envelopes: node j
+    // is file node (k - j) % k, and the segment from it runs back along
+    // file segment k - 1 - j.
+    let frame_nodes: Vec<Point> = (0..k).map(|j| nodes[(k - j) % k]).collect();
+    let handles: Vec<[Point; 2]> = (0..k)
+        .map(|j| {
+            let [h1, h2] = segs[k - 1 - j];
+            [h2, h1]
+        })
+        .collect();
+    let mut frame_corners = Vec::with_capacity(4);
+    for c in corners {
+        let n = *node_of.get(*c)? % k;
+        frame_corners.push((k - n) % k);
+    }
+    frame_corners.sort_unstable();
+    frame_corners.dedup();
+    tracedraw_core::envelope::Frame::from_parts(&frame_nodes, &handles, &frame_corners)
 }
 
 /// A version 3 object's transformations, split at its envelope.
@@ -4320,12 +8360,107 @@ pub(crate) fn build_path(pts: &[Point], types: &[u8]) -> (BezPath, bool) {
     (path, closed)
 }
 
-/// Minimal PNG encoder: 8-bit RGBA, no filtering, one IDAT chunk. The
-/// rows go straight into a fast zlib stream: the PNG only carries the
-/// pixels inside the document, and the default level made opening files
-/// with large pictures several times slower.
+/// The pixels of `png` as the encoder's rows were before it filtered
+/// them: a zero byte, then the row's RGBA, top row first. For tests. The
+/// decoder premultiplies, so colours are exact only where a pixel is
+/// opaque (alpha is always exact).
+#[cfg(test)]
+pub(crate) fn raw_rows(png: &[u8]) -> Vec<u8> {
+    let pm = tiny_skia::Pixmap::decode_png(png).expect("a png");
+    let mut out = Vec::new();
+    for y in 0..pm.height() {
+        out.push(0);
+        for x in 0..pm.width() {
+            let c = pm.pixel(x, y).expect("pixel").demultiply();
+            out.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+        }
+    }
+    out
+}
+
+/// Minimal PNG encoder: 8-bit RGB when every pixel is opaque, else RGBA,
+/// each row with the Sub filter, one IDAT chunk. The rows go into a fast
+/// zlib stream: the PNG only carries the pixels inside the document, and
+/// the default level made opening files with large pictures several
+/// times slower. Unfiltered RGBA came out nearly as large as the raw
+/// pixels for photos (40 MB for a 4000 x 3000 one, 22 MB like this), and
+/// every undo step and copy of the drawing used to hold it.
 pub(crate) fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     use std::io::Write;
+    let row = width as usize * 4;
+    let pixels = rgba.get(..row * height as usize).unwrap_or(rgba);
+    // Rows the data does not reach are blank (clear).
+    let opaque =
+        pixels.len() == row * height as usize && pixels.chunks_exact(4).all(|p| p[3] == 255);
+    let bpp = if opaque { 3 } else { 4 };
+    let mut enc = flate2::write::ZlibEncoder::new(
+        Vec::with_capacity(rgba.len() / 4),
+        flate2::Compression::fast(),
+    );
+    let blank = vec![0u8; row];
+    let mut line = Vec::with_capacity(1 + width as usize * bpp);
+    let mut ok = true;
+    for y in 0..height as usize {
+        let src = rgba.get(y * row..(y + 1) * row).unwrap_or(&blank[..]);
+        line.clear();
+        line.push(1);
+        if opaque {
+            src.chunks_exact(4)
+                .for_each(|p| line.extend_from_slice(&p[..3]));
+        } else {
+            line.extend_from_slice(src);
+        }
+        // Filter type 1 (Sub): each byte less the same byte of the pixel
+        // to its left (from the end, so the left ones are still raw).
+        let px = &mut line[1..];
+        for i in (bpp..px.len()).rev() {
+            px[i] = px[i].wrapping_sub(px[i - bpp]);
+        }
+        ok &= enc.write_all(&line).is_ok();
+    }
+    let idat = if ok {
+        enc.finish().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    png_file(width, height, if opaque { 2 } else { 6 }, &idat)
+}
+
+/// 8-bit grey levels, row by row, as PNG bytes; rows the data does not
+/// reach are zeros.
+pub(crate) fn encode_gray_png(width: u32, height: u32, gray: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let row = width as usize;
+    let mut enc = flate2::write::ZlibEncoder::new(
+        Vec::with_capacity(gray.len() / 4),
+        flate2::Compression::fast(),
+    );
+    let blank = vec![0u8; row];
+    let mut line = Vec::with_capacity(1 + row);
+    let mut ok = true;
+    for y in 0..height as usize {
+        let src = gray.get(y * row..(y + 1) * row).unwrap_or(&blank[..]);
+        line.clear();
+        line.push(1);
+        line.extend_from_slice(src);
+        // Filter type 1 (Sub), as in `encode_png`.
+        let px = &mut line[1..];
+        for i in (1..px.len()).rev() {
+            px[i] = px[i].wrapping_sub(px[i - 1]);
+        }
+        ok &= enc.write_all(&line).is_ok();
+    }
+    let idat = if ok {
+        enc.finish().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    png_file(width, height, 0, &idat)
+}
+
+/// A PNG file of 8-bit samples of the colour type `color_type` from its
+/// compressed image data.
+fn png_file(width: u32, height: u32, color_type: u8, idat: &[u8]) -> Vec<u8> {
     fn chunk(out: &mut Vec<u8>, tag: &[u8; 4], body: &[u8]) {
         out.extend_from_slice(&(body.len() as u32).to_be_bytes());
         let mut crc = flate2::Crc::new();
@@ -4335,33 +8470,14 @@ pub(crate) fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
         out.extend_from_slice(body);
         out.extend_from_slice(&crc.sum().to_be_bytes());
     }
-    let row = width as usize * 4;
-    let mut enc = flate2::write::ZlibEncoder::new(
-        Vec::with_capacity(rgba.len() / 4),
-        flate2::Compression::fast(),
-    );
-    let blank = vec![0u8; row];
-    let mut ok = true;
-    for y in 0..height as usize {
-        let line = rgba.get(y * row..(y + 1) * row).unwrap_or(&blank[..]);
-        ok &= enc
-            .write_all(&[0])
-            .and_then(|_| enc.write_all(line))
-            .is_ok();
-    }
-    let idat = if ok {
-        enc.finish().unwrap_or_default()
-    } else {
-        Vec::new()
-    };
     let mut out = Vec::with_capacity(idat.len() + 64);
     out.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
     let mut ihdr = Vec::with_capacity(13);
     ihdr.extend_from_slice(&width.to_be_bytes());
     ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    ihdr.extend_from_slice(&[8, color_type, 0, 0, 0]);
     chunk(&mut out, b"IHDR", &ihdr);
-    chunk(&mut out, b"IDAT", &idat);
+    chunk(&mut out, b"IDAT", idat);
     chunk(&mut out, b"IEND", &[]);
     out
 }
@@ -4397,72 +8513,332 @@ fn file_corners(radii: &[f64], w: f64, h: f64) -> Corners {
     c
 }
 
-/// Move a facing page's objects half a page left or right, whichever puts
-/// more of their centres on the page (`width` across).
-fn shift_onto_page(layers: &mut [Layer], width: f64) {
-    let centres: Vec<f64> = layers
-        .iter()
-        .flat_map(|l| l.shapes.iter())
-        .map(|s| s.bounds())
-        .filter(|b| b.x0.is_finite() && b.x1.is_finite())
-        .map(|b| (b.x0 + b.x1) / 2.0)
-        .collect();
-    let on_page = |dx: f64| {
-        centres
-            .iter()
-            .filter(|c| (0.0..=width).contains(&(**c + dx)))
-            .count()
-    };
-    let half = width / 2.0;
-    let dx = if on_page(half) > on_page(-half) {
-        half
+/// How far a facing page's objects move from the spine of its spread
+/// onto the page (`width` across): half a page left for a page on the
+/// `right` of the spine, right for one on its left.
+fn spine_shift(width: f64, right: bool) -> f64 {
+    if right {
+        -width / 2.0
     } else {
-        -half
-    };
-    for s in layers.iter_mut().flat_map(|l| l.shapes.iter_mut()) {
-        s.transform = Affine::translate((dx, 0.0)) * s.transform;
+        width / 2.0
     }
 }
+
+/// The object data key marking a paragraph frame as part of a run of
+/// linked frames, "run:place" (the key a PDF import marks its frames
+/// with, so the app links both the same way).
+pub const FLOW_KEY: &str = "pdf.flow";
+
+/// How far left of the spine (mm) an object's centre must be to belong to
+/// the left page of a spread: one sitting on the spine goes right.
+const SPINE_SLACK_MM: f64 = 0.01;
 
 /// A paragraph's line spacing, space before and after and indents from
 /// its resolved style, the values of `base` where it says nothing.
 fn paragraph_spacing(style: &text::RunStyle, base: &ParagraphStyle) -> ParagraphStyle {
     let mut p = base.clone();
+    // The font's line height, which our leading counts in (taken as 1.15
+    // times the size, as common text faces have it).
+    let size_mm = style.size_pt.unwrap_or(12.0) * 25.4 / 72.0;
+    let line_mm = size_mm * 1.15;
+    // Version 16+ style strings give the line spacing and the space
+    // before and after a paragraph in the unit `spacingMethod` names:
+    // 0 the character height (factors, 1.0 = 100 %), 1 points (distances
+    // in tenths of a micron, read as millionths: 35277 is 3.5277 mm, 10
+    // points), 2 the point size (factors of the size). Read as factors
+    // of the character height, points made every line sit on the one
+    // before (#2370).
+    let method = style.spacing_method.unwrap_or(0);
+    // A factor read from a style string as the distance it stands for, mm.
+    let to_mm = |f: f64| match method {
+        1 => f * 100.0,
+        2 => f * size_mm,
+        _ => f * line_mm,
+    };
+    // Points and the point size stay what they are: turned into a share
+    // of a line height taken as 1.15 times the size, they grew with the
+    // font's real line height, so a face whose lines are taller than
+    // that (1.41 times the size for some Tamil faces) set its lines
+    // about 1.23 times as far apart as the file (#2676).
+    const MM_PT: f64 = 72.0 / 25.4;
     if let Some(ls) = style.line_spacing {
-        p.leading_pct = (ls * 100.0).clamp(10.0, 1000.0);
-    } else if let Some(mm) = style.line_spacing_mm {
-        // A distance between baselines, as a share of the font's line
-        // height, which our leading counts in (taken as 1.15 times the
-        // size, as common text faces have it).
-        let line_mm = style.size_pt.unwrap_or(12.0) * 25.4 / 72.0 * 1.15;
-        if line_mm > 0.0 {
-            p.leading_pct = (mm / line_mm * 100.0).clamp(10.0, 1000.0);
+        match method {
+            1 => {
+                p.leading_unit = LeadingUnit::Points;
+                p.leading_pct = (to_mm(ls) * MM_PT).clamp(0.1, 2000.0);
+            }
+            2 => {
+                p.leading_unit = LeadingUnit::PercentPointSize;
+                p.leading_pct = (ls * 100.0).clamp(10.0, 1000.0);
+            }
+            _ => {
+                p.leading_unit = LeadingUnit::PercentCharHeight;
+                p.leading_pct = (ls * 100.0).clamp(10.0, 1000.0);
+            }
         }
+    } else if let Some(mm) = style.line_spacing_mm {
+        // A distance between baselines (a version 12 interval entry of
+        // unit 1), in points for the same reason.
+        p.leading_unit = LeadingUnit::Points;
+        p.leading_pct = (mm * MM_PT).clamp(0.1, 2000.0);
     }
-    // Space before and after (version 16+ style strings), in character
-    // heights when the spacing unit is the character height: 1 before is
-    // the usual line spacing, so only what goes past it is extra room.
-    if matches!(style.spacing_method, None | Some(0)) {
-        let line_mm = style.size_pt.unwrap_or(12.0) * 25.4 / 72.0 * 1.15;
+    // Space before: the distance from the paragraph before, so only what
+    // goes past the line spacing is extra room (100 % of the character
+    // height, the default, is none). Space after in points: all extra
+    // room. In the character height, the larger of the space after and
+    // the space before parts two paragraphs: what the space after goes
+    // past the space before is extra room. Paragraphs of 160 % before
+    // and after, and verses of 150 % both, lie about half a character
+    // height apart in the program that saved them; added up they opened
+    // two character heights apart (#4162).
+    if method <= 2 {
+        let baseline_mm = p.line_step(line_mm, size_mm);
         if let Some(b) = style.para_before {
-            p.space_before = ((b - 1.0).max(0.0) * line_mm).min(1000.0);
+            let before = match method {
+                0 => (b - 1.0) * line_mm,
+                _ => to_mm(b) - baseline_mm,
+            };
+            p.space_before = before.clamp(0.0, 1000.0);
+            // In the character height, kept so: the room follows the
+            // font's own line height and size, as in the reference
+            // program, and the Text docker shows the percent (#2613).
+            p.space_before_pct =
+                (method == 0 && b.is_finite()).then(|| (b * 100.0).clamp(0.0, 10000.0));
         }
         if let Some(a) = style.para_after {
-            p.space_after = (a.max(0.0) * line_mm).min(1000.0);
+            let a = if method == 0 {
+                (a - style.para_before.unwrap_or(1.0).max(1.0)).max(0.0)
+            } else {
+                a
+            };
+            p.space_after = to_mm(a).clamp(0.0, 1000.0);
+            p.space_after_pct =
+                (method == 0 && a.is_finite()).then(|| (a * 100.0).clamp(0.0, 10000.0));
         }
     }
     if let Some((left, first, right)) = style.indent_pt {
         const PT_MM: f64 = 25.4 / 72.0;
         p.left_indent = left * PT_MM;
-        p.first_line_indent = first * PT_MM;
+        // The file gives the first line's indent from the frame's edge, as
+        // the left indent is (the left one moves the other lines only),
+        // while TraceDraw's first-line indent counts from the left indent:
+        // read as given, a first line at 1 mm under a left indent of
+        // 1.5 mm sat at 2.5 mm and wrapped a line that fits (#2669).
+        p.first_line_indent = (first - left) * PT_MM;
         p.right_indent = right * PT_MM;
+    }
+    if let Some(tabs) = &style.tabs {
+        p.tabs = tracedraw_core::normalized_tabs(tabs);
+    }
+    // Character and word spacing count in widths of the font's space
+    // character, as the paragraph's spacing does (#2586; they were read
+    // as a quarter of the em, which made text too wide).
+    if let Some(cs) = style.char_spacing {
+        p.char_spacing_pct = (cs * 100.0).clamp(-100.0, 2000.0);
+    }
+    if let Some(ws) = style.word_spacing {
+        p.word_spacing_pct = (ws * 100.0).clamp(0.0, 2000.0);
     }
     p
 }
 
+/// A transparency mask and the part of the object it applies to.
+type Mask = (Fill, u8);
+
+/// A pattern as a transparency mask (#2960): each colour becomes the
+/// grey of its opacity, the transparency running from `end` percent for
+/// black to `start` percent for white by the colour's lightness.
+fn pattern_mask(
+    p: &tracedraw_core::style::Pattern,
+    start: f64,
+    end: f64,
+) -> tracedraw_core::style::Pattern {
+    use tracedraw_core::style::Pattern;
+    let opacity = move |light: f32| {
+        let t = end + (start - end) * f64::from(light.clamp(0.0, 1.0));
+        (1.0 - t / 100.0).clamp(0.0, 1.0) as f32
+    };
+    let lightness = |c: Color| {
+        let [r, g, b] = c.to_rgb_f32_builtin();
+        r * 0.2126 + g * 0.7152 + b * 0.0722
+    };
+    let grey = move |c: Color| Color::Gray {
+        v: opacity(lightness(c)),
+    };
+    let mut p = p.clone();
+    match &mut p {
+        Pattern::TwoColor { front, back, .. } => {
+            *front = grey(*front);
+            *back = grey(*back);
+        }
+        Pattern::Vector { shapes, .. } => {
+            for s in shapes {
+                tracedraw_core::color_convert::map_shape_colors(s, &grey);
+            }
+        }
+        Pattern::Bitmap {
+            png,
+            width_px,
+            height_px,
+            ..
+        } => {
+            if let Ok(pm) = tiny_skia::Pixmap::decode_png(png) {
+                let mut rgba = pm.data().to_vec();
+                for px in rgba.chunks_exact_mut(4) {
+                    // Premultiplied: a clear pixel lets the background through.
+                    let a = f32::from(px[3]) / 255.0;
+                    let un = |v: u8| {
+                        if a > 0.0 {
+                            f32::from(v) / 255.0 / a
+                        } else {
+                            0.0
+                        }
+                    };
+                    let l = un(px[0]) * 0.2126 + un(px[1]) * 0.7152 + un(px[2]) * 0.0722;
+                    let v = (opacity(l) * a * 255.0).round() as u8;
+                    px[0] = v;
+                    px[1] = v;
+                    px[2] = v;
+                    px[3] = 255;
+                }
+                *png = encode_png(pm.width(), pm.height(), &rgba).into();
+                *width_px = pm.width();
+                *height_px = pm.height();
+            }
+        }
+    }
+    p
+}
+
+/// What a version 16+ transparency record says on its own (#2960).
+enum RecordTransparency {
+    /// A fountain or pattern whose lightness is the opacity.
+    Mask(Mask),
+    /// A uniform transparency.
+    Opacity(f64),
+}
+
+/// A vector pattern as a transparency mask over `shape`: one tile over
+/// the shape's box on the page.
+fn pattern_mask_over(shape: &Shape, mut mask: Fill) -> tracedraw_core::live::Effect {
+    let b = shape.bounds();
+    if let Fill::Pattern(tracedraw_core::style::Pattern::Vector { placement, .. }) = &mut mask {
+        placement.offset_x = b.x0;
+        placement.offset_y = b.y0;
+        placement.size = Some(Size::new(b.width(), b.height()));
+        placement.transform_with_object = true;
+    }
+    tracedraw_core::live::Effect::Transparency {
+        mask,
+        merge: tracedraw_core::live::MergeMode::Normal,
+        target: 2,
+    }
+}
+
+/// A fountain of greys whose luminance is the opacity: a graded
+/// transparency's fill (versions 11 and 15: 255 opaque, 0 see-through).
+fn grey_mask(f: &tracedraw_core::Fountain) -> Fill {
+    let mut mask = f.clone();
+    for s in &mut mask.stops {
+        let [red, g, b] = s.color.to_rgb_f32_builtin();
+        let grey = (red * 0.2126 + g * 0.7152 + b * 0.0722).clamp(0.0, 1.0);
+        s.color = Color::Gray { v: grey };
+    }
+    Fill::Fountain(mask)
+}
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A version 16+ radial fountain of 1.0 by 1.0 runs from the centre
+    /// to the object's edges, its half axes on the box's half sides, as
+    /// the radial transparency of #3805 is drawn (it faded out at the
+    /// ellipse's own edge, not past it).
+    #[test]
+    fn a_radial_frame_reaches_the_object_s_edges() {
+        let tail: Vec<u8> = [0.25, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.0]
+            .iter()
+            .flat_map(|v: &f64| v.to_le_bytes())
+            .collect();
+        let h = radial_frame(&tail).unwrap();
+        assert_eq!(h.start, Point::new(0.5, 0.0));
+        assert_eq!(h.end, Point::new(1.5, 0.0));
+        assert_eq!(h.skew, Point::new(0.5, 0.5));
+        assert!(radial_frame(&tail[..56]).is_none());
+    }
+
+    /// A black and white picture coloured in the other program (yellow
+    /// outline, blue fill) opens with those colours in its pixels and no
+    /// outline round it; one with neither keeps its black and white
+    /// (#3410).
+    #[test]
+    fn a_coloured_one_bit_picture_keeps_its_colours() {
+        let png = encode_png(2, 1, &[0, 0, 0, 255, 255, 255, 255, 255]);
+        let picture = |stroke: Option<Color>, fill: Fill| {
+            let mut s = Shape::new(
+                tracedraw_core::ShapeId(1),
+                ShapeKind::Bitmap {
+                    rect: Rect::new(0.0, 0.0, 2.0, 1.0),
+                    width_px: 2,
+                    height_px: 1,
+                    png: png.clone().into(),
+                    fx: None,
+                },
+            );
+            s.stroke = stroke.map(|c| tracedraw_core::Stroke {
+                color: c,
+                ..Default::default()
+            });
+            s.fill = fill;
+            colour_mono_bitmap(&mut s, [[0, 0, 0], [255, 255, 255]]);
+            let ShapeKind::Bitmap { png, .. } = &s.kind else {
+                panic!("not a picture")
+            };
+            let pm = tiny_skia::Pixmap::decode_png(png).expect("png");
+            let px: Vec<[u8; 3]> = pm
+                .pixels()
+                .iter()
+                .map(|p| [p.red(), p.green(), p.blue()])
+                .collect();
+            (s, px)
+        };
+        let yellow = Color::rgb8(255, 230, 0);
+        let blue = Color::rgb8(0, 0, 200);
+        let (s, px) = picture(Some(yellow), Fill::Solid(blue));
+        assert_eq!(px, vec![[255, 230, 0], [0, 0, 200]]);
+        assert!(s.stroke.is_none() && matches!(s.fill, Fill::None));
+        // The outline colour alone: the paper stays white.
+        let (_, px) = picture(Some(yellow), Fill::None);
+        assert_eq!(px, vec![[255, 230, 0], [255, 255, 255]]);
+        let (s, px) = picture(None, Fill::None);
+        assert_eq!(px, vec![[0, 0, 0], [255, 255, 255]]);
+        assert!(s.stroke.is_none());
+    }
+
+    /// The indent record of #2669: left 1.5 mm, first line 1 mm from the
+    /// frame, right 0. The first line starts at 1 mm (left + first-line
+    /// indent in TraceDraw's layout), not 2.5 mm, and a first line at the
+    /// left indent (the usual block indent) is no extra indent.
+    #[test]
+    fn the_first_line_indent_counts_from_the_frame() {
+        const MM_PT: f64 = 72.0 / 25.4;
+        let mut st = text::RunStyle {
+            indent_pt: Some((1.5 * MM_PT, 1.0 * MM_PT, 0.0)),
+            ..Default::default()
+        };
+        let p = paragraph_spacing(&st, &ParagraphStyle::default());
+        assert!((p.left_indent - 1.5).abs() < 1e-9, "{p:?}");
+        assert!((p.first_line_indent + 0.5).abs() < 1e-9, "{p:?}");
+        assert!((p.left_indent + p.first_line_indent - 1.0).abs() < 1e-9);
+        assert_eq!(p.right_indent, 0.0);
+        st.indent_pt = Some((5.0 * MM_PT, 5.0 * MM_PT, 0.0));
+        let p = paragraph_spacing(&st, &ParagraphStyle::default());
+        assert!(p.first_line_indent.abs() < 1e-9, "{p:?}");
+        assert!((p.left_indent - 5.0).abs() < 1e-9);
+        st.indent_pt = Some((0.0, 3.0 * MM_PT, 0.0));
+        let p = paragraph_spacing(&st, &ParagraphStyle::default());
+        assert!((p.first_line_indent - 3.0).abs() < 1e-9, "{p:?}");
+    }
 
     #[test]
     fn paragraph_spacing_before_and_after_come_from_the_style_string() {
@@ -4474,22 +8850,77 @@ mod tests {
         let p = paragraph_spacing(&st, &ParagraphStyle::default());
         let line_mm = st.size_pt.unwrap_or(12.0) * 25.4 / 72.0 * 1.15;
         assert!((p.space_before - line_mm).abs() < 1e-9, "{p:?}");
-        assert!((p.space_after - line_mm / 2.0).abs() < 1e-9, "{p:?}");
+        // The space after is less than the space before: no more room
+        // (#4162).
+        assert_eq!(p.space_after, 0.0, "{p:?}");
+        // Kept in percent of the character height too (#2613).
+        assert_eq!(
+            (p.space_before_pct, p.space_after_pct),
+            (Some(200.0), Some(0.0))
+        );
         assert!((p.leading_pct - 120.0).abs() < 1e-9);
+        // A space after past the space before adds what goes past it;
+        // the same space before and after adds none (#4162).
+        let more = text::parse_style_string(
+            r#"{"paragraph":{"beforeParaSpacing":"1500000","afterParaSpacing":"2000000"}}"#,
+        );
+        let p = paragraph_spacing(&more, &ParagraphStyle::default());
+        assert!((p.space_after_pct.unwrap() - 50.0).abs() < 1e-9, "{p:?}");
+        let same = text::parse_style_string(
+            r#"{"paragraph":{"beforeParaSpacing":"1500000","afterParaSpacing":"1500000"}}"#,
+        );
+        let p = paragraph_spacing(&same, &ParagraphStyle::default());
+        assert_eq!(p.space_after_pct, Some(0.0), "{p:?}");
+        assert!((p.space_before_pct.unwrap() - 150.0).abs() < 1e-9, "{p:?}");
         // The defaults files hold: no extra room.
         let d = text::parse_style_string(
             r#"{"paragraph":{"beforeParaSpacing":"1000000","afterParaSpacing":"0"}}"#,
         );
         let p = paragraph_spacing(&d, &ParagraphStyle::default());
         assert_eq!((p.space_before, p.space_after), (0.0, 0.0));
-        // Another unit is not read.
+        // An unknown unit is not read.
         let other = text::parse_style_string(
-            r#"{"paragraph":{"beforeParaSpacing":"2000000","spacingMethod":"1"}}"#,
+            r#"{"paragraph":{"beforeParaSpacing":"2000000","spacingMethod":"7"}}"#,
         );
         assert_eq!(
             paragraph_spacing(&other, &ParagraphStyle::default()).space_before,
             0.0
         );
+    }
+
+    /// #2370: a drink menu saved by CorelDRAW 27 with its spacing in
+    /// points (`spacingMethod` 1): 10.3 point text, lines 35277 apart
+    /// (3.5277 mm, 10 points), 62603 before a paragraph and 2118 after.
+    /// Read as factors of the character height, the lines were 0.035 of
+    /// a line apart (the 10 % floor) and every line of the menu was drawn
+    /// on the one before.
+    #[test]
+    fn spacing_given_in_points_is_a_distance() {
+        let st = text::parse_style_string(
+            r#"{"character":{"latin":{"size":"36334"}},"paragraph":{"afterParaSpacing":"2118","beforeParaSpacing":"62603","interLineSpacing":"35277","spacingMethod":"1"}}"#,
+        );
+        let p = paragraph_spacing(&st, &ParagraphStyle::default());
+        let size_mm = st.size_pt.expect("size") * 25.4 / 72.0;
+        // Points stay points, whatever the face's own line height
+        // (#2676: a tall face set the lines further apart than the file).
+        assert_eq!(p.leading_unit, LeadingUnit::Points);
+        for line_height in [size_mm * 1.15, size_mm * 1.41] {
+            let baseline = p.line_step(line_height, size_mm);
+            assert!((baseline - 3.5277).abs() < 1e-6, "{p:?}");
+        }
+        assert!((p.space_before - (6.2603 - 3.5277)).abs() < 1e-6, "{p:?}");
+        assert!((p.space_after - 0.2118).abs() < 1e-6, "{p:?}");
+        // In the point size: 1.2 times the size between baselines.
+        let pt = text::parse_style_string(
+            r#"{"character":{"latin":{"size":"304800"}},"paragraph":{"interLineSpacing":"1200000","spacingMethod":"2"}}"#,
+        );
+        let p = paragraph_spacing(&pt, &ParagraphStyle::default());
+        let size_mm = pt.size_pt.expect("size") * 25.4 / 72.0;
+        assert_eq!(p.leading_unit, LeadingUnit::PercentPointSize);
+        for line_height in [size_mm * 1.15, size_mm * 1.41] {
+            let baseline = p.line_step(line_height, size_mm);
+            assert!((baseline - 1.2 * size_mm).abs() < 1e-6, "{p:?}");
+        }
     }
     use tracedraw_core::geometry::Shape as _;
 
@@ -4520,7 +8951,7 @@ mod tests {
 
     // Byte-building helpers: RIFF chunks and typical payloads.
 
-    fn chunk(id: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    pub(crate) fn chunk(id: &[u8; 4], payload: &[u8]) -> Vec<u8> {
         let mut v = id.to_vec();
         v.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         v.extend_from_slice(payload);
@@ -4530,25 +8961,25 @@ mod tests {
         v
     }
 
-    fn list(lt: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    pub(crate) fn list(lt: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut payload = lt.to_vec();
         payload.extend_from_slice(body);
         chunk(b"LIST", &payload)
     }
 
-    fn riff(form: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    pub(crate) fn riff(form: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut payload = form.to_vec();
         payload.extend_from_slice(body);
         chunk(b"RIFF", &payload)
     }
 
-    fn u16s(v: &[u16]) -> Vec<u8> {
+    pub(crate) fn u16s(v: &[u16]) -> Vec<u8> {
         v.iter().flat_map(|x| x.to_le_bytes()).collect()
     }
-    fn u32s(v: &[u32]) -> Vec<u8> {
+    pub(crate) fn u32s(v: &[u32]) -> Vec<u8> {
         v.iter().flat_map(|x| x.to_le_bytes()).collect()
     }
-    fn i32s(v: &[i32]) -> Vec<u8> {
+    pub(crate) fn i32s(v: &[i32]) -> Vec<u8> {
         v.iter().flat_map(|x| x.to_le_bytes()).collect()
     }
     fn f64s(v: &[f64]) -> Vec<u8> {
@@ -4556,7 +8987,7 @@ mod tests {
     }
 
     /// 12-byte colour record (version 5+): BGR model 5.
-    fn color_bgr(r: u8, g: u8, b: u8) -> Vec<u8> {
+    pub(crate) fn color_bgr(r: u8, g: u8, b: u8) -> Vec<u8> {
         let mut v = u16s(&[5, 0]);
         v.extend_from_slice(&[0xaa; 4]); // unknown bytes must be skipped
         v.extend_from_slice(&[b, g, r, 0]);
@@ -4572,7 +9003,7 @@ mod tests {
 
     /// A `loda` payload (32-bit header) with the given object type and
     /// arguments (type, body). Types are written reversed, as in files.
-    fn loda(kind: u32, args: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    pub(crate) fn loda(kind: u32, args: &[(u32, Vec<u8>)]) -> Vec<u8> {
         let header = 20usize;
         let mut bodies = Vec::new();
         let mut offsets = Vec::new();
@@ -4649,7 +9080,7 @@ mod tests {
         out
     }
 
-    fn mcfg(v: u16, w: i32, h: i32) -> Vec<u8> {
+    pub(crate) fn mcfg(v: u16, w: i32, h: i32) -> Vec<u8> {
         let pad = if v >= 13 {
             12
         } else if v >= 9 {
@@ -4783,6 +9214,252 @@ mod tests {
         assert!((p.x - 127.0).abs() < 1e-9 && (p.y - 127.0).abs() < 1e-9);
     }
 
+    /// What the reader does not interpret is kept by object and listed in
+    /// the report: here an `obbx` chunk and an argument of type 12010 of
+    /// the object numbered 42 in its `usdn`, and a `sumi` chunk of the
+    /// document; what it reads (the coordinates, the `mcfg`) is not.
+    #[test]
+    fn unknown_records_are_kept_by_object_and_counted() {
+        let obj = list(
+            b"obj ",
+            &[
+                chunk(b"usdn", &u32s(&[42])),
+                chunk(
+                    b"loda",
+                    &loda(
+                        OBJ_RECT,
+                        &[
+                            (ARG_COORDS, i32s(&[254000, 127000, 0])),
+                            (12010, vec![8, 9, 10, 11]),
+                        ],
+                    ),
+                ),
+                chunk(b"obbx", &i32s(&[0; 8])),
+            ]
+            .concat(),
+        );
+        let body = [
+            chunk(b"vrsn", &u16s(&[900])),
+            chunk(b"sumi", &[3; 10]),
+            chunk(b"mcfg", &mcfg(9, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep, kept) =
+            crate::open_bytes_keeping(&riff(b"CDR9", &body), "t").expect("opens");
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        assert_eq!(doc.pages.len(), 1);
+        assert_eq!(
+            rep.unknown.lines(),
+            [
+                "chunk obbx: 1 record(s), 32 bytes",
+                "chunk sumi: 1 record(s), 10 bytes",
+                "argument 12010: 1 record(s), 4 bytes"
+            ]
+        );
+        use tracedraw_cdr_format::raw::{Key, Owner};
+        let of_object = &kept.records[&Owner::Object(42)];
+        assert_eq!(of_object.len(), 2);
+        assert_eq!(of_object[0].key, Key::Arg(12010));
+        assert_eq!(kept.bytes(&of_object[0]), &[8, 9, 10, 11]);
+        assert_eq!(of_object[1].key, Key::Chunk(*b"obbx"));
+        assert_eq!(kept.path_of(&of_object[1]), "CDR9/page/layr/obj ");
+        let of_document = &kept.records[&Owner::Document];
+        assert_eq!(of_document.len(), 1);
+        assert_eq!(kept.bytes(&of_document[0]), &[3; 10]);
+        // Without the table, the same document and report.
+        let (_, plain) = crate::open_bytes(&riff(b"CDR9", &body), "t").expect("opens");
+        assert_eq!(plain.unknown, rep.unknown);
+    }
+
+    /// A mesh fill object (type 0x20, a version 11 file, #896): a curve
+    /// whose fill is the grid of argument 19150, its outline the mesh's
+    /// edge, not the coordinates' stale curve.
+    #[test]
+    fn mesh_fill_objects_are_read_with_their_grid() {
+        let unit = 100_000; // 10 mm
+                            // A line through nodes (row, col) at (col, row) * 10 mm.
+        let line = |nodes: &[(i32, i32)], column: bool| -> Vec<u8> {
+            let mut v = u32s(&[100, nodes.len() as u32]);
+            for (r, c) in nodes {
+                v.extend_from_slice(&i32s(&[c * unit, r * unit]));
+            }
+            v.push(0x04);
+            v.extend(std::iter::repeat_n(0x44, nodes.len() - 1));
+            for (r, c) in nodes {
+                v.extend_from_slice(&i32s(&[*r, *c]));
+            }
+            let n = (nodes.len() - 1).max(1) as f64;
+            v.extend_from_slice(&f64s(
+                &(0..nodes.len()).map(|i| i as f64 / n).collect::<Vec<_>>(),
+            ));
+            v.extend_from_slice(&f64s(&[0.0]));
+            v.extend_from_slice(&u32s(&[u32::from(column)]));
+            v
+        };
+        // The second column line runs back from (1, 1) to (0, 1) and
+        // bends: two control points between its nodes.
+        let curved = |v: &mut Vec<u8>| {
+            v.extend_from_slice(&u32s(&[100, 4]));
+            v.extend_from_slice(&i32s(&[unit, unit, 2 * unit, 7 * unit / 10]));
+            v.extend_from_slice(&i32s(&[2 * unit, 3 * unit / 10, unit, 0]));
+            v.extend_from_slice(&[0x04, 0xc0, 0xc0, 0x84]);
+            v.extend_from_slice(&i32s(&[1, 1, -1, -1, -1, -1, 0, 1]));
+            v.extend_from_slice(&f64s(&[0.0, -1.0, -1.0, 1.0, 1.0]));
+            v.extend_from_slice(&u32s(&[1]));
+        };
+        let mut body = u32s(&[100, 2, 2]);
+        body.extend(line(&[(0, 0), (1, 0)], true));
+        curved(&mut body);
+        body.extend(line(&[(0, 0), (0, 1)], false));
+        body.extend(line(&[(1, 0), (1, 1)], false));
+        body.extend(f64s(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0]));
+        body.extend(u32s(&[100, 2, 2]));
+        // Column by column: (0, 0), (1, 0), (0, 1), (1, 1).
+        for (r, g, b) in [(255, 0, 0), (0, 0, 255), (0, 255, 0), (255, 255, 255)] {
+            body.extend(color_bgr(r, g, b));
+        }
+        // #1238: a record marked 150 (a version 27 file) holds each
+        // colour in a sized record and 12 bytes after the last.
+        let sized = |colours: usize, size: u32| {
+            let lines = body.len() - 4 * 12 - 12;
+            let mut b = u32s(&[150]);
+            b.extend_from_slice(&body[4..lines]);
+            b.extend(u32s(&[150, 2, 2]));
+            for (r, g, bl) in [(255, 0, 0), (0, 0, 255), (0, 255, 0), (255, 255, 255)]
+                .into_iter()
+                .take(colours)
+            {
+                let mut rec = vec![1u8];
+                rec.extend(u32s(&[12]));
+                rec.extend(color_bgr(r, g, bl));
+                rec.push(7);
+                rec.extend(u32s(&[16]));
+                rec.resize(43, 0);
+                b.extend(u32s(&[size]));
+                b.extend(rec);
+            }
+            b.extend(u32s(&[1, 9, 5]));
+            let mut mesh = u32s(&[b.len() as u32 + 4]);
+            mesh.extend(b);
+            mesh
+        };
+        let (mesh_150, mesh_150_short, mesh_150_wide) =
+            (sized(4, 43), sized(3, 43), sized(4, u32::MAX));
+        let mut mesh = u32s(&[body.len() as u32 + 4]);
+        mesh.extend(body);
+        // The coordinates' curve: a triangle far from the mesh.
+        let mut coords = u32s(&[3]);
+        coords.extend(i32s(&[
+            5 * unit,
+            5 * unit,
+            6 * unit,
+            5 * unit,
+            5 * unit,
+            6 * unit,
+        ]));
+        coords.extend([0x04, 0x44, 0x4c]);
+        let obj = |mesh: Vec<u8>| {
+            list(
+                b"obj ",
+                &chunk(
+                    b"loda",
+                    &loda(OBJ_MESH, &[(ARG_MESH, mesh), (ARG_COORDS, coords.clone())]),
+                ),
+            )
+        };
+        let doc_of = |obj: Vec<u8>| {
+            let body = [
+                chunk(b"mcfg", &mcfg(11, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            parse(&riff(b"CDRB", &body), 11)
+        };
+        let (doc, rep) = doc_of(obj(mesh.clone()));
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        assert_eq!(rep.skipped_objects, 0);
+        let s = first_shape(&doc);
+        let Fill::Mesh(m) = &s.fill else {
+            panic!("{:?} {:?}", s.fill, rep.warnings)
+        };
+        assert_eq!((m.rows, m.cols), (1, 1));
+        let at = |r, c| m.node(r, c).map(|n| (n.pos, n.color));
+        assert_eq!(
+            at(0, 0),
+            Some((Point::new(0.0, 0.0), Color::rgb8(255, 0, 0)))
+        );
+        assert_eq!(
+            at(0, 1),
+            Some((Point::new(10.0, 0.0), Color::rgb8(0, 255, 0)))
+        );
+        assert_eq!(
+            at(1, 0),
+            Some((Point::new(0.0, 10.0), Color::rgb8(0, 0, 255)))
+        );
+        assert_eq!(
+            at(1, 1),
+            Some((Point::new(10.0, 10.0), Color::rgb8(255, 255, 255)))
+        );
+        // The curved column line's control points are the handles of
+        // its nodes towards each other; the straight lines leave the
+        // other handles a third of the way to the neighbours.
+        use tracedraw_core::MeshHandle;
+        let n01 = m.node(0, 1).unwrap();
+        let n11 = m.node(1, 1).unwrap();
+        let near = |p: Point, q: Point| (p - q).hypot() < 1e-6;
+        assert!(near(
+            n11.handle(MeshHandle::Up, n01.pos),
+            Point::new(20.0, 7.0)
+        ));
+        assert!(near(
+            n01.handle(MeshHandle::Down, n11.pos),
+            Point::new(20.0, 3.0)
+        ));
+        assert!(near(
+            n01.handle(MeshHandle::Left, Point::new(0.0, 0.0)),
+            Point::new(10.0 - 10.0 / 3.0, 0.0)
+        ));
+        assert!(m.node(0, 0).unwrap().handles.is_none());
+        assert!(m.is_curved());
+        // The outline is the mesh's edge, round the square, bulging with
+        // the curved line.
+        let ShapeKind::Path { path, closed } = &s.kind else {
+            panic!("{:?}", s.kind)
+        };
+        assert!(closed);
+        let b = path.bounding_box();
+        assert!(b.x0.abs() < 1e-9 && (b.x1 - 17.5).abs() < 1e-6, "{b:?}");
+        assert!(b.y0.abs() < 1e-9 && (b.y1 - 10.0).abs() < 1e-9, "{b:?}");
+        // A mesh cut short keeps the curve, with a warning.
+        let (doc, rep) = doc_of(obj(mesh[..mesh.len() - 20].to_vec()));
+        assert_eq!(rep.shapes, 1);
+        assert!(rep.warnings.iter().any(|w| w.contains("mesh")));
+        assert!(!matches!(first_shape(&doc).fill, Fill::Mesh(_)));
+        // Every shorter cut opens without a panic.
+        for cut in 0..mesh.len() {
+            let _ = doc_of(obj(mesh[..cut].to_vec()));
+        }
+        // The record marked 150 gives the same colours.
+        let (doc, rep) = doc_of(obj(mesh_150.clone()));
+        let Fill::Mesh(m150) = &first_shape(&doc).fill else {
+            panic!("{:?}", rep.warnings)
+        };
+        for (r, c) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            assert_eq!(m150.node(r, c).map(|n| n.color), at(r, c).map(|n| n.1));
+        }
+        // One colour short, or a colour sized past the record: the curve
+        // with a warning, and no cut panics.
+        for bad in [mesh_150_short, mesh_150_wide] {
+            let (doc, rep) = doc_of(obj(bad));
+            assert!(rep.warnings.iter().any(|w| w.contains("mesh")));
+            assert!(!matches!(first_shape(&doc).fill, Fill::Mesh(_)));
+        }
+        for cut in 0..mesh_150.len() {
+            let _ = doc_of(obj(mesh_150[..cut].to_vec()));
+        }
+    }
+
     #[test]
     fn solid_fill_version_13_uses_a_property_list() {
         // id, since (1300), body length, type 1, since, properties length,
@@ -4844,7 +9521,7 @@ mod tests {
         let mut ctx = Ctx::new(&main, &tree, 18);
         ctx.vector_patterns.insert(12, &drawing);
         ctx.read_fill(tree.root.find(b"fild").unwrap());
-        let Fill::Pattern(tracedraw_core::style::Pattern::Vector { shapes, tile }) =
+        let Fill::Pattern(tracedraw_core::style::Pattern::Vector { shapes, tile, .. }) =
             &ctx.fills[&5].fill
         else {
             panic!("{:?}", ctx.fills[&5].fill)
@@ -4986,6 +9663,200 @@ mod tests {
                 assert_eq!(f.stops[1].color, Color::rgb8(255, 255, 255));
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// A version 13 fountain fill of type `kind` (24-byte stops): edge
+    /// pad in percent, angle in millionths of a degree, mid point in
+    /// percent, then `(colour, pos)`.
+    fn fountain_fild_v13(
+        id: u32,
+        kind: u8,
+        edge: i16,
+        angle: i32,
+        mid: u8,
+        stops: &[((u8, u8, u8), u32)],
+    ) -> Vec<u8> {
+        let mut g = vec![0u8; 8];
+        g.push(kind);
+        g.extend_from_slice(&[0; 17]);
+        g.extend_from_slice(&i16s(&[edge]));
+        g.extend_from_slice(&i32s(&[angle]));
+        g.extend_from_slice(&i32s(&[0, 0]));
+        g.extend_from_slice(&[0; 2]);
+        g.extend_from_slice(&u32s(&[0x0001_0000]));
+        g.extend_from_slice(&[mid, 0]);
+        g.extend_from_slice(&u32s(&[stops.len() as u32]));
+        g.extend_from_slice(&[0; 3]);
+        for (c, pos) in stops {
+            g.extend_from_slice(&color_bgr(c.0, c.1, c.2));
+            g.extend_from_slice(&[0; 5]);
+            g.extend_from_slice(&u32s(&[*pos]));
+            g.extend_from_slice(&[0; 3]);
+        }
+        let mut fild = u32s(&[id, 1300, (g.len() + 2) as u32]);
+        fild.extend_from_slice(&u16s(&[2]));
+        fild.extend_from_slice(&g);
+        fild
+    }
+
+    /// A version 13 file with one square curve (1 inch) filled with
+    /// `fild` (id 1) and placed by the file matrix `m` (a, c, e, b, d, f).
+    fn fountain_square_v13(fild: Vec<u8>, m: [f64; 6]) -> (Document, ParseReport) {
+        let mut coords = u32s(&[5]);
+        coords.extend_from_slice(&i32s(&[0, 0, 254000, 0, 254000, 254000, 0, 254000, 0, 0]));
+        coords.extend_from_slice(&[0x08, 0x40, 0x40, 0x40, 0x48]);
+        let obj = list(
+            b"obj ",
+            &[
+                chunk(
+                    b"loda",
+                    &loda(OBJ_CURVE, &[(ARG_COORDS, coords), (ARG_FILL, u32s(&[1]))]),
+                ),
+                chunk(b"trfd", &trfd(13, m)),
+            ]
+            .concat(),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(13, 2_540_000, 2_540_000)),
+            chunk(b"fild", &fild),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        parse(&riff(b"CDRD", &body), 13)
+    }
+
+    /// A fountain fill's angle is measured from its object's own x axis:
+    /// it turns with the object (#1257). Page 4 of the reporter's version
+    /// 13 file holds a rectangle whose matrix takes its x axis up the
+    /// page and its y axis to the right (stretched 1.82 times), filled
+    /// with a green to white linear fill at -30.47 degrees and an edge pad
+    /// of 17 %; the reference picture shows the green band in the lower
+    /// left corner, its edge running at -30.4 degrees on the page, so the
+    /// colours run up and to the right at 59.53 degrees (-30.47 + 90),
+    /// not stretched with the object. Read as an angle on the page, it ran
+    /// down to the right from a green top left corner.
+    #[test]
+    fn fountain_fill_turns_with_its_object() {
+        let fild = fountain_fild_v13(
+            1,
+            1,
+            17,
+            -30_465_545,
+            50,
+            &[((60, 140, 90), 0), ((255, 255, 255), 100)],
+        );
+        // The rectangle of the reporter's page 4.
+        let (doc, rep) = fountain_square_v13(fild.clone(), [0.0, 1.820_513, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        let Fill::Fountain(f) = &s.fill else {
+            panic!("{:?}", s.fill);
+        };
+        assert!((f.angle - 59.534455).abs() < 1e-6, "{}", f.angle);
+        assert!((f.edge_pad - 0.17).abs() < 1e-9);
+        assert_eq!(f.stops[0].color, Color::rgb8(60, 140, 90));
+        // Turned a quarter the other way without a mirror, stretched, and
+        // not turned: the turn of the object's x axis is added, nothing
+        // else.
+        for (m, want) in [
+            ([0.0, -2.0, 0.0, 1.0, 0.0, 0.0], 59.534455),
+            ([0.0, 1.0, 0.0, -1.0, 0.0, 0.0], -120.465545),
+            ([-1.0, 0.0, 0.0, 0.0, -1.0, 0.0], 149.534455),
+            ([3.0, 0.0, 0.0, 0.0, 0.5, 0.0], -30.465545),
+            ([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], -30.465545),
+            ([1.0, 0.7, 0.0, 0.0, 1.0, 0.0], -30.465545),
+        ] {
+            let (doc, _) = fountain_square_v13(fild.clone(), m);
+            let Fill::Fountain(f) = &first_shape(&doc).fill else {
+                panic!("a fountain fill for {m:?}");
+            };
+            assert!((f.angle - want).abs() < 1e-6, "{m:?}: {}", f.angle);
+        }
+    }
+
+    /// The mid point of a two-colour linear fountain fill is where its
+    /// colours are mixed half and half, in percent of the way from the
+    /// first (#1257): the reporter's page 4 (mid point 9) turns from its
+    /// green edge pad to a light green within a few percent of the
+    /// object, and page 3 (32) stays yellow over most of it. Fills of
+    /// three colours or more, and the other kinds, keep their blends
+    /// even (not checked on a file).
+    #[test]
+    fn fountain_fill_mid_point_of_two_colours() {
+        let green_white = [((60, 140, 90), 0), ((255, 255, 255), 100)];
+        let read = |kind: u8, mid: u8, stops: &[((u8, u8, u8), u32)]| {
+            let fild = fountain_fild_v13(1, kind, 0, 0, mid, stops);
+            let (doc, rep) = fountain_square_v13(fild, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            match &first_shape(&doc).fill {
+                Fill::Fountain(f) => f.clone(),
+                other => panic!("{other:?}"),
+            }
+        };
+        let f = read(1, 9, &green_white);
+        assert!((f.stops[0].mid - 0.09).abs() < 1e-9, "{:?}", f.stops);
+        // Half way between green and white 9 % of the way along.
+        let half = f.color_at(0.09).to_rgb8();
+        assert!((half[1] as i32 - 198).abs() <= 1, "{half:?}");
+        assert!(f.color_at(0.5).to_rgb8()[0] > 200);
+        // 50 and values outside 1 to 99 leave the blend even.
+        for mid in [50, 0, 100, 200] {
+            assert!(!read(1, mid, &green_white).has_midpoints(), "{mid}");
+        }
+        // Not used by radial fills or three colours.
+        assert!(!read(2, 9, &green_white).has_midpoints());
+        let three = [((0, 0, 0), 0), ((255, 0, 0), 50), ((255, 255, 255), 100)];
+        assert!(!read(1, 9, &three).has_midpoints());
+    }
+
+    /// Version 14 files saved by newer releases keep the palette id
+    /// (property 7) after each stop's colour, as version 15 files do;
+    /// version 14 files of that release's own writer leave it out. Both
+    /// read.
+    #[test]
+    fn fountain_fill_version_14_stops_with_or_without_the_palette_id() {
+        for with_id in [false, true] {
+            let v = 14u16;
+            let mut g = vec![0u8; 8];
+            g.push(1);
+            g.extend_from_slice(&[0; 17]);
+            g.extend_from_slice(&i16s(&[0]));
+            g.extend_from_slice(&i32s(&[90_000_000]));
+            g.extend_from_slice(&i32s(&[0, 0]));
+            g.extend_from_slice(&[0; 2]);
+            g.extend_from_slice(&u32s(&[0]));
+            g.extend_from_slice(&[50, 0]);
+            g.extend_from_slice(&u16s(&[2]));
+            for (c, pos) in [((0, 0, 0), 0u16), ((255, 255, 255), 100)] {
+                g.push(1);
+                g.extend_from_slice(&u32s(&[12]));
+                g.extend_from_slice(&color_bgr(c.0, c.1, c.2));
+                if with_id {
+                    g.push(7);
+                    g.extend_from_slice(&u32s(&[16]));
+                    g.extend_from_slice(&[0xcb; 16]);
+                }
+                g.extend_from_slice(&[0; 5]);
+                g.extend_from_slice(&u16s(&[pos]));
+            }
+            g.extend_from_slice(&[0; 8]); // the record's tail
+            let mut fild = u32s(&[1, 1300, (g.len() + 2) as u32]);
+            fild.extend_from_slice(&u16s(&[2]));
+            fild.extend_from_slice(&g);
+            let main = riff(b"CDRE", &chunk(b"fild", &fild));
+            let tree = crate::riff::parse(&main).unwrap();
+            let mut ctx = Ctx::new(&main, &tree, v);
+            ctx.read_fill(tree.root.find(b"fild").unwrap());
+            match &ctx.fills[&1].fill {
+                Fill::Fountain(f) => {
+                    assert_eq!(f.stops.len(), 2, "{with_id}");
+                    assert_eq!(f.stops[0].color, Color::rgb8(0, 0, 0), "{with_id}");
+                    assert_eq!(f.stops[1].color, Color::rgb8(255, 255, 255), "{with_id}");
+                    assert!((f.stops[1].pos - 1.0).abs() < 1e-9, "{with_id}");
+                }
+                other => panic!("{other:?}"),
+            }
         }
     }
 
@@ -5589,6 +10460,193 @@ mod tests {
         }
     }
 
+    /// An artistic text under one envelope takes it as a live envelope,
+    /// its frame carried back into the text's own space through the
+    /// matrices before it (#2368); turned text, paragraph text and
+    /// other objects do not.
+    #[test]
+    fn an_envelope_on_artistic_text_becomes_a_live_one() {
+        use tracedraw_core::envelope::Frame;
+        let text = |frame: Option<tracedraw_core::geometry::Size>| ShapeKind::Text {
+            spans: vec![TextSpan::new("TEST", "Arial", 24.0)],
+            origin: Point::ZERO,
+            frame,
+            align: TextAlign::Left,
+            para: Default::default(),
+            on_path: None,
+        };
+        let mut frame = Frame::around(Rect::new(10.0, 20.0, 50.0, 40.0));
+        frame.nodes[1].y -= 5.0;
+        let chain = |before: Affine| TransformChain {
+            before,
+            warps: vec![Warp {
+                rect: Rect::new(10.0, 20.0, 50.0, 40.0),
+                frame: frame.clone(),
+                after: Affine::IDENTITY,
+            }],
+            distortions: Vec::new(),
+            ..Default::default()
+        };
+        let before = Affine::translate((10.0, 20.0)) * Affine::scale_non_uniform(2.0, 0.5);
+        let e = text_envelope(&text(None), &chain(before)).expect("a live envelope");
+        let got = e.envelope_frame().expect("a frame");
+        for (g, f) in got.nodes.iter().zip(&frame.nodes) {
+            assert!((before * *g - *f).hypot() < 1e-9, "{g:?} {f:?}");
+        }
+        assert_eq!(got.corners, frame.corners);
+        // Turned text, paragraph text, a rectangle: not this way.
+        assert!(text_envelope(&text(None), &chain(Affine::rotate(0.3))).is_none());
+        let para = Some(tracedraw_core::geometry::Size::new(30.0, 10.0));
+        assert!(text_envelope(&text(para), &chain(before)).is_none());
+        let rect = ShapeKind::Rect {
+            rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+            radius: 0.0,
+            corners: None,
+        };
+        assert!(text_envelope(&rect, &chain(before)).is_none());
+    }
+
+    #[test]
+    fn rectangle_radii_are_shares_or_lengths_by_their_size() {
+        // 1 x 0.5 inch with corners of 0.4: a share of half the shorter
+        // side (6.35 mm), as version 17 and 22 files show, so 2.54 mm; a
+        // large number is the length itself in coordinate units, as the
+        // version 15 form of #2333 holds (20000 on its 2 mm corners).
+        let read = |v: u16, raw: f64| {
+            let mut c = f64s(&[254000.0, 127000.0]);
+            c.extend_from_slice(&f64s(&[1.0, 1.0]));
+            c.push(1);
+            c.extend_from_slice(&[0; 7]);
+            for gap in [16usize, 16, 16, 0] {
+                c.extend_from_slice(&f64s(&[raw]));
+                c.extend_from_slice(&vec![0u8; gap]);
+            }
+            let obj = list(
+                b"obj ",
+                &chunk(b"loda", &loda(OBJ_RECT, &[(ARG_COORDS, c)])),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let tag = [b'C', b'D', b'R', b'A' + (v - 10) as u8];
+            let (doc, rep) = parse(&riff(&tag, &body), v);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            match &first_shape(&doc).kind {
+                ShapeKind::Rect { radius, .. } => *radius,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!((read(17, 0.4) - 2.54).abs() < 1e-9);
+        assert!((read(22, 0.4) - 2.54).abs() < 1e-9);
+        assert!((read(15, 0.4) - 2.54).abs() < 1e-9);
+        // 20000 units are 2 mm, not 20000 times half the side (a capsule).
+        assert!((read(15, 20000.0) - 2.0).abs() < 1e-9);
+        assert!((read(22, 20000.0) - 2.0).abs() < 1e-9);
+    }
+
+    /// An object the file has paragraph text wrap round (arguments 13001
+    /// and 13000, a version 20 file of #4142) wraps it, with the room the
+    /// file keeps free; an object without them does not.
+    #[test]
+    fn text_wrap_round_an_object_is_read() {
+        let read = |wrap: Option<(u32, u32)>| {
+            let mut c = f64s(&[254000.0, 127000.0]);
+            c.extend_from_slice(&f64s(&[1.0, 1.0]));
+            c.extend_from_slice(&[0; 8]);
+            for gap in [16usize, 16, 16, 0] {
+                c.extend_from_slice(&f64s(&[0.0]));
+                c.extend_from_slice(&vec![0u8; gap]);
+            }
+            let mut args = vec![(ARG_COORDS, c)];
+            if let Some((style, offset)) = wrap {
+                args.push((ARG_WRAP_STYLE, style.to_le_bytes().to_vec()));
+                args.push((ARG_WRAP_OFFSET, offset.to_le_bytes().to_vec()));
+            }
+            let obj = list(
+                b"obj ",
+                &[
+                    chunk(b"loda", &loda(OBJ_RECT, &args)),
+                    chunk(b"trfd", &trfd(20, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0])),
+                ]
+                .concat(),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(20, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRK", &body), 20);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            let s = first_shape(&doc);
+            (s.wrap_text, s.wrap_style)
+        };
+        let (on, style) = read(Some((1, 20000)));
+        assert!(on);
+        assert!((style.offset - 2.0).abs() < 1e-9, "{style:?}");
+        assert_eq!(style.side, tracedraw_core::text_flow::WrapSide::Straddle);
+        assert_eq!(style.mode, tracedraw_core::text_flow::WrapMode::Contour);
+        // 2 keeps to the outline on the object's left, 4 to the box
+        // (#4162).
+        let (_, two) = read(Some((2, 25400)));
+        assert_eq!(
+            (two.mode, two.side),
+            (
+                tracedraw_core::text_flow::WrapMode::Contour,
+                tracedraw_core::text_flow::WrapSide::Left
+            )
+        );
+        let (_, four) = read(Some((4, 14000)));
+        assert_eq!(four.mode, tracedraw_core::text_flow::WrapMode::Square);
+        assert!((four.offset - 1.4).abs() < 1e-9);
+        assert!(!read(None).0);
+        assert!(!read(Some((0, 20000))).0);
+    }
+
+    /// A radius the file gives as a length is the corner's size on the
+    /// page: a rectangle enlarged three times by its transform with its
+    /// 2 mm corners kept opens with 2 mm corners, not 6 mm ones, while a
+    /// radius given as a share grows with the rectangle (#4126).
+    #[test]
+    fn length_radii_keep_their_size_on_a_scaled_rectangle() {
+        let read = |raw: f64| {
+            let mut c = f64s(&[254000.0, 127000.0]);
+            c.extend_from_slice(&f64s(&[3.0, 3.0]));
+            c.push(1);
+            c.extend_from_slice(&[0; 7]);
+            for gap in [16usize, 16, 16, 0] {
+                c.extend_from_slice(&f64s(&[raw]));
+                c.extend_from_slice(&vec![0u8; gap]);
+            }
+            let obj = list(
+                b"obj ",
+                &[
+                    chunk(b"loda", &loda(OBJ_RECT, &[(ARG_COORDS, c)])),
+                    chunk(b"trfd", &trfd(22, [3.0, 0.0, 0.0, 0.0, 3.0, 0.0])),
+                ]
+                .concat(),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(22, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRM", &body), 22);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            let page = first_shape(&doc).page_corners().expect("a rectangle");
+            assert!(page.radii.iter().all(|r| (r - page.radii[0]).abs() < 1e-9));
+            page.radii[0]
+        };
+        // 20000 units: 2 mm on the page.
+        let got = read(20000.0);
+        assert!((got - 2.0).abs() < 1e-9, "{got}");
+        // A share of 0.4: 2.54 mm in the rectangle's own space, 7.62 mm
+        // on the page.
+        let got = read(0.4);
+        assert!((got - 7.62).abs() < 1e-9, "{got}");
+    }
+
     #[test]
     fn rectangle_radii_per_corner() {
         // Width, height, then four radii from the corner at (width, 0)
@@ -5620,7 +10678,8 @@ mod tests {
         // Drawn leftwards: the first corner is on the left.
         let c = read(-254000);
         assert!(near(c.radii, [2.0, 3.0, 1.0, 4.0]), "{c:?}");
-        // One radius for every corner stays the plain form.
+        // One radius for every corner: the same on every corner, keeping
+        // its size when the rectangle is resized (#619).
         let c = i32s(&[254000, 127000, 5000, 5000, 5000, 5000]);
         let obj = list(
             b"obj ",
@@ -5634,7 +10693,61 @@ mod tests {
         let (doc, _) = parse(&riff(b"CDR9", &body), 9);
         assert!(matches!(
             first_shape(&doc).kind,
-            ShapeKind::Rect { corners: None, radius, .. } if (radius - 0.5).abs() < 1e-9
+            ShapeKind::Rect { corners: Some(c), radius, .. }
+                if (radius - 0.5).abs() < 1e-9 && c.fixed && c.is_uniform()
+        ));
+    }
+
+    /// Rounded rectangles open with corners that keep their size when
+    /// resized, at the size they measure on the page; a rectangle the
+    /// file stretches gets round corners, not oval ones (#619).
+    #[test]
+    fn rounded_rectangles_keep_their_corner_size() {
+        // 25.4 x 12.7 mm with 1 mm corners, scaled 2 x 1 by its transform.
+        let c = i32s(&[254000, 127000, 10000, 10000, 10000, 10000]);
+        let obj = list(
+            b"obj ",
+            &[
+                chunk(b"loda", &loda(OBJ_RECT, &[(ARG_COORDS, c)])),
+                chunk(b"trfd", &trfd(9, [2.0, 0.0, 0.0, 0.0, 1.0, 0.0])),
+            ]
+            .concat(),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(9, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, _) = parse(&riff(b"CDR9", &body), 9);
+        let mut s = first_shape(&doc).clone();
+        let page = s.page_corners().expect("a rectangle");
+        assert!(page.fixed, "{page:?}");
+        assert!(
+            page.radii.iter().all(|r| (r - 1.0).abs() < 1e-9),
+            "{page:?}"
+        );
+        // Resized, the corners stay 1 mm.
+        s.transform = s.transform * Affine::scale_non_uniform(1.0, 3.0);
+        let page = s.page_corners().expect("a rectangle");
+        assert!(
+            page.radii.iter().all(|r| (r - 1.0).abs() < 1e-9),
+            "{page:?}"
+        );
+        // Square corners stay square and plain.
+        let c = i32s(&[254000, 127000, 0, 0, 0, 0]);
+        let obj = list(
+            b"obj ",
+            &chunk(b"loda", &loda(OBJ_RECT, &[(ARG_COORDS, c)])),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(9, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, _) = parse(&riff(b"CDR9", &body), 9);
+        assert!(matches!(
+            first_shape(&doc).kind,
+            ShapeKind::Rect { corners: None, radius, .. } if radius == 0.0
         ));
     }
 
@@ -5665,34 +10778,85 @@ mod tests {
         }
     }
 
+    /// A book on facing pages (version 21, `mcfg` byte 26) keeps one
+    /// page record per spread, its objects measured from the spine: the
+    /// first record is page 1 alone on the right, each record after it a
+    /// left and a right page, and the last one the last page alone on the
+    /// left when nothing of it is on the right. Each record opens as its
+    /// pages, every object on its own page; read as one page per record,
+    /// a book of 248 pages opened as 125 with each spread's two pages on
+    /// top of each other (#4104).
     #[test]
-    fn facing_page_objects_move_to_the_side_holding_most_of_them() {
-        let rect = |x: f64| {
-            let mut s = Shape::new(
-                tracedraw_core::ShapeId(1),
-                ShapeKind::Rect {
-                    rect: Rect::new(x, 10.0, x + 20.0, 30.0),
-                    radius: 0.0,
-                    corners: None,
-                },
-            );
-            s.transform = Affine::IDENTITY;
-            s
+    fn a_book_on_facing_pages_opens_each_spread_as_two_pages() {
+        // A rectangle from the spine `x` mm across (left of it when
+        // negative), 10 mm high.
+        let square = |x: f64| {
+            let mut c = f64s(&[x * 10000.0, 100000.0]);
+            c.extend_from_slice(&f64s(&[1.0, 1.0]));
+            c.push(0);
+            c.extend_from_slice(&[0; 7]);
+            for gap in [16usize, 16, 16, 0] {
+                c.extend_from_slice(&f64s(&[0.0]));
+                c.extend_from_slice(&vec![0u8; gap]);
+            }
+            list(b"obj ", &chunk(b"loda", &loda(OBJ_RECT, &[(ARG_COORDS, c)])))
         };
-        let centre_x = |l: &[Layer]| {
-            let b = l[0].shapes[0].bounds();
-            (b.x0 + b.x1) / 2.0
+        let record = |xs: &[f64]| {
+            let objs: Vec<u8> = xs.iter().flat_map(|&x| square(x)).collect();
+            list(b"page", &list(b"layr", &objs))
         };
-        // Measured from the spine with the page to its right: half a page
-        // too far right when placed from the page centre.
-        let mut layers = vec![Layer::new(tracedraw_core::LayerId(1), "L")];
-        layers[0].shapes = vec![rect(150.0), rect(250.0), rect(280.0)];
-        shift_onto_page(&mut layers, 210.0);
-        assert!((centre_x(&layers) - 55.0).abs() < 1e-9);
-        // To its left: half a page too far left.
-        layers[0].shapes = vec![rect(-100.0), rect(-60.0), rect(150.0)];
-        shift_onto_page(&mut layers, 210.0);
-        assert!((centre_x(&layers) - 15.0).abs() < 1e-9);
+        let open = |facing: u8, records: &[Vec<u8>]| {
+            // 100 x 150 mm pages.
+            let mut m = mcfg(21, 1_000_000, 1_500_000);
+            m.resize(32, 0);
+            m[26] = facing;
+            let mut body = chunk(b"mcfg", &m);
+            for r in records {
+                body.extend_from_slice(r);
+            }
+            parse(&riff(b"CDRL", &body), 21).0
+        };
+        // Page 1 alone; pages 2 and 3; pages 4 and 5 (5 empty but there,
+        // as it is not the last); page 6 alone on the left.
+        let records = [
+            record(&[20.0]),
+            record(&[-80.0, 30.0]),
+            record(&[-50.0]),
+            record(&[-90.0]),
+        ];
+        let doc = open(1, &records);
+        assert!(doc.metadata.facing_pages);
+        assert!(doc.metadata.facing_start.is_right());
+        assert_eq!(doc.pages.len(), 6);
+        let lefts = |i: usize| -> Vec<f64> {
+            doc.pages[i]
+                .layers
+                .iter()
+                .flat_map(|l| &l.shapes)
+                .map(|s| (s.bounds().x0 * 10.0).round() / 10.0)
+                .collect()
+        };
+        // From each page's left edge: right pages start at the spine,
+        // left pages end at it.
+        assert_eq!(lefts(0), vec![0.0]);
+        assert_eq!(lefts(1), vec![20.0]);
+        assert_eq!(lefts(2), vec![0.0]);
+        assert_eq!(lefts(3), vec![50.0]);
+        assert!(lefts(4).is_empty());
+        assert_eq!(lefts(5), vec![10.0]);
+        let ids: std::collections::HashSet<_> = doc.pages.iter().map(|p| p.id).collect();
+        assert_eq!(ids.len(), 6, "every page its own id");
+        // A book starting on the left: its first record is a spread.
+        let doc = open(1, &[record(&[-80.0, 30.0]), record(&[-50.0, 10.0])]);
+        assert!(!doc.metadata.facing_start.is_right());
+        assert_eq!(doc.pages.len(), 4);
+        // Without facing pages: one page per record, objects from their
+        // centres.
+        let doc = open(0, &records);
+        assert!(!doc.metadata.facing_pages);
+        assert_eq!(doc.pages.len(), 4);
+        let x0 = doc.pages[0].layers[0].shapes[0].bounds().x0;
+        assert!((x0 - 50.0).abs() < 1e-6, "{x0}");
     }
 
     #[test]
@@ -5894,6 +11058,253 @@ mod tests {
         assert_eq!(doc.pages[0].layers[0].shapes.len(), 1);
     }
 
+    /// Artwork on a page's guides layer (#4331): the layer opens visible,
+    /// as the file shows it, and does not print; an empty guides layer
+    /// is left out as before.
+    #[test]
+    fn artwork_on_the_guides_layer_shows() {
+        let rect_obj = list(
+            b"obj ",
+            &chunk(
+                b"loda",
+                &loda(OBJ_RECT, &[(ARG_COORDS, i32s(&[254000, 254000, 0]))]),
+            ),
+        );
+        let layer = |flags: [u8; 4], objs: &[u8]| {
+            list(b"layr", &[chunk(b"flgs", &flags), objs.to_vec()].concat())
+        };
+        let page = list(
+            b"page",
+            &[
+                chunk(b"flgs", &[0, 0, 0, 0x90]),
+                list(
+                    b"gobj",
+                    &[
+                        layer([0x0a, 0, 0, 0x98], &rect_obj),
+                        layer([0, 0, 0, 0x98], &rect_obj),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let body = [chunk(b"mcfg", &mcfg(12, 2_100_000, 2_970_000)), page].concat();
+        let (doc, rep) = parse(&riff(b"CDRC", &body), 12);
+        let layers = &doc.pages[0].layers;
+        assert_eq!(layers.len(), 2, "{:?}", rep.warnings);
+        let guides = layers
+            .iter()
+            .find(|l| !l.printable)
+            .expect("the guides layer is kept");
+        assert_eq!(guides.shapes.len(), 1);
+        assert!(guides.visible, "artwork on the guides layer shows");
+    }
+
+    /// Objects on the master page's desktop layer and guidelines on its
+    /// guides layer, as the version 7 to 21 files of #1775 hold them
+    /// (master layer flags [2, 1, 1, 0x98] guides, [0, 1, 1, 0x98]
+    /// desktop): no page of their own; the objects go to a master layer
+    /// shown on every page, the guidelines to every page.
+    #[test]
+    fn master_desktop_objects_and_guides_make_no_page_of_their_own() {
+        let far = 228_600_000;
+        let guide = |pts: &[i32], angle: i32| {
+            let mut a = vec![0u8; 12];
+            a.extend_from_slice(&i32s(&[angle]));
+            a.extend_from_slice(&i32s(pts));
+            list(
+                b"obj ",
+                &chunk(b"loda", &loda(OBJ_GUIDE, &[(ARG_GUIDE_LINE, a)])),
+            )
+        };
+        let vertical = |x: i32| guide(&[x, -far, x, far, x, far], 90_000_000);
+        let rect_obj = list(
+            b"obj ",
+            &chunk(
+                b"loda",
+                &loda(OBJ_RECT, &[(ARG_COORDS, i32s(&[254000, 254000, 0]))]),
+            ),
+        );
+        let layer = |flags: [u8; 4], objs: &[u8]| {
+            list(b"layr", &[chunk(b"flgs", &flags), objs.to_vec()].concat())
+        };
+        let master = list(
+            b"page",
+            &[
+                chunk(b"flgs", &[0, 0, 1, 0x90]),
+                list(
+                    b"gobj",
+                    &[
+                        layer([2, 1, 1, 0x98], &vertical(-1_050_000)),
+                        layer([0, 1, 1, 0x98], &rect_obj),
+                        layer([0x12, 0, 1, 0x98], &[]),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let page = |own: &[u8]| {
+            list(
+                b"page",
+                &[
+                    chunk(b"flgs", &[0, 0, 0, 0x90]),
+                    list(
+                        b"gobj",
+                        &[
+                            layer([0x0a, 0, 1, 0x98], &[]),
+                            layer([0x08, 0, 1, 0x98], &[]),
+                            layer([0x0a, 0, 0, 0x98], own),
+                            layer([0, 0, 0, 0x98], &[]),
+                            layer([0x1a, 1, 1, 0x98], &[]),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            )
+        };
+        let body = [
+            chunk(b"mcfg", &mcfg(12, 2_100_000, 2_970_000)),
+            master,
+            page(&[]),
+            page(&vertical(0)),
+            page(&[]),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRC", &body), 12);
+        assert_eq!(doc.pages.len(), 3, "{:?}", rep.warnings);
+        let names: Vec<&str> = doc.pages.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Page 1", "Page 2", "Page 3"]);
+        assert!(doc
+            .pages
+            .iter()
+            .all(|p| p.layers.iter().all(|l| l.shapes.is_empty())));
+        assert_eq!(doc.master.len(), 1);
+        assert_eq!(doc.master[0].shapes.len(), 1);
+        assert_eq!(
+            doc.master[0].scope,
+            tracedraw_core::document::MasterScope::All
+        );
+        use tracedraw_core::document::GuideLine;
+        // The master page's guideline is the drawing's master guideline,
+        // shown on every page before the page's own (#1928).
+        let xs = |guides: Vec<tracedraw_core::document::Guide>| -> Vec<f64> {
+            guides
+                .iter()
+                .filter_map(|g| match g.line {
+                    GuideLine::Vertical { x } => Some((x * 1000.0).round() / 1000.0),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(xs(doc.master_guides.clone()), [0.0]);
+        let shown = |i: usize| xs(doc.guides_on_page(doc.pages[i].id).unwrap_or_default());
+        assert_eq!(shown(0), [0.0]);
+        assert_eq!(shown(1), [0.0, 105.0]);
+        assert_eq!(shown(2), [0.0]);
+        assert_eq!(xs(doc.pages[1].guides.clone()), [105.0]);
+        // Every page draws the master's desktop objects.
+        let shown = doc.layers_for_page(doc.pages[1].id).unwrap_or_default();
+        assert_eq!(shown.iter().map(|l| l.shapes.len()).sum::<usize>(), 1);
+    }
+
+    /// A file holding only a master page keeps its objects as a page.
+    #[test]
+    fn a_lone_master_page_with_objects_stays_a_page() {
+        let rect_obj = list(
+            b"obj ",
+            &chunk(
+                b"loda",
+                &loda(OBJ_RECT, &[(ARG_COORDS, i32s(&[254000, 254000, 0]))]),
+            ),
+        );
+        let master = list(
+            b"page",
+            &[
+                chunk(b"flgs", &[0, 0, 1, 0x90]),
+                list(
+                    b"layr",
+                    &[chunk(b"flgs", &[0, 1, 1, 0x98]), rect_obj].concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let body = [chunk(b"mcfg", &mcfg(12, 2_100_000, 2_970_000)), master].concat();
+        let (doc, rep) = parse(&riff(b"CDRC", &body), 12);
+        assert_eq!(doc.pages.len(), 1, "{:?}", rep.warnings);
+        assert_eq!(doc.pages[0].layers[0].shapes.len(), 1);
+        assert!(doc.master.is_empty());
+    }
+
+    /// A page the user named carries the name in its own `lgob` `loda`
+    /// (argument 1000 after a zero 12000), UTF-16LE ending in a line feed
+    /// and a NUL, as files of versions 15 and 27 hold it; the page bytes
+    /// of #1807 (version 21). Pages without it are "Page N", counted
+    /// after the master page is dropped (#1807).
+    #[test]
+    fn page_names_come_from_the_page_loda() {
+        let utf16 =
+            |t: &str| -> Vec<u8> { t.encode_utf16().flat_map(|u| u.to_le_bytes()).collect() };
+        let named = |text: &[u8]| {
+            list(
+                b"lgob",
+                &chunk(
+                    b"loda",
+                    &loda(0, &[(12000, vec![0; 4]), (ARG_NAME, text.to_vec())]),
+                ),
+            )
+        };
+        let layer = |x: i32| {
+            let rect_obj = list(
+                b"obj ",
+                &chunk(
+                    b"loda",
+                    &loda(OBJ_RECT, &[(ARG_COORDS, i32s(&[254000 + x, 254000, 0]))]),
+                ),
+            );
+            list(
+                b"layr",
+                &[chunk(b"flgs", &[0, 0, 0, 0x98]), rect_obj].concat(),
+            )
+        };
+        let master = list(b"page", &chunk(b"flgs", &[0x40, 0, 1, 0x90]));
+        let page = |name: Option<Vec<u8>>, x: i32| {
+            let mut body = [
+                chunk(b"flgs", &[0x40, 0, 0, 0x90]),
+                list(b"gobj", &layer(x)),
+            ]
+            .concat();
+            if let Some(n) = name {
+                body.extend_from_slice(&named(&n));
+            }
+            list(b"page", &body)
+        };
+        let kitchen = vec![
+            0xa8, 0x53, 0x3f, 0x62, 0xd0, 0x62, 0xd2, 0x89, 0x0a, 0x00, 0x00, 0x00,
+        ];
+        let mut screen = utf16("ScreenLogo\n");
+        screen.extend_from_slice(&[0, 0]);
+        let body = [
+            chunk(b"mcfg", &mcfg(21, 2_540_000, 2_540_000)),
+            master,
+            page(None, 0),
+            page(Some(kitchen), 1000),
+            page(Some(screen), 2000),
+            // Only a line feed: no name of its own.
+            page(Some(vec![0x0a, 0, 0, 0]), 3000),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRL", &body), 21);
+        let names: Vec<&str> = doc.pages.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Page 1", "厨房拐角", "ScreenLogo", "Page 4"],
+            "{:?}",
+            rep.warnings
+        );
+    }
+
     #[test]
     fn cropped_bitmap_object_becomes_a_clip_frame_and_layer_order_is_reversed() {
         // Same bitmap as the test below, placed in a 25.4 mm square.
@@ -5989,16 +11400,122 @@ mod tests {
                 assert_eq!(&png[12..16], b"IHDR");
                 assert!((rect.width() - 25.4).abs() < 1e-9);
                 // Decode the IDAT and check the top-left pixel is blue.
-                let idat_len = u32::from_be_bytes([png[33], png[34], png[35], png[36]]) as usize;
-                let idat = &png[41..41 + idat_len];
-                let mut raw = Vec::new();
-                std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(idat), &mut raw)
-                    .unwrap();
+                let raw = raw_rows(png);
                 assert_eq!(&raw[1..5], &[0, 0, 255, 255]);
                 assert_eq!(&raw[10..14], &[255, 0, 0, 255]);
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// A picture printed in a spot ink keeps the ink's description before
+    /// its image block, whose start the u32 at byte 20 gives; it was read
+    /// at the usual place, found a size of 0 x 0 and the objects showing
+    /// it were left out (#3996).
+    #[test]
+    fn a_bitmap_whose_image_block_starts_later_is_read_where_it_starts() {
+        let mut bmp = u32s(&[34]);
+        bmp.extend_from_slice(&[0; 50]);
+        bmp.extend_from_slice(&u32s(&[5, 0, 2, 2, 0, 24, 0, 16]));
+        bmp.extend_from_slice(&[0; 32]);
+        bmp.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
+        bmp.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
+        // The ink's description, 100 bytes, between byte 40 and the block.
+        let ink: Vec<u8> = (0..100u8).map(|i| i | 1).collect();
+        bmp.splice(40..40, ink);
+        bmp[20..24].copy_from_slice(&(32u32 + 100).to_le_bytes());
+        match decode_bitmap(&bmp, 20, None) {
+            Some(Ok((id, def))) => {
+                assert_eq!(id, 34);
+                assert_eq!((def.width_px, def.height_px), (2, 2));
+                let raw = raw_rows(&def.png);
+                assert_eq!(&raw[1..5], &[0, 0, 255, 255]);
+            }
+            Some(Err(note)) => panic!("{note}"),
+            None => panic!("not read"),
+        }
+    }
+
+    /// Objects naming one bitmap record share one copy of its picture.
+    #[test]
+    fn objects_naming_one_bitmap_share_its_picture() {
+        let mut bmp = u32s(&[42]);
+        bmp.extend_from_slice(&[0; 50]);
+        bmp.extend_from_slice(&u32s(&[5, 0, 2, 2, 0, 24, 0, 16]));
+        bmp.extend_from_slice(&[0; 32]);
+        bmp.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
+        bmp.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
+        let mut c = i32s(&[0, 0, 254000, 254000]);
+        c.extend_from_slice(&[0; 32]);
+        c.extend_from_slice(&u32s(&[42]));
+        c.extend_from_slice(&[0; 20]);
+        c.extend_from_slice(&u32s(&[0]));
+        let obj = list(
+            b"obj ",
+            &chunk(b"loda", &loda(OBJ_BITMAP, &[(ARG_COORDS, c)])),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(13, 2_540_000, 2_540_000)),
+            chunk(b"bmp ", &bmp),
+            list(
+                b"page",
+                &list(b"layr", &[obj.clone(), obj.clone(), obj].concat()),
+            ),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRD", &body), 13);
+        assert_eq!(rep.shapes, 3, "{:?}", rep.warnings);
+        let pictures: Vec<&tracedraw_core::SharedBytes> = doc.pages[0]
+            .layers
+            .iter()
+            .flat_map(|l| &l.shapes)
+            .filter_map(|s| match &s.kind {
+                ShapeKind::Bitmap { png, .. } => Some(png),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pictures.len(), 3);
+        assert!(pictures
+            .iter()
+            .all(|p| tracedraw_core::SharedBytes::ptr_eq(p, pictures[0])));
+    }
+
+    /// A picture of colour model 99 (one grey byte per pixel, no palette),
+    /// as a bitmap transparency stores its picture, is read as greys; it
+    /// was dropped, so a picture fill naming it had no image and its
+    /// object came in opaque (#2691, a version 22 file).
+    #[test]
+    fn grey_model_99_bitmaps_have_no_palette() {
+        // 2 x 2, model 99, 8 bpp, stride 4: bottom row 10, 200; top 0, 255.
+        let mut bmp = u32s(&[5]);
+        bmp.extend_from_slice(&[0; 50]);
+        bmp.extend_from_slice(&u32s(&[BITMAP_GREY_MASK, 1, 2, 2, 1, 8, 4, 8]));
+        bmp.extend_from_slice(&[0; 32]);
+        bmp.extend_from_slice(&[10, 200, 0, 0, 0, 255, 0, 0]);
+        let mut c = i32s(&[0, 0, 254000, 254000]);
+        c.extend_from_slice(&[0; 32]);
+        c.extend_from_slice(&u32s(&[5]));
+        c.extend_from_slice(&[0; 20]);
+        c.extend_from_slice(&u32s(&[0]));
+        let obj = list(
+            b"obj ",
+            &chunk(b"loda", &loda(OBJ_BITMAP, &[(ARG_COORDS, c)])),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(13, 2_540_000, 2_540_000)),
+            chunk(b"bmp ", &bmp),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRD", &body), 13);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let ShapeKind::Bitmap { png, .. } = &first_shape(&doc).kind else {
+            panic!("a bitmap");
+        };
+        let raw = raw_rows(png);
+        // Top row first: 0 and 255, then 10 and 200, as opaque greys.
+        assert_eq!(&raw[1..9], &[0, 0, 0, 255, 255, 255, 255, 255]);
+        assert_eq!(&raw[10..18], &[10, 10, 10, 255, 200, 200, 200, 255]);
     }
 
     #[test]
@@ -6041,13 +11558,7 @@ mod tests {
             let ShapeKind::Bitmap { png, .. } = &first_shape(&doc).kind else {
                 panic!("a bitmap");
             };
-            let idat_len = u32::from_be_bytes([png[33], png[34], png[35], png[36]]) as usize;
-            let mut raw = Vec::new();
-            std::io::Read::read_to_end(
-                &mut flate2::read::ZlibDecoder::new(&png[41..41 + idat_len]),
-                &mut raw,
-            )
-            .unwrap();
+            let raw = raw_rows(png);
             // Rows of a filter byte and two RGBA pixels, top row first.
             [raw[4], raw[8], raw[13], raw[17]]
         };
@@ -6089,19 +11600,24 @@ mod tests {
         .concat();
         let (doc, rep) = parse(&riff(b"CDRD", &body), 13);
         assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        // The object keeps the CMYK colour mode (#1254).
+        assert!(first_shape(&doc).cmyk_bitmap);
         let ShapeKind::Bitmap { png, .. } = &first_shape(&doc).kind else {
             panic!("a bitmap");
         };
-        let idat_len = u32::from_be_bytes([png[33], png[34], png[35], png[36]]) as usize;
-        let mut raw = Vec::new();
-        std::io::Read::read_to_end(
-            &mut flate2::read::ZlibDecoder::new(&png[41..41 + idat_len]),
-            &mut raw,
-        )
-        .unwrap();
+        let raw = raw_rows(png);
         // Without a profile: one minus the ink, times one minus the black.
         assert_eq!(&raw[1..5], &[0, 255, 255, 255]);
         assert_eq!(&raw[5..9], &[127, 127, 127, 255]);
+        // The ink bytes are kept for separations (#1659): one grey plane
+        // per ink, cyan, magenta, yellow, black, fitting the pixels.
+        let inks = first_shape(&doc).picture_inks.clone().expect("inks kept");
+        assert!(inks.fits(png));
+        let planes: Vec<u8> = raw_rows(&inks.png)
+            .chunks(9)
+            .flat_map(|row| [row[1], row[5]])
+            .collect();
+        assert_eq!(planes, [255, 0, 0, 0, 0, 0, 0, 128]);
         // Through a table, the table decides.
         let lut =
             tracedraw_core::icc::CmykLut::with_points(3, |[c, _, _, k]| Some([1.0 - c, 0.5, k]))
@@ -6227,7 +11743,7 @@ mod tests {
     }
 
     /// version 13+ solid fill with a property list holding one colour.
-    fn solid_fild_v13(id: u32, rgb: (u8, u8, u8)) -> Vec<u8> {
+    pub(crate) fn solid_fild_v13(id: u32, rgb: (u8, u8, u8)) -> Vec<u8> {
         let mut props = vec![0x01u8];
         props.extend_from_slice(&12u32.to_le_bytes());
         props.extend_from_slice(&color_bgr(rgb.0, rgb.1, rgb.2));
@@ -6241,15 +11757,15 @@ mod tests {
     }
 
     /// One style record of the 7 to version 15 `txsm` layout.
-    struct Style7 {
-        chars: u16,
-        font: Option<u16>,
-        flags: Option<u32>,
-        size_units: Option<i32>,
-        fill: Option<u32>,
+    pub(crate) struct Style7 {
+        pub(crate) chars: u16,
+        pub(crate) font: Option<u16>,
+        pub(crate) flags: Option<u32>,
+        pub(crate) size_units: Option<i32>,
+        pub(crate) fill: Option<u32>,
     }
 
-    fn txsm7(v: u16, frame: bool, styles: &[Style7], text: &str) -> Vec<u8> {
+    pub(crate) fn txsm7(v: u16, frame: bool, styles: &[Style7], text: &str) -> Vec<u8> {
         txsm7_opt(v, frame, styles, text, false)
     }
 
@@ -6346,6 +11862,78 @@ mod tests {
         t
     }
 
+    /// A paragraph text frame of two columns (#1852: the fourth and
+    /// fifth frames of the combination files, versions 7 to 15): the
+    /// frame's block holds the column count (at byte 4, at byte 8 from
+    /// version 15) and a width and gutter for each column, so it is 8
+    /// bytes longer a column. Read as one column, the paragraph count came
+    /// from the wrong place and the frames were dropped as empty.
+    #[test]
+    fn a_two_column_frame_of_versions_9_to_15_keeps_its_text() {
+        let style = || Style7 {
+            chars: 3,
+            font: None,
+            flags: None,
+            size_units: None,
+            fill: None,
+        };
+        for v in 9u16..=15 {
+            let mut t = txsm7(v, false, &[style()], "abc");
+            let start = if v >= 15 { 105 } else { 96 };
+            let base = if v >= 15 {
+                40
+            } else if v >= 14 {
+                36
+            } else {
+                34
+            };
+            let at = start + if v >= 15 { 8 } else { 4 };
+            t[at..at + 4].copy_from_slice(&2u32.to_le_bytes());
+            // The second column's width and gutter.
+            let cols = start + base;
+            t.splice(cols..cols, i32s(&[780_380, 288_736]));
+            let txsm = text::read_txsm(&t, v, 0, &mut |w| panic!("{v}: {w}")).expect("txsm");
+            let text: String = txsm
+                .paragraphs
+                .iter()
+                .flat_map(|p| p.runs.iter().map(|r| r.text.clone()))
+                .collect();
+            assert_eq!(text, "abc", "{v}");
+            // Two columns, the gutter after the first (zero here).
+            assert_eq!(txsm.columns.map(|c| c.0), Some(2), "{v}");
+        }
+    }
+
+    /// An empty text object in a version 10 file (#4330): a text with no
+    /// text record and one whose record holds no letters are not counted
+    /// as objects that could not be read.
+    #[test]
+    fn an_empty_text_is_not_an_unread_object() {
+        let obj = list(
+            b"obj ",
+            &chunk(
+                b"loda",
+                &loda(OBJ_ARTISTIC_TEXT, &[(ARG_COORDS, i32s(&[0, 0]))]),
+            ),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(10, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (_, rep) = parse(&riff(b"CDRA", &body), 10);
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
+        let (_, rep) = text_doc(
+            12,
+            b"CDRC",
+            Vec::new(),
+            OBJ_ARTISTIC_TEXT,
+            &[(ARG_COORDS, i32s(&[0, 0]))],
+            txsm7(12, false, &[], ""),
+        );
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
+    }
+
     fn text_doc(
         v: u16,
         form: &[u8; 4],
@@ -6365,6 +11953,118 @@ mod tests {
         ]
         .concat();
         parse(&riff(form, &body), v)
+    }
+
+    /// Text set in a face named with a leading `@` (#1544: the vertical
+    /// form of an East Asian face, the line turned a quarter clockwise by
+    /// its transform) reads as vertical text in the face of that name,
+    /// in the same place: the layout's own quarter turn replaces the
+    /// transform's. Text in a face without the `@`, a face named `@`
+    /// alone, or with only some runs in an `@` face stays horizontal.
+    #[test]
+    fn text_in_an_at_face_is_vertical_text() {
+        let style = |chars: u16, font: u16| Style7 {
+            chars,
+            font: Some(font),
+            flags: None,
+            size_units: Some(127_000),
+            fill: None,
+        };
+        let read = |names: &[(u16, &str)], styles: &[Style7], text: &str| {
+            let tables = names
+                .iter()
+                .map(|(id, n)| chunk(b"font", &font_chunk(*id, n)))
+                .collect::<Vec<_>>()
+                .concat();
+            let (doc, rep) = text_doc(
+                12,
+                b"CDRC",
+                tables,
+                OBJ_ARTISTIC_TEXT,
+                &[(ARG_COORDS, i32s(&[0, 0]))],
+                txsm7(12, false, styles, text),
+            );
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            first_shape(&doc).clone()
+        };
+        let s = read(&[(3, "@SimHei")], &[style(4, 3)], "小儿先天");
+        let ShapeKind::Text {
+            spans,
+            para,
+            origin,
+            ..
+        } = &s.kind
+        else {
+            panic!("{:?}", s.kind);
+        };
+        assert!(para.vertical && para.columns_from_right());
+        assert_eq!(spans[0].font_family, "SimHei");
+        // The column starts where the line started (the page centre) and
+        // runs where the line ran: to the right, as this object's
+        // transform does not turn it (a file's turns it down the page).
+        let turn = tracedraw_core::document::vertical_line_frame();
+        let start = s.transform * *origin;
+        let down = s.transform * (*origin + (turn * Point::new(10.0, 0.0)).to_vec2());
+        assert!(
+            (start - Point::new(127.0, 127.0)).hypot() < 1e-6,
+            "{start:?}"
+        );
+        assert!((down - Point::new(137.0, 127.0)).hypot() < 1e-6, "{down:?}");
+        for (names, styles, text) in [
+            (vec![(3, "SimHei")], vec![style(4, 3)], "小儿先天"),
+            (vec![(3, "@")], vec![style(4, 3)], "小儿先天"),
+            (
+                vec![(3, "@SimHei"), (4, "Arial")],
+                vec![style(2, 3), style(2, 4)],
+                "小儿ab",
+            ),
+        ] {
+            let s = read(&names, &styles, text);
+            let ShapeKind::Text { spans, para, .. } = &s.kind else {
+                panic!("{:?}", s.kind);
+            };
+            assert!(!para.vertical, "{names:?}");
+            assert_eq!(spans[0].font_family, names[0].1);
+            let [a, b, c, d, e, f] = s.transform.as_coeffs();
+            assert!(
+                (a - 1.0).abs() + b.abs() + c.abs() + (d - 1.0).abs() < 1e-9
+                    && (e - 127.0).abs() + (f - 127.0).abs() < 1e-9,
+                "{:?}",
+                s.transform
+            );
+        }
+    }
+
+    /// A paragraph frame in an `@` face turns with its text: its box is
+    /// the same box on the page, its width and height swapped.
+    #[test]
+    fn a_frame_in_an_at_face_turns_with_its_text() {
+        let mut kind = ShapeKind::Text {
+            spans: vec![TextSpan::new("縦", "@SimHei", 12.0)],
+            origin: Point::new(1.0, 2.0),
+            frame: Some(Size::new(30.0, 10.0)),
+            align: TextAlign::Left,
+            para: tracedraw_core::document::ParagraphStyle::default(),
+            on_path: None,
+        };
+        let turn = vertical_font_text(&mut kind).expect("turned");
+        let ShapeKind::Text { origin, frame, .. } = &kind else {
+            panic!("{kind:?}");
+        };
+        let f = frame.expect("frame");
+        assert_eq!((f.width, f.height), (10.0, 30.0));
+        let new_box = Rect::new(origin.x, origin.y, origin.x + f.width, origin.y + f.height);
+        let back = (turn * new_box.to_path(0.01)).bounding_box();
+        assert!(
+            (back.x0 - 1.0).abs() < 1e-9 && (back.y0 - 2.0).abs() < 1e-9,
+            "{back:?}"
+        );
+        assert!(
+            (back.x1 - 31.0).abs() < 1e-9 && (back.y1 - 12.0).abs() < 1e-9,
+            "{back:?}"
+        );
+        // Once vertical, nothing more changes.
+        assert!(vertical_font_text(&mut kind).is_none());
     }
 
     #[test]
@@ -6533,6 +12233,692 @@ mod tests {
         t.push(1); // path data per letter
         t.extend_from_slice(&vec![0; 24 * text.len()]);
         t
+    }
+
+    /// Blends between ellipses in a version `v` file, one linked group of
+    /// object type 7 with the given first u32 of its 3000 argument each:
+    /// the step count of each live blend read, and the report.
+    fn read_blends(v: u16, counts: &[u32]) -> (Vec<u32>, ParseReport) {
+        read_blends_with(v, counts, &[])
+    }
+
+    /// [`read_blends`] with `extra` arguments added to every blend
+    /// record's `loda`.
+    fn read_blends_with(
+        v: u16,
+        counts: &[u32],
+        extra: &[(u32, Vec<u8>)],
+    ) -> (Vec<u32>, ParseReport) {
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let ellipse = |x: i32| {
+            let mut c = i32s(&[x, -100_000, x + 200_000, 100_000]);
+            c.extend_from_slice(&u32s(&[0]));
+            list(
+                b"obj ",
+                &[
+                    chunk(b"loda", &loda(OBJ_ELLIPSE, &[(ARG_COORDS, c)])),
+                    chunk(b"trfd", &trfd(v, identity)),
+                ]
+                .concat(),
+            )
+        };
+        let group = |steps: u32| {
+            let mut a = u32s(&[steps, 254_000]);
+            a.extend_from_slice(&[0; 80]);
+            let mut args = vec![(12020, u32s(&[2, 0, 0])), (3000, a)];
+            args.extend_from_slice(extra);
+            list(b"lnkg", &list(b"lgob", &chunk(b"loda", &loda(7, &args))))
+        };
+        let mut objects = Vec::new();
+        for &n in counts {
+            objects.extend(ellipse(0));
+            objects.extend(group(n));
+            objects.extend(ellipse(600_000));
+        }
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &objects)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRD", &body), v);
+        // The layer lists its objects from the top, the file from the
+        // bottom: in file order.
+        let steps = doc.pages[0].layers[0]
+            .shapes
+            .iter()
+            .rev()
+            .flat_map(|s| &s.effects)
+            .filter_map(|e| match e {
+                tracedraw_core::live::Effect::Blend { steps, .. } => Some(*steps),
+                _ => None,
+            })
+            .collect();
+        (steps, rep)
+    }
+
+    /// A version 15 drop shadow is an empty linked group after its object,
+    /// its `loda` of object type 23 holding a record of 119 bytes: the
+    /// offset, the opacity out of 255, the feathering, the colour and the
+    /// merge code (#3222). The ellipse before it gets the shadow; the one
+    /// after it keeps none, and nothing is drawn for the group.
+    #[test]
+    fn version_15_drop_shadow_goes_to_the_object_before_it() {
+        let v = 15u16;
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let ellipse = |x: i32| {
+            let mut c = i32s(&[x, -100_000, x + 200_000, 100_000]);
+            c.extend_from_slice(&u32s(&[0]));
+            list(
+                b"obj ",
+                &[
+                    chunk(b"loda", &loda(OBJ_ELLIPSE, &[(ARG_COORDS, c)])),
+                    chunk(b"trfd", &trfd(v, identity)),
+                ]
+                .concat(),
+            )
+        };
+        let record = |merge: u32| {
+            let mut r = u32s(&[0x514, 111]);
+            r.extend_from_slice(&i32s(&[69_478, -31_429]));
+            r.extend_from_slice(&u32s(&[200, 15, 3]));
+            r.extend_from_slice(&[0; 12]);
+            r.extend_from_slice(&1.0f64.to_le_bytes());
+            r.extend_from_slice(&u32s(&[0]));
+            r.extend_from_slice(&[1, 12, 0, 0, 0]);
+            // CMYK black: model 2, palette 5, C M Y K 0 0 0 100.
+            r.extend_from_slice(&[2, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 100]);
+            r.extend_from_slice(&[0; 30]);
+            r.extend_from_slice(&u32s(&[1, merge]));
+            r.extend_from_slice(&[0; 12]);
+            assert_eq!(r.len(), 119);
+            r
+        };
+        let group = |merge: u32| {
+            let args = vec![(3000, record(merge)), (100, u32s(&[0x23c5e88]))];
+            list(b"lnkg", &list(b"lgob", &chunk(b"loda", &loda(23, &args))))
+        };
+        for (merge, mode) in [
+            (9, tracedraw_core::live::MergeMode::Multiply),
+            (0, tracedraw_core::live::MergeMode::Normal),
+        ] {
+            let objects = [ellipse(0), group(merge), ellipse(600_000)].concat();
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &objects)),
+            ]
+            .concat();
+            let (doc, _) = parse(&riff(b"CDRD", &body), v);
+            // The layer lists its objects from the top.
+            let shapes = &doc.pages[0].layers[0].shapes;
+            assert_eq!(shapes.len(), 2);
+            assert!(shapes[0].shadow.is_none());
+            let s = shapes[1].shadow.expect("the shadow of the first ellipse");
+            assert!((s.offset.x - 6.9478).abs() < 1e-9, "{:?}", s.offset);
+            assert!((s.offset.y + 3.1429).abs() < 1e-9, "{:?}", s.offset);
+            assert!((s.opacity - 200.0 / 255.0).abs() < 1e-9);
+            assert!((s.blur - 1.5).abs() < 1e-9);
+            assert_eq!(
+                s.color,
+                tracedraw_core::color::Color::cmyk_pct(0.0, 0.0, 0.0, 100.0)
+            );
+            assert_eq!(s.merge, mode);
+            assert!(s.perspective.is_none());
+        }
+    }
+
+    /// A step count field holding no count a blend can have (0, or a
+    /// value past 999, as another layout would put there) gives the
+    /// default 20 steps and a warning naming the value; it was kept to
+    /// 999, so such files drew every blend with 999 steps (#980). Counts
+    /// of 1 to 999 are kept as read.
+    #[test]
+    fn a_blend_step_count_out_of_range_gives_the_default() {
+        for v in [9u16, 13, 15] {
+            let (steps, rep) = read_blends(v, &[60_000, 0, 65_535, 1, 999, 35]);
+            assert_eq!(steps, [20, 20, 20, 1, 999, 35], "version {v}");
+            assert!(
+                rep.warnings.iter().any(|w| w.contains("60000")),
+                "{:?}",
+                rep.warnings
+            );
+            let (_, rep) = read_blends(v, &[20, 400]);
+            assert!(
+                !rep.warnings.iter().any(|w| w.contains("blend")),
+                "{:?}",
+                rep.warnings
+            );
+        }
+    }
+
+    /// A version 27 blend record holds the settings after the two
+    /// centres (#1192): flags, the rotation in millionths of a degree and
+    /// the colour and object acceleration factors, counted from the lower
+    /// object, which gets the blend. Here: object acceleration 53 (the
+    /// steps packed toward the upper object), colour -15, a loop of -90
+    /// degrees and the hue falling from the lower object, as the
+    /// reporter's files hold them. Version 22 records keep other bytes
+    /// there and read as even.
+    #[test]
+    fn a_version_27_blend_reads_its_settings_from_the_lower_object() {
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let read = |v: u16| {
+            let ellipse = |x: i32| {
+                let mut c = i32s(&[x, -100_000, x + 200_000, 100_000]);
+                c.extend_from_slice(&u32s(&[0]));
+                list(
+                    b"obj ",
+                    &[
+                        chunk(b"loda", &loda(OBJ_ELLIPSE, &[(ARG_COORDS, c)])),
+                        chunk(b"trfd", &trfd(v, identity)),
+                    ]
+                    .concat(),
+                )
+            };
+            let mut a = Vec::new();
+            a.extend_from_slice(&50u16.to_le_bytes());
+            a.extend_from_slice(&0u16.to_le_bytes());
+            a.extend_from_slice(&100_000u32.to_le_bytes());
+            a.extend_from_slice(&[0; 20]);
+            a.extend_from_slice(&i32s(&[700_000, 0, 100_000, 0]));
+            a.extend_from_slice(&u32s(&[0x12]));
+            a.extend_from_slice(&i32s(&[-90_000_000, 0]));
+            a.extend_from_slice(&1.3f64.powf(-15.0 / 4.0).to_le_bytes());
+            a.extend_from_slice(&1.3f64.powf(53.0 / 4.0).to_le_bytes());
+            a.extend_from_slice(&[0; 16]);
+            assert_eq!(a.len(), 88);
+            let group = list(
+                b"lnkg",
+                &list(
+                    b"lgob",
+                    &chunk(b"loda", &loda(7, &[(12040, vec![0; 16]), (3000, a)])),
+                ),
+            );
+            let objects = [ellipse(0), group, ellipse(600_000)].concat();
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &objects)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRD", &body), v);
+            assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+            doc.pages[0].layers[0].shapes.clone()
+        };
+        let shapes = read(27);
+        assert_eq!(shapes.len(), 2);
+        assert!(shapes[1].effects.is_empty(), "the upper object");
+        let [tracedraw_core::live::Effect::Blend {
+            steps,
+            accel_objects,
+            accel_colors,
+            rotation,
+            end_id,
+            options,
+            ..
+        }] = shapes[0].effects.as_slice()
+        else {
+            panic!("{:?}", shapes[0].effects);
+        };
+        assert_eq!((*steps, *end_id), (50, Some(shapes[1].id)));
+        assert!((accel_objects + 0.53).abs() < 1e-9, "{accel_objects}");
+        assert!((accel_colors - 0.15).abs() < 1e-9, "{accel_colors}");
+        assert_eq!(*rotation, -90.0);
+        assert!(options.loop_rotation && !options.accel_sizing && !options.steps_below);
+        assert_eq!(
+            options.color_blend,
+            tracedraw_core::live::ColorBlend::CounterClockwise
+        );
+        // The steps lie above the start, the loop takes the middle one
+        // off the straight way between the two.
+        let ev = tracedraw_core::live::evaluate(&shapes[0]);
+        assert_eq!(ev.above.len(), 50);
+        let way = shapes[0].bounds().center().y;
+        let middle = ev.above[24].bounds().center();
+        assert!((middle.y - way).abs() > 5.0, "{middle:?} {way}");
+        let read22 = read(22);
+        let [tracedraw_core::live::Effect::Blend {
+            accel_objects,
+            rotation,
+            options,
+            ..
+        }] = read22[0].effects.as_slice()
+        else {
+            panic!("{:?}", read22[0].effects);
+        };
+        assert_eq!((*accel_objects, *rotation), (0.0, 0.0));
+        assert_eq!(
+            options.color_blend,
+            tracedraw_core::live::ColorBlend::Direct
+        );
+    }
+
+    /// Version 25 keeps the step count in the first u16 of the 3000
+    /// argument and another value in the u16 after it (the file of #980:
+    /// 0x3a05_0004 for 4 steps, 0x28ae_0096 for 150). Read as one u32 the
+    /// count fell out of range and every blend got 20 steps.
+    #[test]
+    fn a_version_25_blend_keeps_its_count_in_the_low_half() {
+        let (steps, rep) = read_blends(25, &[0x3a05_0004, 0x28ae_0096, 0x40fa_000f, 20]);
+        assert_eq!(steps, [4, 150, 15, 20]);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    }
+
+    /// A type 7 record with a style string of its own, as the drawing's
+    /// objects carry (the version 25 file of #980 counts it among its
+    /// objects), is no blend between its neighbours: drawn as one with its
+    /// 150 steps, it flooded the picture the file's program shows as a
+    /// grid. Its neighbours stay plain objects.
+    #[test]
+    fn a_counted_linked_group_record_makes_no_blend() {
+        let style = (ARG_STYLE_STRING, [u32s(&[1, 2]), b"{}".to_vec()].concat());
+        let (steps, rep) = read_blends_with(25, &[150], &[style]);
+        assert!(steps.is_empty(), "{steps:?}");
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let (steps, _) = read_blends_with(25, &[150], &[]);
+        assert_eq!(steps, [150]);
+    }
+
+    /// The blends of one file take at most `FILE_BLEND_STEPS` steps
+    /// together; the blend that crosses it gets what is left, later ones
+    /// one step, with a warning (#980).
+    #[test]
+    fn the_blends_of_a_file_share_a_bound_on_steps() {
+        let per = 999u32;
+        let full = (FILE_BLEND_STEPS / per) as usize;
+        let mut counts = vec![per; full + 2];
+        counts.push(5);
+        let (steps, rep) = read_blends(13, &counts);
+        assert_eq!(steps.len(), counts.len());
+        assert!(steps[..full].iter().all(|n| *n == per));
+        assert_eq!(steps[full], FILE_BLEND_STEPS - full as u32 * per);
+        assert_eq!(&steps[full + 1..], [1, 1]);
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("fewer")),
+            "{:?}",
+            rep.warnings
+        );
+        let (steps, rep) = read_blends(13, &[20; 50]);
+        assert_eq!(steps, [20; 50]);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    }
+
+    /// A blend as versions 9 and 13 store it: the two end objects with an
+    /// empty linked group between them, whose `loda` of object type 7
+    /// holds the step count in its argument of type 3000. The first end
+    /// gets a live blend to the second, which stays an object of its own;
+    /// a linked group of another type (a contour's, 15) makes none (#597).
+    #[test]
+    fn an_empty_blend_group_links_its_two_end_objects() {
+        let v = 13u16;
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let ellipse = |x: i32| {
+            let mut c = i32s(&[x, -100_000, x + 200_000, 100_000]);
+            c.extend_from_slice(&u32s(&[0]));
+            list(
+                b"obj ",
+                &[
+                    chunk(b"loda", &loda(OBJ_ELLIPSE, &[(ARG_COORDS, c)])),
+                    chunk(b"trfd", &trfd(v, identity)),
+                ]
+                .concat(),
+            )
+        };
+        let group = |kind: u32, steps: u32| {
+            let mut a = u32s(&[steps, 254_000]);
+            a.extend_from_slice(&[0; 80]);
+            list(
+                b"lnkg",
+                &list(
+                    b"lgob",
+                    &chunk(
+                        b"loda",
+                        &loda(kind, &[(12020, u32s(&[2, 0, 0])), (3000, a)]),
+                    ),
+                ),
+            )
+        };
+        let read = |kind: u32| {
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(
+                    b"page",
+                    &list(
+                        b"layr",
+                        &[ellipse(0), group(kind, 12), ellipse(600_000)].concat(),
+                    ),
+                ),
+            ]
+            .concat();
+            parse(&riff(b"CDRD", &body), v)
+        };
+        let (doc, rep) = read(7);
+        assert_eq!(rep.shapes, 2, "{:?}", rep.warnings);
+        let shapes = &doc.pages[0].layers[0].shapes;
+        let blends: Vec<(u32, Option<tracedraw_core::ShapeId>)> = shapes
+            .iter()
+            .flat_map(|s| &s.effects)
+            .filter_map(|e| match e {
+                tracedraw_core::live::Effect::Blend { steps, end_id, .. } => {
+                    Some((*steps, *end_id))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blends.len(), 1, "{shapes:?}");
+        assert_eq!(blends[0].0, 12);
+        let other = shapes
+            .iter()
+            .find(|s| s.effects.is_empty())
+            .expect("the other end");
+        assert_eq!(blends[0].1, Some(other.id));
+        // The lower object is the start, as the record counts its steps
+        // from it (#1192); the steps lie above it and pair the two
+        // outlines from their first nodes (#597).
+        assert!(!shapes[0].effects.is_empty() && shapes[1].effects.is_empty());
+        let options = shapes
+            .iter()
+            .flat_map(|s| &s.effects)
+            .find_map(|e| match e {
+                tracedraw_core::live::Effect::Blend { options, .. } => Some(*options),
+                _ => None,
+            })
+            .expect("blend");
+        assert!(!options.steps_below);
+        let nodes = options.map_nodes.expect("nodes");
+        assert!((nodes.start[0] - nodes.start[1]).hypot() > 1e-6);
+        assert!((nodes.end[0] - nodes.end[1]).hypot() > 1e-6);
+        // A blend group with no object before it: a warning, no blend.
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+            list(
+                b"page",
+                &list(b"layr", &[group(7, 12), ellipse(600_000)].concat()),
+            ),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRD", &body), v);
+        assert!(doc.pages[0].layers[0].shapes[0].effects.is_empty());
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("blend")),
+            "{:?}",
+            rep.warnings
+        );
+        // A contour's linked group (type 15): no blend.
+        let (doc, _) = read(15);
+        assert!(doc.pages[0].layers[0]
+            .shapes
+            .iter()
+            .all(|s| s.effects.is_empty()));
+    }
+
+    /// A contour as the version 9 file of #597 stores it: a linked group
+    /// whose `loda` of object type 15 holds the offset (u32, 2.54 mm),
+    /// the step count, flags and three colours in a 44-byte argument of
+    /// type 3000, with the steps as curves, followed by the object. The
+    /// object gets a live inside contour of that many steps at that
+    /// offset, to the colour of its innermost step, with mitred corners
+    /// (its steps have straight sides), and the steps go; steps around
+    /// the object make an outside one. Another layout keeps the steps as
+    /// drawn (#1031).
+    #[test]
+    fn a_contour_group_becomes_a_live_contour_of_the_object_after_it() {
+        let v = 9u16;
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let fild = |id: u32, rgb: (u8, u8, u8)| {
+            let mut f = u32s(&[id]);
+            f.extend_from_slice(&u16s(&[1, 0]));
+            f.extend_from_slice(&[0, 0]);
+            f.extend_from_slice(&color_bgr(rgb.0, rgb.1, rgb.2));
+            chunk(b"fild", &f)
+        };
+        // A square from `a` to `b` (file units) on both axes, filled with
+        // fill `fill`.
+        let square = |a: i32, b: i32, fill: u32| {
+            let mut c = u32s(&[5]);
+            c.extend_from_slice(&i32s(&[a, a, b, a, b, b, a, b, a, a]));
+            c.extend_from_slice(&[0x08, 0x40, 0x40, 0x40, 0x48]);
+            list(
+                b"obj ",
+                &[
+                    chunk(
+                        b"loda",
+                        &loda(OBJ_CURVE, &[(ARG_COORDS, c), (ARG_FILL, u32s(&[fill]))]),
+                    ),
+                    chunk(b"trfd", &trfd(v, identity)),
+                ]
+                .concat(),
+            )
+        };
+        let step = 25_400; // 2.54 mm
+        let record = |len: usize| {
+            let mut a = u32s(&[step as u32]);
+            a.extend_from_slice(&u16s(&[3, 0x2f]));
+            for _ in 0..3 {
+                a.extend_from_slice(&color_bgr(0, 0, 0));
+            }
+            a.resize(len, 0);
+            a
+        };
+        let read = |steps: Vec<Vec<u8>>, len: usize| {
+            let group = list(
+                b"lnkg",
+                &[
+                    list(
+                        b"lgob",
+                        &chunk(
+                            b"loda",
+                            &loda(
+                                15,
+                                &[(19120, i32s(&[0, 0, 0, 0])), (ARG_BLEND_STEPS, record(len))],
+                            ),
+                        ),
+                    ),
+                    steps.concat(),
+                ]
+                .concat(),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                fild(1, (255, 255, 0)),
+                fild(2, (170, 170, 0)),
+                fild(3, (85, 85, 0)),
+                fild(4, (0, 0, 0)),
+                list(
+                    b"page",
+                    &list(b"layr", &[group, square(0, 400_000, 1)].concat()),
+                ),
+            ]
+            .concat();
+            parse(&riff(b"CDRD", &body), v)
+        };
+        // Inside: the steps front to back, innermost (black) first.
+        let inside: Vec<Vec<u8>> = (1..=3)
+            .rev()
+            .map(|k| square(k * step, 400_000 - k * step, k as u32 + 1))
+            .collect();
+        let (doc, rep) = read(inside.clone(), 44);
+        let shapes = &doc.pages[0].layers[0].shapes;
+        assert_eq!(shapes.len(), 1, "steps replaced: {:?}", rep.warnings);
+        match shapes[0].effects.as_slice() {
+            [tracedraw_core::live::Effect::Contour {
+                steps,
+                offset,
+                outside,
+                to_center,
+                fill_to,
+                color_blend,
+                corners,
+                ..
+            }] => {
+                assert_eq!(*steps, 3);
+                // Straight steps of a straight object: mitred corners.
+                assert_eq!(*corners, Some(tracedraw_core::shaping::Join::Miter));
+                assert!((offset - 2.54).abs() < 1e-9, "{offset}");
+                assert!(!outside && !to_center);
+                assert_eq!(*fill_to, Color::rgb8(0, 0, 0));
+                assert_eq!(*color_blend, 0);
+            }
+            other => panic!("{other:?}"),
+        }
+        // The effect draws the steps where the file had them.
+        let ev = tracedraw_core::live::evaluate(&shapes[0]);
+        assert_eq!(ev.above.len(), 3);
+        let inner = ev.above.last().expect("step").bounds();
+        let own = shapes[0].bounds();
+        assert!(
+            (inner.x0 - own.x0 - 7.62).abs() < 0.01 && (own.x1 - inner.x1 - 7.62).abs() < 0.01,
+            "{inner:?} in {own:?}"
+        );
+        // Outside: the steps around the object.
+        let outside: Vec<Vec<u8>> = (1..=3)
+            .map(|k| square(-k * step, 400_000 + k * step, k as u32 + 1))
+            .collect();
+        let (doc, _) = read(outside, 44);
+        let shapes = &doc.pages[0].layers[0].shapes;
+        assert_eq!(shapes.len(), 1);
+        assert!(matches!(
+            shapes[0].effects.as_slice(),
+            [tracedraw_core::live::Effect::Contour {
+                outside: true,
+                steps: 3,
+                ..
+            }]
+        ));
+        // A record of another length: the steps stay as drawn.
+        let (doc, _) = read(inside, 48);
+        let shapes = &doc.pages[0].layers[0].shapes;
+        assert_eq!(shapes.len(), 4);
+        assert!(shapes.iter().all(|s| s.effects.is_empty()));
+    }
+
+    /// A brush stroke as the version 27 file of #3680 keeps it:
+    /// the guide curve (numbered 2), then a linked group (numbered 1)
+    /// whose `loda` is of object type 28 holding the objects the brush
+    /// repeats, the document's link table pairing the group with the
+    /// guide. The objects stay as drawn; the guide is marked with them by
+    /// the file's identities (`spid`), which they take (#3680).
+    #[test]
+    fn a_brush_stroke_group_marks_its_guide_with_its_objects() {
+        let v = 9u16;
+        let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let spid = |n: u8| {
+            let mut b = [0u8; 16];
+            b[0] = n;
+            b[15] = 0xa0;
+            chunk(b"spid", &b)
+        };
+        let obj = |number: u32, id: u8, coords: Vec<u8>| {
+            list(
+                b"obj ",
+                &[
+                    chunk(b"spnd", &u32s(&[number])),
+                    spid(id),
+                    chunk(b"loda", &loda(OBJ_CURVE, &[(ARG_COORDS, coords)])),
+                    chunk(b"trfd", &trfd(v, identity)),
+                ]
+                .concat(),
+            )
+        };
+        let square = |a: i32| {
+            let b = a + 20_000;
+            let mut c = u32s(&[5]);
+            c.extend_from_slice(&i32s(&[a, 0, b, 0, b, 20_000, a, 20_000, a, 0]));
+            c.extend_from_slice(&[0x08, 0x40, 0x40, 0x40, 0x48]);
+            c
+        };
+        let mut guide = u32s(&[2]);
+        guide.extend_from_slice(&i32s(&[0, 10_000, 500_000, 10_000]));
+        guide.extend_from_slice(&[0x08, 0x40]);
+        let read = |kind: u32, linked: bool| {
+            let group = list(
+                b"lnkg",
+                &[
+                    chunk(b"spnd", &u32s(&[1])),
+                    list(b"lgob", &chunk(b"loda", &loda(kind, &[(ARG_BLEND_STEPS, vec![0; 692])]))),
+                    obj(3, 3, square(0)),
+                    obj(4, 4, square(100_000)),
+                    obj(5, 5, square(200_000)),
+                ]
+                .concat(),
+            );
+            let mut lnkt = u32s(&[52, 1, 12, 20, 52, 0x100, 1, 2]);
+            lnkt.resize(52, 0);
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                if linked { chunk(b"lnkt", &lnkt) } else { Vec::new() },
+                list(
+                    b"page",
+                    &list(b"layr", &[obj(2, 2, guide.clone()), group].concat()),
+                ),
+            ]
+            .concat();
+            parse(&riff(b"CDRD", &body), v).0
+        };
+        let key = crate::artistic::DATA_KEY;
+        let doc = read(crate::artistic::OBJ_ARTISTIC_GROUP, true);
+        let shapes = &doc.pages[0].layers[0].shapes;
+        assert_eq!(shapes.len(), 4, "the objects stay");
+        let guide = shapes
+            .iter()
+            .find(|s| s.data.iter().any(|(k, _)| k == key))
+            .expect("guide marked");
+        assert!(matches!(guide.kind, ShapeKind::Path { .. }));
+        let uid = |n: u8| {
+            let mut b = [0u8; 16];
+            b[0] = n;
+            b[15] = 0xa0;
+            format!("{:032x}", u128::from_le_bytes(b))
+        };
+        assert_eq!(guide.uid.map(|u| format!("{:032x}", u.0)), Some(uid(2)));
+        let mark = &guide.data.iter().find(|(k, _)| k == key).expect("mark").1;
+        let v: serde_json::Value = serde_json::from_str(mark).expect("json");
+        assert_eq!(v["objects"], serde_json::json!([uid(3), uid(4), uid(5)]));
+        // Another linked group, or no link table: nothing marked.
+        for doc in [read(15, true), read(crate::artistic::OBJ_ARTISTIC_GROUP, false)] {
+            assert!(doc.pages[0].layers[0]
+                .shapes
+                .iter()
+                .all(|s| s.data.iter().all(|(k, _)| k != key)));
+        }
+    }
+
+    /// A blend starts a rectangle at its corner at the origin, along its
+    /// height first, whichever way the file drew it; other objects at
+    /// their first node, toward the next (#597).
+    #[test]
+    fn blend_nodes_start_at_the_file_s_first_node() {
+        let rect = |x0, y0, x1, y1| {
+            Shape::new(
+                tracedraw_core::ShapeId(1),
+                ShapeKind::Rect {
+                    rect: Rect::new(x0, y0, x1, y1),
+                    radius: 0.0,
+                    corners: None,
+                },
+            )
+        };
+        // Width and height negative: the origin is the upper right corner.
+        let n = blend_nodes(&rect(-73.0, -67.0, 0.0, 0.0)).expect("nodes");
+        assert_eq!(n, [Point::new(0.0, 0.0), Point::new(0.0, -67.0)]);
+        // Height positive.
+        let n = blend_nodes(&rect(-81.0, 0.0, 0.0, 75.0)).expect("nodes");
+        assert_eq!(n, [Point::new(0.0, 0.0), Point::new(0.0, 75.0)]);
+        // A polygon: its top vertex, then the next one clockwise.
+        let poly = Shape::new(
+            tracedraw_core::ShapeId(2),
+            ShapeKind::Polygon {
+                rect: Rect::new(-10.0, -10.0, 10.0, 10.0),
+                points: 4,
+                sharpness: 0.0,
+                complex: None,
+                twist: 0.0,
+                bend: 0.0,
+            },
+        );
+        let [a, b] = blend_nodes(&poly).expect("nodes");
+        assert!((a - Point::new(0.0, 10.0)).hypot() < 1e-9, "{a:?}");
+        assert!((b - Point::new(10.0, 0.0)).hypot() < 1e-9, "{b:?}");
+        // A flat rectangle has no way to run.
+        assert!(blend_nodes(&rect(-5.0, 0.0, 0.0, 0.0)).is_none());
     }
 
     /// Version 21 texts fitted to a circle they are not grouped with (as
@@ -6722,6 +13108,71 @@ mod tests {
         );
     }
 
+    /// #2431: a text whose box runs on from the point its offset names
+    /// starts there (the version 18 file of the issue: "this is test"
+    /// starting 12.84 mm along a 130 mm curve, its letters' angles and
+    /// the preview agree); a text whose box lies about that point has
+    /// its middle there, as before.
+    #[test]
+    fn a_fitted_text_starts_at_its_offset_when_its_box_runs_on_from_there() {
+        let v = 21u16;
+        let text_obj = |t: Vec<u8>, bbox: [i32; 4]| {
+            list(
+                b"obj ",
+                &[
+                    chunk(b"bbox", &i32s(&bbox)),
+                    chunk(
+                        b"loda",
+                        &loda(OBJ_ARTISTIC_TEXT, &[(ARG_COORDS, i32s(&[0, 0]))]),
+                    ),
+                    chunk(b"trfd", &trfd(v, [1.0, 0.0, -3_000_000.0, 0.0, 1.0, 0.0])),
+                    chunk(b"txsm", &t),
+                ]
+                .concat(),
+            )
+        };
+        // A straight curve 130 mm long, across the page centre.
+        let mut coords = u32s(&[2]);
+        coords.extend_from_slice(&i32s(&[-650_000, 0, 650_000, 0]));
+        coords.extend_from_slice(&[0x08, 0x40]);
+        let curve = list(
+            b"obj ",
+            &chunk(b"loda", &loda(OBJ_CURVE, &[(ARG_COORDS, coords)])),
+        );
+        // Its box from 11.5 to 125 mm along the curve.
+        let starts = text_obj(
+            txsm21_on_path("Starts", 128_400, 0, false),
+            [-535_000, 120_000, 600_000, 0],
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+            chunk(b"font", &font_chunk(5, "Georgia")),
+            list(b"page", &list(b"layr", &[starts, curve].concat())),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRL", &body), v);
+        let sh = doc.pages[0].layers[0]
+            .shapes
+            .iter()
+            .find(|sh| matches!(sh.kind, ShapeKind::Text { .. }))
+            .expect("text");
+        let ShapeKind::Text {
+            on_path: Some(tp),
+            origin,
+            align,
+            ..
+        } = &sh.kind
+        else {
+            panic!("not on a path: {:?} {:?}", sh.kind, rep.warnings);
+        };
+        assert_eq!(*align, TextAlign::Left);
+        let (p, _) = tp.baseline().at(tp.offset).expect("point");
+        let page = sh.transform * Affine::translate(origin.to_vec2());
+        // Page centre (127, 127): the curve starts at x 62.
+        let p = page * p;
+        assert!((p - Point::new(62.0 + 12.84, 127.0)).hypot() < 0.1, "{p:?}");
+    }
+
     /// Lists nested in a layer keep the file's front-to-back order.
     #[test]
     fn objects_of_nested_lists_keep_their_stacking_order() {
@@ -6874,6 +13325,76 @@ mod tests {
         }
     }
 
+    /// Spanish text set in a font whose record names the Arabic character
+    /// set (#2047): "Economia" with its i acute opened with an Arabic
+    /// letter in its middle. Arabic text in such a font stays Arabic.
+    #[test]
+    fn latin_text_in_a_font_of_another_script_keeps_its_accents() {
+        let spanish = [
+            b'E', b'c', b'o', b'n', b'o', b'm', 0xed, b'a', b' ', b'm', b'a', 0xf1, b'a', b'n',
+            b'a',
+        ];
+        // "marhaba" in Windows-1256.
+        let arabic = [0xe3, 0xd1, 0xcd, 0xc8, 0xc7];
+        let styles = [
+            Style7 {
+                chars: spanish.len() as u16,
+                font: Some(3),
+                flags: None,
+                size_units: None,
+                fill: None,
+            },
+            Style7 {
+                chars: arabic.len() as u16,
+                font: Some(4),
+                flags: None,
+                size_units: None,
+                fill: None,
+            },
+        ];
+        let mut t = txsm7(9, false, &styles, "");
+        let cut = t.len() - 1 - 4;
+        t.truncate(cut);
+        let bytes = [&spanish[..], &arabic[..]].concat();
+        t.extend_from_slice(&u32s(&[bytes.len() as u32]));
+        t.extend_from_slice(&vec![0; bytes.len() * 4]);
+        t.extend_from_slice(&bytes);
+        t.push(0);
+        let tables = [
+            chunk(b"font", &font_chunk_8bit(3, 178, b"Arial")),
+            chunk(b"font", &font_chunk_8bit(4, 178, b"Tahoma")),
+        ]
+        .concat();
+        let obj = list(
+            b"obj ",
+            &[
+                chunk(
+                    b"loda",
+                    &loda(OBJ_ARTISTIC_TEXT, &[(ARG_COORDS, i32s(&[0, 0]))]),
+                ),
+                chunk(b"txsm", &t),
+            ]
+            .concat(),
+        );
+        let layer = list(b"layr", &obj);
+        let body = [
+            chunk(b"mcfg", &mcfg(9, 2_540_000, 2_540_000)),
+            tables,
+            list(b"page", &layer),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDR9", &body), 9);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        match &first_shape(&doc).kind {
+            ShapeKind::Text { spans, .. } => {
+                assert_eq!(spans.len(), 2, "{spans:?}");
+                assert_eq!(spans[0].text, "Econom\u{ed}a ma\u{f1}ana");
+                assert_eq!(spans[1].text, "\u{645}\u{631}\u{62d}\u{628}\u{627}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// version 16+ style string: u32 length in UTF-16 units, then the text.
     fn style_string(v: u16, s: &str) -> Vec<u8> {
         if v < 17 {
@@ -6955,6 +13476,354 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// #2886: a Persian word whose last letter's style gives the Latin
+    /// slot 24 pt and the right-to-left (`RTL`) slot 154 pt, as the cover
+    /// of the report does: the letter is drawn at 154 pt like the rest of
+    /// the word, one run that joins, and Latin letters keep the Latin
+    /// size. The reader took the Latin size for all letters and cut the
+    /// word apart at 24 pt.
+    #[test]
+    fn right_to_left_letters_take_the_rtl_font_of_their_style() {
+        let v = 16u16;
+        let mut t = u32s(&[1]); // frame
+        t.extend_from_slice(&[0; 32]);
+        t.extend_from_slice(&u16s(&[1600]));
+        t.extend_from_slice(&[0; 3]);
+        t.extend_from_slice(&u32s(&[1, 1])); // one frame, id 1
+        t.extend_from_slice(&[0; 48]);
+        t.extend_from_slice(&u32s(&[0])); // not on a path
+        t.extend_from_slice(&[0; 8]);
+        t.extend_from_slice(&u32s(&[1])); // one paragraph
+        t.extend_from_slice(&u32s(&[0]));
+        t.push(0);
+        t.push(0); // frame flag byte: not 1
+        t.extend_from_slice(&style_string(
+            v,
+            r#"{"character":{"RTL":{"font":"Calibri","size":"543325"},"latin":{"font":"Calibri","size":"543325"}}}"#,
+        ));
+        t.extend_from_slice(&u32s(&[1])); // one style record
+        t.extend_from_slice(&u16s(&[0, 1, 0]));
+        t.extend_from_slice(&style_string(
+            v,
+            r#"{"character":{"RTL":{"font":"Calibri","size":"543325"},"latin":{"font":"Calibri","size":"84667"}}}"#,
+        ));
+        let text = "بوی ab";
+        let n = text.chars().count();
+        t.extend_from_slice(&u32s(&[n as u32]));
+        for i in 0..n {
+            t.extend_from_slice(&u16s(&[0]));
+            t.push(if i >= 2 { 0 } else { 0xfe });
+            t.extend_from_slice(&[0; 5]);
+        }
+        let bytes = utf16(text);
+        t.extend_from_slice(&u32s(&[bytes.len() as u32]));
+        t.extend_from_slice(&bytes);
+        t.push(0);
+        let mut coords = vec![0u8; 4];
+        coords.extend_from_slice(&i32s(&[508_000, 254_000]));
+        let (doc, rep) = text_doc(
+            v,
+            b"CDRG",
+            Vec::new(),
+            OBJ_PARAGRAPH_TEXT,
+            &[(ARG_COORDS, coords)],
+            t,
+        );
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let ShapeKind::Text { spans, .. } = &first_shape(&doc).kind else {
+            panic!("{:?}", first_shape(&doc).kind);
+        };
+        assert_eq!(spans.len(), 2, "{spans:?}");
+        assert_eq!(spans[0].text, "بوی ");
+        assert!((spans[0].size_pt - 154.0).abs() < 0.1, "{spans:?}");
+        assert_eq!(spans[0].font_family, "Calibri");
+        assert_eq!(spans[1].text, "ab");
+        assert!((spans[1].size_pt - 24.0).abs() < 0.1, "{spans:?}");
+    }
+
+    /// Paragraph text of layout 1500 in a version 21 file (#1833, saved by
+    /// the program that wrote the samples): each paragraph holds one style
+    /// string, its default, as in layout 1700. The reader took a second
+    /// one for the paragraph's base, read the record count as a string
+    /// and dropped all 84 paragraph texts of the file. The form with a
+    /// base string before the default still reads.
+    #[test]
+    fn paragraph_text_of_layout_1500_with_one_style_string() {
+        let v = 21u16;
+        let read = |base: Option<&str>| {
+            let mut t = u32s(&[0, 0xffff_ffff, 0, 0xffff_ffff, 8, 13, 0, 3, 0]);
+            t.extend_from_slice(&u16s(&[1500]));
+            t.extend_from_slice(&[0; 3]);
+            t.extend_from_slice(&u32s(&[1, 1])); // one frame, id 1
+            for x in [1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+                t.extend_from_slice(&f64s(&[x]));
+            }
+            t.extend_from_slice(&u32s(&[0])); // not on a path
+            t.extend_from_slice(&[0; 8]);
+            t.extend_from_slice(&i32s(&[0, -100_000, 0, 500_000]));
+            t.extend_from_slice(&style_string(v, r#"{"frame":{}}"#));
+            t.extend_from_slice(&u32s(&[1])); // one paragraph
+            t.extend_from_slice(&u32s(&[1]));
+            t.push(0);
+            if let Some(b) = base {
+                t.extend_from_slice(&style_string(v, b));
+            }
+            t.extend_from_slice(&style_string(
+                v,
+                r#"{"character":{"latin":{"font":"Arial","size":"35278"}},"paragraph":{"justify":"2"}}"#,
+            ));
+            t.extend_from_slice(&u32s(&[1])); // one record: the plain one
+            t.extend_from_slice(&u16s(&[6, 0, 4]));
+            t.extend_from_slice(&u32s(&[3]));
+            t.extend_from_slice(&utf16("PTG"));
+            t.extend_from_slice(&style_string(v, "{\n  \"character\": {\n  }\n}"));
+            t.extend_from_slice(&u32s(&[5]));
+            for _ in 0..5 {
+                t.extend_from_slice(&[0; 8]);
+            }
+            t.extend_from_slice(&u32s(&[5]));
+            t.extend_from_slice(b"Pump.");
+            t.push(0);
+            let mut coords = vec![0u8; 4];
+            coords.extend_from_slice(&i32s(&[500_000, 100_000]));
+            text_doc(
+                v,
+                b"CDRL",
+                Vec::new(),
+                OBJ_PARAGRAPH_TEXT,
+                &[(ARG_COORDS, coords)],
+                t,
+            )
+        };
+        for base in [None, Some(r#"{"paragraph":{"justify":"2"}}"#)] {
+            let (doc, rep) = read(base);
+            assert_eq!(rep.shapes, 1, "{base:?}: {:?}", rep.warnings);
+            assert!(rep.warnings.is_empty(), "{base:?}: {:?}", rep.warnings);
+            match &first_shape(&doc).kind {
+                ShapeKind::Text {
+                    spans,
+                    frame,
+                    align,
+                    ..
+                } => {
+                    assert!(frame.is_some(), "{base:?}");
+                    assert_eq!(*align, TextAlign::Center, "{base:?}");
+                    let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+                    assert_eq!(text, "Pump.", "{base:?}");
+                    assert_eq!(spans[0].font_family, "Arial", "{base:?}");
+                }
+                other => panic!("{base:?}: {other:?}"),
+            }
+        }
+    }
+
+    /// From version 16 the coordinates of artistic text hold a point a
+    /// few hundredths of a millimetre from (0, 0) that does not move the
+    /// text: it starts where its transform puts it (#2359: read as a
+    /// place, 108 texts of a version 18 file rose by up to 0.046 mm and
+    /// were saved there).
+    #[test]
+    fn artistic_text_coordinates_do_not_move_the_text() {
+        let v = 18u16;
+        let mut t = u32s(&[0xffff_ffff]);
+        t.extend_from_slice(&[0; 32]);
+        t.extend_from_slice(&u16s(&[1700]));
+        t.extend_from_slice(&[0; 3]);
+        t.extend_from_slice(&u32s(&[1, 1]));
+        t.extend_from_slice(&[0; 48]);
+        t.extend_from_slice(&u32s(&[0]));
+        t.extend_from_slice(&[0; 8]);
+        t.extend_from_slice(&u32s(&[1]));
+        t.extend_from_slice(&u32s(&[0]));
+        t.push(0);
+        t.push(0);
+        t.extend_from_slice(&style_string(
+            v,
+            r#"{"character":{"latin":{"font":"Arial","size":"128819","weight":"400","italic":"0"}}}"#,
+        ));
+        t.extend_from_slice(&u32s(&[0]));
+        t.extend_from_slice(&u32s(&[2]));
+        for _ in 0..2 {
+            t.extend_from_slice(&u16s(&[0]));
+            t.push(0xfe);
+            t.extend_from_slice(&[0; 5]);
+        }
+        t.extend_from_slice(&u32s(&[2]));
+        t.extend_from_slice(b"Hi");
+        t.push(0);
+        // As the version 18 file of #2359 holds it: (0, 0.046 mm).
+        let obj = list(
+            b"obj ",
+            &[
+                chunk(b"bbox", &i32s(&[0, 100_000, 100_000, 0])),
+                chunk(
+                    b"loda",
+                    &loda(OBJ_ARTISTIC_TEXT, &[(ARG_COORDS, i32s(&[0, 460]))]),
+                ),
+                chunk(b"trfd", &trfd(v, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0])),
+                chunk(b"txsm", &t),
+            ]
+            .concat(),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRI", &body), v);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        match &first_shape(&doc).kind {
+            ShapeKind::Text { origin, .. } => {
+                assert!(origin.x.abs() < 1e-9 && origin.y.abs() < 1e-9, "{origin:?}")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Artistic text starting with a paragraph break shows its letters
+    /// on its origin, not a line below it (#3215).
+    #[test]
+    fn artistic_text_starting_with_a_break_keeps_its_letters_on_the_origin() {
+        let v = 18u16;
+        let mut t = u32s(&[0xffff_ffff]);
+        t.extend_from_slice(&[0; 32]);
+        t.extend_from_slice(&u16s(&[1700]));
+        t.extend_from_slice(&[0; 3]);
+        t.extend_from_slice(&u32s(&[1, 1]));
+        t.extend_from_slice(&[0; 48]);
+        t.extend_from_slice(&u32s(&[0]));
+        t.extend_from_slice(&[0; 8]);
+        t.extend_from_slice(&u32s(&[1]));
+        t.extend_from_slice(&u32s(&[0]));
+        t.push(0);
+        t.push(0);
+        t.extend_from_slice(&style_string(
+            v,
+            r#"{"character":{"latin":{"font":"Arial","size":"128819","weight":"400","italic":"0"}}}"#,
+        ));
+        t.extend_from_slice(&u32s(&[0]));
+        t.extend_from_slice(&u32s(&[3]));
+        for _ in 0..3 {
+            t.extend_from_slice(&u16s(&[0]));
+            t.push(0xfe);
+            t.extend_from_slice(&[0; 5]);
+        }
+        t.extend_from_slice(&u32s(&[3]));
+        t.extend_from_slice(b"\rHi");
+        t.push(0);
+        let obj = list(
+            b"obj ",
+            &[
+                chunk(b"bbox", &i32s(&[0, 100_000, 100_000, 0])),
+                chunk(b"loda", &loda(OBJ_ARTISTIC_TEXT, &[])),
+                chunk(b"trfd", &trfd(v, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0])),
+                chunk(b"txsm", &t),
+            ]
+            .concat(),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRI", &body), v);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        match &first_shape(&doc).kind {
+            ShapeKind::Text { spans, .. } => {
+                let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+                assert_eq!(text, "Hi");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A run set in a semibold face (style code 1024, weight 600) reads
+    /// as that face, named by the family and its weight, not as bold;
+    /// regular (64) and bold (4096) runs keep the family's name (#624).
+    #[test]
+    fn semibold_runs_keep_their_face() {
+        let v = 21u16;
+        let read = |family: &str, weight: &str| {
+            let mut t = u32s(&[0xffff_ffff]);
+            t.extend_from_slice(&[0; 32]);
+            t.extend_from_slice(&u16s(&[1700]));
+            t.extend_from_slice(&[0; 3]);
+            t.extend_from_slice(&u32s(&[1, 1]));
+            t.extend_from_slice(&[0; 48]);
+            t.extend_from_slice(&u32s(&[0]));
+            t.extend_from_slice(&[0; 8]);
+            t.extend_from_slice(&u32s(&[1]));
+            t.extend_from_slice(&u32s(&[0]));
+            t.push(0);
+            t.push(0);
+            t.extend_from_slice(&style_string(
+                v,
+                &format!(
+                    r#"{{"character":{{"latin":{{"font":"{family}","size":"128819","weight":"{weight}","italic":"0"}}}}}}"#
+                ),
+            ));
+            t.extend_from_slice(&u32s(&[0]));
+            t.extend_from_slice(&u32s(&[2]));
+            for _ in 0..2 {
+                t.extend_from_slice(&u16s(&[0]));
+                t.push(0xfe);
+                t.extend_from_slice(&[0; 5]);
+            }
+            t.extend_from_slice(&u32s(&[2]));
+            t.extend_from_slice(b"Hi");
+            t.push(0);
+            let obj = list(
+                b"obj ",
+                &[
+                    chunk(b"bbox", &i32s(&[0, 100_000, 100_000, 0])),
+                    chunk(
+                        b"loda",
+                        &loda(OBJ_ARTISTIC_TEXT, &[(ARG_COORDS, i32s(&[0, 8]))]),
+                    ),
+                    chunk(b"trfd", &trfd(v, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0])),
+                    chunk(b"txsm", &t),
+                ]
+                .concat(),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, _) = parse(&riff(b"CDRL", &body), v);
+            match &first_shape(&doc).kind {
+                ShapeKind::Text { spans, .. } => (spans[0].font_family.clone(), spans[0].bold),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(
+            read("Titillium Web", "1024"),
+            ("Titillium Web SemiBold".to_string(), false)
+        );
+        assert_eq!(
+            read("Titillium Web", "4096"),
+            ("Titillium Web".to_string(), true)
+        );
+        assert_eq!(
+            read("Titillium Web", "64"),
+            ("Titillium Web".to_string(), false)
+        );
+        // Light (16) and black (65536) faces too.
+        assert_eq!(read("Lato", "16").0, "Lato Light");
+        assert_eq!(read("Lato", "65536"), ("Lato Black".to_string(), false));
+        // A family already named with its weight keeps its name.
+        assert_eq!(
+            read("Segoe UI Semibold", "1024"),
+            ("Segoe UI Semibold".to_string(), false),
+            "the name gives the weight: that face, not bold"
+        );
+        assert_eq!(
+            read("Arial Black", "64"),
+            ("Arial Black".to_string(), false)
+        );
+        assert_eq!(read("Lato Hairline", "1").0, "Lato Hairline");
     }
 
     /// Version 21 paragraph text: the loda has no frame size; the frame
@@ -7258,8 +14127,11 @@ mod tests {
                 spans, align, para, ..
             } => {
                 assert_eq!(*align, TextAlign::Center);
-                assert!((spans[0].tracking_pct + 10.0 * SPACE_EM).abs() < 1e-9);
-                assert!((para.leading_pct - 150.0).abs() < 1e-6, "{para:?}");
+                assert!((para.char_spacing_pct + 10.0).abs() < 1e-9, "{para:?}");
+                assert_eq!(spans[0].tracking_pct, 0.0);
+                // The distance in points: 1.5 times 1.15 times 36 pt.
+                assert_eq!(para.leading_unit, LeadingUnit::Points);
+                assert!((para.leading_pct - 36.0 * 1.15 * 1.5).abs() < 1e-3, "{para:?}");
             }
             other => panic!("{other:?}"),
         }
@@ -7328,11 +14200,128 @@ mod tests {
                 assert_eq!(spans[0].font_family, "Verdana");
                 assert!((spans[0].size_pt - 36.0).abs() < 1e-9);
                 assert!(spans[0].italic && !spans[0].bold);
-                assert!((spans[0].tracking_pct - 5.0 * SPACE_EM).abs() < 1e-9);
+                assert!((para.char_spacing_pct - 5.0).abs() < 1e-9, "{para:?}");
                 assert!((para.leading_pct - 150.0).abs() < 1e-9);
                 assert!((para.left_indent - 25.4).abs() < 1e-9, "{para:?}");
-                assert!((para.first_line_indent - 6.35).abs() < 1e-9);
+                // First line at 18 pt from the frame: 54 pt left of the
+                // other lines (#2669).
+                assert!((para.first_line_indent + 19.05).abs() < 1e-9, "{para:?}");
                 assert!((para.right_indent - 12.7).abs() < 1e-9);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A version 14 style table whose font entry sets Arial at 12 pt in
+    /// the Latin slot and another font at 54 pt in the East Asian slot,
+    /// as the file of #955 does for its Chinese titles: the Chinese
+    /// letters take the East Asian font and size, the Latin ones Arial.
+    #[test]
+    fn style_table_east_asian_slot_sets_the_cjk_letters() {
+        let v = 14u16;
+        let mut st = u32s(&[1]); // one record
+        st.extend_from_slice(&u32s(&[0])); // fills
+        st.extend_from_slice(&u32s(&[0])); // outlines
+        st.extend_from_slice(&u32s(&[1, 100])); // one font entry, id 100
+        st.extend_from_slice(&[0; 20]);
+        st.extend_from_slice(&u16s(&[3, 0])); // Latin: font 3
+        st.extend_from_slice(&u16s(&[4, 0x86])); // East Asian: font 4
+        st.extend_from_slice(&u16s(&[3, 0xb2])); // other: font 3
+        st.extend_from_slice(&i32s(&[42_333, 190_500, 42_333])); // 12, 54, 12 pt
+        st.extend_from_slice(&u32s(&[0x40, 0x1000, 0x40])); // regular, bold, regular
+        st.extend_from_slice(&u32s(&[1, 200, 0, 2])); // one align entry: centre
+        st.extend_from_slice(&u32s(&[0])); // intervals
+        for _ in 0..6 {
+            st.extend_from_slice(&u32s(&[0])); // set5 .. drop caps
+        }
+        st.extend_from_slice(&u32s(&[0])); // set11
+        st.extend_from_slice(&u32s(&[2, 77, 0, 0, 0, 0])); // num 2, style 77, no name
+        st.extend_from_slice(&u32s(&[0, 0])); // fill, outline refs
+        st.extend_from_slice(&u32s(&[100, 200, 0, 0, 0])); // font, align, interval, set5, set11
+        let styles = [Style7 {
+            chars: 8,
+            font: None,
+            flags: None,
+            size_units: None,
+            fill: None,
+        }];
+        let tables = [
+            chunk(b"font", &font_chunk(3, "Arial")),
+            chunk(b"font", &font_chunk(4, "Script Han")),
+            list(b"stlt", &st),
+        ]
+        .concat();
+        let (doc, rep) = text_doc(
+            v,
+            b"CDRE",
+            tables,
+            OBJ_ARTISTIC_TEXT,
+            &[(ARG_COORDS, i32s(&[0, 0])), (ARG_STYLE, u32s(&[77]))],
+            txsm7(v, false, &styles, "Ab 荣誉证书"),
+        );
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        match &first_shape(&doc).kind {
+            ShapeKind::Text { spans, align, .. } => {
+                assert_eq!(*align, TextAlign::Center);
+                assert_eq!(spans.len(), 2, "{spans:?}");
+                assert_eq!(spans[0].text, "Ab ");
+                assert_eq!(spans[0].font_family, "Arial");
+                assert!((spans[0].size_pt - 12.0).abs() < 1e-3);
+                assert!(!spans[0].bold);
+                assert_eq!(spans[1].text, "荣誉证书");
+                assert_eq!(spans[1].font_family, "Script Han");
+                assert!(
+                    (spans[1].size_pt - 54.0).abs() < 1e-3,
+                    "{}",
+                    spans[1].size_pt
+                );
+                assert!(spans[1].bold);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The same entry with the three slots alike (as most files have
+    /// them) keeps the text in one run.
+    #[test]
+    fn style_table_alike_slots_keep_one_run() {
+        let v = 14u16;
+        let mut st = u32s(&[1]);
+        st.extend_from_slice(&u32s(&[0, 0]));
+        st.extend_from_slice(&u32s(&[1, 100]));
+        st.extend_from_slice(&[0; 20]);
+        for _ in 0..3 {
+            st.extend_from_slice(&u16s(&[3, 0]));
+        }
+        st.extend_from_slice(&i32s(&[42_333; 3]));
+        st.extend_from_slice(&u32s(&[0x40; 3]));
+        st.extend_from_slice(&u32s(&[0, 0]));
+        for _ in 0..8 {
+            st.extend_from_slice(&u32s(&[0]));
+        }
+        st.extend_from_slice(&u32s(&[2, 77, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0]));
+        let styles = [Style7 {
+            chars: 8,
+            font: None,
+            flags: None,
+            size_units: None,
+            fill: None,
+        }];
+        let tables = [chunk(b"font", &font_chunk(3, "Arial")), list(b"stlt", &st)].concat();
+        let (doc, rep) = text_doc(
+            v,
+            b"CDRE",
+            tables,
+            OBJ_ARTISTIC_TEXT,
+            &[(ARG_COORDS, i32s(&[0, 0])), (ARG_STYLE, u32s(&[77]))],
+            txsm7(v, false, &styles, "Ab 荣誉证书"),
+        );
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        match &first_shape(&doc).kind {
+            ShapeKind::Text { spans, .. } => {
+                assert_eq!(spans.len(), 1, "{spans:?}");
+                assert_eq!(spans[0].text, "Ab 荣誉证书");
+                assert_eq!(spans[0].font_family, "Arial");
             }
             other => panic!("{other:?}"),
         }
@@ -7388,8 +14377,92 @@ mod tests {
         assert!(shapes[1].stroke.is_none());
     }
 
+    /// A version 14 framed `txsm` as a seal's ring of letters is stored
+    /// (#955): the paragraph's extra byte set to 1 and 64 bytes after it,
+    /// then one style per letter turning and shifting it.
+    fn txsm14_ring(letters: &[(char, i32, i32, i32)]) -> Vec<u8> {
+        let mut t = u32s(&[1]); // frame flag
+        t.extend_from_slice(&[0; 32]);
+        t.extend_from_slice(&u32s(&[1, 4])); // one frame, id 4
+        t.extend_from_slice(&[0; 48]);
+        t.extend_from_slice(&u32s(&[0])); // not on a path
+        t.extend_from_slice(&u32s(&[1, 0x1a])); // one paragraph, style id
+        t.push(0);
+        t.push(1); // 64 bytes follow
+        let mut block = u32s(&[4, u32::MAX]);
+        for m in [0.77f64, 0.0, 1000.0, 0.0, 1.0, 2000.0] {
+            block.extend_from_slice(&m.to_le_bytes());
+        }
+        block.extend_from_slice(&[0; 8]);
+        assert_eq!(block.len(), 64);
+        t.extend_from_slice(&block);
+        t.extend_from_slice(&u32s(&[letters.len() as u32]));
+        for &(_, angle, dx, dy) in letters {
+            t.extend_from_slice(&u16s(&[1]));
+            t.push(0x3c); // size, angle, shifts
+            t.push(0);
+            t.extend_from_slice(&i32s(&[63_500, angle, dx, dy]));
+        }
+        t.extend_from_slice(&u32s(&[letters.len() as u32]));
+        for i in 0..letters.len() {
+            // Two bytes a letter; its style numbered in the third byte.
+            t.extend_from_slice(&[1, 0, (i as u8) << 1, 0, 0, 0, 0, 0]);
+        }
+        let text: String = letters.iter().map(|l| l.0).collect();
+        let bytes = utf16(&text);
+        t.extend_from_slice(&u32s(&[bytes.len() as u32]));
+        t.extend_from_slice(&bytes);
+        t.push(0); // no path
+        t
+    }
+
     #[test]
-    fn text_object_without_txsm_is_skipped_with_a_warning() {
+    fn version_14_ring_of_turned_and_shifted_letters_opens() {
+        // As a version 14 seal stores its ring of letters (#955).
+        let letters = [
+            ('\u{6d2a}', 129_432_549, 842, 428),
+            ('\u{5c71}', 98_894_641, 655, 505),
+            ('\u{533a}', 347_035_491, 424, -760),
+        ];
+        let (doc, rep) = text_doc(
+            14,
+            b"CDRE",
+            Vec::new(),
+            OBJ_ARTISTIC_TEXT,
+            &[(ARG_COORDS, i32s(&[0, 0]))],
+            txsm14_ring(&letters),
+        );
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let ShapeKind::Text { spans, .. } = &first_shape(&doc).kind else {
+            panic!("{:?}", first_shape(&doc).kind);
+        };
+        let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "\u{6d2a}\u{5c71}\u{533a}");
+        // One span a letter, each with its own placement.
+        assert_eq!(spans.len(), 3, "{spans:?}");
+        assert!((spans[0].angle_deg - 129.432549).abs() < 1e-9);
+        assert!((spans[0].offset_x_pct - 842.0).abs() < 1e-9);
+        assert!((spans[0].size_pt - 18.0).abs() < 1e-9);
+        assert!((spans[0].baseline_shift_pt - 4.28 * 18.0).abs() < 1e-9);
+        assert!((spans[1].angle_deg - 98.894641).abs() < 1e-9);
+        // 347 degrees is 13 clockwise; a negative shift goes down.
+        assert!((spans[2].angle_deg + 12.964509).abs() < 1e-9);
+        assert!((spans[2].baseline_shift_pt + 7.6 * 18.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn version_14_ring_text_cut_short_never_panics() {
+        let t = txsm14_ring(&[('a', 0, 10, 10), ('b', 90_000_000, 20, 20)]);
+        for cut in 0..t.len() {
+            let _ = text::read_txsm(&t[..cut], 14, 0, &mut |_| {});
+        }
+    }
+
+    /// A text object with no text record holds no letters: nothing is
+    /// drawn and nothing counts as unread (#4330).
+    #[test]
+    fn text_object_without_txsm_draws_nothing() {
         let obj = list(
             b"obj ",
             &chunk(
@@ -7404,8 +14477,7 @@ mod tests {
         .concat();
         let (_, rep) = parse(&riff(b"CDRD", &body), 13);
         assert_eq!(rep.shapes, 0);
-        assert_eq!(rep.skipped_objects, 1);
-        assert!(rep.warnings.iter().any(|w| w.contains("txsm")));
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
     }
 
     // Fills: bitmaps, textures, pattern tiles, version 16 fountain transform.
@@ -7457,6 +14529,7 @@ mod tests {
                 height_px,
                 size_mm,
                 png,
+                ..
             }) => {
                 assert_eq!((*width_px, *height_px), (2, 2));
                 assert!((size_mm - 25.4).abs() < 1e-9);
@@ -7465,6 +14538,244 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(ctx.report.warnings.is_empty(), "{:?}", ctx.report.warnings);
+    }
+
+    /// An object of a kind that is not read, with no outline of its own
+    /// and the empty box (#2022: the 22 objects of type 0x1f a drawing
+    /// kept from an imported picture, each a name and a style), draws
+    /// nothing, so it is not counted as left out; one with a real box is.
+    #[test]
+    fn objects_that_draw_nothing_are_not_counted_as_skipped() {
+        // Argument 40004 of such an object: a name in UTF-16.
+        let mut note = u32s(&[0x40, 0x541, 0, 0x28]);
+        note.extend_from_slice(&utf16("data-name=\"Layer 2\""));
+        note.extend_from_slice(&u32s(&[0x541, 7, 0]));
+        let object = |bbox: [i32; 4]| {
+            list(
+                b"obj ",
+                &[
+                    chunk(b"bbox", &i32s(&bbox)),
+                    list(
+                        b"lgob",
+                        &chunk(
+                            b"loda",
+                            &loda(0x1f, &[(40004, note.clone()), (12000, u32s(&[0]))]),
+                        ),
+                    ),
+                ]
+                .concat(),
+            )
+        };
+        let file = |bbox: [i32; 4]| {
+            let body = [
+                chunk(b"mcfg", &mcfg(14, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &object(bbox))),
+            ]
+            .concat();
+            riff(b"CDRE", &body)
+        };
+        let (doc, rep) = parse(&file([-2, 2, 2, -2]), 14);
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        assert_eq!(
+            doc.pages[0]
+                .layers
+                .iter()
+                .map(|l| l.shapes.len())
+                .sum::<usize>(),
+            0
+        );
+        // The same record over a part of the page is an object left out.
+        let (_, rep) = parse(&file([0, 100_000, 100_000, 0]), 14);
+        assert_eq!(rep.skipped_objects, 1);
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("0x1f")),
+            "{:?}",
+            rep.warnings
+        );
+    }
+
+    /// The groups of a table as files of versions 14 to 21 hold them
+    /// (#2170): the table's group with its layout record, and a group a
+    /// cell with the cell's outline, place, fill, outline and text.
+    /// `cells`: left, top (down from the table's top left corner, in
+    /// coordinate units), width, height, fill id, text.
+    fn table_group(v: u16, at: (f64, f64), cells: &[(i32, i32, i32, i32, u32, &str)]) -> Vec<u8> {
+        let table_id = [
+            0xf8, 0xc3, 0x15, 0x2b, 0x26, 0x21, 0xa5, 0x40, 0x85, 0x15, 0x71, 0xea, 0x17, 0x43,
+            0xcd, 0x20,
+        ];
+        let own = |loda: Vec<u8>, m: [f64; 6]| {
+            list(
+                b"lgob",
+                &[
+                    chunk(b"loda", &loda),
+                    list(b"trfl", &chunk(b"trfd", &trfd(v, m))),
+                ]
+                .concat(),
+            )
+        };
+        let mut body = [
+            own(
+                loda(0x26, &[(ARG_FILL, u32s(&[0])), (ARG_OUTLINE, u32s(&[7]))]),
+                [1.0, 0.0, at.0, 0.0, 1.0, at.1],
+            ),
+            list(
+                b"npps",
+                &[chunk(b"ppid", &table_id), chunk(b"ppdt", &u32s(&[1, 2, 2]))].concat(),
+            ),
+        ]
+        .concat();
+        for (n, &(x, y, w, h, fill, text)) in cells.iter().enumerate() {
+            // The outline: a rectangle from the cell's top left corner.
+            let mut outline = u32s(&[5]);
+            outline.extend_from_slice(&i32s(&[0, 0, w, 0, w, -h, 0, -h, 0, 0]));
+            outline.extend_from_slice(&[0x0c, 0x44, 0x44, 0x44, 0x48]);
+            let (cx, cy) = (at.0 + x as f64, at.1 - y as f64);
+            let style = Style7 {
+                chars: text.chars().count() as u16,
+                font: None,
+                flags: None,
+                size_units: None,
+                fill: None,
+            };
+            let styles: &[Style7] = if text.is_empty() { &[] } else { &[style] };
+            let mut frame = vec![0u8; 4];
+            frame.extend_from_slice(&i32s(&[w, h]));
+            // The text's frame starts 2 mm inside the cell.
+            let text_object = list(
+                b"obj ",
+                &[
+                    own(
+                        loda(OBJ_PARAGRAPH_TEXT, &[(ARG_COORDS, frame)]),
+                        [1.0, 0.0, cx + 20_000.0, 0.0, 1.0, cy - 20_000.0],
+                    ),
+                    chunk(b"txsm", &txsm7(v, true, styles, text)),
+                ]
+                .concat(),
+            );
+            let cell = [
+                chunk(b"usdn", &u32s(&[100 + n as u32])),
+                own(
+                    loda(
+                        0x26,
+                        &[
+                            (ARG_COORDS, outline),
+                            (ARG_FILL, u32s(&[fill])),
+                            (ARG_OUTLINE, u32s(&[7])),
+                        ],
+                    ),
+                    [1.0, 0.0, cx, 0.0, 1.0, cy],
+                ),
+                text_object,
+            ]
+            .concat();
+            body.extend_from_slice(&list(b"grp ", &cell));
+        }
+        list(b"grp ", &body)
+    }
+
+    /// A table of a version 14 file opens as a table (#2170): it opened
+    /// as nothing, its twelve empty cells counted as texts left out.
+    #[test]
+    fn tables_of_version_14_open_as_tables() {
+        let v = 14;
+        // Two columns (30 and 20 mm) and two rows (10 and 15 mm); the
+        // second row is one cell over both columns.
+        let cells = [
+            (0, 0, 300_000, 100_000, 0, "Hi"),
+            (300_000, 0, 200_000, 100_000, 9, ""),
+            (0, 100_000, 500_000, 150_000, 0, ""),
+        ];
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_100_000, 2_970_000)),
+            chunk(b"fild", &solid_fild_v13(9, (255, 0, 0))),
+            chunk(b"outl", &outl_v13(7, 0, 0)),
+            chunk(b"font", &font_chunk(0, "Arial")),
+            list(
+                b"page",
+                &list(b"layr", &table_group(v, (-500_000.0, 400_000.0), &cells)),
+            ),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRE", &body), v);
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        assert_eq!(rep.shapes, 1);
+        let shape = first_shape(&doc);
+        let ShapeKind::Table(t) = &shape.kind else {
+            panic!("{:?}", shape.kind);
+        };
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        assert!(near(t.col_widths[0], 30.0) && near(t.col_widths[1], 20.0));
+        assert!(near(t.row_heights[0], 10.0) && near(t.row_heights[1], 15.0));
+        assert_eq!((t.rows(), t.cols()), (2, 2));
+        // The table's top left corner on the page: 50 mm left of and
+        // 40 mm above the centre of an A4 page.
+        let corner = shape.transform * Point::new(t.rect.x0, t.rect.y1);
+        assert!(near(corner.x, 55.0) && near(corner.y, 188.5), "{corner:?}");
+        assert_eq!(t.cells.len(), 4);
+        let cell = |r, c| &t.cells[t.cell_index(r, c).expect("a cell")];
+        let text: String = cell(0, 0).text.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(text, "Hi");
+        assert!(cell(0, 1).text.is_empty());
+        assert!(matches!(cell(0, 1).fill, Some(Fill::Solid(_))));
+        assert!(cell(0, 0).fill.is_none());
+        assert_eq!((cell(1, 0).row_span, cell(1, 0).col_span), (1, 2));
+        assert!(t.covered(1, 1));
+        // The cells' outline is the table's border; their text stands
+        // 2 mm inside them.
+        assert!(t.border.is_some());
+        assert!(cell(0, 0).borders.is_default());
+        assert!(near(t.padding, 2.0), "{}", t.padding);
+
+        // A table of empty cells: the same grid, margin included.
+        let cells = [
+            (0, 0, 300_000, 100_000, 0, ""),
+            (300_000, 0, 200_000, 100_000, 0, ""),
+        ];
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_100_000, 2_970_000)),
+            list(b"page", &list(b"layr", &table_group(v, (0.0, 0.0), &cells))),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRE", &body), v);
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let ShapeKind::Table(t) = &first_shape(&doc).kind else {
+            panic!("not a table");
+        };
+        assert_eq!((t.rows(), t.cols()), (1, 2));
+        assert!(t.cells.iter().all(|c| c.text.is_empty()));
+        assert!(near(t.padding, 2.0), "{}", t.padding);
+    }
+
+    /// A group that is not a table (no layout record) stays a group, and
+    /// a table whose cells cannot be read is not made up.
+    #[test]
+    fn groups_without_a_table_record_stay_groups() {
+        let v = 14;
+        let cells = [
+            (0, 0, 300_000, 100_000, 0, "One"),
+            (300_000, 0, 200_000, 100_000, 0, "Two"),
+        ];
+        let table = table_group(v, (0.0, 0.0), &cells);
+        // The same bytes with another record id.
+        let mut other = table.clone();
+        let at = other
+            .windows(4)
+            .position(|w| w == b"ppid")
+            .expect("the record id");
+        other[at + 8] ^= 0xff;
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_100_000, 2_970_000)),
+            chunk(b"font", &font_chunk(0, "Arial")),
+            list(b"page", &list(b"layr", &other)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRE", &body), v);
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
+        assert!(matches!(first_shape(&doc).kind, ShapeKind::Group { .. }));
     }
 
     #[test]
@@ -7604,13 +14915,7 @@ mod tests {
                 ..
             }) => {
                 assert_eq!((*width_px, *height_px), (8, 2));
-                let idat_len = u32::from_be_bytes([png[33], png[34], png[35], png[36]]) as usize;
-                let mut raw = Vec::new();
-                std::io::Read::read_to_end(
-                    &mut flate2::read::ZlibDecoder::new(&png[41..41 + idat_len]),
-                    &mut raw,
-                )
-                .unwrap();
+                let raw = raw_rows(png);
                 // Top row: bit 1 (white) is the back colour, bit 0 the front.
                 assert_eq!(&raw[1..4], &[4, 5, 6]);
                 assert_eq!(&raw[1 + 4 * 4..1 + 4 * 4 + 3], &[1, 2, 3]);
@@ -7662,6 +14967,107 @@ mod tests {
         }
     }
 
+    /// The 120-byte transparency record of a version 11 file (#896):
+    /// uniform when its flag at byte 32 is 0, with the percent as an f64
+    /// at byte 64; graded when 1, the fill id at byte 112 naming a
+    /// fountain fill of greys that is the mask (255 opaque).
+    #[test]
+    fn version_11_transparency_records_uniform_and_graded() {
+        use tracedraw_core::live::Effect;
+        // A linear fountain of greys: 255 at the start, 0 at the end.
+        let mut g = vec![0u8; 2];
+        g.push(1);
+        g.extend_from_slice(&[0; 19]);
+        g.extend_from_slice(&i32s(&[0, 90_000_000, 0, 0]));
+        g.extend_from_slice(&[0; 2]);
+        g.extend_from_slice(&u32s(&[0]));
+        g.extend_from_slice(&[50, 0]);
+        g.extend_from_slice(&u32s(&[2]));
+        for (grey, pos) in [(255u8, 0u32), (0, 100)] {
+            g.extend_from_slice(&u16s(&[9, 5]));
+            g.extend_from_slice(&[0; 4]);
+            g.extend_from_slice(&[grey, 0, 0, 0]);
+            g.extend_from_slice(&u32s(&[pos]));
+        }
+        let mut ramp = u32s(&[7]);
+        ramp.extend_from_slice(&u16s(&[2]));
+        ramp.extend_from_slice(&g);
+        let record = |graded: u32, percent: f64, fill: u32| {
+            let mut t = u32s(&[5, 1, 0, 0, 0, 0, 0, 0, graded, 0, 0, 0, 0, 0, 0, 0]);
+            t.extend_from_slice(&f64s(&[percent, 100.0]));
+            t.extend_from_slice(&u32s(&[0, 2, 0, 0, 0, 0, 0, 0, fill, 0]));
+            assert_eq!(t.len(), 120);
+            t
+        };
+        let doc_of = |t: Vec<u8>| {
+            let obj = list(
+                b"obj ",
+                &chunk(
+                    b"loda",
+                    &loda(
+                        OBJ_RECT,
+                        &[
+                            (ARG_COORDS, i32s(&[254000, 254000, 0])),
+                            (ARG_FILL, u32s(&[3])),
+                            (ARG_OPACITY, t),
+                        ],
+                    ),
+                ),
+            );
+            let body = [
+                chunk(b"fild", &solid_fild(3, (255, 255, 255))),
+                chunk(b"fild", &ramp),
+                chunk(b"mcfg", &mcfg(11, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            parse(&riff(b"CDRB", &body), 11)
+        };
+        // Uniform: 60 % transparent.
+        let (doc, rep) = doc_of(record(0, 60.0, 3));
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        assert!((s.opacity - 0.4).abs() < 1e-9);
+        assert!(s.effects.is_empty());
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        // Graded: the fountain's greys as the mask, opaque where white.
+        let (doc, rep) = doc_of(record(1, 0.0, 7));
+        let s = first_shape(&doc);
+        assert_eq!(s.opacity, 1.0);
+        match s.effects.as_slice() {
+            [Effect::Transparency {
+                mask: Fill::Fountain(f),
+                target: 2,
+                ..
+            }] => {
+                assert_eq!(f.kind, FountainKind::Linear);
+                assert!((f.angle - 90.0).abs() < 1e-9);
+                assert_eq!(f.stops.len(), 2);
+                assert_eq!(f.stops[0].color, Color::Gray { v: 1.0 });
+                assert_eq!(f.stops[1].color, Color::Gray { v: 0.0 });
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        // Graded with a fill that is not a fountain: opaque, with a warning.
+        let (doc, rep) = doc_of(record(1, 0.0, 3));
+        assert!(first_shape(&doc).effects.is_empty());
+        assert_eq!(first_shape(&doc).opacity, 1.0);
+        assert!(rep
+            .warnings
+            .iter()
+            .any(|w| w.contains("graded transparency")));
+        // A value out of range: opaque, with a warning.
+        let (doc, rep) = doc_of(record(0, 140.0, 3));
+        assert_eq!(first_shape(&doc).opacity, 1.0);
+        assert!(rep.warnings.iter().any(|w| w.contains("out of range")));
+        // A record of another length reads as before (the u16 at byte 10).
+        let mut op = vec![0u8; 10];
+        op.extend_from_slice(&u16s(&[250]));
+        let (doc, _) = doc_of(op);
+        assert!((first_shape(&doc).opacity - 0.75).abs() < 1e-9);
+    }
+
     #[test]
     fn opacity_argument_is_a_transparency() {
         let mut op = vec![0u8; 14];
@@ -7709,6 +15115,272 @@ mod tests {
         parse(&riff(b"CDRE", &body), 14)
     }
 
+    /// The background of the reporter's version 15 files (#1257): a sky
+    /// blue rectangle whose argument 8000 holds a graded transparency
+    /// record naming a fountain of greys, white (opaque) to black
+    /// (see-through). It opened as a flat blue.
+    #[test]
+    fn version_15_graded_transparency_record() {
+        use tracedraw_core::live::Effect;
+        let record = |graded: u32, fill: u32| {
+            let mut b = vec![5u8];
+            b.extend_from_slice(&u32s(&[1, 0, 1]));
+            b.extend_from_slice(&i32s(&[-2_286_000, 1_524_000, 4_852_444, -2_584_380]));
+            b.extend_from_slice(&u32s(&[graded, 3008, 1]));
+            b.extend_from_slice(&i32s(&[3_881_258, -2_978_060, 3_256_163, -1_130_321]));
+            b.extend_from_slice(&u32s(&[125]));
+            b.extend_from_slice(&f64s(&[0.0, 100.0]));
+            b.extend_from_slice(&u32s(&[0, 2, 0, 0, 0, 0, 0, fill, 0, 0]));
+            assert_eq!(b.len(), 117);
+            let mut op = u32s(&[0x514, 117]);
+            op.extend_from_slice(&b);
+            op
+        };
+        // A version 15 linear fountain of greys (45-byte stops): white at
+        // the start, black at the end.
+        let mut g = vec![0u8; 8];
+        g.push(1);
+        g.extend_from_slice(&[0; 17]);
+        g.extend_from_slice(&i16s(&[0]));
+        g.extend_from_slice(&i32s(&[90_000_000]));
+        g.extend_from_slice(&i32s(&[0, 0]));
+        g.extend_from_slice(&[0; 2]);
+        g.extend_from_slice(&u32s(&[0]));
+        g.extend_from_slice(&[50, 0]);
+        g.extend_from_slice(&u32s(&[2]));
+        g.extend_from_slice(&[0; 3]);
+        for (c, pos) in [(255u8, 0u32), (0, 100)] {
+            g.extend_from_slice(&color_bgr(c, c, c));
+            g.extend_from_slice(&[0; 26]);
+            g.extend_from_slice(&u32s(&[pos]));
+            g.extend_from_slice(&[0; 3]);
+        }
+        let mut ramp = u32s(&[7, 1300, (g.len() + 2) as u32]);
+        ramp.extend_from_slice(&u16s(&[2]));
+        ramp.extend_from_slice(&g);
+        let doc_of = |v: u16, op: Vec<u8>| {
+            let mut coords = u32s(&[5]);
+            coords.extend_from_slice(&i32s(&[0, 0, 254000, 0, 254000, 254000, 0, 254000, 0, 0]));
+            coords.extend_from_slice(&[0x08, 0x40, 0x40, 0x40, 0x48]);
+            let obj = list(
+                b"obj ",
+                &chunk(
+                    b"loda",
+                    &loda(
+                        OBJ_CURVE,
+                        &[
+                            (ARG_COORDS, coords),
+                            (ARG_FILL, u32s(&[3])),
+                            (ARG_OPACITY, op),
+                        ],
+                    ),
+                ),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                chunk(b"fild", &solid_fild_v13(3, (214, 238, 252))),
+                chunk(b"fild", &ramp),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            parse(&riff(b"CDRF", &body), v)
+        };
+        let (doc, rep) = doc_of(15, record(1, 7));
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        assert_eq!(s.opacity, 1.0);
+        assert!(matches!(s.fill, Fill::Solid(_)), "{:?}", s.fill);
+        match s.effects.as_slice() {
+            [Effect::Transparency {
+                mask: Fill::Fountain(f),
+                target: 2,
+                ..
+            }] => {
+                assert_eq!(f.kind, FountainKind::Linear);
+                assert_eq!(f.stops.len(), 2);
+                assert_eq!(f.stops[0].color, Color::Gray { v: 1.0 });
+                assert_eq!(f.stops[1].color, Color::Gray { v: 0.0 });
+                // Placed by the record's points, not the fill's angle (90)
+                // and edge pad: from (388.1, -297.8) to (325.6, -113.0) mm
+                // in the object's space, the opaque end first.
+                assert!((f.angle - 108.69).abs() < 0.01, "{}", f.angle);
+                assert_eq!(f.edge_pad, 0.0);
+                let h = f.handles.expect("placed by its points");
+                use tracedraw_core::geometry::Shape as _;
+                let b = (s.transform * s.local_path()).bounding_box();
+                let near = |rel: Point, x: f64, y: f64| {
+                    let p = Fountain::rel_to_page(b, rel);
+                    let o = s.transform * Point::new(x, y);
+                    (p - o).hypot() < 1e-3
+                };
+                assert!(near(h.start, 388.1258, -297.806), "{h:?}");
+                assert!(near(h.end, 325.6163, -113.0321), "{h:?}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // A record naming a solid fill, or not marked 1, reads as before.
+        for op in [record(1, 3), record(0, 7)] {
+            let (doc, _) = doc_of(15, op);
+            assert!(first_shape(&doc).effects.is_empty());
+            assert_eq!(first_shape(&doc).opacity, 1.0);
+        }
+    }
+
+    /// #3222: the uniform transparencies of a version 15 file (0 at byte
+    /// 29 of the record, the amount at 61) opened solid, so its panels
+    /// hid the names behind them; and its merge code at byte 77, 9 on
+    /// two grey panels its reference pictures show darkening the teal
+    /// beneath, merged as Normal (a pale grey).
+    #[test]
+    fn version_15_uniform_transparency_and_its_merge_mode() {
+        use tracedraw_core::live::{Effect, MergeMode};
+        let record = |percent: f64, merge: u32| {
+            let mut b = vec![5u8];
+            b.extend_from_slice(&u32s(&[1]));
+            b.resize(37, 0);
+            // Byte 37 holds 1 in such records too; byte 29 says uniform.
+            b.extend_from_slice(&u16s(&[1]));
+            b.resize(61, 0);
+            b.extend_from_slice(&f64s(&[percent, 100.0]));
+            b.resize(77, 0);
+            b.extend_from_slice(&u32s(&[merge, 2]));
+            b.resize(105, 0);
+            b.extend_from_slice(&u32s(&[3]));
+            b.resize(117, 0);
+            [u32s(&[0x514, 117]), b].concat()
+        };
+        let doc_of = |op: Vec<u8>| {
+            let mut coords = u32s(&[5]);
+            coords.extend_from_slice(&i32s(&[0, 0, 254000, 0, 254000, 254000, 0, 254000, 0, 0]));
+            coords.extend_from_slice(&[0x08, 0x40, 0x40, 0x40, 0x48]);
+            let obj = list(
+                b"obj ",
+                &chunk(
+                    b"loda",
+                    &loda(
+                        OBJ_CURVE,
+                        &[
+                            (ARG_COORDS, coords),
+                            (ARG_FILL, u32s(&[3])),
+                            (ARG_OPACITY, op),
+                        ],
+                    ),
+                ),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(15, 2_540_000, 2_540_000)),
+                chunk(b"fild", &solid_fild_v13(3, (190, 190, 190))),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRF", &body), 15);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            (first_shape(&doc).clone(), rep)
+        };
+        // 44 % see-through, merged as Normal: an opacity.
+        let (s, _) = doc_of(record(44.0, 0));
+        assert!((s.opacity - 0.56).abs() < 1e-9, "{}", s.opacity);
+        assert!(s.effects.is_empty(), "{:?}", s.effects);
+        // 50 %, merge code 9: a grey mask of the opacity, multiplied.
+        let (s, _) = doc_of(record(50.0, 9));
+        assert_eq!(s.opacity, 1.0);
+        match s.effects.as_slice() {
+            [Effect::Transparency {
+                mask: Fill::Solid(Color::Gray { v }),
+                merge: MergeMode::Multiply,
+                target: 2,
+            }] => assert!((v - 0.5).abs() < 1e-6, "{v}"),
+            other => panic!("{other:?}"),
+        }
+        // A code not known yet: Normal, named in a warning.
+        let (s, rep) = doc_of(record(50.0, 6));
+        assert!((s.opacity - 0.5).abs() < 1e-9, "{}", s.opacity);
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("merge mode 6")),
+            "{:?}",
+            rep.warnings
+        );
+        // None at all: solid.
+        let (s, _) = doc_of(record(0.0, 0));
+        assert_eq!(s.opacity, 1.0);
+        assert!(s.effects.is_empty());
+    }
+
+    /// The shapes of pages 1 and 2 of the reporter's version 13 file
+    /// (#1257): argument 8000 holds the same 117-byte record as version
+    /// 15, here naming a fountain of greys (colour model 9, 255 to 0). The
+    /// objects opened flat, without the fade to see-through.
+    #[test]
+    fn version_13_graded_transparency_record() {
+        use tracedraw_core::live::Effect;
+        let mut b = vec![5u8];
+        b.extend_from_slice(&u32s(&[1, 0, 1]));
+        b.extend_from_slice(&i32s(&[-2_458_949, 2_369_502, 961_709, -876_740]));
+        b.extend_from_slice(&u32s(&[1, 264, 1]));
+        b.extend_from_slice(&i32s(&[-294_272, -155_932, -693_859, 109_615]));
+        b.extend_from_slice(&u32s(&[0]));
+        b.extend_from_slice(&f64s(&[0.0, 100.0]));
+        b.extend_from_slice(&u32s(&[0, 2, 0, 0, 0, 0, 0, 7, 0, 0]));
+        assert_eq!(b.len(), 117);
+        let mut op = u32s(&[0x514, 117]);
+        op.extend_from_slice(&b);
+        // The fountain of greys as the file holds it (id changed to 7).
+        let ramp_hex = concat!(
+            "0700000014050000740000000200140500006200000001000000000000000000",
+            "40a5ae023c00000027007aa893080000000000000000ff00000001003b000200",
+            "010c0000000900050000000000ff00006400000000000000010c000000090005",
+            "0000000000000000000000000000640000000000000000000000000000000000",
+        );
+        let ramp_hex: String = ramp_hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+        let ramp: Vec<u8> = (0..ramp_hex.len() / 2)
+            .map(|i| u8::from_str_radix(&ramp_hex[2 * i..2 * i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(ramp.len(), 128);
+        let mut coords = u32s(&[5]);
+        coords.extend_from_slice(&i32s(&[0, 0, 254000, 0, 254000, 254000, 0, 254000, 0, 0]));
+        coords.extend_from_slice(&[0x08, 0x40, 0x40, 0x40, 0x48]);
+        let obj = list(
+            b"obj ",
+            &chunk(
+                b"loda",
+                &loda(
+                    OBJ_CURVE,
+                    &[
+                        (ARG_COORDS, coords),
+                        (ARG_FILL, u32s(&[3])),
+                        (ARG_OPACITY, op),
+                    ],
+                ),
+            ),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(13, 2_540_000, 2_540_000)),
+            chunk(b"fild", &solid_fild_v13(3, (176, 216, 176))),
+            chunk(b"fild", &ramp),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRD", &body), 13);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        assert_eq!(s.opacity, 1.0);
+        match s.effects.as_slice() {
+            [Effect::Transparency {
+                mask: Fill::Fountain(f),
+                target: 2,
+                ..
+            }] => {
+                assert_eq!(f.kind, FountainKind::Linear);
+                assert_eq!(f.stops.len(), 2);
+                assert_eq!(f.stops[0].color, Color::Gray { v: 1.0 });
+                assert_eq!(f.stops[1].color, Color::Gray { v: 0.0 });
+                assert_eq!(f.edge_pad, 0.0);
+                assert!(f.handles.is_some());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn lens_records_in_the_transparency_argument() {
         use tracedraw_core::live::{Effect, Lens};
@@ -7742,6 +15414,463 @@ mod tests {
         // Truncated records read as no lens.
         let (doc, _) = rect_with_transparency_record(&[1, 0, 0]);
         assert!(first_shape(&doc).effects.is_empty());
+    }
+
+    /// The 117-byte body of a version 24 uniform transparency record
+    /// (tagged 1300), laid out as the file of #1706 holds it: u8 5, the
+    /// record's number, zeros, u32 1 at 29, a number at 33, -1 at 57, the
+    /// transparency in percent (f64) at 61, 2 at 81 and 4 at 105.
+    fn uniform_transparency_record_v24(number: u32, percent: f64) -> Vec<u8> {
+        let mut b = vec![5u8];
+        b.extend_from_slice(&u32s(&[number]));
+        b.resize(29, 0);
+        b.extend_from_slice(&u32s(&[1, 0xa5]));
+        b.resize(57, 0);
+        b.extend_from_slice(&i32s(&[-1]));
+        b.extend_from_slice(&f64s(&[percent, 0.0]));
+        b.resize(81, 0);
+        b.extend_from_slice(&u32s(&[2]));
+        b.resize(105, 0);
+        b.extend_from_slice(&u32s(&[4]));
+        b.resize(117, 0);
+        b
+    }
+
+    /// The fill rule of a version 16+ curve (#1919): its style string's
+    /// `fill.winding`, "1" in the reporter's version 27 file for traced
+    /// letters made of overlapping parts (filled where they overlap),
+    /// "0" or left out for the even-odd rule.
+    #[test]
+    fn version_16_plus_fill_winding_is_the_curve_fill_rule() {
+        use tracedraw_core::shaping::FillRule;
+        let v = 24u16;
+        let read = |json: &str| {
+            let style = [u32s(&[1, json.len() as u32]), json.as_bytes().to_vec()].concat();
+            let mut coords = u32s(&[5]);
+            coords.extend_from_slice(&i32s(&[0, 0, 254000, 0, 254000, 254000, 0, 254000, 0, 0]));
+            coords.extend_from_slice(&[0x08, 0x40, 0x40, 0x40, 0x48]);
+            let obj = list(
+                b"obj ",
+                &chunk(
+                    b"loda",
+                    &loda(
+                        OBJ_CURVE,
+                        &[(ARG_STYLE_STRING, style), (ARG_COORDS, coords)],
+                    ),
+                ),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRO", &body), v);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            first_shape(&doc).fill_rule
+        };
+        let colour =
+            r#""primaryColor":"CMYK,USER,0,0,0,100,100,00000000-0000-0000-0000-000000000000""#;
+        assert_eq!(
+            read(&format!(
+                r#"{{"fill":{{"overprint":"0",{colour},"type":"1","winding":"1"}}}}"#
+            )),
+            FillRule::NonZero
+        );
+        assert_eq!(
+            read(&format!(
+                r#"{{"fill":{{{colour},"type":"1","winding":"0"}}}}"#
+            )),
+            FillRule::EvenOdd
+        );
+        assert_eq!(
+            read(&format!(r#"{{"fill":{{{colour},"type":"1"}}}}"#)),
+            FillRule::EvenOdd
+        );
+    }
+
+    /// A version 22 picture whose graded transparency fades out over the
+    /// top third (#1544): the style string holds the greys, the angle and
+    /// a centred run 0.22 of the box long; argument 8000 holds where the
+    /// run lies, as versions 13 and 15 have it. The mask runs between the
+    /// record's points (it faded over the middle fifth before); a record
+    /// that is not graded, not linear or cut short leaves the style
+    /// string's run as it was.
+    #[test]
+    fn version_22_graded_transparency_runs_between_its_record_points() {
+        use tracedraw_core::live::Effect;
+        let v = 22u16;
+        let json = r#"{"transparency":{"appliesTo":"2","fill":{"angle":"90","fountainType":"1","primaryColor":"GRAY255,USER,255,100,00000000-0000-0000-0000-000000000000","secondaryColor":"GRAY255,USER,0,100,00000000-0000-0000-0000-000000000000","type":"2","xCenterOffset":"0","xScale":"0.22","yCenterOffset":"0","yScale":"0.22"}}}"#;
+        let style = [u32s(&[1, json.len() as u32]), json.as_bytes().to_vec()].concat();
+        let record = |graded: u32, kind: u16, len: usize| {
+            let mut b = vec![5u8];
+            b.extend_from_slice(&u32s(&[2, 0, 0]));
+            b.extend_from_slice(&i32s(&[-3_702_634, -3_391_392, 2_736_892, -9_213_092]));
+            b.extend_from_slice(&u32s(&[graded, 5]));
+            b.extend_from_slice(&u16s(&[kind, 0x079f]));
+            b.extend_from_slice(&i32s(&[127_000, 160_000, 127_000, 254_000]));
+            b.extend_from_slice(&u32s(&[0]));
+            b.extend_from_slice(&f64s(&[0.0, 100.0]));
+            b.resize(81, 0);
+            b.extend_from_slice(&u32s(&[2]));
+            b.resize(105, 0);
+            b.extend_from_slice(&u32s(&[4]));
+            b.resize(117, 0);
+            let mut op = u32s(&[0x514, 117]);
+            op.extend_from_slice(&b);
+            op.truncate(len);
+            op
+        };
+        let read = |op: Option<Vec<u8>>| {
+            let mut args = vec![(ARG_STYLE_STRING, style.clone())];
+            if let Some(op) = op {
+                args.insert(0, (ARG_OPACITY, op));
+            }
+            args.push((ARG_COORDS, f64s(&[254_000.0, 254_000.0, 1.0, 1.0])));
+            let obj = list(b"obj ", &chunk(b"loda", &loda(OBJ_RECT, &args)));
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRN", &body), v);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            first_shape(&doc).clone()
+        };
+        let mask_of = |s: &Shape| match s.effects.as_slice() {
+            [Effect::Transparency {
+                mask: Fill::Fountain(f),
+                target: 2,
+                ..
+            }] => f.clone(),
+            other => panic!("{other:?}"),
+        };
+        let s = read(Some(record(1, 1, 125)));
+        let f = mask_of(&s);
+        assert_eq!(f.kind, FountainKind::Linear);
+        assert_eq!(f.stops[0].color, Color::Gray { v: 1.0 });
+        assert_eq!(f.edge_pad, 0.0);
+        let h = f.handles.expect("placed by the record's points");
+        use tracedraw_core::geometry::Shape as _;
+        let b = (s.transform * s.local_path()).bounding_box();
+        let near = |rel: Point, x: f64, y: f64| {
+            let p = Fountain::rel_to_page(b, rel);
+            (p - s.transform * Point::new(x, y)).hypot() < 1e-3
+        };
+        assert!(near(h.start, 12.7, 16.0), "{h:?}");
+        assert!(near(h.end, 12.7, 25.4), "{h:?}");
+        // Without the record, or with one not graded, not linear or cut
+        // short: the style string's centred run.
+        let plain = mask_of(&read(None));
+        assert!(plain.handles.is_none());
+        assert!((plain.edge_pad - 0.39).abs() < 1e-9, "{}", plain.edge_pad);
+        for op in [record(0, 1, 125), record(1, 2, 125), record(1, 1, 60)] {
+            let f = mask_of(&read(Some(op)));
+            assert!(f.handles.is_none());
+            assert_eq!(f.edge_pad, plain.edge_pad);
+        }
+    }
+
+    #[test]
+    fn version_24_group_with_uniform_transparency_on_its_objects() {
+        // #1706: a group given a uniform transparency of 50 in a version 24
+        // file. The group's own `loda` holds none; each object holds a
+        // style string whose transparency is a fill of type 1 without an
+        // amount, and the amount in a tagged record in argument 8000.
+        let v = 24u16;
+        let json = r#"{"transparency":{"fill":{"type":"1"}},"fill":{"type":"1","primaryColor":"RGB255,USER,102,97,143,100,00000000-0000-0000-0000-000000000000"}}"#;
+        let style_of =
+            |json: &str| [u32s(&[1, json.len() as u32]), json.as_bytes().to_vec()].concat();
+        let style = style_of(json);
+        let square_styled = |style: &[u8], number: u32, record: Option<f64>| {
+            let mut args = vec![(ARG_STYLE_STRING, style.to_vec())];
+            if let Some(p) = record {
+                let body = uniform_transparency_record_v24(number, p);
+                let op = [u32s(&[0x514, body.len() as u32]), body].concat();
+                args.insert(0, (ARG_OPACITY, op));
+            }
+            args.push((ARG_COORDS, f64s(&[254_000.0, 254_000.0, 1.0, 1.0])));
+            list(b"obj ", &chunk(b"loda", &loda(OBJ_RECT, &args)))
+        };
+        let square = |number: u32, record: Option<f64>| square_styled(&style, number, record);
+        let group_loda = loda(
+            0,
+            &[
+                (12000, u32s(&[0])),
+                (ARG_STYLE_STRING, [u32s(&[1, 2]), b"{}".to_vec()].concat()),
+                (100, u32s(&[8])),
+            ],
+        );
+        let read = |objects: Vec<u8>| {
+            let grp = list(b"grp ", &[chunk(b"loda", &group_loda), objects].concat());
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(b"page", &list(b"layr", &grp)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRO", &body), v);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            let ShapeKind::Group { children } = &first_shape(&doc).kind else {
+                panic!("not a group: {:?}", first_shape(&doc).kind);
+            };
+            assert_eq!(first_shape(&doc).opacity, 1.0);
+            // In the order of the file (front to back).
+            children.iter().rev().map(|c| c.opacity).collect::<Vec<_>>()
+        };
+        let got = read([square(1, Some(50.0)), square(2, Some(50.0))].concat());
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|o| (o - 0.5).abs() < 1e-9), "{got:?}");
+        // 75 % lets a quarter through; without the record, opaque.
+        let got = read([square(1, Some(75.0)), square(2, None)].concat());
+        assert!((got[0] - 0.25).abs() < 1e-9 && got[1] == 1.0, "{got:?}");
+        // An amount out of range is opaque.
+        let got = read([square(1, Some(250.0)), square(2, Some(50.0))].concat());
+        assert!(got[0] == 1.0 && (got[1] - 0.5).abs() < 1e-9, "{got:?}");
+        // The record counts only when the style string names a uniform
+        // transparency without its amount; its own amount wins.
+        let empty = style_of(r#"{"transparency":{}}"#);
+        let own = style_of(r#"{"transparency":{"fill":{"type":"1"},"uniformTransparency":"0.2"}}"#);
+        let got = read(
+            [
+                square_styled(&empty, 1, Some(50.0)),
+                square_styled(&own, 2, Some(50.0)),
+            ]
+            .concat(),
+        );
+        assert!(got[0] == 1.0 && (got[1] - 0.8).abs() < 1e-9, "{got:?}");
+        // A merge mode the reader does not know is named in a warning
+        // (#1666); the object is still read, merged as Normal.
+        let merged = style_of(r#"{"transparency":{"fill":{"type":"1"},"mode":"4"}}"#);
+        let grp = list(
+            b"grp ",
+            &[
+                chunk(b"loda", &group_loda),
+                square_styled(&merged, 1, Some(0.0)),
+            ]
+            .concat(),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &grp)),
+        ]
+        .concat();
+        let (_, rep) = parse(&riff(b"CDRO", &body), v);
+        assert_eq!(rep.shapes, 1);
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("merge mode 4")),
+            "{:?}",
+            rep.warnings
+        );
+    }
+
+    /// A vector pattern fill laid out as a version 27 file holds it: the
+    /// 1600 record all zeros, and in the 1300 record the tile's size, 8
+    /// zero bytes, a u16 (4), the box and the `vpat` id (two bytes past
+    /// the record's stated 36), then 6 zero bytes.
+    fn vector_pattern_fild_v27(id: u32, tile: (u32, u32), part: [i32; 4], vpat: u32) -> Vec<u8> {
+        let mut fild = u32s(&[id, 1300, 2 + 8 + 16 + 8 + 44]);
+        fild.extend_from_slice(&u16s(&[10]));
+        fild.extend_from_slice(&u32s(&[1600, 16, 0, 0, 0, 0]));
+        fild.extend_from_slice(&u32s(&[1300, 36, tile.0, tile.1, 0, 0]));
+        fild.extend_from_slice(&u16s(&[4]));
+        fild.extend_from_slice(&i32s(&part));
+        fild.extend_from_slice(&u32s(&[vpat]));
+        fild.extend_from_slice(&[0; 6]);
+        fild
+    }
+
+    /// A 100 mm square pattern drawing with a 20 x 10 mm rectangle at its
+    /// centre, as a `vpat` chunk's data.
+    fn vpat_with_a_rectangle(id: u32) -> Vec<u8> {
+        use crate::cmx::tests as cmx;
+        let drawing = cmx::file(&[cmx::page(&[
+            cmx::begin_page(1_000_000, 1_000_000),
+            cmx::begin_layer("L", None),
+            cmx::rect(&cmx::attrs(1, 0), 0, 0, 200_000, 100_000, 0, 0),
+            cmx::instr(14, &[]),
+            cmx::instr(12, &[]),
+            cmx::instr(10, &[]),
+        ])]);
+        [u32s(&[id]), drawing].concat()
+    }
+
+    #[test]
+    fn version_27_vector_pattern_fill_layout() {
+        let vpat = vpat_with_a_rectangle(19);
+        let fild = vector_pattern_fild_v27(
+            5,
+            (200_000, 100_000),
+            [-200_000, 200_000, 200_000, -200_000],
+            19,
+        );
+        let main = riff(b"CDRU", &chunk(b"fild", &fild));
+        let tree = crate::riff::parse(&main).unwrap();
+        let mut ctx = Ctx::new(&main, &tree, 27);
+        ctx.vector_patterns.insert(19, &vpat[4..]);
+        ctx.read_fill(tree.root.find(b"fild").unwrap());
+        assert!(ctx.report.warnings.is_empty(), "{:?}", ctx.report.warnings);
+        let Fill::Pattern(tracedraw_core::style::Pattern::Vector { shapes, tile, .. }) =
+            &ctx.fills[&5].fill
+        else {
+            panic!("{:?}", ctx.fills[&5].fill)
+        };
+        assert!((tile.width - 20.0).abs() < 1e-6 && (tile.height - 10.0).abs() < 1e-6);
+        // The 40 mm square around the centre, stretched to the tile: the
+        // rectangle half the tile wide and a quarter of it high.
+        let b = shapes[0].bounds();
+        assert!(
+            (b.width() - 10.0).abs() < 1e-6 && (b.height() - 2.5).abs() < 1e-6,
+            "{b:?}"
+        );
+        // A record cut short, or a box of no size: no fill, with a warning.
+        for bad in [
+            fild[..fild.len() - 12].to_vec(),
+            vector_pattern_fild_v27(5, (200_000, 100_000), [0; 4], 19),
+        ] {
+            let main = riff(b"CDRU", &chunk(b"fild", &bad));
+            let tree = crate::riff::parse(&main).unwrap();
+            let mut ctx = Ctx::new(&main, &tree, 27);
+            ctx.vector_patterns.insert(19, &vpat[4..]);
+            ctx.read_fill(tree.root.find(b"fild").unwrap());
+            assert_eq!(ctx.fills[&5].fill, Fill::None);
+            assert!(ctx
+                .report
+                .warnings
+                .iter()
+                .any(|w| w.contains("vector pattern")));
+        }
+    }
+
+    /// A group's vector pattern transparency (a version 27 file): the
+    /// group's own `loda` holds argument 8000, a 117-byte record whose
+    /// type at byte 37 is 10 and whose fill id at byte 105 names a vector
+    /// pattern fill; the pattern is a mask over all the group holds.
+    #[test]
+    fn version_27_group_with_a_vector_pattern_transparency() {
+        use tracedraw_core::live::Effect;
+        let v = 27u16;
+        let record = |kind: u16, fill: u32, len: usize| {
+            let mut b = vec![5u8];
+            b.extend_from_slice(&u32s(&[2]));
+            b.resize(13, 0);
+            b.extend_from_slice(&i32s(&[-127_000, 127_000, 127_000, -127_000]));
+            b.resize(37, 0);
+            b.extend_from_slice(&u16s(&[kind]));
+            b.resize(69, 0);
+            b.extend_from_slice(&f64s(&[100.0]));
+            b.resize(81, 0);
+            b.extend_from_slice(&u32s(&[2]));
+            b.resize(105, 0);
+            b.extend_from_slice(&u32s(&[fill]));
+            b.resize(len, 0);
+            [u32s(&[0x514, 117]), b].concat()
+        };
+        let json = r#"{"transparency":{},"fill":{"type":"1","primaryColor":"RGB255,USER,102,97,143,100,00000000-0000-0000-0000-000000000000"}}"#;
+        let style = [u32s(&[1, json.len() as u32]), json.as_bytes().to_vec()].concat();
+        let square = list(
+            b"obj ",
+            &chunk(
+                b"loda",
+                &loda(
+                    OBJ_RECT,
+                    &[
+                        (ARG_STYLE_STRING, style),
+                        (ARG_COORDS, f64s(&[254_000.0, 254_000.0, 1.0, 1.0])),
+                    ],
+                ),
+            ),
+        );
+        let solid = {
+            let mut props = vec![0x01u8];
+            props.extend_from_slice(&12u32.to_le_bytes());
+            props.extend_from_slice(&color_bgr(10, 20, 30));
+            props.push(0x00);
+            let mut body = u32s(&[1300, props.len() as u32]);
+            body.extend_from_slice(&props);
+            let mut fild = u32s(&[6, 1300, (body.len() + 2) as u32]);
+            fild.extend_from_slice(&u16s(&[1]));
+            fild.extend_from_slice(&body);
+            fild
+        };
+        let read = |op: Option<Vec<u8>>| {
+            let mut args = vec![
+                (12000, u32s(&[0])),
+                (ARG_STYLE_STRING, [u32s(&[1, 2]), b"{}".to_vec()].concat()),
+                (100, u32s(&[8])),
+            ];
+            if let Some(op) = op {
+                args.insert(1, (ARG_OPACITY, op));
+            }
+            let grp = list(
+                b"grp ",
+                &[
+                    list(b"lgob", &chunk(b"loda", &loda(0, &args))),
+                    square.clone(),
+                ]
+                .concat(),
+            );
+            let pattern = vector_pattern_fild_v27(
+                5,
+                (254_000, 254_000),
+                [-200_000, 200_000, 200_000, -200_000],
+                19,
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                chunk(b"vpat", &vpat_with_a_rectangle(19)),
+                chunk(b"fild", &pattern),
+                chunk(b"fild", &solid),
+                list(b"page", &list(b"layr", &grp)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRU", &body), v);
+            (first_shape(&doc).clone(), rep)
+        };
+        // The group stays a group, though it holds one object, and carries
+        // the mask: one tile over its box, moving with it.
+        let (g, rep) = read(Some(record(10, 5, 117)));
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let ShapeKind::Group { children } = &g.kind else {
+            panic!("not a group: {:?}", g.kind);
+        };
+        assert_eq!(children.len(), 1);
+        assert!(children[0].effects.is_empty());
+        let [Effect::Transparency {
+            mask: Fill::Pattern(tracedraw_core::style::Pattern::Vector { placement, .. }),
+            merge: tracedraw_core::live::MergeMode::Normal,
+            target: 2,
+        }] = g.effects.as_slice()
+        else {
+            panic!("{:?}", g.effects);
+        };
+        let b = g.bounds();
+        assert!(b.width() > 1.0 && b.height() > 1.0, "{b:?}");
+        assert!(
+            (placement.offset_x - b.x0).abs() < 1e-9 && (placement.offset_y - b.y0).abs() < 1e-9
+        );
+        assert_eq!(placement.size, Some(Size::new(b.width(), b.height())));
+        assert!(placement.transform_with_object);
+        // Without the record, with one of another type or one cut short:
+        // the object alone, opaque, as before.
+        for op in [None, Some(record(1, 5, 117)), Some(record(10, 5, 60))] {
+            let (s, rep) = read(op);
+            assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+            assert!(!matches!(s.kind, ShapeKind::Group { .. }), "{:?}", s.kind);
+            assert!(s.effects.is_empty() && s.opacity == 1.0);
+        }
+        // A fill that is no vector pattern, or none at all: opaque, with a
+        // warning.
+        for fill in [6, 77] {
+            let (s, rep) = read(Some(record(10, fill, 117)));
+            assert!(!matches!(s.kind, ShapeKind::Group { .. }), "{:?}", s.kind);
+            assert!(s.effects.is_empty());
+            assert!(
+                rep.warnings
+                    .iter()
+                    .any(|w| w.contains("not a vector pattern")),
+                "{:?}",
+                rep.warnings
+            );
+        }
     }
 
     // Arrowheads.
@@ -7779,7 +15908,7 @@ mod tests {
     }
 
     #[test]
-    fn arrowheads_are_classified_from_their_outline() {
+    fn arrowheads_keep_their_own_outline_size_and_place() {
         let triangle = arrw(
             5,
             &[(0, 0), (100, 50), (0, 100), (0, 0)],
@@ -7859,21 +15988,35 @@ mod tests {
             let s = ctx.outlines[&id].stroke.clone().expect("stroke");
             (s.start_arrow, s.end_arrow)
         };
-        assert_eq!(arrows(1), (Arrowhead::Arrow, Arrowhead::Diamond));
-        assert_eq!(arrows(2), (Arrowhead::Square, Arrowhead::Bar));
-        assert_eq!(arrows(3), (Arrowhead::Circle, Arrowhead::OpenArrow));
-        assert_eq!(arrows(4), (Arrowhead::None, Arrowhead::None));
-        match arrows(5).0 {
-            Arrowhead::Custom { path, name } => {
-                use tracedraw_core::geometry::Shape as _;
-                assert_eq!(name, "Arrowhead 11");
-                let b = path.bounding_box();
-                // Normalised: one unit tall, tip at x = 0, body towards -x.
-                assert!((b.height() - 1.0).abs() < 1e-9, "{b:?}");
-                assert!(b.x1.abs() < 1e-9 && (b.x0 + 1.0).abs() < 1e-9, "{b:?}");
-            }
+        // Each head is the file's own outline, at the file's size and
+        // place (#3436): head units over 127 000 per outline width, in
+        // head space of 4 outline widths a unit. They were sorted into
+        // presets drawn at our size.
+        use tracedraw_core::geometry::Shape as _;
+        let unit = 127_000.0 * tracedraw_core::style::HEAD_SIZE_PER_WIDTH;
+        let custom = |a: Arrowhead| match a {
+            Arrowhead::Custom { path, name } => (path.bounding_box(), name),
             other => panic!("{other:?}"),
-        }
+        };
+        let (b, name) = custom(arrows(1).0);
+        assert_eq!(name, "Arrowhead 5");
+        assert!(
+            b.x0.abs() < 1e-12 && (b.x1 - 100.0 / unit).abs() < 1e-12,
+            "{b:?}"
+        );
+        assert!(
+            b.y0.abs() < 1e-12 && (b.y1 - 100.0 / unit).abs() < 1e-12,
+            "{b:?}"
+        );
+        assert_eq!(custom(arrows(1).1).1, "Arrowhead 6");
+        assert_eq!(custom(arrows(2).0).1, "Arrowhead 7");
+        assert_eq!(custom(arrows(2).1).1, "Arrowhead 8");
+        assert_eq!(custom(arrows(3).0).1, "Arrowhead 9");
+        // An open head is stroked one outline width wide.
+        let (b, _) = custom(arrows(3).1);
+        assert!((b.x1 - (100.0 + 63_500.0) / unit).abs() < 1e-3, "{b:?}");
+        assert_eq!(arrows(4), (Arrowhead::None, Arrowhead::None));
+        assert_eq!(custom(arrows(5).0).1, "Arrowhead 11");
         assert!(ctx
             .report
             .warnings
@@ -7925,7 +16068,7 @@ mod tests {
         for c in tree.root.find_all(b"arrx") {
             ctx.read_arrowhead_x(c);
         }
-        assert_eq!(ctx.arrows.get(&1), Some(&Arrowhead::Arrow));
+        assert!(ctx.arrows.get(&1).is_some_and(Arrowhead::is_custom));
         assert!(!ctx.arrows.contains_key(&2));
         assert!(ctx
             .report
@@ -7947,7 +16090,7 @@ mod tests {
         let wide = txsm7(12, false, &styles, "Next");
         let mut warn = |_: String| {};
         let read = |d: &[u8], warn: &mut dyn FnMut(String)| {
-            text::read_txsm(d, 12, warn).map(|t| {
+            text::read_txsm(d, 12, 0, warn).map(|t| {
                 t.paragraphs[0]
                     .runs
                     .iter()
@@ -8064,6 +16207,151 @@ mod tests {
         assert!(anchored_path_for_text(&shapes, &curves, &far, cap).is_none());
     }
 
+    /// Symbols (#2177), as a version 15 file holds them (the test writes
+    /// version 14, whose rectangles are simpler): the definition a
+    /// group of `LIST sytr` (named in argument 19201), the symbol table
+    /// `sblk` naming it for symbol 0x55, and instances on the page
+    /// (`LIST symb`) naming the symbol in their `spnd` and placing the
+    /// definition with their matrix. They open as one document symbol and
+    /// its instances, where the same square drawn through the same
+    /// matrix lies.
+    #[test]
+    fn symbols_open_as_symbols_and_their_instances() {
+        // Version 14: its rectangle record is the simpler one.
+        let v = 14;
+        let square = |m: [f64; 6]| {
+            list(
+                b"obj ",
+                &list(
+                    b"lgob",
+                    &[
+                        chunk(
+                            b"loda",
+                            &loda(OBJ_RECT, &[(ARG_COORDS, i32s(&[100_000, 100_000, 0]))]),
+                        ),
+                        list(b"trfl", &chunk(b"trfd", &trfd(v, m))),
+                    ]
+                    .concat(),
+                ),
+            )
+        };
+        let mut record = vec![0u8; 548];
+        for u in "Logo".encode_utf16().chain([0]) {
+            record.extend_from_slice(&u.to_le_bytes());
+        }
+        let definition = list(
+            b"grp ",
+            &[
+                chunk(b"spnd", &u32s(&[0x77])),
+                list(b"lgob", &chunk(b"loda", &loda(0, &[(ARG_SYMBOL, record)]))),
+                square([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ]
+            .concat(),
+        );
+        let instance = |m: [f64; 6]| {
+            list(
+                b"symb",
+                &[
+                    chunk(b"spnd", &u32s(&[0x55])),
+                    list(
+                        b"lgob",
+                        &[
+                            chunk(b"loda", &loda(0, &[])),
+                            list(b"trfl", &chunk(b"trfd", &trfd(v, m))),
+                        ]
+                        .concat(),
+                    ),
+                ]
+                .concat(),
+            )
+        };
+        let moved = [2.0, 0.0, 300_000.0, 0.0, 1.0, -200_000.0];
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_100_000, 2_970_000)),
+            chunk(b"sblk", &u32s(&[0, 0x55, 0x77])),
+            list(b"sytr", &definition),
+            list(
+                b"page",
+                &list(
+                    b"layr",
+                    &[
+                        instance([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                        instance(moved),
+                        square(moved),
+                    ]
+                    .concat(),
+                ),
+            ),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRF", &body), v);
+        assert_eq!(doc.symbols.len(), 1, "{:?}", rep.warnings);
+        assert_eq!(doc.symbols[0].name, "Logo");
+        let shapes: Vec<&Shape> = doc
+            .pages
+            .iter()
+            .flat_map(|p| &p.layers)
+            .flat_map(|l| &l.shapes)
+            .collect();
+        assert_eq!(shapes.len(), 3, "{:?}", rep.warnings);
+        let placed = |s: &Shape| {
+            let r = doc.symbols[0].shape.bounds();
+            let t = s.transform;
+            let p0 = t * Point::new(r.x0, r.y0);
+            let p1 = t * Point::new(r.x1, r.y1);
+            Rect::from_points(p0, p1)
+        };
+        let close = |a: Rect, b: Rect| {
+            (a.x0 - b.x0).abs() < 1e-6
+                && (a.y0 - b.y0).abs() < 1e-6
+                && (a.x1 - b.x1).abs() < 1e-6
+                && (a.y1 - b.y1).abs() < 1e-6
+        };
+        let plain = shapes
+            .iter()
+            .find(|s| !matches!(s.kind, ShapeKind::SymbolInstance { .. }))
+            .expect("the plain square");
+        let instances: Vec<Rect> = shapes
+            .iter()
+            .filter(|s| matches!(s.kind, ShapeKind::SymbolInstance { index: 0 }))
+            .map(|s| placed(s))
+            .collect();
+        assert_eq!(instances.len(), 2);
+        // The unmoved instance draws the definition where it stands.
+        assert!(
+            close(
+                instances
+                    .iter()
+                    .copied()
+                    .fold(Rect::ZERO, |a, b| if b.width() < 15.0 { b } else { a }),
+                doc.symbols[0].shape.bounds()
+            ),
+            "{instances:?}"
+        );
+        // The moved one where the square drawn through its matrix lies.
+        assert!(
+            instances.iter().any(|&r| close(r, plain.bounds())),
+            "{instances:?} {:?}",
+            plain.bounds()
+        );
+        // A symbol the file lacks: left out with a warning.
+        let lacking = [
+            chunk(b"mcfg", &mcfg(v, 2_100_000, 2_970_000)),
+            list(
+                b"page",
+                &list(b"layr", &instance([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])),
+            ),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRF", &lacking), v);
+        assert!(doc.symbols.is_empty());
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("no definition")),
+            "{:?}",
+            rep.warnings
+        );
+    }
+
     #[test]
     fn clip_containers_draw_their_clpt_group_inside() {
         // A version 12 container (a 30 mm square) naming group 0x55 of the
@@ -8139,6 +16427,94 @@ mod tests {
         );
     }
 
+    /// #2515, #4360: a transparency set on a clip container is shown on
+    /// the clip frame, and fades the frame's fill and outline while the
+    /// objects inside keep their own opacity; a graded one stays on the
+    /// frame inside.
+    #[test]
+    fn a_clip_containers_transparency_is_the_clip_frames() {
+        use tracedraw_core::live::Effect;
+        let v = 24u16;
+        let style_of =
+            |json: &str| [u32s(&[1, json.len() as u32]), json.as_bytes().to_vec()].concat();
+        let square = |side: f64, extra: Vec<(u32, Vec<u8>)>| {
+            let mut args = extra;
+            args.push((ARG_COORDS, f64s(&[side, side, 1.0, 1.0])));
+            list(b"obj ", &chunk(b"loda", &loda(OBJ_RECT, &args)))
+        };
+        let read = |container_args: Vec<(u32, Vec<u8>)>| {
+            let group = list(
+                b"grp ",
+                &[
+                    chunk(b"spnd", &u32s(&[0x55])),
+                    square(100_000.0, Vec::new()),
+                ]
+                .concat(),
+            );
+            let mut args = container_args;
+            args.push((ARG_CLIP_CONTENTS, u32s(&[0x55, 1, 0, 1])));
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                list(b"clpt", &group),
+                list(b"page", &list(b"layr", &square(300_000.0, args))),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRO", &body), v);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            first_shape(&doc).clone()
+        };
+        let masks = |s: &Shape| {
+            s.effects
+                .iter()
+                .filter(|e| matches!(e, Effect::Transparency { .. }))
+                .count()
+        };
+
+        // A uniform transparency of 90 in the container's style string.
+        let uniform = style_of(
+            r#"{"transparency":{"fill":{"type":"1"},"uniformTransparency":"0.9"},"fill":{"type":"1","primaryColor":"RGB255,USER,255,255,255,100,00000000-0000-0000-0000-000000000000"}}"#,
+        );
+        let clip = read(vec![(ARG_STYLE_STRING, uniform.clone())]);
+        let ShapeKind::ClipFrame { frame, contents } = &clip.kind else {
+            panic!("not a clip frame: {:?}", clip.kind);
+        };
+        assert!((clip.opacity - 0.1).abs() < 1e-9, "{}", clip.opacity);
+        // The frame keeps it too (Extract Contents gives it back); the
+        // contents hold none of their own.
+        assert!((frame.opacity - 0.1).abs() < 1e-9, "{}", frame.opacity);
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0].opacity, 1.0);
+        // The objects inside are not faded with it (#4360).
+        assert!(clip.clip_contents_opaque());
+
+        // The amount held in the record of argument 8000 (#1706).
+        let bare = style_of(r#"{"transparency":{"fill":{"type":"1"}}}"#);
+        let body = uniform_transparency_record_v24(1, 55.0);
+        let record = [u32s(&[0x514, body.len() as u32]), body].concat();
+        let clip = read(vec![(ARG_OPACITY, record), (ARG_STYLE_STRING, bare)]);
+        assert!(matches!(clip.kind, ShapeKind::ClipFrame { .. }));
+        assert!((clip.opacity - 0.45).abs() < 1e-9, "{}", clip.opacity);
+
+        // A graded transparency: the mask fades the clip frame whole, not
+        // the fill of the frame inside alone.
+        let graded = style_of(
+            r#"{"transparency":{"appliesTo":"2","fill":{"angle":"90","fountainType":"1","primaryColor":"GRAY255,USER,255,100,00000000-0000-0000-0000-000000000000","secondaryColor":"GRAY255,USER,0,100,00000000-0000-0000-0000-000000000000","type":"2","xCenterOffset":"0","xScale":"1","yCenterOffset":"0","yScale":"1"}}}"#,
+        );
+        let clip = read(vec![(ARG_STYLE_STRING, graded)]);
+        let ShapeKind::ClipFrame { frame, .. } = &clip.kind else {
+            panic!("not a clip frame: {:?}", clip.kind);
+        };
+        assert_eq!(masks(&clip), 0, "{:?}", clip.effects);
+        assert_eq!(masks(frame), 1, "{:?}", frame.effects);
+
+        // A container with no transparency stays opaque.
+        let plain = style_of(r#"{"fill":{"type":"0"}}"#);
+        let clip = read(vec![(ARG_STYLE_STRING, plain)]);
+        assert!(matches!(clip.kind, ShapeKind::ClipFrame { .. }));
+        assert_eq!(clip.opacity, 1.0);
+        assert_eq!(masks(&clip), 0);
+    }
+
     #[test]
     fn version_15_artistic_text_coordinates_holding_an_id_are_no_place() {
         let styles = [Style7 {
@@ -8201,7 +16577,7 @@ mod tests {
         d.extend_from_slice(&bytes);
         d.push(0);
         let mut warnings = Vec::new();
-        let t = text::read_txsm(&d, 12, &mut |w| warnings.push(w)).expect("txsm");
+        let t = text::read_txsm(&d, 12, 0, &mut |w| warnings.push(w)).expect("txsm");
         let got: String = t.paragraphs[0]
             .runs
             .iter()
@@ -8217,7 +16593,7 @@ mod tests {
         d.extend_from_slice(&u32s(&[5]));
         d.extend_from_slice(&[b'a', 0xe7, b'a', 0xed, b'!']);
         d.push(0);
-        let t = text::read_txsm(&d, 12, &mut |_| {}).expect("txsm");
+        let t = text::read_txsm(&d, 12, 0, &mut |_| {}).expect("txsm");
         let got: String = t.paragraphs[0]
             .runs
             .iter()
@@ -8273,8 +16649,8 @@ mod tests {
             let s = ctx.outlines[&id].stroke.clone().expect("stroke");
             (s.start_arrow, s.end_arrow)
         };
-        assert_eq!(arrows(1), (Arrowhead::Arrow, Arrowhead::None));
-        assert_eq!(arrows(2), (Arrowhead::None, Arrowhead::Arrow));
+        assert!(arrows(1).0.is_custom() && arrows(1).1 == Arrowhead::None);
+        assert!(arrows(2).0 == Arrowhead::None && arrows(2).1.is_custom());
         assert!(ctx.report.warnings.is_empty(), "{:?}", ctx.report.warnings);
     }
 
@@ -8320,6 +16696,83 @@ mod tests {
         assert!(rep.warnings.iter().any(|w| w.contains("0x26")));
     }
 
+    /// A point list is the control polygon of a B-spline (#2723): the
+    /// shape is the smooth curve inside it, not the polygon.
+    #[test]
+    fn point_lists_are_b_splines_steered_by_their_points() {
+        // ppdt: u16 count, u32 1, the points, then a u32 for each point.
+        let mut ppdt = 4u16.to_le_bytes().to_vec();
+        ppdt.extend_from_slice(&u32s(&[1]));
+        ppdt.extend_from_slice(&i32s(&[0, 0, 254_000, 0, 254_000, 127_000, 0, 127_000]));
+        ppdt.extend_from_slice(&u32s(&[1, 0, 1, 0]));
+        let obj = list(
+            b"obj ",
+            &[
+                chunk(b"loda", &loda(OBJ_CONNECTOR, &[])),
+                list(
+                    b"npps",
+                    &[chunk(b"ppid", &[0; 16]), chunk(b"ppdt", &ppdt)].concat(),
+                ),
+            ]
+            .concat(),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(9, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDR9", &body), 9);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        match &first_shape(&doc).kind {
+            ShapeKind::Path { path, closed } => {
+                use tracedraw_core::geometry::Shape as _;
+                assert!(closed);
+                // A move, four curves and the close.
+                assert_eq!(path.elements().len(), 6);
+                assert!(path
+                    .elements()
+                    .iter()
+                    .all(|e| !matches!(e, tracedraw_core::geometry::PathEl::LineTo(_))));
+                // The closed cubic B-spline round a rectangle's corners
+                // spans eleven twelfths of each side, in the middle.
+                let b = path.bounding_box();
+                assert!(
+                    (b.width() - 25.4 * 11.0 / 12.0).abs() < 1e-6
+                        && (b.height() - 12.7 * 11.0 / 12.0).abs() < 1e-6,
+                    "{b:?}"
+                );
+                assert!((b.center().x - 12.7).abs() < 1e-6, "{b:?}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// An open B-spline starts at its first point and ends at its last,
+    /// bending towards the points between (#2723).
+    #[test]
+    fn open_b_splines_run_from_the_first_point_to_the_last() {
+        let pts = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(20.0, 0.0),
+        ];
+        let path = b_spline_path(&pts, false);
+        let els = path.elements();
+        assert_eq!(
+            els.first(),
+            Some(&tracedraw_core::geometry::PathEl::MoveTo(pts[0]))
+        );
+        assert!(
+            matches!(els.last(), Some(tracedraw_core::geometry::PathEl::CurveTo(_, _, e)) if *e == pts[2])
+        );
+        use tracedraw_core::geometry::Shape as _;
+        let b = path.bounding_box();
+        assert!(b.height() > 2.0 && b.height() < 10.0, "{b:?}");
+        // Two points are the line between them.
+        let line = b_spline_path(&pts[..2], false);
+        assert_eq!(line.elements().len(), 2);
+    }
+
     #[test]
     fn guidelines_become_page_guides_not_skipped_objects() {
         // 12 bytes, the angle, then the line's points from the page centre:
@@ -8358,6 +16811,171 @@ mod tests {
                 GuideLine::Horizontal { y: cy - 20.0 }
             ]
         );
+    }
+
+    /// Version 7 keeps the guidelines every page shows in the document's
+    /// `guid` chunk (#1775: the four guidelines around the page of the
+    /// reporter's version 7 file): a count, the count again, then a
+    /// 40-byte record each as argument 16000. They were not read.
+    #[test]
+    fn version_7_guidelines_come_from_the_guid_chunk() {
+        let far = 228_600_000;
+        let record = |angle: i32, pts: &[i32]| {
+            let mut a = vec![0u8; 12];
+            a.extend_from_slice(&i32s(&[angle]));
+            a.extend_from_slice(&i32s(pts));
+            a
+        };
+        let mut guid = u32s(&[2, 2]);
+        guid.extend(record(
+            90_000_000,
+            &[100_000, -far, 100_000, far, 100_000, far],
+        ));
+        guid.extend(record(0, &[-far, -200_000, far, -200_000, far, -200_000]));
+        let body = |v: u16| {
+            [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                chunk(b"guid", &guid),
+                list(b"page", &list(b"layr", &[])),
+                list(b"page", &list(b"layr", &[])),
+            ]
+            .concat()
+        };
+        let (doc, rep) = parse(&riff(b"CDR7", &body(7)), 7);
+        use tracedraw_core::document::GuideLine;
+        for page in &doc.pages {
+            let (cx, cy) = (page.size.width / 2.0, page.size.height / 2.0);
+            // The guidelines every page shows (#1928: the master page's).
+            let lines: Vec<GuideLine> = doc
+                .guides_on_page(page.id)
+                .expect("a page of the drawing")
+                .iter()
+                .map(|g| g.line)
+                .collect();
+            assert_eq!(
+                lines,
+                vec![
+                    GuideLine::Vertical { x: cx + 10.0 },
+                    GuideLine::Horizontal { y: cy - 20.0 }
+                ],
+                "{:?}",
+                rep.warnings
+            );
+        }
+        // A short chunk gives what it holds and no more.
+        let mut short = guid.clone();
+        short.truncate(8 + 40 + 10);
+        let body = [
+            chunk(b"mcfg", &mcfg(7, 2_540_000, 2_540_000)),
+            chunk(b"guid", &short),
+            list(b"page", &list(b"layr", &[])),
+        ]
+        .concat();
+        let (doc, _) = parse(&riff(b"CDR7", &body), 7);
+        assert_eq!(
+            doc.guides_on_page(doc.pages[0].id)
+                .expect("the drawing's page")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn embedded_packages_keep_their_place_as_a_box() {
+        // #3083: a wrapped file (Object Packager) with no picture.
+        let mut coords = i32s(&[200_000, 100_000]);
+        coords.extend_from_slice(&i32s(&[-100_000, 50_000, 100_000, -50_000]));
+        let name: Vec<u8> = "Embedding 3"
+            .encode_utf16()
+            .chain([0])
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let obj = list(
+            b"obj ",
+            &chunk(
+                b"loda",
+                &loda(OBJ_EMBEDDED, &[(ARG_NAME, name), (ARG_COORDS, coords)]),
+            ),
+        );
+        let ole = crate::ole::tests::compound_named(
+            "\u{1}Ole10Native",
+            &crate::ole::tests::package("New.crv3d"),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(12, 2_540_000, 2_540_000)),
+            chunk(b"ole2", &ole),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRC", &body), 12);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let ShapeKind::Group { children } = &first_shape(&doc).kind else {
+            panic!("{:?}", first_shape(&doc).kind);
+        };
+        let ShapeKind::Rect { rect, .. } = &children[0].kind else {
+            panic!("{:?}", children[0].kind);
+        };
+        assert!((rect.width() - 20.0).abs() < 1e-9 && (rect.height() - 10.0).abs() < 1e-9);
+        assert_eq!(children[0].name.as_deref(), Some("New.crv3d"));
+        assert!(rep.warnings.iter().any(|w| w.contains("New.crv3d")));
+    }
+
+    #[test]
+    fn an_embedded_drawing_shows_its_objects_at_their_own_size() {
+        // #3600: a .tdraw wrapped as a package, in a 20 by 10 mm object
+        // around the page centre.
+        let mut inner = tracedraw_core::Document::new("inner", Size::new(100.0, 50.0));
+        let id = inner.ids_mut().shape();
+        inner.pages[0].layers[0].shapes.push(Shape::new(
+            id,
+            ShapeKind::Rect {
+                rect: Rect::new(10.0, 10.0, 40.0, 30.0),
+                radius: 0.0,
+                corners: None,
+            },
+        ));
+        let file = inner.to_json().expect("json");
+        let mut coords = i32s(&[200_000, 100_000]);
+        coords.extend_from_slice(&i32s(&[-100_000, 50_000, 100_000, -50_000]));
+        let name: Vec<u8> = "Embedding 3"
+            .encode_utf16()
+            .chain([0])
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let obj = list(
+            b"obj ",
+            &chunk(
+                b"loda",
+                &loda(OBJ_EMBEDDED, &[(ARG_NAME, name), (ARG_COORDS, coords)]),
+            ),
+        );
+        let ole = crate::ole::tests::compound_named(
+            "\u{1}Ole10Native",
+            &crate::ole::tests::package_with("Inner.tdraw", file.as_bytes()),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(12, 2_540_000, 2_540_000)),
+            chunk(b"ole2", &ole),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRC", &body), 12);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        let group = first_shape(&doc);
+        let ShapeKind::Group { children } = &group.kind else {
+            panic!("{:?}", group.kind);
+        };
+        assert!(matches!(children[0].kind, ShapeKind::Rect { .. }));
+        let b = group.bounds();
+        assert!(
+            (b.width() - 30.0).abs() < 1e-6 && (b.height() - 20.0).abs() < 1e-6,
+            "{b:?}"
+        );
+        assert!(
+            (b.center().x - 127.0).abs() < 1e-6 && (b.center().y - 127.0).abs() < 1e-6,
+            "{b:?}"
+        );
+        assert!(!rep.warnings.iter().any(|w| w.contains("Inner.tdraw")));
     }
 
     #[test]
@@ -8421,5 +17039,1415 @@ mod tests {
         let (_, rep) = parse(&riff(b"CDRC", &body), 12);
         assert!(rep.warnings.iter().any(|w| w.contains("not shown")));
         assert!(!rep.warnings.iter().any(|w| w.contains("0x0a")));
+    }
+
+    #[test]
+    fn embedded_metafile_pictures_are_drawn_over_their_objects_rectangle() {
+        // A player drawing every metafile as a 10 by 5 frame filled by
+        // one rectangle (the import crate's player is registered by the
+        // app).
+        tracedraw_core::document::metafile::set(|_, ids| {
+            let path = Rect::new(0.0, 0.0, 10.0, 5.0).to_path(0.1);
+            let mut bar = Shape::new(ids.shape(), ShapeKind::Path { path, closed: true });
+            bar.fill = Fill::Solid(tracedraw_core::Color::BLACK);
+            Some((vec![bar], Size::new(10.0, 5.0)))
+        });
+        let mut stream = crate::ole::tests::presentation(&[1, 0, 9, 0, 0, 3]);
+        stream.resize(4096, 0);
+        let ole = crate::ole::tests::compound_named("\u{2}OlePres000", &stream);
+        // A version 26 barcode (#1131): no name argument; its `olel`
+        // names storage 3. 20 by 10 mm around the page centre.
+        let mut coords = i32s(&[200_000, 100_000]);
+        coords.extend_from_slice(&i32s(&[-100_000, 50_000, 100_000, -50_000]));
+        let mut olel = vec![0, 1, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0];
+        olel.extend_from_slice(&[0, 0, 1, 0, 0, 0]);
+        let obj = list(
+            b"obj ",
+            &[
+                chunk(b"loda", &loda(OBJ_EMBEDDED, &[(ARG_COORDS, coords)])),
+                chunk(b"olel", &olel),
+            ]
+            .concat(),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(12, 2_540_000, 2_540_000)),
+            chunk(b"ole2", &ole),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        let (doc, rep) = parse(&riff(b"CDRC", &body), 12);
+        assert_eq!(rep.skipped_objects, 0, "{:?}", rep.warnings);
+        let shape = first_shape(&doc);
+        let ShapeKind::Group { children } = &shape.kind else {
+            panic!("{:?}", shape.kind);
+        };
+        assert_eq!(children.len(), 1);
+        assert!(matches!(shape.fill, Fill::None) && shape.stroke.is_none());
+        assert_ne!(children[0].id, shape.id);
+        let b = shape.transform.transform_rect_bbox(children[0].bounds());
+        let c = 127.0;
+        for (got, want) in [
+            (b.x0, c - 10.0),
+            (b.x1, c + 10.0),
+            (b.y0, c - 5.0),
+            (b.y1, c + 5.0),
+        ] {
+            assert!((got - want).abs() < 1e-6, "{b:?}");
+        }
+    }
+
+    /// A version 16+ `trfd` entry of `tag` 1740: the tag, the entry's
+    /// length less 16, the entry type and its body.
+    fn trfd_entry(ty: u16, body: &[u8]) -> Vec<u8> {
+        let mut e = u32s(&[1740, (body.len() + 10 - 16) as u32]);
+        e.extend_from_slice(&u16s(&[ty]));
+        e.extend_from_slice(body);
+        e
+    }
+
+    /// A matrix entry: 6 zero bytes, then a, c, e, b, d, f (offsets in
+    /// file units).
+    fn trfd_matrix(m: [f64; 6]) -> Vec<u8> {
+        let mut b = vec![0u8; 6];
+        b.extend_from_slice(&f64s(&m));
+        trfd_entry(8, &b)
+    }
+
+    /// An envelope entry as version 27 files hold one: 8 unknown and 6
+    /// zero bytes, the box (left, top, right, bottom in file units), the
+    /// corner point indexes, a running number, 0, the outline's point
+    /// count, three more numbers and 8 zero bytes.
+    fn trfd_envelope(bx: [i32; 4], corners: [u32; 4], count: u32) -> Vec<u8> {
+        let mut b = vec![0x23, 0x02, 0x50, 0x01, 0x5f, 0x00, 0x02, 0x00];
+        b.extend_from_slice(&[0; 6]);
+        b.extend_from_slice(&i32s(&bx));
+        b.extend_from_slice(&u32s(&corners));
+        b.extend_from_slice(&u32s(&[4, 0, count, 23, 24, 25, 0, 0]));
+        trfd_entry(1, &b)
+    }
+
+    /// A version 16+ `trfd` of the given entries: length, count, the
+    /// offsets table at 16 (after 0xffff), the entries.
+    fn trfd_v16(entries: &[Vec<u8>]) -> Vec<u8> {
+        let head = 16 + 4 * (entries.len() + 1);
+        let mut offsets = Vec::new();
+        let mut at = head;
+        for e in entries {
+            offsets.push(at as u32);
+            at += e.len();
+        }
+        offsets.push(at as u32);
+        let mut out = u32s(&[at as u32, entries.len() as u32, 16, 0xffff]);
+        out.extend_from_slice(&u32s(&offsets));
+        for e in entries {
+            out.extend_from_slice(e);
+        }
+        out
+    }
+
+    /// An `envd` record: the header (length, 2, the offsets table at 60,
+    /// the types table at 72), the outline's point count at 16, the node
+    /// types from byte 80, then the points.
+    fn envd(points: &[(i32, i32)], types: &[u8]) -> Vec<u8> {
+        let types_at = 80u32;
+        let points_at = types_at + types.len() as u32;
+        let len = points_at + 8 * points.len() as u32;
+        let mut out = u32s(&[len, 2, 60, 72, points.len() as u32]);
+        out.resize(60, 0);
+        out.extend_from_slice(&u32s(&[types_at, points_at, len, 30, 40]));
+        out.extend_from_slice(types);
+        for (x, y) in points {
+            out.extend_from_slice(&i32s(&[*x, *y]));
+        }
+        out
+    }
+
+    /// A version 27 file of one 10 mm square curve from the page centre
+    /// (fill `fill` when given), whose `trfl` holds `trfd` and `envds`, in
+    /// a group when `grouped` (the group's `lgob` holding them instead).
+    fn envelope_file(trfd: Vec<u8>, envds: &[Vec<u8>], grouped: bool) -> (Document, ParseReport) {
+        envelope_file_of(27, trfd, envds, grouped)
+    }
+
+    /// [`envelope_file`] in version `v`.
+    fn envelope_file_of(
+        v: u16,
+        trfd: Vec<u8>,
+        envds: &[Vec<u8>],
+        grouped: bool,
+    ) -> (Document, ParseReport) {
+        let mut coords = u32s(&[5]);
+        coords.extend_from_slice(&i32s(&[
+            0, 0, 0, 100_000, 100_000, 100_000, 100_000, 0, 0, 0,
+        ]));
+        coords.extend_from_slice(&[0x0c, 0x44, 0x44, 0x44, 0x48]);
+        let trfl = |t: Vec<u8>| {
+            let mut b = chunk(b"trfd", &t);
+            for e in envds {
+                b.extend_from_slice(&chunk(b"envd", e));
+            }
+            list(b"trfl", &b)
+        };
+        let identity = trfd_v16(&[trfd_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])]);
+        let (own, group) = if grouped {
+            (identity, Some(trfd))
+        } else {
+            (trfd, None)
+        };
+        let obj = list(
+            b"obj ",
+            &list(
+                b"lgob",
+                &[
+                    chunk(b"loda", &loda(OBJ_CURVE, &[(ARG_COORDS, coords)])),
+                    if grouped {
+                        list(b"trfl", &chunk(b"trfd", &own))
+                    } else {
+                        trfl(own)
+                    },
+                ]
+                .concat(),
+            ),
+        );
+        let layer = match group {
+            Some(t) => list(
+                b"grp ",
+                &[
+                    list(b"lgob", &[chunk(b"loda", &loda(7, &[])), trfl(t)].concat()),
+                    obj.clone(),
+                    obj,
+                ]
+                .concat(),
+            ),
+            None => obj,
+        };
+        let body = [
+            chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &layer)),
+        ]
+        .concat();
+        let tag = [b'C', b'D', b'R', b'A' + (v - 10) as u8];
+        parse(&riff(&tag, &body), v)
+    }
+
+    /// The outline of an envelope over the box (0, 0)-(20, 10) mm whose
+    /// top-right corner is raised to 20 mm, as files hold it: clockwise
+    /// from the bottom-left corner, the top side a curve with its handles
+    /// on the line, the rest straight.
+    fn raised_envelope() -> Vec<u8> {
+        envd(
+            &[
+                (0, 0),
+                (0, 100_000),
+                (66_667, 133_333),
+                (133_333, 166_667),
+                (200_000, 200_000),
+                (200_000, 0),
+                (0, 0),
+            ],
+            &[0x0c, 0x44, 0xc0, 0xc0, 0x84, 0x44, 0x48],
+        )
+    }
+
+    /// Version 16+ envelopes (#1668): the `trfd` holds the matrices
+    /// before the envelope, the envelope (entry type 1: the box it maps
+    /// from and its corners among the points of the `envd` chunk after
+    /// the `trfd`) and the matrices after it. Seen in a version 27 file
+    /// whose "2.0" is enveloped: the objects' outlines are stored as
+    /// drawn before the envelope, and read with the matrices only they
+    /// came out straight and out of place.
+    #[test]
+    fn version_16_envelopes_bend_objects_between_their_matrices() {
+        // Stretched to 20 x 10 mm, bent so the right side rises to 20 mm,
+        // then moved 5 mm up.
+        let t = trfd_v16(&[
+            trfd_matrix([2.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            trfd_envelope([0, 100_000, 200_000, 0], [0, 1, 4, 5], 7),
+            trfd_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 50_000.0]),
+        ]);
+        let (doc, rep) = envelope_file(t.clone(), &[raised_envelope()], false);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        assert!(
+            matches!(s.kind, ShapeKind::Path { closed: true, .. }),
+            "{:?}",
+            s.kind
+        );
+        let b = s.page_path().bounding_box();
+        let c = 127.0;
+        for (got, want) in [
+            (b.x0, c),
+            (b.x1, c + 20.0),
+            (b.y0, c + 5.0),
+            (b.y1, c + 25.0),
+        ] {
+            assert!((got - want).abs() < 0.05, "{b:?}");
+        }
+        // The top edge rises along the frame's top side: halfway along,
+        // it is at 15 mm (+5).
+        let p = s.page_path();
+        let top_mid = (0..=200)
+            .map(|k| Point::new(c + 10.0, c + 5.0 + k as f64 * 0.1))
+            .filter(|q| p.winding(*q) != 0)
+            .map(|q| q.y)
+            .fold(f64::MIN, f64::max);
+        assert!((top_mid - (c + 20.0)).abs() < 0.2, "{top_mid}");
+
+        // Without its outline record the envelope is left out, with a
+        // warning, and the matrices still apply.
+        let (doc, rep) = envelope_file(t, &[], false);
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("envelope")),
+            "{:?}",
+            rep.warnings
+        );
+        let b = first_shape(&doc).page_path().bounding_box();
+        assert!(
+            (b.height() - 10.0).abs() < 1e-6 && (b.y0 - (c + 5.0)).abs() < 1e-6,
+            "{b:?}"
+        );
+    }
+
+    /// #3222: a version 15 file holds its envelopes as version 16 does
+    /// (the dance pads and panels of the reporter's 19-page file, drawn
+    /// flat and out of place before): on an object and on a group.
+    #[test]
+    fn version_15_envelopes_bend_objects_and_groups() {
+        let c = 127.0;
+        // An object: stretched, bent so its right side rises to 20 mm,
+        // then moved 5 mm up.
+        let t = trfd_v16(&[
+            trfd_matrix([2.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            trfd_envelope([0, 100_000, 200_000, 0], [0, 1, 4, 5], 7),
+            trfd_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 50_000.0]),
+        ]);
+        let (doc, rep) = envelope_file_of(15, t, &[raised_envelope()], false);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let b = first_shape(&doc).page_path().bounding_box();
+        for (got, want) in [
+            (b.x0, c),
+            (b.x1, c + 20.0),
+            (b.y0, c + 5.0),
+            (b.y1, c + 25.0),
+        ] {
+            assert!((got - want).abs() < 0.05, "{b:?}");
+        }
+        // A group: the matrix before the envelope is already in its
+        // objects; the envelope and the move after it are the group's.
+        let t = trfd_v16(&[
+            trfd_matrix([3.0, 0.0, 0.0, 0.0, 3.0, 0.0]),
+            trfd_envelope([0, 100_000, 100_000, 0], [0, 1, 4, 5], 7),
+            trfd_matrix([1.0, 0.0, 100_000.0, 0.0, 1.0, 0.0]),
+        ]);
+        let env = envd(
+            &[
+                (0, 0),
+                (0, 100_000),
+                (33_333, 133_333),
+                (66_667, 166_667),
+                (100_000, 200_000),
+                (100_000, 0),
+                (0, 0),
+            ],
+            &[0x0c, 0x44, 0xc0, 0xc0, 0x84, 0x44, 0x48],
+        );
+        let (doc, rep) = envelope_file_of(15, t, &[env], true);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        let ShapeKind::Group { children } = &s.kind else {
+            panic!("{:?}", s.kind);
+        };
+        for child in children {
+            let b = s
+                .transform
+                .transform_rect_bbox(child.page_path().bounding_box());
+            for (got, want) in [
+                (b.x0, c + 10.0),
+                (b.x1, c + 20.0),
+                (b.y0, c),
+                (b.y1, c + 20.0),
+            ] {
+                assert!((got - want).abs() < 0.05, "{b:?}");
+            }
+        }
+    }
+
+    /// A distortion entry (version 16+, type 0x10) as the version 27
+    /// files of #1715 hold one: 6 zero bytes, the kind, the centre (file
+    /// units), the option bits, two values, the seed and 36 zero bytes.
+    fn trfd_distortion(kind: u16, center: (i32, i32), flags: u32, values: (i32, i32)) -> Vec<u8> {
+        let mut b = vec![0u8; 6];
+        b.extend_from_slice(&u16s(&[kind]));
+        b.extend_from_slice(&i32s(&[center.0, center.1]));
+        b.extend_from_slice(&u32s(&[flags]));
+        b.extend_from_slice(&i32s(&[values.0, values.1]));
+        b.extend_from_slice(&u32s(&[0x6aea_07df]));
+        b.extend_from_slice(&[0; 36]);
+        trfd_entry(16, &b)
+    }
+
+    /// A version 27 file of one straight line of `length` file units from
+    /// the page centre to the right (the control object of the Zipper
+    /// files of #1715), with `trfd`.
+    fn line_file(length: i32, trfd: Vec<u8>) -> (Document, ParseReport) {
+        let mut coords = u32s(&[2]);
+        coords.extend_from_slice(&i32s(&[0, 0, length, 0]));
+        coords.extend_from_slice(&[0x04, 0x44]);
+        let obj = list(
+            b"obj ",
+            &list(
+                b"lgob",
+                &[
+                    chunk(b"loda", &loda(OBJ_CURVE, &[(ARG_COORDS, coords)])),
+                    list(b"trfl", &chunk(b"trfd", &trfd)),
+                ]
+                .concat(),
+            ),
+        );
+        let body = [
+            chunk(b"mcfg", &mcfg(27, 2_540_000, 2_540_000)),
+            list(b"page", &list(b"layr", &obj)),
+        ]
+        .concat();
+        parse(&riff(b"CDRR", &body), 27)
+    }
+
+    /// The outline a shape's live effects draw, on the page.
+    fn drawn_page_path(s: &Shape) -> BezPath {
+        let ev = tracedraw_core::live::evaluate(s);
+        ev.main.page_path()
+    }
+
+    /// Version 16+ Zipper distortions (#1715): "Zipper Traning Data 20"
+    /// of #1736, a 133.39 mm line moved by the matrix before the entry,
+    /// a Zipper (kind 2) of amplitude 41 and frequency 15 about a centre
+    /// near its left end and 1.86 mm under it, then stretched 2.04 times
+    /// upwards by the matrix after it. It opened as a straight line; it
+    /// opens as the line with a live Zipper whose outline has the file's
+    /// box (x -78.00 to 59.12, y 27.25 to 54.39 mm from the page centre)
+    /// and 17 points: the teeth reach 41 / 800 of the line's length to
+    /// either side, the tips (the first point among them) moved by a
+    /// fifth of the way from the line's middle to the centre.
+    #[test]
+    fn version_16_zipper_distortions_open_live() {
+        use tracedraw_core::{effects::Distort, live::Effect};
+        let t = trfd_v16(&[
+            trfd_matrix([1.0, 0.0, -659_298.0, 0.0, 1.0, 313_103.0]),
+            trfd_distortion(2, (-595_628, 294_550), 0, (41, 15)),
+            trfd_matrix([1.0, 0.0, 0.0, 0.0, 2.04072, -226_944.0]),
+        ]);
+        let (doc, rep) = line_file(1_333_870, t);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        let Some(Effect::Distort(Distort::Zipper {
+            amplitude,
+            frequency,
+            center: Some(center),
+            smooth,
+            shifted_tips,
+            ..
+        })) = s.effects.first().cloned()
+        else {
+            panic!("no Zipper: {:?}", s.effects);
+        };
+        assert!(
+            (amplitude - 41.0 / 100.0 * 133.387 / 8.0).abs() < 1e-3,
+            "{amplitude}"
+        );
+        assert_eq!(frequency, 15);
+        assert!(shifted_tips && !smooth);
+        // The centre in the line's own space (the matrix before the
+        // entry only moves it).
+        let local = s.local_path().bounding_box();
+        assert!(
+            (center.x - (local.x0 + 6.3670)).abs() < 1e-3,
+            "{center:?} {local:?}"
+        );
+        assert!(
+            (center.y - (local.y0 - 1.8553)).abs() < 1e-3,
+            "{center:?} {local:?}"
+        );
+        let drawn = drawn_page_path(s);
+        assert_eq!(
+            drawn
+                .elements()
+                .iter()
+                .filter(|e| !matches!(e, tracedraw_core::geometry::PathEl::ClosePath))
+                .count(),
+            17
+        );
+        let b = drawn.bounding_box();
+        let c = 127.0;
+        for (got, want) in [
+            (b.x0, c - 78.00),
+            (b.x1, c + 59.12),
+            (b.y0, c + 27.25),
+            (b.y1, c + 54.39),
+        ] {
+            assert!((got - want).abs() < 0.02, "{b:?}");
+        }
+        // Saved again by TraceDraw (drawn as curves, the package's own
+        // member keeping the object), it opens with the same live Zipper.
+        let bytes = crate::write::document_to_cdr_version(&doc, 27);
+        let (back, _) = crate::open_bytes(&bytes, "back").expect("reads back");
+        let again = first_shape(&back);
+        match again.effects.first() {
+            Some(Effect::Distort(Distort::Zipper {
+                amplitude: a2,
+                frequency: 15,
+                center: Some(c2),
+                shifted_tips: true,
+                ..
+            })) => {
+                assert!((a2 - amplitude).abs() < 1e-9 && (*c2 - center).hypot() < 1e-6);
+            }
+            e => panic!("{e:?}"),
+        }
+        let b2 = drawn_page_path(again).bounding_box();
+        assert!(
+            (b2.x0 - b.x0).abs() < 0.01 && (b2.y1 - b.y1).abs() < 0.01,
+            "{b2:?}"
+        );
+        // The Smooth bit.
+        let t = trfd_v16(&[trfd_distortion(2, (0, 10_000), 1, (82, 20))]);
+        let (doc, _) = line_file(1_184_155, t);
+        assert!(matches!(
+            first_shape(&doc).effects.first(),
+            Some(Effect::Distort(Distort::Zipper {
+                smooth: true,
+                frequency: 20,
+                ..
+            }))
+        ));
+    }
+
+    /// Version 16+ Twister distortions (#1715): kind 3, the angle in
+    /// degrees, the centre where the matrices before the entry put it
+    /// ("Distord Twister" of #1674: the square's middle, -74 to -1001
+    /// degrees). Moved only, the object keeps its kind and the centre is
+    /// taken back into its own space; stretched, it becomes its outline
+    /// through the stretch and the centre stays. Another kind (no file
+    /// seen) is left out with a warning.
+    #[test]
+    fn version_16_twister_distortions_open_live() {
+        use tracedraw_core::{effects::Distort, live::Effect};
+        let twister = |s: &Shape| match s.effects.first() {
+            Some(Effect::Distort(Distort::Twister {
+                angle_deg,
+                center: Some(c),
+            })) => (*angle_deg, *c),
+            e => panic!("no Twister: {e:?}"),
+        };
+        let t = trfd_v16(&[
+            trfd_matrix([1.0, 0.0, 20_000.0, 0.0, 1.0, 0.0]),
+            trfd_distortion(3, (70_000, 50_000), 0, (-214, 0)),
+        ]);
+        let (doc, rep) = envelope_file(t, &[], false);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        let (angle, c) = twister(s);
+        assert_eq!(angle, -214.0);
+        assert!((c - Point::new(5.0, 5.0)).hypot() < 1e-9, "{c:?}");
+        // The square swirls about its middle (129 to 139, 127 to 137 mm
+        // on the page), which stays.
+        let drawn = drawn_page_path(s);
+        let b = drawn.bounding_box();
+        assert!(
+            (b.center() - Point::new(134.0, 132.0)).hypot() < 1e-6,
+            "{b:?}"
+        );
+        assert!(drawn != s.page_path());
+
+        let t = trfd_v16(&[
+            trfd_matrix([2.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            trfd_distortion(3, (100_000, 50_000), 0, (-74, 0)),
+            trfd_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 50_000.0]),
+        ]);
+        let (doc, rep) = envelope_file(t, &[], false);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        let (angle, c) = twister(s);
+        assert_eq!(angle, -74.0);
+        assert!((c - Point::new(10.0, 5.0)).hypot() < 1e-9, "{c:?}");
+        let b = s.page_path().bounding_box();
+        assert!(
+            (b.width() - 20.0).abs() < 1e-6 && (b.y0 - 132.0).abs() < 1e-6,
+            "{b:?}"
+        );
+
+        let t = trfd_v16(&[trfd_distortion(9, (50_000, 50_000), 0, (40, 0))]);
+        let (doc, rep) = envelope_file(t, &[], false);
+        assert!(first_shape(&doc).effects.is_empty());
+        assert!(
+            rep.warnings
+                .iter()
+                .any(|w| w.contains("distortion of kind 9")),
+            "{:?}",
+            rep.warnings
+        );
+    }
+
+    /// Version 16+ Push and Pull distortions (#1824): kind 1, the amount
+    /// in percent (-200 to 200, negative pulls) and 0. "Push and Pull 1"
+    /// and "8" of #1824 are a 56.0022 mm square pulled by 118 and pushed
+    /// by 200 about its middle; their boxes (the objects' `bbox`) are
+    /// 1.5901 and 3.0000 times the square's side, centred on it. The
+    /// outline TraceDraw's Push and Pull draws for this 10 mm square has
+    /// boxes of 15.901 and 30.000 mm, the same shares.
+    #[test]
+    fn version_16_push_and_pull_distortions_open_live() {
+        use tracedraw_core::{effects::Distort, live::Effect};
+        for (amount, side) in [(-118, 15.901), (200, 30.0)] {
+            let t = trfd_v16(&[trfd_distortion(1, (50_000, 50_000), 0, (amount, 0))]);
+            let (doc, rep) = envelope_file(t, &[], false);
+            assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+            let s = first_shape(&doc);
+            match s.effects.first() {
+                Some(Effect::Distort(Distort::PushPull {
+                    amount: a,
+                    center: Some(c),
+                })) => {
+                    assert_eq!(*a, f64::from(amount));
+                    assert!((*c - Point::new(5.0, 5.0)).hypot() < 1e-9, "{c:?}");
+                }
+                e => panic!("no Push and Pull: {e:?}"),
+            }
+            let b = drawn_page_path(s).bounding_box();
+            let middle = s.page_path().bounding_box().center();
+            assert!((b.center() - middle).hypot() < 0.005, "{b:?}");
+            assert!((b.width() - side).abs() < 0.005, "{amount}: {b:?}");
+            assert!((b.height() - side).abs() < 0.005, "{amount}: {b:?}");
+        }
+        // Saved again by TraceDraw (drawn as curves, the package's own
+        // member keeping the object), it opens with the same live effect.
+        let t = trfd_v16(&[trfd_distortion(1, (50_000, 50_000), 0, (-118, 0))]);
+        let (doc, _) = envelope_file(t, &[], false);
+        let bytes = crate::write::document_to_cdr_version(&doc, 27);
+        let (back, _) = crate::open_bytes(&bytes, "back").expect("reads back");
+        assert!(matches!(
+            first_shape(&back).effects.first(),
+            Some(Effect::Distort(Distort::PushPull { amount, .. })) if *amount == -118.0
+        ));
+    }
+
+    /// Stacked distortions (#1824): "Push and Pull 23" to "27" and "31"
+    /// to "36" distort an object again over its distortion, two to five
+    /// entries one after the other in its `trfd` (in "25" to "27" with a
+    /// matrix between them). The earlier ones are baked into the outline
+    /// in order, each about its own centre, and the last stays live, so
+    /// the object draws all of them; it opened with the first alone.
+    #[test]
+    fn version_16_stacked_distortions_draw_them_all() {
+        use tracedraw_core::distort::distort;
+        use tracedraw_core::{effects::Distort, live::Effect};
+        let pp = |amount: f64, x: f64, y: f64| Distort::PushPull {
+            amount,
+            center: Some(Point::new(x, y)),
+        };
+        let mut square = BezPath::new();
+        square.move_to((0.0, 0.0));
+        square.line_to((0.0, 10.0));
+        square.line_to((10.0, 10.0));
+        square.line_to((10.0, 0.0));
+        square.close_path();
+        for between in [false, true] {
+            let mut entries = vec![
+                trfd_matrix([1.0, 0.0, 20_000.0, 0.0, 1.0, -10_000.0]),
+                trfd_distortion(1, (70_000, 0), 0, (-200, 0)),
+            ];
+            if between {
+                entries.push(trfd_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]));
+            }
+            entries.push(trfd_distortion(1, (40_000, -30_000), 0, (94, 0)));
+            entries.push(trfd_distortion(3, (60_000, -10_000), 0, (-90, 0)));
+            let (doc, rep) = envelope_file(trfd_v16(&entries), &[], false);
+            assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+            let s = first_shape(&doc);
+            // The last one live, about its centre in file space.
+            assert_eq!(s.effects.len(), 1, "{:?}", s.effects);
+            match s.effects.first() {
+                Some(Effect::Distort(Distort::Twister {
+                    angle_deg,
+                    center: Some(c),
+                })) => {
+                    assert_eq!(*angle_deg, -90.0);
+                    assert!((*c - Point::new(6.0, -1.0)).hypot() < 1e-9, "{c:?}");
+                }
+                e => panic!("no live Twister: {e:?}"),
+            }
+            // The outline: the square moved by the matrix, pulled, pushed,
+            // then twisted.
+            let moved = Affine::translate((2.0, -1.0)) * square.clone();
+            let want = distort(
+                &distort(&distort(&moved, pp(-200.0, 7.0, 0.0)), pp(94.0, 4.0, -3.0)),
+                Distort::Twister {
+                    angle_deg: -90.0,
+                    center: Some(Point::new(6.0, -1.0)),
+                },
+            );
+            let size = doc.pages[0].size;
+            let want = Affine::translate((size.width / 2.0, size.height / 2.0)) * want;
+            let (got, want) = (drawn_page_path(s).bounding_box(), want.bounding_box());
+            for (g, w) in [
+                (got.x0, want.x0),
+                (got.y0, want.y0),
+                (got.x1, want.x1),
+                (got.y1, want.y1),
+            ] {
+                assert!((g - w).abs() < 1e-6, "{got:?} {want:?}");
+            }
+        }
+    }
+
+    /// A group's envelope (#1668): the group's own `lgob` holds the
+    /// `trfd` and `envd`; its objects already carry the matrices before
+    /// the envelope (the file's dot of "2.0" sat 50 mm away from it
+    /// without the matrix after), and are bent and then moved by the
+    /// rest.
+    #[test]
+    fn version_16_group_envelopes_bend_their_objects() {
+        let t = trfd_v16(&[
+            // Already in the objects: not applied again.
+            trfd_matrix([3.0, 0.0, 0.0, 0.0, 3.0, 0.0]),
+            trfd_envelope([0, 100_000, 100_000, 0], [0, 1, 4, 5], 7),
+            trfd_matrix([1.0, 0.0, 100_000.0, 0.0, 1.0, 0.0]),
+        ]);
+        let env = envd(
+            &[
+                (0, 0),
+                (0, 100_000),
+                (33_333, 133_333),
+                (66_667, 166_667),
+                (100_000, 200_000),
+                (100_000, 0),
+                (0, 0),
+            ],
+            &[0x0c, 0x44, 0xc0, 0xc0, 0x84, 0x44, 0x48],
+        );
+        let (doc, rep) = envelope_file(t, &[env], true);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let s = first_shape(&doc);
+        let ShapeKind::Group { children } = &s.kind else {
+            panic!("{:?}", s.kind);
+        };
+        let c = 127.0;
+        for child in children {
+            assert!(
+                matches!(child.kind, ShapeKind::Path { .. }),
+                "{:?}",
+                child.kind
+            );
+            let b = s
+                .transform
+                .transform_rect_bbox(child.page_path().bounding_box());
+            for (got, want) in [
+                (b.x0, c + 10.0),
+                (b.x1, c + 20.0),
+                (b.y0, c),
+                (b.y1, c + 20.0),
+            ] {
+                assert!((got - want).abs() < 0.05, "{b:?}");
+            }
+        }
+    }
+
+    /// A perspective entry as the version 22 file of #2691 holds one: 6
+    /// zero bytes, 1, the box (left, top, right, bottom in file units),
+    /// the corners it goes to (bottom-left, top-left, top-right,
+    /// bottom-right, the first again), then 60 bytes not read.
+    fn trfd_perspective(bx: [i32; 4], corners: [(i32, i32); 4]) -> Vec<u8> {
+        let mut b = vec![0u8; 6];
+        b.extend_from_slice(&u32s(&[1]));
+        b.extend_from_slice(&i32s(&bx));
+        for (x, y) in corners.iter().chain(std::iter::once(&corners[0])) {
+            b.extend_from_slice(&i32s(&[*x, *y]));
+        }
+        b.extend_from_slice(&u32s(&[492, 68]));
+        b.resize(b.len() + 52, 0);
+        trfd_entry(2, &b)
+    }
+
+    /// Where the corners of a shape's live perspective land on the page.
+    fn perspective_on_page(s: &Shape) -> [Point; 4] {
+        let corners = s
+            .effects
+            .iter()
+            .find_map(|e| match e {
+                tracedraw_core::live::Effect::Perspective { corners } => Some(*corners),
+                _ => None,
+            })
+            .expect("a live perspective");
+        corners.map(|p| s.transform * p)
+    }
+
+    fn assert_near(got: [Point; 4], want: [(f64, f64); 4]) {
+        for (g, w) in got.iter().zip(want) {
+            assert!(
+                (g.x - w.0).abs() < 1e-6 && (g.y - w.1).abs() < 1e-6,
+                "{got:?} against {want:?}"
+            );
+        }
+    }
+
+    /// Version 16+ perspectives (#2691): an entry of type 2 between the
+    /// matrices takes its box onto four corners. A version 22 file whose
+    /// shop sign is in perspective opened with the sign flat and its
+    /// grouped parts out of place, the perspectives left out.
+    #[test]
+    fn version_16_perspectives_take_their_box_onto_their_corners() {
+        // Stretched to 20 x 10 mm, the top-right corner raised to 20 mm,
+        // then moved 5 mm up.
+        let t = trfd_v16(&[
+            trfd_matrix([2.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            trfd_perspective(
+                [0, 100_000, 200_000, 0],
+                [(0, 0), (0, 100_000), (200_000, 200_000), (200_000, 0)],
+            ),
+            trfd_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 50_000.0]),
+        ]);
+        let (doc, rep) = envelope_file(t, &[], false);
+        assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        // The page is 254 mm square, its centre the file's origin.
+        let c = 127.0;
+        assert_near(
+            perspective_on_page(first_shape(&doc)),
+            [
+                (c, c + 5.0),
+                (c + 20.0, c + 5.0),
+                (c + 20.0, c + 25.0),
+                (c, c + 15.0),
+            ],
+        );
+
+        // Applied again over the first (the box of the second is where
+        // the first left the object): both apply, in order.
+        let t = trfd_v16(&[
+            trfd_perspective(
+                [0, 100_000, 100_000, 0],
+                [(0, 0), (0, 100_000), (100_000, 100_000), (100_000, 0)],
+            ),
+            trfd_matrix([1.0, 0.0, 100_000.0, 0.0, 1.0, 0.0]),
+            trfd_perspective(
+                [100_000, 100_000, 200_000, 0],
+                [
+                    (100_000, 0),
+                    (100_000, 100_000),
+                    (200_000, 150_000),
+                    (200_000, 0),
+                ],
+            ),
+        ]);
+        let (doc, _) = envelope_file(t, &[], false);
+        assert_near(
+            perspective_on_page(first_shape(&doc)),
+            [
+                (c + 10.0, c),
+                (c + 20.0, c),
+                (c + 20.0, c + 15.0),
+                (c + 10.0, c + 10.0),
+            ],
+        );
+    }
+
+    /// A group in perspective (#2691): the group's own `trfd` holds the
+    /// perspective and its objects only their own matrices; each object
+    /// takes the group's perspective.
+    #[test]
+    fn version_16_group_perspectives_reach_their_objects() {
+        let t = trfd_v16(&[
+            trfd_perspective(
+                [0, 100_000, 100_000, 0],
+                [(0, 0), (0, 100_000), (100_000, 200_000), (100_000, 0)],
+            ),
+            trfd_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 50_000.0]),
+        ]);
+        let (doc, rep) = envelope_file(t, &[], true);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        let ShapeKind::Group { children } = &first_shape(&doc).kind else {
+            panic!("a group");
+        };
+        assert_eq!(children.len(), 2);
+        let c = 127.0;
+        for s in children {
+            assert_near(
+                perspective_on_page(s),
+                [
+                    (c, c + 5.0),
+                    (c + 10.0, c + 5.0),
+                    (c + 10.0, c + 25.0),
+                    (c, c + 15.0),
+                ],
+            );
+        }
+    }
+
+    /// Envelope records that do not hold together are left out without
+    /// a panic: corners past the outline, too few points, a box with no
+    /// area, a truncated record.
+    #[test]
+    fn broken_version_16_envelopes_are_left_out() {
+        let good = raised_envelope();
+        for (bx, corners, env) in [
+            ([0, 100_000, 200_000, 0], [0, 1, 4, 50], good.clone()),
+            ([0, 100_000, 0, 0], [0, 1, 4, 5], good.clone()),
+            ([0, 100_000, 200_000, 0], [0, 1, 4, 5], good[..100].to_vec()),
+            (
+                [0, 100_000, 200_000, 0],
+                [0, 1, 2, 3],
+                envd(&[(0, 0), (0, 1), (0, 0)], &[0x0c, 0x44, 0x48]),
+            ),
+        ] {
+            let t = trfd_v16(&[
+                trfd_matrix([2.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                trfd_envelope(bx, corners, 7),
+            ]);
+            let (doc, rep) = envelope_file(t, &[env], false);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            let b = first_shape(&doc).page_path().bounding_box();
+            assert!((b.width() - 20.0).abs() < 1e-6, "{b:?}");
+        }
+        assert!(envelope_frame(&[], &[0, 1, 2, 3]).is_none());
+        assert!(envelope_entry(&[0; 20], 0).is_none());
+    }
+
+    /// The tail of a version 16+ linear fill (#1668): the fill's centre
+    /// and a matrix in units of the object's box from its centre; the
+    /// fill runs along the matrix's x axis from the centre less half of
+    /// it to the centre plus half of it, its bands square to the axis on
+    /// the object. Seen in a version 27 file that carries a picture of
+    /// itself: its letters are white down to their lower edge, where a
+    /// fill whose tail puts the centre 0.21 of the box below the middle
+    /// and the run over 0.16 of its height turns yellow; read from the
+    /// angle and edge pad alone, the turn lay in the middle.
+    #[test]
+    fn version_16_linear_fills_are_placed_by_their_frame() {
+        let fill = |tail: &[f64]| {
+            let mut g = vec![0u8; 8];
+            g.push(1);
+            g.extend_from_slice(&[0; 17]);
+            g.extend_from_slice(&i16s(&[45]));
+            g.extend_from_slice(&i32s(&[90_000_000, 0, 0]));
+            g.extend_from_slice(&[0; 2]);
+            g.extend_from_slice(&u32s(&[0]));
+            g.extend_from_slice(&[50, 0]);
+            g.extend_from_slice(&u32s(&[2]));
+            g.extend_from_slice(&[0; 3]);
+            for (c, pos) in [((0, 0, 0), 0u32), ((255, 255, 255), 100)] {
+                g.extend_from_slice(&color_bgr(c.0, c.1, c.2));
+                g.extend_from_slice(&[0; 26]);
+                g.extend_from_slice(&u32s(&[pos]));
+                g.extend_from_slice(&[0; 3]);
+            }
+            g.extend_from_slice(&[0; 3]);
+            g.extend_from_slice(&f64s(tail));
+            let mut fild = u32s(&[1, 1300, (g.len() + 2) as u32]);
+            fild.extend_from_slice(&u16s(&[2]));
+            fild.extend_from_slice(&g);
+            fild
+        };
+        // A 20 x 10 mm rectangle (a curve) from the page centre.
+        let read = |fild: Vec<u8>| {
+            let mut coords = u32s(&[5]);
+            coords.extend_from_slice(&i32s(&[
+                0, 0, 0, 100_000, 200_000, 100_000, 200_000, 0, 0, 0,
+            ]));
+            coords.extend_from_slice(&[0x0c, 0x44, 0x44, 0x44, 0x48]);
+            let obj = list(
+                b"obj ",
+                &[
+                    chunk(
+                        b"loda",
+                        &loda(OBJ_CURVE, &[(ARG_COORDS, coords), (ARG_FILL, u32s(&[1]))]),
+                    ),
+                    chunk(
+                        b"trfd",
+                        &trfd_v16(&[trfd_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])]),
+                    ),
+                ]
+                .concat(),
+            );
+            let body = [
+                chunk(b"mcfg", &mcfg(27, 2_540_000, 2_540_000)),
+                chunk(b"fild", &fild),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRR", &body), 27);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            let s = first_shape(&doc).clone();
+            let Fill::Fountain(f) = &s.fill else {
+                panic!("{:?}", s.fill);
+            };
+            (f.clone(), s.page_path().bounding_box())
+        };
+        let c = 127.0;
+        // Straight up from a quarter of the height below the middle, over
+        // half of it: black at the bottom edge, white from the middle up.
+        let (f, b) = read(fill(&[0.0, -0.25, 0.0, -0.5, 0.0, 0.5, 0.0, 0.0]));
+        assert!(f.handles.is_some() && f.edge_pad == 0.0, "{f:?}");
+        let t = |x: f64, y: f64| f.param_at(b, Point::new(c + x, c + y)).expect("a frame");
+        assert!(t(10.0, 0.0).abs() < 1e-9, "{}", t(10.0, 0.0));
+        assert!((t(10.0, 5.0) - 1.0).abs() < 1e-9, "{}", t(10.0, 5.0));
+        assert!((t(3.0, 2.5) - 0.5).abs() < 1e-9, "{}", t(3.0, 2.5));
+        assert!((f.angle - 90.0).abs() < 1e-9, "{}", f.angle);
+        // Along the box's diagonal, (0.5, 0.5) in box units: on the
+        // object the axis runs (10, 5) mm. The bands run along the
+        // frame's other axis, (-0.5, 0.5) in box units, (-10, 5) mm on
+        // the object, which is not square to the first on a box that is
+        // not square (#1238).
+        let (f, b) = read(fill(&[0.0, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0]));
+        let t = |x: f64, y: f64| f.param_at(b, Point::new(c + x, c + y)).expect("a frame");
+        assert!((t(10.0, 5.0) - 0.5).abs() < 1e-9);
+        assert!((t(15.0, 7.5) - 1.0).abs() < 1e-9, "{}", t(15.0, 7.5));
+        assert!((t(8.0, 6.0) - 0.5).abs() < 1e-9, "{}", t(8.0, 6.0));
+        // #1238: a skewed fill. The same axis with the other one lying
+        // along the box's width: the bands are level.
+        let (f, b) = read(fill(&[0.0, 0.0, 0.5, -0.5, 0.0, 0.5, 0.0, 0.0]));
+        let t = |x: f64, y: f64| f.param_at(b, Point::new(c + x, c + y)).expect("a frame");
+        assert!((t(10.0, 5.0) - 0.5).abs() < 1e-9);
+        assert!((t(2.0, 5.0) - 0.5).abs() < 1e-9, "{}", t(2.0, 5.0));
+        assert!((t(15.0, 7.5) - 1.0).abs() < 1e-9, "{}", t(15.0, 7.5));
+        // A second axis of no length, or not a number, falls back to
+        // bands square to the first in box units.
+        for bad in [0.0, f64::NAN, f64::INFINITY] {
+            let (f, _) = read(fill(&[0.0, 0.0, 0.5, bad, 0.0, 0.5, bad, 0.0]));
+            assert!(f.handles.is_some(), "{f:?}");
+        }
+        // A tail of four values, or an axis of no length, keeps the angle
+        // and the edge pad.
+        for tail in [
+            &[0.25, -0.1, 0.5, 0.8][..],
+            &[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][..],
+        ] {
+            let (f, _) = read(fill(tail));
+            assert!(f.handles.is_none() && f.edge_pad > 0.0, "{f:?}");
+        }
+    }
+
+    /// The 117-byte transparency record of a version 16+ object, as
+    /// versions 13 to 27 lay it out: the byte 5 and the record's number,
+    /// the type (u16) at byte 37 of the body, the start amount in percent
+    /// at 61 and the fill id at 105.
+    fn transparency_record_v16(kind: u16, percent: f64, fill: u32) -> Vec<u8> {
+        transparency_record_v16_to(kind, percent, 0.0, fill)
+    }
+
+    /// [`transparency_record_v16`] with the end amount at byte 69.
+    fn transparency_record_v16_to(kind: u16, percent: f64, end: f64, fill: u32) -> Vec<u8> {
+        let mut b = vec![5u8];
+        b.extend_from_slice(&u32s(&[3]));
+        b.resize(29, 0);
+        b.extend_from_slice(&u32s(&[1]));
+        b.resize(37, 0);
+        b.extend_from_slice(&u16s(&[kind]));
+        b.resize(61, 0);
+        b.extend_from_slice(&f64s(&[percent, end]));
+        b.resize(81, 0);
+        b.extend_from_slice(&u32s(&[2]));
+        b.resize(105, 0);
+        b.extend_from_slice(&u32s(&[fill]));
+        b.resize(117, 0);
+        [u32s(&[0x514, 117]), b].concat()
+    }
+
+    /// #2960: a version 18 file whose objects' style strings do not
+    /// describe their transparency keeps it in argument 8000: a uniform
+    /// one (type 0) as its amount, the others as the fill the record
+    /// names, a fountain of greys or a pattern, whose lightness is the
+    /// opacity. Every kind opened solid.
+    #[test]
+    fn version_18_transparency_records_without_a_style_string_section() {
+        use tracedraw_core::live::Effect;
+        use tracedraw_core::style::{Pattern, PatternTile};
+        let main = riff(b"CDRI", &chunk(b"mcfg", &mcfg(18, 2_540_000, 2_540_000)));
+        let tree = crate::riff::parse(&main).unwrap();
+        let mut ctx = Ctx::new(&main, &tree, 18);
+        let ramp = Fountain {
+            stops: vec![
+                Stop::new(0.0, Color::rgb8(255, 255, 255)),
+                Stop::new(1.0, Color::rgb8(0, 0, 0)),
+            ],
+            ..Default::default()
+        };
+        let two = Fill::Pattern(Pattern::TwoColor {
+            tile: PatternTile::Checker,
+            front: Color::rgb8(0, 0, 0),
+            back: Color::rgb8(255, 255, 255),
+            size_mm: 5.0,
+            placement: Default::default(),
+        });
+        ctx.fills.insert(
+            7,
+            FillDef {
+                fill: Fill::Fountain(ramp),
+            },
+        );
+        ctx.fills.insert(8, FillDef { fill: two.clone() });
+        ctx.fills.insert(
+            9,
+            FillDef {
+                fill: Fill::Solid(Color::rgb8(10, 20, 30)),
+            },
+        );
+        let mut read_to = |kind: u16, percent: f64, end: f64, fill: u32| {
+            // Kept for the reader's lifetime, as file data is.
+            let op: &'static [u8] =
+                Box::leak(transparency_record_v16_to(kind, percent, end, fill).into_boxed_slice());
+            let arg = Arg {
+                ty: ARG_OPACITY,
+                off: 0,
+                end: op.len(),
+            };
+            ctx.read_transparency_record_v16(op, arg)
+        };
+        // Uniform: its amount, whatever the fill (the object's own).
+        assert!(
+            matches!(read_to(0, 40.0, 0.0, 9), Some(RecordTransparency::Opacity(o)) if (o - 0.6).abs() < 1e-9)
+        );
+        assert!(matches!(
+            read_to(0, 40.0, 0.0, 7),
+            Some(RecordTransparency::Opacity(_))
+        ));
+        assert!(read_to(0, 0.0, 0.0, 9).is_none());
+        assert!(read_to(0, 250.0, 0.0, 9).is_none());
+        // A fountain: its greys, white opaque.
+        let Some(RecordTransparency::Mask((Fill::Fountain(f), 2))) = read_to(1, 0.0, 0.0, 7) else {
+            panic!("no fountain mask");
+        };
+        assert_eq!(f.stops[0].color, Color::Gray { v: 1.0 });
+        assert_eq!(f.stops[1].color, Color::Gray { v: 0.0 });
+        // A two-colour pattern: its colours become greys of their opacity,
+        // the transparency running from the end amount for black to the
+        // start amount for white (100 and 0 in the reporter's file: white
+        // see-through, black solid).
+        let Some(RecordTransparency::Mask((
+            Fill::Pattern(Pattern::TwoColor { front, back, .. }),
+            2,
+        ))) = read_to(7, 100.0, 0.0, 8)
+        else {
+            panic!("no two-colour mask");
+        };
+        assert_eq!(
+            (front, back),
+            (Color::Gray { v: 1.0 }, Color::Gray { v: 0.0 })
+        );
+        // Amounts of 30 % for white and 80 % for black.
+        let Some(RecordTransparency::Mask((
+            Fill::Pattern(Pattern::TwoColor { front, back, .. }),
+            _,
+        ))) = read_to(7, 30.0, 80.0, 8)
+        else {
+            panic!("no two-colour mask");
+        };
+        let grey = |c: Color| match c {
+            Color::Gray { v } => v,
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            (grey(front) - 0.2).abs() < 1e-6 && (grey(back) - 0.7).abs() < 1e-6,
+            "{front:?} {back:?}"
+        );
+        // A fill that is neither: opaque, with a warning.
+        assert!(read_to(1, 0.0, 0.0, 9).is_none());
+        assert!(read_to(1, 0.0, 0.0, 99).is_none());
+        assert!(ctx
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.contains("names fill 99")));
+
+        // Through an object: a style string without a transparency
+        // section and a uniform record of 40 %.
+        let rect = |style: &str, op: Vec<u8>| {
+            let style = [u32s(&[1, style.len() as u32]), style.as_bytes().to_vec()].concat();
+            let args = vec![
+                (ARG_OPACITY, op),
+                (ARG_STYLE_STRING, style),
+                (ARG_COORDS, f64s(&[254_000.0, 254_000.0, 1.0, 1.0])),
+            ];
+            let body = [
+                chunk(b"mcfg", &mcfg(18, 2_540_000, 2_540_000)),
+                list(
+                    b"page",
+                    &list(
+                        b"layr",
+                        &list(b"obj ", &chunk(b"loda", &loda(OBJ_RECT, &args))),
+                    ),
+                ),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRI", &body), 18);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            first_shape(&doc).clone()
+        };
+        let fill = r#"{"fill":{"type":"1","primaryColor":"RGB255,USER,102,97,143,100,00000000-0000-0000-0000-000000000000"}}"#;
+        let s = rect(fill, transparency_record_v16(0, 40.0, 1));
+        assert!((s.opacity - 0.6).abs() < 1e-9, "{}", s.opacity);
+        assert!(!s
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::Transparency { .. })));
+        // An empty transparency section is still none.
+        let s = rect(
+            r#"{"transparency":{}}"#,
+            transparency_record_v16(0, 40.0, 1),
+        );
+        assert_eq!(s.opacity, 1.0);
+        // The style string's own amount wins over the record's.
+        let own = r#"{"transparency":{"fill":{"type":"1"},"uniformTransparency":"0.2"}}"#;
+        let s = rect(own, transparency_record_v16(0, 40.0, 1));
+        assert!((s.opacity - 0.8).abs() < 1e-9, "{}", s.opacity);
+    }
+
+    /// #1238 (a version 27 drawing of a car): a transparency taken off
+    /// leaves its section in the style string with fill type 0 and the
+    /// old amounts, and no transparency argument; the lamps and the
+    /// grille opened see-through or gone. And the section's `mode` is
+    /// the merge mode, which opened as Normal with a warning, so the
+    /// highlights and shades lay over the paint as flat patches.
+    #[test]
+    fn style_string_transparency_taken_off_and_merge_modes() {
+        use tracedraw_core::live::{Effect, MergeMode};
+        let rect = |style: &str, op: Option<Vec<u8>>| {
+            let style = [u32s(&[1, style.len() as u32]), style.as_bytes().to_vec()].concat();
+            let mut args = vec![
+                (ARG_STYLE_STRING, style),
+                (ARG_COORDS, f64s(&[254_000.0, 254_000.0, 1.0, 1.0])),
+            ];
+            if let Some(op) = op {
+                args.insert(0, (ARG_OPACITY, op));
+            }
+            let body = [
+                chunk(b"mcfg", &mcfg(27, 2_540_000, 2_540_000)),
+                list(
+                    b"page",
+                    &list(
+                        b"layr",
+                        &list(b"obj ", &chunk(b"loda", &loda(OBJ_RECT, &args))),
+                    ),
+                ),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRR", &body), 27);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            (first_shape(&doc).clone(), rep)
+        };
+        let style = |ty: u8, amount: &str, mode: u8| {
+            format!(
+                r#"{{"transparency":{{"fill":{{"type":"{ty}"}},"uniformTransparency":"{amount}","mode":"{mode}"}}}}"#
+            )
+        };
+        // Taken off: solid, whatever amount and mode were left behind.
+        let (s, rep) = rect(&style(0, "1", 9), None);
+        assert_eq!(s.opacity, 1.0);
+        assert!(s.effects.is_empty(), "{:?}", s.effects);
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+        // The same section with the argument is a transparency.
+        let (s, _) = rect(
+            &style(0, "0.3", 0),
+            Some(transparency_record_v16(0, 30.0, 1)),
+        );
+        assert!((s.opacity - 0.7).abs() < 1e-9, "{}", s.opacity);
+        // And type 1 without the argument is one too.
+        let (s, _) = rect(&style(1, "0.3", 0), None);
+        assert!((s.opacity - 0.7).abs() < 1e-9, "{}", s.opacity);
+        // The merge modes seen, each a mask of the opacity so merged.
+        for (code, mode) in [
+            (7, MergeMode::Add),
+            (8, MergeMode::Subtract),
+            (9, MergeMode::Multiply),
+            (29, MergeMode::Overlay),
+        ] {
+            let (s, rep) = rect(
+                &style(1, "0.5", code),
+                Some(transparency_record_v16(0, 50.0, 1)),
+            );
+            assert!(rep.warnings.is_empty(), "{code}: {:?}", rep.warnings);
+            assert_eq!(s.opacity, 1.0, "{code}");
+            match s.effects.as_slice() {
+                [Effect::Transparency {
+                    mask: Fill::Solid(Color::Gray { v }),
+                    merge,
+                    ..
+                }] => {
+                    assert_eq!(*merge, mode, "{code}");
+                    assert!((v - 0.5).abs() < 1e-6, "{code}: {v}");
+                }
+                other => panic!("{code}: {other:?}"),
+            }
+        }
+        // A merge mode on an object that hides nothing still merges.
+        let (s, _) = rect(&style(1, "0", 9), Some(transparency_record_v16(0, 0.0, 1)));
+        assert!(
+            matches!(
+                s.effects.as_slice(),
+                [Effect::Transparency {
+                    merge: MergeMode::Multiply,
+                    ..
+                }]
+            ),
+            "{:?}",
+            s.effects
+        );
+        // A code outside the table: Normal, named in a warning.
+        let (s, rep) = rect(
+            &style(1, "0.5", 99),
+            Some(transparency_record_v16(0, 50.0, 1)),
+        );
+        assert!((s.opacity - 0.5).abs() < 1e-9, "{}", s.opacity);
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("merge mode 99")),
+            "{:?}",
+            rep.warnings
+        );
+    }
+
+    /// #3095: a fountain transparency in a version 18 file, each kind
+    /// (linear, radial, conical, square), with nodes in greys, in another
+    /// model, or not given in the style string at all (then the record's
+    /// fountain): a graded mask every time, never the object drawn
+    /// uniform or solid.
+    #[test]
+    fn fountain_transparencies_of_every_kind_and_node_model() {
+        use tracedraw_core::live::Effect;
+        let v = 18u16;
+        let ramp = Fill::Fountain(Fountain {
+            stops: vec![
+                Stop::new(0.0, Color::rgb8(255, 255, 255)),
+                Stop::new(0.5, Color::rgb8(128, 128, 128)),
+                Stop::new(1.0, Color::rgb8(0, 0, 0)),
+            ],
+            ..Default::default()
+        });
+        let read = |style: &str| {
+            let style = [u32s(&[1, style.len() as u32]), style.as_bytes().to_vec()].concat();
+            let args = vec![
+                (ARG_OPACITY, transparency_record_v16(1, 0.0, 5)),
+                (ARG_STYLE_STRING, style),
+                (ARG_COORDS, f64s(&[254_000.0, 254_000.0, 1.0, 1.0])),
+            ];
+            let obj = list(b"obj ", &chunk(b"loda", &loda(OBJ_RECT, &args)));
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                chunk(b"fild", &crate::write::fild_of_version(v, 5, &ramp)),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRJ", &body), v);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            first_shape(&doc).clone()
+        };
+        let mask = |s: &Shape| {
+            s.effects.iter().find_map(|e| match e {
+                Effect::Transparency {
+                    mask: Fill::Fountain(f),
+                    ..
+                } => Some(f.clone()),
+                _ => None,
+            })
+        };
+        let grey = |c: Color| c.to_rgb_f32_builtin()[1];
+        let fill = r#""fill":{"type":"1","primaryColor":"RGB255,USER,102,97,143,100,00000000-0000-0000-0000-000000000000"}"#;
+        let node = |model: &str, v: u8| match model {
+            "GRAY" => format!("GRAY255,USER,{v},100,00000000-0000-0000-0000-000000000000"),
+            _ => format!("RGB255,USER,{v},{v},{v},100,00000000-0000-0000-0000-000000000000"),
+        };
+        for (code, kind) in [
+            (1, FountainKind::Linear),
+            (2, FountainKind::Radial),
+            (3, FountainKind::Conical),
+            (4, FountainKind::Square),
+        ] {
+            for model in ["GRAY", "RGB"] {
+                let style = format!(
+                    r#"{{"transparency":{{"fill":{{"type":"2","fountainType":"{code}","angle":"0","primaryColor":"{}","secondaryColor":"{}","xScale":"1","yScale":"1","xCenterOffset":"0","yCenterOffset":"0"}},"startTransparency":"0","endTransparency":"1"}},{fill}}}"#,
+                    node(model, 255),
+                    node(model, 0),
+                );
+                let s = read(&style);
+                assert_eq!(s.opacity, 1.0, "{model} {code}");
+                let f = mask(&s).unwrap_or_else(|| panic!("{model} {code}: {:?}", s.effects));
+                assert_eq!(f.kind, kind, "{model} {code}");
+                // Graded from clear to opaque (a radial run is stored
+                // from its rim, so its stops come the other way round).
+                let (a, b) = (grey(f.stops[0].color), grey(f.stops.last().unwrap().color));
+                assert!((a - b).abs() > 0.99, "{model} {code}: {:?}", f.stops);
+            }
+        }
+        // The style string names a fountain but gives no nodes: the
+        // record's fountain, mid node and all, not 50 % uniform.
+        let s = read(&format!(
+            r#"{{"transparency":{{"fill":{{"type":"2"}},"startTransparency":"0","endTransparency":"1"}},{fill}}}"#
+        ));
+        assert_eq!(s.opacity, 1.0);
+        let f = mask(&s).unwrap_or_else(|| panic!("{:?}", s.effects));
+        assert_eq!(f.stops.len(), 3, "{:?}", f.stops);
+        assert!((grey(f.stops[1].color) - 128.0 / 255.0).abs() < 0.02, "{:?}", f.stops);
+    }
+
+    /// #2960: an object's vector pattern transparency read from its
+    /// record: the pattern at its own tile size from the bottom-left
+    /// corner of the object's box, its colours the greys of their opacity.
+    #[test]
+    fn an_object_with_a_vector_pattern_transparency_record() {
+        use tracedraw_core::live::Effect;
+        let v = 27u16;
+        let read = |style: &str| {
+            let pattern = vector_pattern_fild_v27(
+                5,
+                (254_000, 254_000),
+                [-200_000, 200_000, 200_000, -200_000],
+                19,
+            );
+            let style = [u32s(&[1, style.len() as u32]), style.as_bytes().to_vec()].concat();
+            let args = vec![
+                (ARG_OPACITY, transparency_record_v16(10, 0.0, 5)),
+                (ARG_STYLE_STRING, style),
+                (ARG_COORDS, f64s(&[254_000.0, 254_000.0, 1.0, 1.0])),
+            ];
+            let obj = list(b"obj ", &chunk(b"loda", &loda(OBJ_RECT, &args)));
+            let body = [
+                chunk(b"mcfg", &mcfg(v, 2_540_000, 2_540_000)),
+                chunk(b"vpat", &vpat_with_a_rectangle(19)),
+                chunk(b"fild", &pattern),
+                list(b"page", &list(b"layr", &obj)),
+            ]
+            .concat();
+            let (doc, rep) = parse(&riff(b"CDRU", &body), v);
+            assert_eq!(rep.shapes, 1, "{:?}", rep.warnings);
+            first_shape(&doc).clone()
+        };
+        let fill = r#""fill":{"type":"1","primaryColor":"RGB255,USER,102,97,143,100,00000000-0000-0000-0000-000000000000"}"#;
+        // No transparency section, and a section naming a vector pattern
+        // (type 10) with its two amounts, which read as their mean before.
+        for style in [
+            format!("{{{fill}}}"),
+            format!(
+                r#"{{"transparency":{{"fill":{{"type":"10"}},"startTransparency":"0","endTransparency":"1"}},{fill}}}"#
+            ),
+        ] {
+            let s = read(&style);
+            assert_eq!(s.opacity, 1.0, "{style}");
+            let b = s.bounds();
+            // At the tile's own size, from the box's bottom-left corner;
+            // the drawing's colours turned into the greys of their opacity.
+            let placed = s.effects.iter().any(|e| {
+                matches!(
+                    e,
+                    Effect::Transparency {
+                        mask: Fill::Pattern(tracedraw_core::style::Pattern::Vector { placement, shapes, .. }),
+                        target: 2,
+                        ..
+                    } if (placement.offset_x - b.x0).abs() < 1e-6
+                        && (placement.offset_y - b.y0).abs() < 1e-6
+                        && placement.size.is_none()
+                        && shapes.iter().all(|s| matches!(s.fill, Fill::Solid(Color::Gray { .. }) | Fill::None))
+                )
+            });
+            assert!(placed, "{style}: {:?}", s.effects);
+        }
     }
 }

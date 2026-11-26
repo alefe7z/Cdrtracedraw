@@ -8,6 +8,10 @@ passe en mode appliquer ; cliquez sur le bouton de sélection pour prélever
 de nouveau. <kbd>Esc</kbd> abandonne l'échantillon et revient à l'outil
 [[tool.pick]].
 
+Le pointeur est une pipette quand l'outil échantillonne et un pot de peinture
+quand il applique. Les images donnent leur couleur même dans un groupe ou un
+cadre.
+
 ## Pipette de couleur {#color-eyedropper}
 
 1. Choisissez l'outil [[tool.color_eyedropper]].
@@ -22,6 +26,12 @@ de nouveau. <kbd>Esc</kbd> abandonne l'échantillon et revient à l'outil
    reçoit un fin). Cliquer à l'intérieur d'une forme fermée vide la remplit.
 
 La barre de propriétés affiche la couleur prélevée.
+
+Pendant que vous déplacez le pointeur pour prendre une couleur, une petite
+case à côté montre la couleur en dessous : un échantillon, le nom de la
+couleur si c'est une couleur de palette ou une encre d'accompagnement, ses
+valeurs dans le mode de couleur du dessin (CMJN ou RVB) et sa valeur
+hexadécimale. La pipette d'un sélecteur de couleur montre la même case.
 
 ## Pipette d'attributs {#attributes-eyedropper}
 

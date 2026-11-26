@@ -1,8 +1,8 @@
-# Table tool and Table menu
+# Table tool and Table submenu
 
 ## Drawing
 
-- Table > Create New Table (and Object > Create > New Table): Number of
+- Text > Table > Create New Table (and Object > Create > New Table): Number of
   Rows, Number of Columns, Height and Width in the document's units
   (100 x 75 mm at first; the last values are offered again), "?", OK
   and Cancel. OK places the table at the page centre and selects it
@@ -10,9 +10,18 @@
 - Property bar: rows (default 3), columns (default 4), cell fill (off by
   default; a colour when on), border width (hairline by default),
   border colour and style (solid, dashed, dotted), then the hint. With a
-  table selected, the fill and border fields edit that table; otherwise
-  they set the defaults for the next one. With cells selected the bar
-  acts on them (see "Selected cells" below).
+  table selected, the fields edit that table: Rows and Columns show its
+  counts and change them, rows added at the bottom as tall as the last
+  one or taken away there, columns at the right as wide as the last one,
+  the other cells keeping their text and formatting, one "Table Rows" or
+  "Table Columns" undo step each (#1680,
+  `table::tests::the_bar_counts_resize_the_selected_table`); otherwise
+  the fields set the defaults for the next one. With cells selected the
+  bar acts on them (see "Selected cells" below).
+- A table selected with the Pick tool shows the same fields after the
+  object fields (X, Y, W, H), without the hint, so its rows, columns,
+  fill and borders change without a change of tool (#1680,
+  `ui::table_bar::tests::a_table_selected_with_the_pick_tool_shows_the_table_fields`).
 - Drag on empty canvas: a table with equal row heights and column
   widths filling the rectangle (a drag smaller than 1 mm either way
   draws nothing). Cells have a 1 mm margin on every side.
@@ -47,7 +56,7 @@ The reach of its lines and edge pointers is 4 screen points.
   next cell (default) or type a tab character into the cell, where
   Ctrl+Tab still moves on and Shift+Tab moves back.
   (`table_tool::tests::tab_options_insert_a_tab_or_go_down_the_columns`)
-- Table > Select: cell, row, column, table.
+- Text > Table > Select: cell, row, column, table.
 
 ## Moving rows and columns
 
@@ -69,18 +78,32 @@ cell does nothing and says so on the status bar.
   row, and the table's top stays put. No row or column gets smaller
   than 1 mm. A line shows the new place while dragging; the release is
   one "Resize Table" step.
+- Scaling a table with the Pick tool (its handles, or the property bar's
+  size and scale) resizes its rows and columns in proportion and leaves
+  its text alone, as a paragraph text's frame does: the font size,
+  spacing and cell margins stay, and the text flows anew in the cells.
+  Turning, slanting and mirroring act on the whole table as before
+  (#2433,
+  `text_frames::tests::scaling_a_table_resizes_its_cells_and_keeps_the_text`).
 - Property bar W and H (document units, with cells selected): the total
   width of the columns and the total height of the rows the selected
   cells cover; a new value is shared out over them in proportion. The
   table grows or shrinks to the right and downwards.
-- Table > Distribute: Rows Evenly and Columns Evenly share the total of
+- Text > Table > Distribute: Rows Evenly and Columns Evenly share the total of
   the selected rows (columns) equally when the selection covers two or
   more; otherwise every row (column) of the table. The table size is
   kept.
   (`table_tool::tests::dragging_lines_resizes_and_undoes_in_one_step`,
   `table_tool::tests::bar_size_insert_n_and_split_n_follow_the_selection`)
 
-## Table menu
+## Table submenu
+
+The right-click menu of a selected table (an imported spreadsheet too),
+and of its cells while they are typed in, has a Table submenu with the
+same Insert, Select and Delete submenus, Merge Cells, Unmerge Cells and
+Split into Rows or Columns, acting the same way (#2976,
+`table::tests::the_context_menu_has_the_table_commands`); Cut, Copy,
+Paste and Delete stay where the menu has them.
 
 - Insert: Row Above, Row Below, Column Left, Column Right insert as many
   rows (columns) as the selected cells cover, above the first or below
@@ -111,7 +134,18 @@ cell does nothing and says so on the status bar.
   alignment and outer borders.
   (`table_bar::tests::the_count_dialog_inserts_and_splits`,
   `tracedraw_core::table::tests::split_a_cell_into_three_rows_and_columns`)
-- Convert Text to Table: lines become rows, tabs separate cells.
+- Convert Text to Table (a dialog, #1276): paragraphs become rows; the
+  cells are cut at commas, tabs, a user-defined separator (an empty one
+  keeps each paragraph whole) or not at all (Paragraphs: one column, a
+  row each). The dialog opens on tabs when the text has one, else on
+  commas when it has one, else on Paragraphs, and shows the rows and
+  columns the table will have. Cells are trimmed of spaces; closing
+  empty paragraphs make no rows. The table takes the text's top left
+  corner, its first style and at least its width (columns at least
+  20 mm and as wide as their widest text on one line with the cell
+  margins, rows 1.6 lines of the text's size).
+  (`table::tests::text_becomes_a_table_by_its_separator`,
+  `ui::dialogs::tests::convert_text_to_table_takes_the_chosen_separator`)
   Convert Table to Text: cells joined by tabs, rows by newlines.
 - Every change is one `SetShapeKind` command after `Table::refit`, so the
   table rectangle always equals the sum of its rows and columns.
@@ -125,7 +159,11 @@ With cells selected (the active cell counts), the property bar shows:
   ticking it gives the selected cells white, unticking makes them
   transparent, the colour button sets their colour. A click on a
   palette colour with the Table tool fills the selected cells, not the
-  table ("Cell Fill" undo step).
+  table ("Cell Fill" undo step); so does one with the Pick tool
+  (Ctrl+click) or the Shape tool for the cells they chose, while the
+  table is the selection. A right click on a palette colour gives every
+  border of those cells that colour, keeping the width and style the
+  bar shows (No Color takes them away; "Cell Borders" undo step) (#2707).
 - Border: which borders of the selected cells to set (All, Outside,
   Inside, Top, Bottom, Left, Right, Inner horizontal, Inner vertical),
   then the width (0 = no border), colour and style. Outside, Top,
@@ -183,8 +221,11 @@ alignment. Empty cells keep no style.
 
 ## Typing in cells
 
-With the Table tool, a click in a cell makes it active and puts the caret
-at the character under the pointer. Typing, Backspace, Delete, Home, End,
+With the Table tool, or the Text tool, a click in a cell makes it active
+and puts the caret at the character under the pointer; the Text tool
+makes no new text over the table, and a click off the table lets the
+cell go (#2438,
+`pick_drag_tests::the_text_tool_types_into_the_table_cell_clicked`). Typing, Backspace, Delete, Home, End,
 Ctrl+Home/End, Ctrl+A and Ctrl+B/I/U work as in text editing (formatting
 applies to the selected characters, or to the whole cell without a
 selection); Enter adds a line, Tab and Shift+Tab move to the next and
@@ -194,3 +235,70 @@ letters never trigger canvas shortcuts. A row grows downwards (the table
 top stays put) when its text needs more height than the row has; rows do
 not shrink while typing. All keystrokes in one cell are one "Edit Cell"
 undo step.
+
+## Copy and paste with spreadsheets
+
+(#4146, `table_clipboard::tests`.) Copying a table that is selected
+alone (Ctrl+C, Edit > Copy) puts its cells on the system clipboard twice:
+as text, one line per row with a tab between cells (a cell holding a
+tab, a line break or a quote is quoted, its quotes doubled), and as an
+HTML table whose cells carry their first characters' font, size, weight,
+slant and colour, their own fill (else the table's) as background, their
+alignment, and their merges. Spreadsheet apps paste either as cells.
+TraceDraw keeps its own copy too, so pasting here still brings the table
+itself. While cells are typed in, Ctrl+C with no characters chosen copies
+the chosen cells the same way (the active cell alone when only it is
+chosen).
+
+Pasting cells copied in a spreadsheet app (text of two rows or more, each
+with two cells or more separated by tabs) onto the page makes a new
+table of them at the page's centre, selected: the first row bold,
+numbers to the right, columns as wide as their texts, as an imported
+sheet (one undo step). Other text still pastes as a text.
+
+While a cell is typed in, pasted text that holds a tab, or several lines
+ending with a line break (one column of a spreadsheet), goes over the
+cells from the active cell to the right and down instead of into the
+cell: rows and columns are added at the bottom and the right when the
+table is too small, each cell keeps its text's look (an empty one takes
+the active cell's), and the whole paste is one "Paste Cells" undo step.
+
+## The workbook kept with a table
+
+(#4143.) A table imported from an `.xlsx` workbook (File > Import, or
+File > Open when the sheet fits one page) keeps the workbook itself; the
+`.tdraw` file saves it with the table (in a packed file once, however
+many copies of the table there are). A CSV or TSV file keeps nothing:
+it has no workbook. Tables made here have none either; a workbook is
+written from their cells when one is needed (`tracedraw_io::xlsx::
+write_xlsx`: one sheet, each cell's text in its place, plain numbers as
+numbers, merged cells merged).
+
+## Editing a table in a spreadsheet program
+
+(#4144, #4145, `table_external::tests`, `spreadsheet_editor::tests`.)
+Table > Edit in Spreadsheet, the same command on the table's property
+bar and in the right-click menu of a table selected alone, opens the
+table's cells in a spreadsheet program. The command is named after the
+program when it is known: "Edit in" and the program's name. The program
+is the one chosen under Options > File Locations > Spreadsheet editor,
+else the one the system opens `.xlsx` files with (on Windows the file
+association's program and its friendly name; on Linux the desktop entry
+`xdg-mime` names for the `.xlsx` media type, its Name and its program;
+on macOS the application Launch Services gives for the `.xlsx` type).
+The field shows the program the system has, and where it is.
+
+The workbook goes to `table-<id>.xlsx` in TraceDraw's folder for
+edited files (next to the system's temporary files, or a portable copy's
+own folder): the workbook the table keeps while it still holds the
+table's texts, so its formulas and formatting are kept, else one written
+from the cells. Each time the program saves it (checked once a second
+with the linked pictures), the table takes the sheet's texts in one
+"Update from Spreadsheet" undo step: rows and columns are added or taken
+away at the bottom and the right to fit the sheet, empty rows between
+filled ones keep their place, each cell keeps its text's look (a new
+cell takes the look of the nearest cell above it), and the saved
+workbook is kept with the table. A file still being written is read
+again the next second. The watch ends when the table is deleted or the
+file is gone. Android hands the workbook to the app picked for
+spreadsheets; the browser build has no command.

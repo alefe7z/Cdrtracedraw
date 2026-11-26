@@ -102,7 +102,7 @@ CD Draw says what to do about the kind of issue you picked.
 **Choose Checks...** turns checks on and off and sets the thresholds;
 **Check Again** runs them again. See [the preflight notes](../behavior/preflight.md).
 
-## Publish to PDF
+## Export as PDF
 
 For a PDF to send to a print shop or to share, use **File > Publish to
 PDF...** (also on the standard toolbar).
@@ -115,7 +115,8 @@ PDF...** (also on the standard toolbar).
 - **Bleed**: 0 to 50 mm, starting at the drawing's bleed.
 - For PDF/X: the **Output condition** (FOGRA39 to start with) and, for
   X-1a and X-3, the resolution transparency is flattened at (300 dpi).
-  The output intent uses the CMYK profile set in Color Management.
+  The output intent uses the CMYK profile set in Color Management, or
+  else the CMYK profile the drawing carries.
 
 ### Document
 
@@ -138,13 +139,15 @@ chosen. CD Draw never keeps your passwords; your other choices are
 remembered for next time.
 
 Press **OK** and choose where to save. See [the Publish to PDF notes](../behavior/publish-to-pdf.md).
+Press **OK** and choose where to save (in the browser the PDF is
+downloaded). See [the Export as PDF notes](../behavior/publish-to-pdf.md).
 
 You can also choose PDF in **File > Export**, with the same PDF/X levels
-and bleed; Publish to PDF adds the bookmarks and protection.
+and bleed; Export as PDF adds the bookmarks and protection.
 
-## Print merge
+## Data merge
 
-**Print Merge** fills a design from a CSV file: create or load the data,
+**Data Merge** fills a design from a CSV file: create or load the data,
 edit it, then perform the merge.
 
 ## Where next

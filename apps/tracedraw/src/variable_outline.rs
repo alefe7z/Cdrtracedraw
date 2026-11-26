@@ -1,10 +1,14 @@
 //! The Variable Outline tool: width nodes along an object's outline.
 //! A drag across the outline of the selected object adds a node there (or
 //! takes the node under the pointer) and sets how far the outline reaches
-//! to the pointer; with Alt only the side the pointer is on changes. The
-//! property bar edits the selected node's reach and removes nodes.
+//! to the pointer; with Shift (or Alt) only the side the pointer is on
+//! changes. Ctrl+click adds a node to the picked ones (or takes it out),
+//! Shift+click picks the nodes from the picked one to the clicked one; a
+//! drag then changes every picked node. The property bar edits the picked
+//! nodes' reach and removes nodes.
 
 use crate::app::App;
+use crate::ui::tips::RichTip;
 use egui::{Color32, Modifiers, Painter, PointerButton, Response, Stroke as EStroke};
 use tracedraw_core::geometry::{Affine, BezPath, Point};
 use tracedraw_core::{Command, ShapeId, Stroke, WidthNode};
@@ -17,7 +21,10 @@ const GRAB_PX: f64 = 7.0;
 /// under way.
 #[derive(Default, Clone, Debug)]
 pub struct VariableOutlineState {
+    /// The node picked last (the property bar shows its reach).
     pub node: Option<usize>,
+    /// Other nodes picked with it (Ctrl+click, Shift+click).
+    pub more: Vec<usize>,
     drag: Option<NodeDrag>,
 }
 
@@ -25,21 +32,118 @@ pub struct VariableOutlineState {
 struct NodeDrag {
     shape: ShapeId,
     index: usize,
-    /// Alt held at the start: only the side the pointer is on changes.
+    /// Shift or Alt held at the start: only the side the pointer is on
+    /// changes.
     one_side: bool,
     /// The first change of the drag has been recorded (later ones amend
     /// it, so the drag is one undo step).
     recorded: bool,
+    /// What the drag does: slide the node along the path or change its
+    /// reach; `None` until the first move says (along the path or
+    /// across it) for a press on a node's centre (#479).
+    slide: Option<bool>,
+    /// Where the press was (page space).
+    from: Point,
 }
 
 /// Sorted nodes, with the index the node at `keep` ends up at.
-fn sorted(mut nodes: Vec<WidthNode>, keep: usize) -> (Vec<WidthNode>, usize) {
-    let marked: Vec<(usize, WidthNode)> = nodes.drain(..).enumerate().collect();
-    let mut marked = marked;
-    marked.sort_by(|a, b| a.1.at.total_cmp(&b.1.at));
-    let at = marked.iter().position(|(i, _)| *i == keep).unwrap_or(0);
-    (marked.into_iter().map(|(_, n)| n).collect(), at)
+pub(crate) fn sorted(nodes: Vec<WidthNode>, keep: usize) -> (Vec<WidthNode>, usize) {
+    let (nodes, map) = sorted_map(nodes);
+    let at = map.get(keep).copied().unwrap_or(0);
+    (nodes, at)
 }
+
+/// Sorted nodes, with where each one went: `map[old] = new`.
+pub(crate) fn sorted_map(nodes: Vec<WidthNode>) -> (Vec<WidthNode>, Vec<usize>) {
+    let mut marked: Vec<(usize, WidthNode)> = nodes.into_iter().enumerate().collect();
+    marked.sort_by(|a, b| a.1.at.total_cmp(&b.1.at));
+    let mut map = vec![0; marked.len()];
+    for (new, (old, _)) in marked.iter().enumerate() {
+        if let Some(m) = map.get_mut(*old) {
+            *m = new;
+        }
+    }
+    (marked.into_iter().map(|(_, n)| n).collect(), map)
+}
+
+/// Where a node sliding to `t` along the path may go: between its
+/// neighbours (a little short of them, so the nodes keep their order) and
+/// within the ends of an open path; round a `closed` loop the neighbours
+/// are the nodes either side of it round the loop, the seam between, so
+/// a node slides on past the start of the path and comes round (#1322).
+pub(crate) fn slide_target(nodes: &[WidthNode], index: usize, t: f64, closed: bool) -> f64 {
+    const GAP: f64 = 1e-4;
+    let n = nodes.len();
+    if !closed || n <= 1 {
+        let lo = index
+            .checked_sub(1)
+            .and_then(|k| nodes.get(k))
+            .map_or(0.0, |m| m.at + GAP);
+        let hi = nodes.get(index + 1).map_or(1.0, |m| m.at - GAP);
+        return if closed {
+            t.rem_euclid(1.0)
+        } else {
+            t.clamp(lo.min(hi), hi.max(lo))
+        };
+    }
+    let prev = nodes.get((index + n - 1) % n).map_or(0.0, |m| m.at);
+    let next = nodes.get((index + 1) % n).map_or(0.0, |m| m.at);
+    // The way round from the node behind to the one ahead; with one other
+    // node they are the same node and the way is the whole loop.
+    let arc = match (next - prev).rem_euclid(1.0) {
+        a if a <= 1e-9 => 1.0,
+        a => a,
+    };
+    let d = (t - prev).rem_euclid(1.0).clamp(GAP, (arc - GAP).max(GAP));
+    (prev + d).rem_euclid(1.0)
+}
+
+/// How far a variable outline reaches into the bends of `path`, as a
+/// share of each bend's radius, at its deepest: past 1 the inner edge
+/// crosses the centre of the bend and its two sides meet in a point (the
+/// hole of a ring turns heart-shaped). That is the shape, not a fault,
+/// but it is taken for one, so the tool says why near the pointer.
+/// `base` and `nodes` are the stroke's width and width nodes, `scale` the
+/// factor they are drawn at.
+pub(crate) fn inner_fold(path: &BezPath, base: f64, nodes: &[WidthNode], scale: f64) -> f64 {
+    use kurbo::{ParamCurveArclen, ParamCurveCurvature, PathSeg};
+    let closed = tracedraw_core::shaping::is_single_loop(path);
+    let segs: Vec<PathSeg> = path.segments().collect();
+    let lens: Vec<f64> = segs.iter().map(|s| s.arclen(1e-3)).collect();
+    let total: f64 = lens.iter().sum();
+    if total.is_nan() || total <= 1e-9 {
+        return 0.0;
+    }
+    const STEPS: usize = 24;
+    let mut run = 0.0;
+    let mut worst: f64 = 0.0;
+    for (seg, len) in segs.iter().zip(&lens) {
+        for i in 0..=STEPS {
+            let u = i as f64 / STEPS as f64;
+            // kurbo's curvature is negative turning to the left
+            // (counter-clockwise, y up): the bend's centre then lies on
+            // the left, the side a node's `left` reaches to.
+            let k = match seg {
+                PathSeg::Line(_) => 0.0,
+                PathSeg::Quad(q) => q.curvature(u),
+                PathSeg::Cubic(c) => c.curvature(u),
+            };
+            if !k.is_finite() || k == 0.0 {
+                continue;
+            }
+            let (l, r) =
+                tracedraw_core::style::width_around(base, nodes, (run + len * u) / total, closed);
+            let inner = if k < 0.0 { l } else { r } * scale;
+            worst = worst.max(inner * k.abs());
+        }
+        run += len;
+    }
+    worst
+}
+
+/// From this share of a bend's radius on (see [`inner_fold`]) the tool
+/// says why the outline is coming to a point.
+pub(crate) const FOLD_NOTE_AT: f64 = 0.9;
 
 impl App {
     /// The object the tool works on: the first selected one with a path.
@@ -88,12 +192,25 @@ impl App {
     }
 
     pub fn variable_outline_input(&mut self, response: &Response, p: Point, mods: Modifiers) {
-        if response.drag_started_by(PointerButton::Primary)
-            || response.clicked_by(PointerButton::Primary)
-        {
+        let clicked = response.clicked_by(PointerButton::Primary);
+        let started = response.drag_started_by(PointerButton::Primary);
+        let ctrl = mods.ctrl || mods.command;
+        if clicked && (mods.shift || ctrl) && self.variable_outline_pick(p, mods.shift) {
+            // Picked (Shift: a run of nodes, Ctrl: one more or one less).
+        } else if started {
+            // Shift or Alt: one side; Ctrl: the node joins the picked ones.
+            self.variable_outline_press_with(p, mods.shift || mods.alt, ctrl);
+        } else if clicked {
+            // A plain click picks the node alone.
             self.variable_outline_press(p, mods.alt);
+            self.vo.more.clear();
         }
         if response.dragged_by(PointerButton::Primary) {
+            // Shift or Alt held (or let go) during the drag: one side, or
+            // both again, from then on (#492).
+            if let Some(d) = &mut self.vo.drag {
+                d.one_side = mods.shift || mods.alt;
+            }
             self.variable_outline_drag(p);
         }
         if response.drag_stopped() || response.clicked_by(PointerButton::Primary) {
@@ -105,6 +222,69 @@ impl App {
     /// there with the reach the outline has; elsewhere, the object under
     /// the pointer is selected.
     pub fn variable_outline_press(&mut self, p: Point, one_side: bool) {
+        self.variable_outline_press_with(p, one_side, false);
+    }
+
+    /// The width node under `p` on the target, if any.
+    fn width_node_at(&self, p: Point) -> Option<usize> {
+        let grab = GRAB_PX / self.view.zoom().max(1e-6) as f64;
+        let id = self.variable_outline_target()?;
+        let (path, stroke, _) = self.variable_outline_geometry(id)?;
+        stroke.widths.iter().enumerate().find_map(|(i, n)| {
+            tracedraw_core::shaping::point_on_path(&path, n.at)
+                .filter(|(q, _)| (*q - p).hypot() <= grab)
+                .map(|_| i)
+        })
+    }
+
+    /// Every picked node, the last picked first.
+    pub fn picked_width_nodes(&self) -> Vec<usize> {
+        let mut out: Vec<usize> = self.vo.node.into_iter().collect();
+        for i in &self.vo.more {
+            if !out.contains(i) {
+                out.push(*i);
+            }
+        }
+        out
+    }
+
+    /// A click with Shift or Ctrl on a node: Shift picks the nodes from
+    /// the one picked to this one, Ctrl adds this one to the picked ones
+    /// or takes it out. False when no node is under `p`.
+    pub fn variable_outline_pick(&mut self, p: Point, range: bool) -> bool {
+        let Some(i) = self.width_node_at(p) else {
+            return false;
+        };
+        self.vo.drag = None;
+        match (range, self.vo.node) {
+            (true, Some(from)) => {
+                let (a, b) = (from.min(i), from.max(i));
+                self.vo.more = (a..=b).filter(|k| *k != i).collect();
+                self.vo.node = Some(i);
+            }
+            (false, Some(_)) if self.picked_width_nodes().contains(&i) => {
+                let rest: Vec<usize> = self
+                    .picked_width_nodes()
+                    .into_iter()
+                    .filter(|k| *k != i)
+                    .collect();
+                self.vo.node = rest.first().copied();
+                self.vo.more = rest.into_iter().skip(1).collect();
+            }
+            _ => {
+                let all = self.picked_width_nodes();
+                self.vo.more = all;
+                self.vo.node = Some(i);
+            }
+        }
+        true
+    }
+
+    /// A press (see [`Self::variable_outline_press`]); with `extend` the
+    /// node pressed joins the picked ones, else a node that is not picked
+    /// becomes the only one (a picked one keeps the others, so a drag
+    /// changes them all).
+    pub fn variable_outline_press_with(&mut self, p: Point, one_side: bool, extend: bool) {
         let grab = GRAB_PX / self.view.zoom().max(1e-6) as f64;
         if let Some(id) = self.variable_outline_target() {
             if let Some((path, stroke, scale)) = self.variable_outline_geometry(id) {
@@ -115,34 +295,135 @@ impl App {
                         .map(|_| i)
                 });
                 if let Some(i) = hit {
+                    let picked = self.picked_width_nodes();
+                    if extend || picked.contains(&i) {
+                        self.vo.more = picked.into_iter().filter(|k| *k != i).collect();
+                    } else {
+                        self.vo.more.clear();
+                    }
                     self.vo.node = Some(i);
                     self.vo.drag = Some(NodeDrag {
                         shape: id,
                         index: i,
                         one_side,
                         recorded: false,
+                        slide: None,
+                        from: p,
+                    });
+                    return;
+                }
+                // A node's reach handle (the dots at its ends): the drag
+                // changes its reach (#479).
+                let handle = stroke.widths.iter().enumerate().find_map(|(i, n)| {
+                    let (q, nn) = tracedraw_core::shaping::point_on_path(&path, n.at)?;
+                    [n.left * scale, -n.right * scale]
+                        .into_iter()
+                        .map(|d| Point::new(q.x + nn[0] * d, q.y + nn[1] * d))
+                        .any(|e| (e - p).hypot() <= grab)
+                        .then_some(i)
+                });
+                if let Some(i) = handle {
+                    let picked = self.picked_width_nodes();
+                    self.vo.more = if extend || picked.contains(&i) {
+                        picked.into_iter().filter(|k| *k != i).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    self.vo.node = Some(i);
+                    self.vo.drag = Some(NodeDrag {
+                        shape: id,
+                        index: i,
+                        one_side,
+                        recorded: false,
+                        slide: Some(false),
+                        from: p,
                     });
                     return;
                 }
                 // The outline under the pointer.
                 if let Some((t, d, _)) = tracedraw_core::shaping::locate_on_path(&path, p) {
-                    let (l, r) = tracedraw_core::style::width_at(stroke.width, &stroke.widths, t);
-                    if d <= (l.max(r) * scale) + grab {
+                    let closed = tracedraw_core::shaping::is_single_loop(&path);
+                    let (l, r) = tracedraw_core::style::width_around(
+                        stroke.width,
+                        &stroke.widths,
+                        t,
+                        closed,
+                    );
+                    // A press by an end of an open line, within its reach
+                    // there (on its cap), widens the end itself: a node a
+                    // little short of the end left the reach to fall back
+                    // to the base width past it, and the widened end came
+                    // out as a bulb with a small cap on a neck (#2547).
+                    let end = (!closed)
+                        .then(|| end_pressed(&path, p, (l.max(r) * scale) + grab))
+                        .flatten();
+                    if let Some(at) = end {
+                        if let Some(i) =
+                            stroke.widths.iter().position(|n| (n.at - at).abs() <= 1e-9)
+                        {
+                            // A node already sits there: it is the one
+                            // dragged.
+                            self.vo.more.clear();
+                            self.vo.node = Some(i);
+                            self.vo.drag = Some(NodeDrag {
+                                shape: id,
+                                index: i,
+                                one_side,
+                                recorded: false,
+                                slide: Some(false),
+                                from: p,
+                            });
+                            return;
+                        }
+                    }
+                    let t = end.unwrap_or(t);
+                    let (l, r) = if end.is_some() {
+                        tracedraw_core::style::width_around(stroke.width, &stroke.widths, t, false)
+                    } else {
+                        (l, r)
+                    };
+                    if d <= (l.max(r) * scale) + grab || end.is_some() {
                         let mut nodes = stroke.widths.clone();
+                        let new = nodes.len();
                         nodes.push(WidthNode {
                             at: t,
                             left: l,
                             right: r,
                         });
-                        let last = nodes.len() - 1;
-                        let (nodes, index) = sorted(nodes, last);
+                        // A lone node on a loop tapers to half the base
+                        // width half way round; with a second node that
+                        // point becomes a node of its own, so the far side
+                        // keeps its taper instead of easing between the
+                        // two (a live test of 0.41).
+                        nodes.extend(
+                            tracedraw_core::style::loop_anchor(
+                                stroke.width,
+                                &stroke.widths,
+                                closed,
+                            )
+                            .filter(|a| {
+                                let gap = (a.at - t).rem_euclid(1.0);
+                                gap.min(1.0 - gap) > 1e-3
+                            }),
+                        );
+                        let (nodes, map) = sorted_map(nodes);
+                        let index = map.get(new).copied().unwrap_or(0);
                         self.set_width_nodes(id, nodes, false);
+                        // The nodes after the new ones move up.
+                        let shifted: Vec<usize> = self
+                            .picked_width_nodes()
+                            .into_iter()
+                            .filter_map(|k| map.get(k).copied())
+                            .collect();
+                        self.vo.more = if extend { shifted } else { Vec::new() };
                         self.vo.node = Some(index);
                         self.vo.drag = Some(NodeDrag {
                             shape: id,
                             index,
                             one_side,
                             recorded: true,
+                            slide: Some(false),
+                            from: p,
                         });
                         return;
                     }
@@ -150,6 +431,7 @@ impl App {
             }
         }
         self.vo.node = None;
+        self.vo.more.clear();
         self.vo.drag = None;
         match self.hit_test(p) {
             Some(id) => self.select(vec![id]),
@@ -157,7 +439,8 @@ impl App {
         }
     }
 
-    /// A drag: the picked node reaches to the pointer (one side or both).
+    /// A drag: the node pressed reaches to the pointer (one side or both),
+    /// and the other picked nodes take the same reach on that side.
     pub fn variable_outline_drag(&mut self, p: Point) {
         let Some(drag) = self.vo.drag.clone() else {
             return;
@@ -171,26 +454,92 @@ impl App {
         let Some((q, n)) = tracedraw_core::shaping::point_on_path(&path, node.at) else {
             return;
         };
+        // A press on the node's centre: the first move along the path
+        // slides the node, across it changes the reach (#479).
+        let slide = match drag.slide {
+            Some(s) => s,
+            None => {
+                let d = p - drag.from;
+                if d.hypot() < 1.0 / self.view.zoom().max(1e-6) as f64 {
+                    return;
+                }
+                let across = (d.x * n[0] + d.y * n[1]).abs();
+                let along = (d.x * n[1] - d.y * n[0]).abs();
+                let s = along > across;
+                if let Some(dr) = self.vo.drag.as_mut() {
+                    dr.slide = Some(s);
+                }
+                s
+            }
+        };
+        if slide {
+            let Some((t, _, _)) = tracedraw_core::shaping::locate_on_path(&path, p) else {
+                return;
+            };
+            // Between its neighbours, so the nodes keep their order; round
+            // a closed loop it may pass the seam, and the nodes are put
+            // back in path order, the picked ones followed (#1322).
+            let mut nodes = stroke.widths.clone();
+            let closed = tracedraw_core::shaping::is_single_loop(&path);
+            let at = slide_target(&nodes, drag.index, t, closed);
+            if let Some(m) = nodes.get_mut(drag.index) {
+                m.at = at;
+            }
+            let (nodes, map) = sorted_map(nodes);
+            self.set_width_nodes(drag.shape, nodes, drag.recorded);
+            self.vo.node = self.vo.node.and_then(|k| map.get(k).copied());
+            self.vo.more = self
+                .vo
+                .more
+                .iter()
+                .filter_map(|k| map.get(*k).copied())
+                .collect();
+            if let Some(d) = self.vo.drag.as_mut() {
+                d.recorded = true;
+                d.index = map.get(drag.index).copied().unwrap_or(drag.index);
+            }
+            return;
+        }
         // Distance across the outline, measured along the normal.
         let across = (p.x - q.x) * n[0] + (p.y - q.y) * n[1];
         let reach = across.abs() / scale;
         let mut nodes = stroke.widths.clone();
-        if let Some(m) = nodes.get_mut(drag.index) {
-            if drag.one_side {
-                if across >= 0.0 {
-                    m.left = reach;
+        let mut targets = self.picked_width_nodes();
+        if !targets.contains(&drag.index) {
+            targets.push(drag.index);
+        }
+        for i in targets {
+            if let Some(m) = nodes.get_mut(i) {
+                if drag.one_side {
+                    if across >= 0.0 {
+                        m.left = reach;
+                    } else {
+                        m.right = reach;
+                    }
                 } else {
+                    m.left = reach;
                     m.right = reach;
                 }
-            } else {
-                m.left = reach;
-                m.right = reach;
             }
         }
         self.set_width_nodes(drag.shape, nodes, drag.recorded);
         if let Some(d) = self.vo.drag.as_mut() {
             d.recorded = true;
         }
+    }
+
+    /// While a drag changes the reach of a width node: whether the
+    /// outline comes to a point inside a bend, its inner side reaching
+    /// past the bend's centre or nearly (see [`inner_fold`]).
+    pub fn variable_outline_folds(&self) -> bool {
+        let Some(drag) = self.vo.drag.as_ref().filter(|d| d.slide != Some(true)) else {
+            return false;
+        };
+        let Some((path, stroke, scale)) = self.variable_outline_geometry(drag.shape) else {
+            return false;
+        };
+        !stroke.widths.is_empty()
+            && inner_fold(&path, stroke.width, &stroke.widths, scale) >= FOLD_NOTE_AT
     }
 
     /// The picked node's left and right reach (mm).
@@ -200,37 +549,50 @@ impl App {
         stroke.widths.get(self.vo.node?).copied()
     }
 
-    /// Set the picked node's reach (property bar).
+    /// Set the picked nodes' reach (property bar).
     pub fn set_variable_outline_node(&mut self, left: f64, right: f64) {
-        let (Some(id), Some(i)) = (self.variable_outline_target(), self.vo.node) else {
+        let Some(id) = self.variable_outline_target() else {
             return;
         };
         let Some((_, stroke, _)) = self.variable_outline_geometry(id) else {
             return;
         };
         let mut nodes = stroke.widths.clone();
-        if let Some(n) = nodes.get_mut(i) {
-            n.left = left.max(0.0);
-            n.right = right.max(0.0);
+        let mut changed = false;
+        for i in self.picked_width_nodes() {
+            if let Some(n) = nodes.get_mut(i) {
+                n.left = left.max(0.0);
+                n.right = right.max(0.0);
+                changed = true;
+            }
+        }
+        if changed {
             self.set_width_nodes(id, nodes, false);
         }
     }
 
-    /// Remove the picked node (Delete or the property bar).
+    /// Remove the picked nodes (Delete or the property bar), one step.
     pub fn delete_variable_outline_node(&mut self) -> bool {
-        let (Some(id), Some(i)) = (self.variable_outline_target(), self.vo.node) else {
+        let Some(id) = self.variable_outline_target() else {
             return false;
         };
         let Some((_, stroke, _)) = self.variable_outline_geometry(id) else {
             return false;
         };
-        if i >= stroke.widths.len() {
+        let picked = self.picked_width_nodes();
+        let nodes: Vec<WidthNode> = stroke
+            .widths
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !picked.contains(i))
+            .map(|(_, n)| *n)
+            .collect();
+        if nodes.len() == stroke.widths.len() {
             return false;
         }
-        let mut nodes = stroke.widths.clone();
-        nodes.remove(i);
         self.set_width_nodes(id, nodes, false);
         self.vo.node = None;
+        self.vo.more.clear();
         true
     }
 
@@ -257,6 +619,7 @@ impl App {
             self.run(cmd);
         }
         self.vo.node = None;
+        self.vo.more.clear();
     }
 }
 
@@ -297,7 +660,7 @@ pub fn draw_width_nodes(app: &App, painter: &Painter) {
         for e in [a, b] {
             painter.circle_filled(e, 2.5, blue);
         }
-        let picked = app.vo.node == Some(i);
+        let picked = app.vo.node == Some(i) || app.vo.more.contains(&i);
         painter.circle_filled(c, 4.0, if picked { blue } else { Color32::WHITE });
         painter.circle_stroke(c, 4.0, EStroke::new(1.2, blue));
     }
@@ -308,6 +671,79 @@ mod tests {
     use super::*;
     use tracedraw_core::geometry::Shape as _;
     use tracedraw_core::{Shape, ShapeKind};
+
+    /// A width node reaching inside a circle of radius 20 mm: the outline
+    /// comes to a point once its inner side nears the centre, whichever
+    /// way round the path runs; the outer side never does.
+    #[test]
+    fn the_tool_knows_when_the_inside_comes_to_a_point() {
+        let circle = |ccw: bool| {
+            let p = tracedraw_core::geometry::ellipse_path(tracedraw_core::geometry::Rect::new(
+                0.0, 0.0, 40.0, 40.0,
+            ));
+            if ccw {
+                p
+            } else {
+                p.reverse_subpaths()
+            }
+        };
+        let node = |left: f64, right: f64| {
+            [WidthNode {
+                at: 0.25,
+                left,
+                right,
+            }]
+        };
+        let ccw = circle(true);
+        let cw = circle(false);
+        let (a, b) = (ccw.area() > 0.0, cw.area() > 0.0);
+        assert!(a != b);
+        // Both sides: the inside reaches 19 mm, nearly to the centre.
+        for p in [&ccw, &cw] {
+            assert!(inner_fold(p, 0.5, &node(19.0, 19.0), 1.0) >= FOLD_NOTE_AT);
+            assert!(inner_fold(p, 0.5, &node(8.0, 8.0), 1.0) < FOLD_NOTE_AT);
+            assert!(inner_fold(p, 0.5, &node(8.0, 8.0), 3.0) >= FOLD_NOTE_AT);
+        }
+        // One side: inside on the left of a counter-clockwise loop (y up),
+        // on the right of a clockwise one.
+        let (inside_l, inside_r) = if a { (&ccw, &cw) } else { (&cw, &ccw) };
+        assert!(inner_fold(inside_l, 0.5, &node(25.0, 0.0), 1.0) > 1.0);
+        assert!(inner_fold(inside_l, 0.5, &node(0.0, 25.0), 1.0) < 0.1);
+        assert!(inner_fold(inside_r, 0.5, &node(0.0, 25.0), 1.0) > 1.0);
+        // A straight line has no bend to fold in.
+        let mut line = BezPath::new();
+        line.move_to(Point::new(0.0, 0.0));
+        line.line_to(Point::new(100.0, 0.0));
+        assert_eq!(inner_fold(&line, 0.5, &node(50.0, 50.0), 1.0), 0.0);
+    }
+
+    /// Dragging a node of a circle's outline inwards: the note shows once
+    /// the inside nears the centre, not before, and not while the node
+    /// only slides.
+    #[test]
+    fn a_drag_past_the_centre_of_a_circle_brings_the_note() {
+        let mut app = App::headless();
+        let layer = app.active_layer().expect("a layer");
+        let id = app.engine.new_shape_id();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Ellipse {
+                rect: tracedraw_core::geometry::Rect::new(30.0, 30.0, 70.0, 70.0),
+                arc: None,
+            },
+        );
+        s.stroke = Some(Stroke::new(tracedraw_core::Color::BLACK, 0.5));
+        app.run(Command::AddShape { layer, shape: s });
+        app.select(vec![id]);
+        app.tool = crate::tools::Tool::VariableOutline;
+        assert!(!app.variable_outline_folds());
+        // Press on the bottom of the outline, drag up inside.
+        app.variable_outline_press(Point::new(50.0, 30.0), false);
+        app.variable_outline_drag(Point::new(50.0, 38.0));
+        assert!(!app.variable_outline_folds(), "8 mm in of a 20 mm radius");
+        app.variable_outline_drag(Point::new(50.0, 49.0));
+        assert!(app.variable_outline_folds(), "19 mm in");
+    }
 
     fn line_app() -> (App, ShapeId) {
         let mut app = App::headless();
@@ -366,6 +802,44 @@ mod tests {
         assert_eq!(app.engine.undo_label().map(str::to_string), undo_before);
     }
 
+    /// A press on the round cap at an end of the line widens the end
+    /// itself: the node sits at the end, so the reach does not fall back
+    /// to the base width past it and the cap stays a half circle as wide
+    /// as the end, not a small cap on a neck after a bulb (#2547). A
+    /// second press there takes the same node.
+    #[test]
+    fn a_press_on_the_end_cap_widens_the_end_itself() {
+        let (mut app, id) = line_app();
+        let mut round = Stroke::new(tracedraw_core::Color::BLACK, 2.0);
+        round.cap = tracedraw_core::style::LineCap::Round;
+        app.run(Command::SetStroke {
+            shapes: vec![id],
+            stroke: Some(round),
+        });
+        // Just past the end, on the cap (the line ends at x 110).
+        app.variable_outline_press(Point::new(110.6, 50.4), false);
+        let w = widths(&app, id);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].at, 1.0, "{w:?}");
+        app.variable_outline_drag(Point::new(110.0, 56.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert!((w[0].left - 6.0).abs() < 1e-6, "{w:?}");
+        let shape = app.doc().find_shape(id).cloned().expect("shape");
+        let st = shape.stroke.clone().expect("stroke");
+        let band =
+            tracedraw_core::shaping::outline_band(&shape.page_path(), &st, 1.0).expect("band");
+        // The cap reaches 6 mm past the end, and the band is as wide as
+        // the end just before it: no neck.
+        let b = band.bounding_box();
+        assert!((b.x1 - 116.0).abs() < 0.05, "{b:?}");
+        assert!(band.winding(Point::new(108.0, 55.5)) != 0, "a neck");
+        // A press on the cap again: the node there, not another.
+        app.variable_outline_press(Point::new(113.0, 51.0), false);
+        assert_eq!(widths(&app, id).len(), 1);
+        assert_eq!(app.vo.node, Some(0));
+    }
+
     #[test]
     fn alt_changes_one_side_and_the_bar_edits_and_removes_nodes() {
         let (mut app, id) = line_app();
@@ -398,6 +872,199 @@ mod tests {
         app.variable_outline_press(Point::new(60.0, 150.0), false);
         assert!(app.selection.is_empty());
     }
+
+    /// Shift+click picks a run of nodes, Ctrl+click one more or one less;
+    /// a drag changes every picked node, both sides, or one side when it
+    /// starts with Shift (#374).
+    #[test]
+    fn shift_and_ctrl_pick_nodes_and_shift_drags_one_side() {
+        let (mut app, id) = line_app();
+        for x in [20.0, 60.0, 100.0] {
+            app.variable_outline_press(Point::new(x, 50.0), false);
+            app.vo.drag = None;
+        }
+        assert_eq!(widths(&app, id).len(), 3);
+        // The first picked, then Shift+click on the last: all three.
+        assert!(app.variable_outline_pick(Point::new(20.0, 50.0), false));
+        app.vo.more.clear();
+        app.vo.node = Some(0);
+        assert!(app.variable_outline_pick(Point::new(100.0, 50.0), true));
+        let mut all = app.picked_width_nodes();
+        all.sort();
+        assert_eq!(all, vec![0, 1, 2]);
+        // A drag on the middle one: all three reach 3 mm both ways.
+        app.variable_outline_press_with(Point::new(60.0, 50.0), false, false);
+        app.variable_outline_drag(Point::new(60.0, 53.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert!(
+            w.iter()
+                .all(|n| (n.left - 3.0).abs() < 1e-6 && (n.right - 3.0).abs() < 1e-6),
+            "{w:?}"
+        );
+        // Ctrl+click takes the middle one out.
+        assert!(app.variable_outline_pick(Point::new(60.0, 50.0), false));
+        let mut left = app.picked_width_nodes();
+        left.sort();
+        assert_eq!(left, vec![0, 2]);
+        // A drag that starts with Shift: one side only, on the picked ones.
+        app.variable_outline_press_with(Point::new(20.0, 50.0), true, false);
+        app.variable_outline_drag(Point::new(20.0, 45.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert!(
+            (w[0].right - 5.0).abs() < 1e-6 && (w[0].left - 3.0).abs() < 1e-6,
+            "{w:?}"
+        );
+        assert!(
+            (w[2].right - 5.0).abs() < 1e-6 && (w[2].left - 3.0).abs() < 1e-6,
+            "{w:?}"
+        );
+        assert!((w[1].right - 3.0).abs() < 1e-6, "{w:?}");
+        // Delete removes the picked ones in one step.
+        assert!(app.delete_variable_outline_node());
+        assert_eq!(widths(&app, id).len(), 1);
+        app.undo();
+        assert_eq!(widths(&app, id).len(), 3);
+    }
+
+    /// A circle, 100 mm across, from (0, 0): its path starts at the right
+    /// and runs through the top, so `t` of the way round lies at
+    /// `360 t` degrees from the right.
+    fn circle_app() -> (App, ShapeId) {
+        let mut app = App::headless();
+        let layer = app.active_layer().expect("a layer");
+        let id = app.engine.new_shape_id();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Ellipse {
+                rect: tracedraw_core::geometry::Rect::new(0.0, 0.0, 100.0, 100.0),
+                arc: None,
+            },
+        );
+        s.stroke = Some(Stroke::new(tracedraw_core::Color::BLACK, 2.0));
+        app.run(Command::AddShape { layer, shape: s });
+        app.select(vec![id]);
+        app.tool = crate::tools::Tool::VariableOutline;
+        app.view.set_zoom(4.0);
+        (app, id)
+    }
+
+    fn on_circle(t: f64, out: f64) -> Point {
+        let a = t * std::f64::consts::TAU;
+        Point::new(50.0 + (50.0 + out) * a.cos(), 50.0 + (50.0 + out) * a.sin())
+    }
+
+    /// #1322: on a closed path a node slides on past the path's start and
+    /// comes round, the nodes staying in path order with the picked one
+    /// followed; a node added at the seam takes the reach eased across
+    /// it, not the plain outline's.
+    #[test]
+    fn a_node_slides_round_a_closed_path_past_its_start() {
+        let (mut app, id) = circle_app();
+        // A node nine tenths of the way round, 6 mm each way.
+        app.variable_outline_press(on_circle(0.9, 0.0), false);
+        app.variable_outline_drag(on_circle(0.9, 6.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert_eq!(w.len(), 1);
+        assert!(
+            (w[0].at - 0.9).abs() < 0.01 && (w[0].left - 6.0).abs() < 0.05,
+            "{w:?}"
+        );
+        // Dragged on along the path, past the start, to a tenth of the way.
+        app.variable_outline_press(on_circle(0.9, 0.0), false);
+        app.variable_outline_drag(on_circle(0.95, 0.0));
+        app.variable_outline_drag(on_circle(0.1, 0.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert_eq!(w.len(), 1);
+        assert!((w[0].at - 0.1).abs() < 0.01, "{w:?}");
+        assert!((w[0].left - 6.0).abs() < 0.05 && (w[0].right - 6.0).abs() < 0.05);
+        // A second node half way round from the first, where the lone
+        // node's taper ends (a live test of 0.41), then 1 mm each way: it
+        // starts with the tapered reach, not the first node's.
+        app.variable_outline_press(on_circle(0.6, 0.0), false);
+        let w = widths(&app, id);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w[1].left < 5.5, "{w:?}");
+        app.variable_outline_drag(on_circle(0.6, 1.0));
+        app.vo.drag = None;
+        // The first node, dragged backwards through the start to nine
+        // tenths: it comes last in path order and stays the picked one.
+        app.variable_outline_press(on_circle(0.1, 0.0), false);
+        app.variable_outline_drag(on_circle(0.05, 0.0));
+        app.variable_outline_drag(on_circle(0.9, 0.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert_eq!(w.len(), 2);
+        assert!(
+            (w[0].at - 0.6).abs() < 0.01 && (w[1].at - 0.9).abs() < 0.01,
+            "{w:?}"
+        );
+        assert!((w[1].left - 6.0).abs() < 0.05 && (w[0].left - 1.0).abs() < 0.05);
+        assert_eq!(app.vo.node, Some(1));
+        // Pulled back to 0.62 it stays after the node at 0.6.
+        app.variable_outline_press(on_circle(0.9, 0.0), false);
+        app.variable_outline_drag(on_circle(0.85, 0.0));
+        app.variable_outline_drag(on_circle(0.62, 0.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert!(w[0].at < w[1].at && (w[1].at - 0.62).abs() < 0.01, "{w:?}");
+        // One undo step per drag.
+        app.undo();
+        let w = widths(&app, id);
+        assert!((w[1].at - 0.9).abs() < 0.01, "{w:?}");
+        // On an open path the ends still stop a node (the line test above).
+        assert!((slide_target(&w, 1, 0.95, false) - 0.95).abs() < 1e-9);
+        assert!((slide_target(&w, 0, 0.9, false) - (w[1].at - 1e-4)).abs() < 1e-9);
+    }
+
+    /// A node pressed on its centre slides along the path when the drag
+    /// goes along it (kept between its neighbours) and changes its reach
+    /// when it goes across; a press on a reach handle changes the reach.
+    /// All of it one undo step per drag (#479).
+    #[test]
+    fn width_nodes_slide_along_the_path_and_their_handles_change_the_reach() {
+        let (mut app, id) = line_app();
+        app.view.set_zoom(4.0);
+        // A node at 60, 4 mm each way.
+        app.variable_outline_press(Point::new(60.0, 50.0), false);
+        app.variable_outline_drag(Point::new(60.0, 54.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert_eq!(w.len(), 1);
+        assert!((w[0].at - 0.5).abs() < 1e-9 && (w[0].left - 4.0).abs() < 1e-6);
+        // Along the path: it slides to 80, its reach as it was.
+        let steps = app.engine.history_labels().0.len();
+        app.variable_outline_press(Point::new(60.0, 50.0), false);
+        app.variable_outline_drag(Point::new(65.0, 50.2));
+        app.variable_outline_drag(Point::new(80.0, 50.5));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert!((w[0].at - 0.7).abs() < 1e-6, "{w:?}");
+        assert!((w[0].left - 4.0).abs() < 1e-6 && (w[0].right - 4.0).abs() < 1e-6);
+        assert_eq!(app.engine.history_labels().0.len(), steps + 1, "one step");
+        // Its handle (4 mm out): the reach follows the pointer.
+        app.variable_outline_press(Point::new(80.0, 54.0), false);
+        app.variable_outline_drag(Point::new(80.0, 57.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert!((w[0].at - 0.7).abs() < 1e-6);
+        assert!(
+            (w[0].left - 7.0).abs() < 1e-6 && (w[0].right - 7.0).abs() < 1e-6,
+            "{w:?}"
+        );
+        // A second node at 30 cannot slide past the first.
+        app.variable_outline_press(Point::new(30.0, 50.0), false);
+        app.vo.drag = None;
+        app.variable_outline_press(Point::new(30.0, 50.0), false);
+        app.variable_outline_drag(Point::new(40.0, 50.0));
+        app.variable_outline_drag(Point::new(100.0, 50.0));
+        app.vo.drag = None;
+        let w = widths(&app, id);
+        assert!(w[0].at < w[1].at && w[1].at > 0.69, "{w:?}");
+    }
 }
 
 /// The Variable Outline tool's property bar: the picked node's width on
@@ -417,7 +1084,7 @@ pub fn variable_outline_bar(app: &mut App, ui: &mut egui::Ui) {
             node.is_some(),
             NumField::new(&mut v)
                 .range(0.0..=app.units.world_from_mm(500.0))
-                .fixed_decimals(app.settings.precision.min(10) as usize)
+                .length_decimals(app.settings.precision.min(10) as usize)
                 .unit_mm(app.units.world_to_mm(1.0))
                 .suffix(format!(" {}", app.units.short()))
                 .width(76.0),
@@ -432,16 +1099,31 @@ pub fn variable_outline_bar(app: &mut App, ui: &mut egui::Ui) {
     }
     crate::ui::propbar::sep(ui);
     if ui
-        .add_enabled(node.is_some(), egui::Button::new(tr("vo.delete_node")))
+        .add_enabled(node.is_some(), crate::ui::btn_icons::Ib::new("vo.delete_node"))
         .clicked()
     {
         app.delete_variable_outline_node();
     }
     if ui
-        .add_enabled(has_nodes, egui::Button::new(tr("vo.clear")))
-        .on_hover_text(tr("vo.clear_hint"))
+        .add_enabled(has_nodes, crate::ui::btn_icons::Ib::new("vo.clear"))
+        .rich_tip(tr("vo.clear_hint"))
         .clicked()
     {
         app.clear_variable_outline();
     }
+}
+
+/// The end of the open `path` (0 for its start, 1 for its end) that `p`
+/// lies within `reach` of, the nearer one when both do; `None` when
+/// neither.
+fn end_pressed(path: &BezPath, p: Point, reach: f64) -> Option<f64> {
+    [0.0, 1.0]
+        .into_iter()
+        .filter_map(|at| {
+            let (q, _) = tracedraw_core::shaping::point_on_path(path, at)?;
+            let d = (q - p).hypot();
+            (d <= reach).then_some((at, d))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(at, _)| at)
 }

@@ -12,6 +12,7 @@ mengatur cara kerja program. Pilih halaman dari daftar di sebelah kiri.
 - [[options.show_new_document_dialog]] (aktif): menanyakan pengaturan gambar
   baru; lihat [Membuat gambar](../get-started/new-document.md).
 - [[options.show_splash]] (aktif).
+- [[options.hardware_acceleration]] (aktif): jendela digambar dengan kartu grafis yang dipilih di sebelahnya ([[options.gpu_automatic]] pada awalnya); nonaktif, dengan perender perangkat lunak komputer. Berlaku pada mulai berikutnya. Jika jendela tidak bisa terbuka dengan cara itu, TraceDraw mulai lagi dengan perender perangkat lunak, lalu dengan OpenGL, dan mengingat yang berhasil.
 - [[options.undo_levels]]: berapa langkah yang dapat Anda urungkan (awalnya
   150).
 
@@ -26,6 +27,11 @@ mengatur cara kerja program. Pilih halaman dari daftar di sebelah kiri.
 - [[options.full_screen_preview]]: [[options.show_page_border]].
 - [[options.wheel_default_action]]: [[options.wheel_zoom]] (bawaan) atau
   [[options.wheel_scroll]].
+- [[options.open_view]]: [[options.open_view_page]] (bawaan),
+  [[options.open_view_objects]], [[options.open_view_width]],
+  [[options.open_view_height]], [[options.open_view_actual]], [[options.open_view_percent]] atau
+  [[options.open_view_saved]] (halaman, posisi, dan zoom yang disimpan
+  setiap kali berkas TraceDraw disimpan).
 - [[options.ruler_calibration]]: tempelkan penggaris ke layar dan ubah
   [[options.screen_resolution]] sampai tandanya cocok, agar zum 100%
   menampilkan ukuran sebenarnya. [[options.reset]] mengembalikan nilai 96.
@@ -49,6 +55,7 @@ mengatur cara kerja program. Pilih halaman dari daftar di sebelah kiri.
 - [[options.node_shape]] untuk simpul [[options.node_cusp]],
   [[options.node_smooth]], dan [[options.node_symmetrical]].
 - [[options.show_curve_direction]].
+- [[options.corner_widgets]].
 - [[options.colors]]: [[options.main_color]] simpul dan gagang yang dipilih
   serta [[options.secondary_color]].
 - [[options.unselected_nodes_filled]].
@@ -93,8 +100,36 @@ Lihat [Penempelan](../pages-layout/snapping.md).
 
 ![Halaman Teks pada opsi CD Draw](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]: seberapa banyak <kbd>Ctrl+8</kbd> dan
-  <kbd>Ctrl+2</kbd> memperbesar dan memperkecil teks yang dipilih (1 poin).
-- [[options.default_font]] dan [[options.default_size]] untuk teks baru.
-- [[menu.text.use_hyphenation]], [[menu.text.show_non_printing]], dan
-  [[menu.text.show_text_frames]].
+Halaman ini punya lima tab.
+
+- [[options.display]]: [[options.keyboard_text_increment]] (seberapa banyak
+  <kbd>Ctrl+8</kbd> dan <kbd>Ctrl+2</kbd> memperbesar dan memperkecil teks yang
+  dipilih, 1 poin), [[options.default_font]] dan [[options.default_size]] untuk
+  teks baru, serta [[menu.text.show_non_printing]].
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]: [[menu.text.show_text_frames]],
+  [[menu.text.use_hyphenation]] dan [[options.hyphenation_patterns]]
+  (bawaan, atau kamus pemenggalan untuk bahasa Anda).
+  - [[options.default_tab_spacing]]: ke mana <kbd>Tab</kbd> melompat dalam paragraf tanpa stop tab sendiri (12,7 mm, setengah inci).
+- [[docker.fonts]]: [[options.show_recent_fonts]] di atas daftar font,
+  [[options.recent_font_count]] (5, hingga 20) dan
+  [[options.font_sample_size]].
+- [[options.spelling]]: [[writing.ignore_digits]], [[writing.ignore_capitals]]
+  dan [[options.add_to_autocorrect]], agar kata yang Anda koreksi di pemeriksa
+  ejaan dikoreksi saat mengetik berikutnya; serta [[options.dictionaries]] yang
+  dipakai, lihat [Kamus](../text/writing-tools.md#dictionaries).
+- [[dialog.autocorrect]]: apa yang dikoreksi saat mengetik; lihat
+  [Koreksi otomatis](../text/writing-tools.md#autocorrect).
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

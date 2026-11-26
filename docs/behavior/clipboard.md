@@ -7,21 +7,146 @@ The selection goes to CD Draw's own clipboard, which keeps everything
 clipboard, so other programs can paste it. Right after the copy CD Draw
 notes what the system clipboard holds (a fingerprint of its text, image
 and file list). Ctrl+C with nothing selected changes nothing.
+clipboard, so other programs can paste it. Right after the copy TraceDraw
+notes what the system clipboard holds, without reading it back: the text
+it wrote (writing text replaces everything there), and on Windows the
+system's clipboard change count. A copy that writes nothing there (nodes,
+guidelines) reads it: the count on Windows, else its text and files, and
+a sample of its picture (the size and about 4096 bytes) only when there
+is neither. Ctrl+C with nothing selected changes nothing.
+
+On a Linux desktop the copy is offered as an SVG image (`image/svg+xml`),
+as a PNG picture with a transparent background (150 dpi, at most 4000
+pixels on the longer side) and as the SVG text, so a presentation or a
+word processor pastes a picture, not the SVG source (#2288). On X11
+TraceDraw owns the clipboard itself and draws the picture only when a
+program asks for it (`x11_copy.rs`). On Wayland the SVG and the text are
+offered at once through the compositor's data control protocol and the
+picture joins them when it has been drawn, on a thread of its own, unless
+another copy was made meanwhile (`wayland_copy.rs`); a compositor without
+that protocol (GNOME) gets the copy through the X11 programs' clipboard,
+which it shares with Wayland programs.
+
+On Windows (#1539) the copy goes there as an enhanced metafile
+(`CF_ENHMETAFILE`), a PDF (`Portable Document Format`), an SVG image
+(`image/svg+xml`), all at once (`win_clipboard::write`): CorelDRAW
+pastes the metafile or the PDF as objects with their fills, outlines and
+text, and so do office programs, where the SVG text alone came in as
+text before. The SVG text goes too only when the metafile cannot be
+made: a spreadsheet takes text first, so a copy pasted in a sheet came in
+as SVG source in its cells (#3461,
+`clipboard::tests::svg_text_goes_only_without_a_picture`). The metafile and the PDF are the size of the
+selection (`App::selection_alone`); the SVG keeps the page, so positions
+survive a copy between two TraceDraw windows. Elsewhere (macOS) the text
+alone goes there.
 
 ## Paste (Ctrl+V, Edit > Paste)
 
 - The system clipboard still holds what the last copy here left there
   (or there is no system clipboard): the objects copied here are pasted.
+  Ctrl+V finds that out as cheaply as it can (#183): on Windows an
+  unchanged change count pastes without reading the clipboard at all;
+  elsewhere its text and files decide, and its picture is decoded only
+  when there is neither text nor a file, or when the picture is what
+  gets pasted (and then once). A 4000 x 3000 picture on the clipboard
+  costs about 0.1 s to decode, so Ctrl+C never reads it and Ctrl+V reads
+  it only when it must.
 - Something was copied in another program since, or nothing was copied
   here: what the system offers, in this order:
   1. files copied in a file manager: each is imported like File >
      Import (one undo step each); a line of the list that ends in CR LF
      loses the CR;
-  2. SVG text: its objects;
-  3. an image: a bitmap object;
-  4. other text: artistic text in the middle of the page.
+  2. vector data another drawing program copied beside a picture of
+     its copy (#2514): its objects with their fills and outlines, one
+     undo step, selected. On Windows CorelDRAW's own copy data comes
+     first (#1539): a registered format whose name mentions Corel, CMX
+     or CDR and holds a CMX or CDR file (RIFF form `CMX1` or `CDR`, or
+     the ZIP package of version X4 and later, cut to the length its
+     header gives) is opened by the `.cdr` reader, and the objects of
+     its first page are pasted, text as text with its font
+     (`clipboard::corel_tests`). Else read on Windows from the registered formats
+     `image/svg+xml`, `Portable Document Format` (also `PDF`,
+     `application/pdf`) and the enhanced metafile, and on an X11 desktop
+     (also through a Wayland one's X server) from `image/svg+xml`,
+     `application/pdf` and `image/x-emf`, the first offered in that
+     order; the SVG, PDF and EMF readers of File > Import read them
+     (the first page of a PDF). Data they cannot read leaves the
+     picture to be pasted
+     (`clipboard::tests::vectors_another_program_copied_paste_as_objects`);
+  3. DXF text (text whose first two lines are `0` and `SECTION`, as a
+     CAD program such as Cadcraft copies a drawing): its objects, read
+     by the DXF reader of File > Import; text it cannot read goes on as
+     below (#3544, `clipboard::tests::dxf_text_pastes_as_objects`);
+  4. SVG text: its objects;
+  5. an image: a bitmap object;
+  6. other text: artistic text in the middle of the page, one step to
+     undo with its fill and outline (`clipboard::tests::pasted_text_is_one_step`).
 
-Ctrl+Shift+V pastes the objects copied here in the middle of the view.
+Ctrl+Shift+V (Edit > Paste in View) pastes in the middle of the view,
+taken when the shortcut is pressed, even if the view moves while a
+picture is being read. Paste at Pointer in the page's right-click menu
+pastes the same, centred where the menu was opened.
+Paste on the page's context menu centres what it pastes where the menu
+was opened.
+
+Edit > Paste Above Selection pastes as Paste does, then lays what came
+just in front of the topmost selected object, in its layer or group,
+instead of at the top of the active layer; one Undo takes it back. With
+nothing selected it is Paste. It has no shortcut of its own; one can be
+given in Options > Customization (#3673,
+`clipboard::tests::paste_above_selection_lands_in_front_of_the_selection`).
+
+### Large pictures on the desktop
+
+The desktop reads and prepares external clipboard pictures on a worker
+thread, including decoding and PNG encoding. The window keeps responding
+and the pointer shows the system's progress indicator while the paste is
+pending. Repeating Paste during that wait does not start another copy of
+the same work. A copy still owned by TraceDraw can paste immediately.
+Picture paste starts when the shortcut is pressed. Releasing Ctrl or
+Shift before V does not lose the request or trigger a second paste.
+
+A Windows clipboard held briefly by another application is retried in
+the background. A read that ultimately fails shows an error in the
+status bar and does not paste an older internal copy instead. A result
+for a document, page or layer that is no longer active is discarded.
+An inserted picture and its target position form one undo step.
+
+### In a browser and on Android (#1403)
+
+A browser hands the clipboard only to a paste event and to its
+clipboard API, never to a plain read:
+
+- Ctrl+V: the paste event's text goes the way above; its files (a
+  picture copied in an image program or a web page, files copied in a
+  file manager) are read in the background and pasted a frame later.
+  The shortcut's own frame then pastes nothing, so the copy made here
+  does not come as well. One picture alone is placed as a bitmap; other
+  files are imported like File > Import. While a text is edited, a
+  picture is not put into it.
+- Edit > Paste (and the context menu's Paste) reads the clipboard with
+  the browser's clipboard API (`navigator.clipboard.read()`): the first
+  time the browser asks for permission (Firefox shows a Paste button).
+  Its picture and text are pasted as for Ctrl+V; text that is still the
+  copy made here pastes the objects copied here. When the browser
+  refuses or has no such API, the copy made here is pasted and the
+  status bar says that Ctrl+V pastes what other programs copied.
+
+On Android the activity reads the system clipboard (`ClipboardManager`):
+its text, and the documents other apps copied (content URIs, which
+reading the clip grants the editor the right to read). One picture alone
+(copied in a gallery, a browser or a chat) is the clipboard's picture,
+placed as a bitmap; other documents are imported like files from the
+document picker. A document's URI is never pasted as text.
+
+Symbol instances pasted into another drawing (or inside pasted groups and
+clip frames) bring their symbols along: a symbol the drawing holds
+already, the same objects under the same name, is used; any other is
+added to the drawing's symbols, with the symbols it shows, in the same
+step as the paste. In the drawing copied from, an instance stays an
+instance of its own symbol (#678,
+`ops2::tests::an_instance_pasted_in_another_drawing_brings_its_symbol`,
+`symbol_paste::tests`).
 
 ## When the clipboard holds no text
 
@@ -32,14 +157,70 @@ with Ctrl (Cmd), Shift+Insert or the Paste key that came without a paste
 event or press before it pastes too, once. V let go after Ctrl is typing
 and does not paste.
 
+## Pictures on Windows (#2349)
+
+A picture another program copied is read as PNG (the registered `PNG`
+or `image/png` formats), else as the device-independent bitmap
+(`CF_DIBV5`, `CF_DIB`) turned into a BMP file and decoded, so bitmaps
+of any depth and layout paste, not only the 32-bit kind the clipboard
+library reads; the library is asked last (`win_clipboard::read_picture`;
+check `clipboard::linked_watch_tests::a_device_independent_bitmap_reads_as_a_picture`).
+
+## Pictures on a Linux desktop (X11)
+
+A screenshot tool keeps its picture on the clipboard itself and hands it
+over when asked; a large picture comes in parts, each one after the
+reader took the one before. The clipboard library gave each part 10 ms
+and asked for PNG only, so a busy program's picture often came out
+empty and took two or three pastes to arrive (#1488). On an X11 desktop
+(no `WAYLAND_DISPLAY`) the paste now reads the clipboard's list of types
+first and asks for the best picture type it offers (PNG, then BMP, TIFF,
+WebP, GIF, JPEG), gives the owner 3 s to answer and each part 2 s, and
+tries again twice, 150 ms apart, when no answer came
+(`x11_clipboard.rs`). A clipboard without a picture type is not waited
+for. On a Wayland desktop the clipboard library reads first and the X11
+clipboard the desktop keeps beside it is read when it finds nothing.
+TraceDraw keeps one connection to the system clipboard for the session
+instead of opening one for each read.
+
+On an X11 desktop the clipboard's text and its list of copied files are
+asked for only when its list of types offers them (`UTF8_STRING` or
+`text/plain;charset=utf-8` for text, `text/uri-list` for files), both
+by the paste itself and by the windowing layer, which reads the text on
+every paste shortcut (`clipboard::paste_may_read_text`, the gate in
+`vendor/eframe`, see `vendor/README.md`). A program that holds a picture
+alone, such as `xclip -selection clipboard -t image/png`, may answer a
+text request with its picture sent in parts; the text read stopped
+after the first part, and the program then waited for the rest and
+answered nobody, so a picture of about 1 MB never pasted and the window
+froze for about 24 s (#1488). An owner that gives no list of types, or
+no program owning the clipboard, is not asked for text either.
+
+## Browser build
+
+The browser hands the clipboard only to paste events, and only as text:
+a copy notes the SVG it wrote, and Ctrl+V compares the paste event's
+text with it. Images and files copied in other programs are not
+available.
+
 ## Checks
 
 - `clipboard::tests`: the copy here wins while the system clipboard
   holds what it left, or holds nothing; a picture or text copied
   elsewhere afterwards wins; copied files are imported; copied file paths
-  lose the line end.
+  lose the line end; the change check and the paste decode a picture only
+  when they must (`the_change_check_decodes_a_picture_only_when_it_must`,
+  `a_paste_decodes_the_picture_only_when_it_needs_it`).
+- `clipboard::clipboard_bench::clipboard_costs` (ignored, needs a
+  clipboard): what copy and paste cost with a 4000 x 3000 picture on it.
 - `pick_drag_tests::ctrl_v_pastes_when_only_its_release_comes_through`
   and `copy_cut_and_paste_events_work_on_objects`.
+- `x11_clipboard::tests::a_picture_sent_slowly_in_parts_arrives_whole`
+  (under the X server of `DISPLAY`, else an Xvfb it starts; skipped
+  without either): a program that owns the clipboard sends a PNG in
+  2 KB parts, 30 ms apart, and the first read gets it whole; once the
+  program is gone a read finds nothing within 2 s.
+  `picture_types_go_best_first` and `pictures_decode_by_type_or_by_signature`.
 - Checked under Xvfb with `xclip`: a picture (`image/png`) and a file
   (`text/uri-list` with CR LF) copied after a copy here paste as a bitmap
   and as an imported file; copying here again pastes the copy.

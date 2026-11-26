@@ -1,5 +1,7 @@
 # Opcje dostosowywania
 
+> *Tłumaczenie maszynowe: ta strona może być mniej aktualna niż wersja angielska.*
+
 [[menu.tools > menu.tools.options > menu.tools.options_customization]] ustawia
 wygląd interfejsu, własne skróty klawiaturowe, widoczne paski i działanie palety
 kolorów.
@@ -11,7 +13,11 @@ kolorów.
 - [[options.center_dialogs]]: okna dialogowe otwierają się na środku okna; po
   wyłączeniu otwierają się tam, gdzie je zostawiono.
 - [[options.ui_shadows]] (mniej cieni pomaga przy wolniejszej grafice).
+- [[options.translucent_menus]]: open menus let the drawing show through them, at the [[options.menu_opacity]] beside the box (off by default).
 - [[options.colored_icons]]: każda grupa narzędzi otrzymuje własny kolor.
+- [[options.docker_tabs_icons_only]]: karty paneli po bokach okna pokazują
+  tylko obrazek, a nazwę w podpowiedzi. Wyłączone pokazują obrazek i nazwę,
+  a kolumna z większą liczbą kart, niż się mieści, przewija się.
 - [[options.ui_size]]: wielkość menu, pasków, ikon i paneli względem skalowania,
   jakie system nadaje monitorowi (domyślnie 100%).
   [[options.reset_to_default]] przywraca 100%. Rozmiar interfejsu nigdy nie
@@ -41,6 +47,14 @@ pokazują Twój skrót. **x** obok skrótu usuwa go, a przywrócenie ustawień
 domyślnych usuwa je wszystkie. Klawisze narzędzi to litera lub <kbd>Shift</kbd>
 i litera. Zobacz [Skróty klawiaturowe](../reference/keyboard-shortcuts.md).
 
+Polecenie może mieć kilka skrótów: nowy klawisz dołącza do tych, które już ma
+(wbudowany klawisz nadal działa obok), a każdy klawisz ma własny przycisk
+usuwania. Skróty przyjmują też przyciski pasków uruchamiające polecenie menu
+(Nowy, Otwórz, Zapisz, Cofnij, Powiększ i inne), te same klawisze co ich
+polecenie menu, a także wiersze, które menu pokazują tylko czasami. Lista
+**Przyciski pasków narzędzi** zawiera wszystkie przyciski pasków Standardowy i
+Powiększenie: przeciągnij stamtąd z powrotem na pasek usunięty przycisk.
+
 ## Paski poleceń {#command-bars}
 
 ![Strona Paski poleceń opcji dostosowywania](../../img/customize-customization-command-bars.png)
@@ -53,14 +67,31 @@ i litera. Zobacz [Skróty klawiaturowe](../reference/keyboard-shortcuts.md).
 [[options.reset]] przywraca paski. W sekcji [[options.other]]:
 [[bars.lock]] i [[options.show_outline_flyout]].
 
+[[options.toolbar_drag_hint]]
+
 ## Paleta kolorów {#color-palette}
 
 ![Strona Paleta kolorów opcji dostosowywania](../../img/customize-customization-color-palette.png)
 
 - [[options.palette_auto_update]] i [[options.palette_show_document]] (obie
   włączone).
+- [[options.palette_position]] (Góra, Dół, Lewo, Prawo lub Swobodna)
+  domyślnej palety, tak jak ustawia ją jej własne menu; nie zmienia się,
+  gdy paski narzędzi są zablokowane.
 - [[options.palette_swatches]]: [[options.palette_no_color]] (włączone) oraz
   działanie opcji [[options.palette_right_button]]: [[options.palette_set_outline]]
   (domyślnie) lub otwarcie menu [[options.palette_context_menu]].
 
 Zobacz [Palety kolorów](../color/palettes.md).
+
+## Menu kontekstowe {#context-menus}
+
+W obszarze Dostosowywanie wybierz [[options.context_menus]], aby niezależnie zarządzać 32 miejscami menu kontekstowych. Wybierz miejsce za pomocą [[options.context_menu_scene]], następnie użyj [[options.context_menu_search]], aby znaleźć operację, i usuń zaznaczenie jej pola, aby ukryć ją w tym miejscu. Operacje pozostają na tej liście, nawet gdy bieżące zaznaczenie nie może ich użyć.
+
+Domyślnie wszystkie operacje są widoczne. Każde miejsce ma własne ustawienia: ukrycie operacji obiektu na obszarze rysunku nie ukrywa jej w panelu Obiekty. Listy dynamiczne, takie jak warstwy docelowe i kolekcje czcionek, są zarządzane jako jedna operacja, więc zmiana ich nazw nie resetuje wyboru.
+
+[[options.context_menu_reset]] przywraca wybrane menu, a [[options.context_menu_reset_all]] przywraca wszystkie menu. [[dialog.ok]] zapisuje wybór w ustawieniach aplikacji; [[dialog.cancel]], Escape lub przycisk zamknięcia przywraca wybór z chwili otwarcia Opcji. Menu główne, skróty klawiaturowe i wyszukiwanie poleceń nadal udostępniają oryginalne polecenia.
+
+Rozwiń podmenu, aby zobaczyć jego elementy z wcięciem. Przeciągnij uchwyt wiersza lub użyj [[options.context_menu_move_up]] i [[options.context_menu_move_down]], aby zmienić kolejność elementów na tym samym poziomie. Menu nadrzędne przenosi się wraz ze swoimi elementami; elementów nie można przenieść do innego menu nadrzędnego. Wyszukiwanie zachowuje widoczną ścieżkę do pasujących elementów. Przywrócenie menu resetuje widoczność i kolejność, a anulowanie Opcji przywraca oba ustawienia do stanu z chwili otwarcia okna.
+
+Menu próbek palety dokumentu i jej pozycja w Menedżerze palet mają osobne ustawienia. Dynamiczne cele zachowują własną kolejność; lista stylów dokumentu pozostaje między stałymi operacjami w Stylach obiektów. Nowe operacje dodane w późniejszej wersji pozostają widoczne i pojawiają się po zapisanych elementach tego samego poziomu.

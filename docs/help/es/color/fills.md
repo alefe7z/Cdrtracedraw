@@ -57,6 +57,19 @@ del panel [[docker.properties]]:
 Una franja debajo del tipo muestra toda la secuencia de colores tal como se
 dibujará.
 
+## El cuadro de diálogo Editar relleno {#edit-fill}
+
+<kbd>F11</kbd> abre el cuadro de diálogo [[edit_fill.title]] con el relleno de
+la selección. Para un degradado muestra una vista previa, el
+[[edit_fill.fill_picker]], el tipo, la repetición y la banda de colores: haga
+clic en un nodo para elegirlo, arrástrelo para moverlo y haga doble clic para
+añadir o quitar uno. Bajo la banda: el color, la transparencia, la posición y
+el [[edit_fill.midpoint]] del nodo, e [[edit_fill.reverse]].
+[[edit_fill.transform]] tiene la rotación, el centro y el relleno del borde.
+**Aceptar** aplica lo que cambió, con [[edit_fill.overprint]]. Mientras el cuadro de diálogo está abierto, la selección muestra el relleno a medida que lo cambia; **Cancelar** o <kbd>Esc</kbd> restaura el relleno anterior.
+
+![El cuadro de diálogo Editar relleno](../../img/color-fills-edit-fill.png)
+
 ## La herramienta Relleno interactivo {#interactive-fill}
 
 La herramienta [[tool.interactive_fill]] (<kbd>G</kbd>) edita los rellenos
@@ -83,10 +96,10 @@ formada por varios objetos superpuestos, creando un objeto nuevo con esa
 área. Los objetos que la rodean quedan como están.
 
 1. Elija la herramienta [[tool.area_fill]].
-2. Elija el relleno y el contorno en la barra de propiedades: **Usar
-   predeterminado** (el relleno y el contorno de los objetos nuevos; un color
-   cuando es sin relleno, para que el área se vea), **Especificar** (el color
-   y, para el contorno, el grosor, al lado) o **Ninguno**.
+2. Elija el relleno y el contorno en la barra de propiedades: **Especificar**
+   (el color y, para el contorno, el grosor, al lado), **Usar predeterminado**
+   (el relleno y el contorno de los objetos nuevos; un color cuando es sin
+   relleno, para que el área se vea) o **Ninguno**.
 3. Haga clic dentro del área.
 
 El nuevo objeto se coloca encima de la capa activa y queda seleccionado. Un
@@ -120,6 +133,9 @@ de una malla conserva sus colores.
 - Un relleno [[docker.fill_texture]] es una textura generada de aspecto
   natural: [[texture.clouds]], [[texture.marble]], [[texture.noise]] o
   [[texture.wood]], con sus colores y su escala.
+- [[texture.holographic]] y [[texture.holo_glitter]] dan un aspecto fijo de lámina holográfica: colores del arcoíris
+  entre zonas oscuras y claras (colores A y B), la purpurina con granos
+  brillantes. No cambia con el ángulo de visión; PDF y SVG lo llevan como imagen.
 
 ## Varios rellenos en un objeto {#several-fills}
 

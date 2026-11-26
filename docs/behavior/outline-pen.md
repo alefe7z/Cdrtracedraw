@@ -1,27 +1,166 @@
 # Outline Pen and Outline Colour
 
-The Outline Pen tool (F12) opens the Properties
-panel on the Outline section and returns to the Pick tool; Outline
-Colour (Shift+F12) opens the Colour panel. The model is
-`tracedraw_core::Stroke`.
+The Outline Pen tool (F12) opens the Outline Pen dialog and gives the
+canvas back to the tool before it; Outline Colour (Shift+F12) opens the
+Colour panel. The model is `tracedraw_core::Stroke`.
+
+## Outline Pen dialog
+
+(#357, `ui/outline_pen.rs`) On the first selected object's outline,
+values that differ across the selection shown empty, or on the default
+outline when nothing is selected. Groups:
+
+- General: Color (the colour picker), Width (a list with None, hairline
+  and 0.25 to 24 pt, a box for any width, the outline unit), Style (the
+  dash patterns drawn, then custom ones; "..." opens Edit Line Style and
+  comes back), Mitre limit (with mitred corners), Dashes (as they come,
+  or aligned to corners and ends), Corners, Line caps and Position as
+  picture buttons.
+- Arrowheads: start and end, each with a "..." that opens the Arrowhead
+  editor on that end, and Share attributes (see below).
+- Calligraphy: Stretch (10 to 100 %), Angle (-90 to 90 degrees), Default
+  (100 %, 0), and a picture of the nib; dragging on it sets angle and
+  stretch. Behind fill, Scale with object.
+- Variable Outline: the width nodes as dots along a bar; a click on the
+  bar adds a node with the width there, on a dot picks it (the nearest
+  within 6 points); a drag on a dot slides it along the bar, 0 to 100 %,
+  kept between its neighbours, the fields following, and a drag on bare
+  bar adds a node there and slides it (a drag there moved the dialog,
+  #652); its position (a position typed past a neighbour puts the nodes
+  in order again), Side 1 and Side 2 widths and their Total (a new total
+  keeps their ratio); Delete Node
+  (`outline_pen::tests::a_width_node_drags_along_the_bar_between_its_neighbours`,
+  `a_slid_node_stops_at_its_neighbours_and_the_ends`).
+- Overprint outline, "?", OK, Cancel.
+
+OK sends only the fields that were changed (also those set to the value
+shown) to every selected object, with Overprint in the same undo step
+(`App::apply_outline_pen`, `the_outline_pen_applies_what_was_changed`);
+with nothing selected it changes the default outline (asking which
+kinds when Options say so).
+
+While the dialog is open the selected objects show what it holds (#741,
+`App::preview_outline_pen`): each change in the dialog is drawn at
+once, as an engine preview made again only when a value changes (never
+every frame). OK keeps it as one undo step; Cancel, Esc and the close
+button take it back, the drawing, the history (redo included) and the
+saved state as they were. Edit Line Style opened from the dialog takes
+the preview back, and it shows again on the return. With nothing
+selected (the default outline) nothing is previewed.
+
+## Presets
+
+The Presets row (#4090, `outline_presets.rs`) under the Variable
+Outline group keeps outlines under a name in the settings
+(`outline_presets`, at most 100). Choosing one puts its whole outline in
+the dialog (every field marked as set), so OK gives it to the selected
+objects in one undo step; + saves the outline shown under the name typed
+beside the list (the same name replaces it), - removes the preset chosen.
+A new name starts as "Outline 1", the first number not taken.
 
 ## Fields and defaults
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| Colour | black (C0 M0 Y0 K100 for new objects) | any colour model |
-| Width | 0.2 mm (0.567 pt) for new objects; imported outlines keep theirs | a hairline (0.0762 mm, 0.216 pt) draws one device pixel at every zoom |
+| Colour | black (C0 M0 Y0 K100 for new objects in a CMYK drawing, RGB 0, 0, 0 in an RGB drawing) | any colour model |
+| Width | 0.2 mm (0.567 pt) for new objects; imported outlines keep theirs | a hairline (0.0762 mm, 0.216 pt) draws one device pixel at every zoom; a dashed one keeps its dashes, a unit of the pattern being its width on screen but at least a pixel, as for any thin outline (#2463, `tracedraw_render` test `a_dashed_hairline_keeps_its_gaps`) |
 | Caps | butt | butt, round, square |
 | Corners | mitre | mitre, round, bevel |
-| Mitre limit | 5 degrees | 1 to 179 degrees; shown with mitred corners |
-| Dash | solid | presets dashed 4:2, dotted 1:1, dash dot 6:2:1:2, and custom line styles, in multiples of the width |
+| Mitre limit | 45 degrees | 1 to 179 degrees; shown with mitred corners |
+| Dash | solid | presets dashed 4:2, dotted 1:1, dash dot 6:2:1:2, round dots 0:2 (dashes of no length, which round caps draw as dots two widths apart; choosing it turns flat caps round, #3404), and custom line styles, in multiples of the width |
 | Align dashes | off | fit the dashes to the corners and ends (with a dash pattern) |
 | Position | centred | outside, centred, inside |
 | Arrowheads | none / none | start and end; presets and custom heads, filled in the outline colour |
+| Arrowhead size | 100 % | per end, 10 to 1000 % of the preset head size |
+| Arrowhead offset | 0 | per end, mm along the line; positive out past the end |
+| Arrowhead mirror | off / off | per end, horizontally (along the line) and vertically (across it) |
+| Arrowhead rotation | 0 | per end, degrees about the tip, counter-clockwise positive |
+| Share attributes | off | the end takes the start's head and settings and follows them |
 | Nib stretch | 1.0 | 0.1 to 1: the calligraphic nib's thickness across its axis |
 | Nib angle | 0 | degrees |
-| Behind fill | off | the outline is drawn under the fill |
+| Behind fill | off | the outline is drawn under the fill; on a PowerClip frame, under its fill and its contents (on screen, in print and in PDF, SVG, EPS and AI exports) |
 | Scale with object | off | the width follows the object's scale factor `sqrt(|det|)` |
+
+## Arrowhead editor
+
+(#1210, `ui/arrowhead_editor.rs`) The "..." beside an end's arrowhead
+list, in the Properties docker's outline section and in the Outline Pen
+dialog, opens the Arrowhead editor on that end: a preview of the line's
+end with the head (drawn by the renderer, made again only when a value
+changes), the head list (presets and custom heads), Size, Offset (in
+the outline unit), Mirror horizontally, Mirror vertically, Rotation,
+Default (back to 100 %, 0, off, off, 0), OK and Cancel. The settings
+are kept per end in `Stroke::start_head` and `Stroke::end_head`
+(`ArrowheadPlacement`); a placement left at its defaults is not written
+to `.tdraw` files, so files saved before the editor existed read and
+write as they did.
+
+The head is built in its own frame (its tip at the origin, the line's
+direction out of the end along +x, the left normal along +y) and placed
+by `ArrowheadPlacement::place`:
+
+- Size `s` (10 to 1000 %): the head is scaled by `s / 100` about its
+  tip. 100 % is the preset size, four outline widths (hairlines count as
+  0.25 mm, at least 1 mm), so a head at 200 % is twice as long and tall.
+  A size that is not a number counts as 100 %.
+- Offset `d` (mm): the tip moves to `end + d * dir`, `dir` the unit
+  direction out of the line at that end: a positive offset moves the
+  head out past the end of the line, a negative one back along it.
+- Mirror horizontally: x is negated in the head's frame, so the head
+  faces back along the line. Mirror vertically: y is negated, so the two
+  sides change places (a mirrored head's path is the mirror image of the
+  plain one). Mirroring is applied before the rotation.
+- Rotation `a` (degrees): the head is turned about its tip by `a`,
+  counter-clockwise positive on the page (the same sense as the
+  Transform docker's angles).
+
+Because every head, preset or custom, goes through this one place
+(`style::arrowhead_paths`), the canvas, SVG, PDF, EPS and EMF exports
+all show the same head. `.cdr` files neither read nor write these
+settings (where they live in the outline record is not known).
+
+Share attributes (the check box beside the End list, `Stroke::
+share_arrowheads`) gives the end the start's head and placement when
+turned on and keeps them the same while on: the End list and its "..."
+are disabled, a change of the start head (in the lists or in the
+editor) reaches the end too, and the band is drawn with the start's head
+at both ends whatever the end's own fields hold. Turning it off leaves
+the end as the start's copy, to be changed on its own.
+
+The editor's OK sends the head and its placement to the selected
+objects as one undo step through `patch_selection_stroke`
+(`StrokeField::StartArrow` and `StartHead`, or `EndArrow` and
+`EndHead`; `ShareArrowheads` for the check box), so a selection whose
+other outline values differ keeps them; values that differ across the
+selection show as mixed in the editor. With nothing selected the editor
+sets the default outline; opened from the Outline Pen dialog it writes
+into that dialog's outline (marked as set) and the dialog comes back,
+its OK applying the change with the rest. Checks:
+`style::arrowhead_tests::head_size_offset_mirror_and_rotation_place_the_head`
+(200 % is twice as long, an offset moves the head, a mirrored head faces
+back, a quarter turn points it across the line),
+`a_vertically_mirrored_head_is_the_mirror_image`,
+`share_attributes_gives_the_end_the_start_head`,
+`head_placements_round_trip_and_defaults_are_not_written`,
+`patch::tests::head_placements_patch_one_at_a_time_and_share_follows_the_start`,
+`io::tests::arrowhead_placement_round_trips_through_the_native_format`,
+the SVG and PDF tests `a_moved_and_scaled_arrowhead_lands_where_the_editor_put_it`,
+`ui::arrowhead_editor::tests` and
+`ui::dockers::tests::the_arrowhead_editor_and_share_attributes_sit_beside_the_lists`.
+
+## Properties docker
+
+The Properties docker's outline section (the default outline with
+nothing selected, the selection's outline otherwise) shows the common
+settings in view: Paint, Hairline and the width, Caps, Corners, the
+start and end arrowheads (each with the Arrowhead editor's "..." and
+Share attributes after the end), Dash (and custom dashes), Align dashes, Edit
+Line Style, Position, Behind fill and Scale with object. The mitre limit
+(with mitred corners), the nib stretch and the nib angle sit under an
+Advanced header below them, closed at first unless one of them is set
+away from its default (45 degrees, 100 %, 0 degrees) or differs between
+the selected objects, so nothing set is hidden (#487,
+`ui::dockers::tests::every_outline_option_is_in_the_properties_docker`).
 
 ## Width unit
 
@@ -30,13 +169,25 @@ and the property bar show and take them in the outline unit, picked
 next to the width: millimetres (the default; preferences saved in
 points by older versions move to millimetres once), points, centimetres,
 inches or pixels. The choice is a preference (`outline_units` in the
-settings) shared by both places and the callout bar. The width list
-offers round values in that unit: points 0.25, 0.5, 0.75, 1, 1.5, 2, 3,
+settings) shared by both places, the Outline Pen dialog and the
+callout bar. The width lists of the property bar, the callout bar and
+the Outline Pen dialog offer one list, round values in that unit: points 0.25, 0.5, 0.75, 1, 1.5, 2, 3,
 4, 6, 8, 10, 12, 16; millimetres (and centimetres) 0.1 to 3 mm; inches
 0.003 to 0.1; pixels 1 to 16. A number typed with a unit after it
 (`1 mm`) is read in that unit. Checked by
 `ui::propbar::tests::outline_widths_read_in_the_outline_unit` and
-`ui::propbar::tests::the_width_presets_follow_the_outline_unit`.
+`ui::propbar::tests::the_width_presets_follow_the_outline_unit`;
+`ui::outline_pen::tests::the_width_list_matches_the_property_bar`
+checks the dialog's list is the same (#967).
+
+Object > Thicker Outline and Thinner Outline step the selection's
+outline one width up or down that list, as the wheel over the width box
+does (past the widest in steps of the last gap). They have no key at
+first; one is given in Options > Customization > Commands. Thinner
+stops at the hairline and never takes the outline off; Thicker gives an
+object without an outline a hairline. Each object keeps its colour and
+the rest of its outline, in one undo step (#2905,
+`ui::propbar::tests::outline_width_commands_step_the_selection`).
 
 ## Mitre limit
 
@@ -44,7 +195,7 @@ A mitred corner sharper than the mitre limit angle is bevelled. The
 angle `a` is kept in the model (`Stroke::miter_limit`, degrees) and
 given to the renderer, SVG (`stroke-miterlimit`), PDF (`M`) and EPS
 (`setmiterlimit`) as the ratio of mitre length to width
-`1 / sin(a / 2)` (5 degrees: 22.9). SVG files read back the other way:
+`1 / sin(a / 2)` (45 degrees: 2.6; 5 degrees: 22.9). New outlines start at 45 degrees, so a thick outline on lettering bevels its narrow turns instead of growing spikes several widths long (#894; the reporter's comparison video shows new outlines with a limit of 45 degrees). They started at 5 degrees before. SVG files read back the other way:
 `a = 2 asin(1 / ratio)`. Outlines in files saved before the field
 existed keep the limit they were drawn with, ratio 4 (about 29
 degrees). `.cdr` files: the limit is neither read nor written (where it
@@ -108,6 +259,11 @@ their pattern). Custom line styles are kept in the settings
 
 ## Checks
 
+- `ui::outline_pen::tests::the_outline_shows_live_while_the_dialog_is_open`
+- Given a selected rectangle and the dialog open, when the width is set
+  to 2 mm, then the rectangle's outline is 2 mm at once, idle frames do
+  not change the drawing, Esc puts back the old width and history, and
+  OK keeps the new width as one undo step.
 - Given a 6 mm flat nib (stretch 0.1) at 0 degrees, a vertical line is
   6 mm wide and a horizontal line 0.6 mm tall.
 - Given stretch 1, the band equals a 2 mm round-capped stroke.
@@ -158,3 +314,10 @@ renderer, `svg::tests::outline_paints_are_written_as_the_stroke_paint`,
 `shaping::tests::stroke_area_covers_the_outline_and_hairlines_cover_nothing`
 and `ui::dockers::tests::outline_paint_offers_every_fill_kind`.
 
+## In the Properties docker (#1200)
+
+- Advanced > the calligraphic nib: stretch as a percentage field (10 to
+  100 %), the nib angle (-90 to 90 degrees) and the nib picture, dragged
+  to turn and flatten it, as in the dialog (`outline_pen::nib_picture`).
+- Overprint outline, under the outline section, and an Outline Pen...
+  button that opens the dialog.

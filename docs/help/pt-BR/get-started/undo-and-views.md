@@ -11,7 +11,9 @@ zoom e de qualquer posição. Zoom e deslocamento nunca alteram o desenho.
   os passos. Escolha um passo para desfazer ou refazer todas as alterações até
   ele.
 - [[menu.edit.repeat]] aplica o último comando de novo, por exemplo ao próximo
-  objeto que você selecionar.
+  objeto que você selecionar. Um deslocamento, redimensionamento ou rotação é
+  repetido em torno do centro, lado ou canto do próprio objeto selecionado, que
+  gira ou cresce onde está em vez de sair do lugar.
 
 ### O painel Desfazer {#undo-docker}
 
@@ -32,6 +34,9 @@ em [[menu.window > menu.window.dockers]].
   [[menu.view.zoom_to_fit]] (<kbd>F4</kbd>) mostra todos os objetos,
   [[menu.view.zoom_to_page]] (<kbd>Shift+F4</kbd>) a página e
   [[menu.view.zoom_to_selected]] (<kbd>Shift+F2</kbd>) a seleção.
+- [[menu.view > menu.view.zoom_1to1]] mostra o desenho no tamanho real
+  (100%), como será impresso. Ele não tem tecla de início: dê uma em
+  [Atalhos de teclado](../reference/keyboard-shortcuts.md).
 - O gesto de pinça no trackpad muda o zoom, e numa tela sensível ao toque dois
   dedos deslocam e ampliam com qualquer ferramenta.
 
@@ -52,12 +57,16 @@ objetos.
 - Mantenha o botão do meio do mouse pressionado e arraste, com qualquer
   ferramenta.
 - Escolha a ferramenta [[tool.pan]] (<kbd>H</kbd>) e arraste.
-- <kbd>Ctrl</kbd>+roda rola para cima e para baixo, <kbd>Alt</kbd>+roda para os
-  lados.
+- <kbd>Ctrl</kbd>+roda e <kbd>Shift</kbd>+roda rolam para os lados,
+  <kbd>Alt</kbd>+roda para cima e para baixo. Para dar zoom com
+  <kbd>Ctrl</kbd>+roda, marque [[options.ctrl_wheel_zooms]] na página
+  [[options.zoom_pan]].
 - Use as barras de rolagem, que cobrem a página e o tamanho de uma página ao
   redor.
 - Mantenha pressionado o botão Navegador, no canto entre as barras de rolagem,
-  e mova o ponteiro sobre a miniatura da página.
+  ou a tecla <kbd>N</kbd>, e mova o ponteiro sobre a miniatura da página.
+  [[menu.view > menu.view.navigator]] abre a miniatura até um clique: clique
+  nela para ir até lá, em outro lugar ou <kbd>Esc</kbd> para fechá-la.
 - <kbd>PgUp</kbd> e <kbd>PgDn</kbd> vão para a página anterior e a próxima.
 
 Para que a roda role em vez de mudar o zoom, mude a ação da roda do mouse na

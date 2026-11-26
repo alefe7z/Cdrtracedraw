@@ -48,7 +48,9 @@ reference point; off, from the ruler origin.
 ### Scale and Mirror {#scale-and-mirror}
 
 [[docker.x]] and [[docker.y]] scale in percent (100% at first).
-[[toolbar.mirror_h]] and [[toolbar.mirror_v]] flip the selection.
+[[toolbar.mirror_h]] and [[toolbar.mirror_v]] flip the selection. They are also
+commands of **Object > Transformations**, so you can give them a shortcut in
+**Options > Customization > Commands** or with a right click on the menu row.
 [[docker.proportional]] keeps both scales the same.
 
 ### Size {#size}
@@ -78,7 +80,27 @@ Hold <kbd>Alt</kbd> to scale, <kbd>Ctrl</kbd> to skew or <kbd>Shift</kbd> to
 reflect for one drag, whatever the mode. With **Apply to duplicate** on, the
 press makes a copy and the drag transforms the copy, leaving the original as
 it was. The property bar also has the position, size, scale, angle and mirror
-fields.
+fields. One drag is one step: <kbd>Ctrl+Z</kbd> puts the selection back as it
+was before the drag (and takes the copy away).
+
+## Rotating to match a line {#rotate-by-lines}
+
+To turn an object so that one of its edges lies along another line, select
+it and choose [[menu.object > menu.object.transformations > menu.object.rotate_by_lines]].
+Click the two ends of the base line on the object, then the two ends of the
+target line; the clicks snap to nodes and other snap points. The object turns
+about the first point you clicked, so the base line takes the target line's
+angle. A right click cancels.
+
+## Transforming each object {#transform-each}
+
+[[menu.object > menu.object.transformations > menu.object.transform_each]]
+scales, moves and turns every selected object by the same amounts, each about
+its own centre, in one undo step. With **Random** on, each object takes an
+amount of its own somewhere between none and the amount set, so a row of
+copies can be varied at once. The dialog keeps the amounts for next time.
+
+![The Transform Each dialog box](../../img/objects-transforming-transform-each.png)
 
 ## Undoing transformations {#clear}
 

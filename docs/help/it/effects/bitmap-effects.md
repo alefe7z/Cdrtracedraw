@@ -17,7 +17,9 @@ restituisce l'originale.
 3. Gli effetti senza impostazioni si applicano subito. Gli altri aprono una
    finestra di dialogo con le anteprime **prima** e **dopo** del primo
    oggetto selezionato: imposta i valori e fai clic su [[dialog.ok]].
-   **Reimposta** riporta ogni impostazione al valore predefinito.
+   Le impostazioni stanno in un pannello a destra; sotto di esso
+   **Reimposta** riporta ogni impostazione al valore predefinito e le due
+   frecce annullano e ripetono le modifiche fatte nella finestra di dialogo.
 
 ![Una finestra di dialogo di effetto bitmap](../../img/effects-bitmap-effects.png)
 
@@ -32,19 +34,21 @@ una bitmap selezionata, <kbd>Ctrl+B</kbd> apre
 |---|---|
 | [[menu.effects.3d]] | [[fx.cylinder]], [[fx.emboss]], [[fx.page_curl]], [[fx.pinch_punch]], [[fx.sphere]] |
 | [[menu.effects.adjust]] | [[fx.auto_adjust]], [[fx.image_adjustments]], [[fx.contrast_enhancement]], [[fx.local_equalization]], [[fx.target_balance]], [[fx.tone_curve]], [[fx.brightness_contrast_intensity]], [[fx.color_balance]], [[fx.gamma]], [[fx.hue_saturation_lightness]], [[fx.selective_color]], [[fx.replace_colors]], [[fx.desaturate]], [[fx.channel_mixer]] |
-| [[menu.effects.art_strokes]] | [[fx.charcoal]], [[fx.conte_crayon]], [[fx.crayon]], [[fx.cubist]], [[fx.impressionist]], [[fx.palette_knife]], [[fx.pastels]], [[fx.pen_ink]], [[fx.pointillist]], [[fx.scraperboard]], [[fx.sketch_pad]], [[fx.watercolor]], [[fx.felt_marker]], [[fx.paper_grain]] |
+| [[menu.effects.art_strokes]] | [[fx.charcoal]], [[fx.conte_crayon]], [[fx.crayon]], [[fx.cubist]], [[fx.impressionist]], [[fx.palette_knife]], [[fx.pastels]], [[fx.pen_ink]], [[fx.pointillist]], [[fx.scraperboard]], [[fx.sketch_pad]], [[fx.watercolor]], [[fx.felt_marker]], [[fx.paper_grain]], [[fx.paper_layers]], [[fx.bristle_paint]], [[fx.mural_paint]], [[fx.luminous_wash]], [[fx.inked_poster]], [[fx.diagonal_smear]], [[fx.blotted_color]], [[fx.primed_canvas]], [[fx.chalked_edges]], [[fx.diagonal_hatching]], [[fx.pencil_weave]], [[fx.light_shadow_strokes]], [[fx.spray_streaks]], [[fx.ink_wash]], [[fx.copier_toner]], [[fx.rubber_print]], [[fx.wet_fiber_paper]] |
 | [[menu.effects.blur]] | [[fx.directional_smooth]], [[fx.gaussian_blur]], [[fx.jagged_edges]], [[fx.low_pass]], [[fx.motion_blur]], [[fx.radial_blur]], [[fx.smart_blur]], [[fx.smooth]], [[fx.soften]], [[fx.zoom]] |
-| [[menu.effects.camera]] | [[fx.colorize]], [[fx.diffuse]], [[fx.photo_filter]], [[fx.sepia_toning]], [[fx.vintage_photo]] |
-| [[menu.effects.color_transform]] | [[fx.bit_planes]], [[fx.halftone]], [[fx.psychedelic]], [[fx.solarize]] |
-| [[menu.effects.contour_group]] | [[fx.edge_detect]], [[fx.find_edges]], [[fx.trace_contour]] |
+| [[menu.effects.camera]] | [[fx.colorize]], [[fx.diffuse]], [[fx.lens_correction]], [[fx.photo_filter]], [[fx.sepia_toning]], [[fx.tilt_shift]], [[fx.vintage_photo]] |
+| [[menu.effects.color_transform]] | [[fx.bit_planes]], [[fx.halftone]], [[fx.psychedelic]], [[fx.solarize]], [[fx.dither]], [[fx.gradient_map]], [[fx.riso_print]], [[fx.newsprint]], [[fx.grit_screen]] |
+| [[menu.effects.contour_group]] | [[fx.edge_detect]], [[fx.find_edges]], [[fx.trace_contour]], [[fx.neon_outline]] |
 | [[menu.effects.correction]] | [[fx.dust_and_scratch]] |
 | [[menu.effects.creative]] | [[fx.crystallize]], [[fx.fabric]], [[fx.frame]], [[fx.glass_tiles]], [[fx.mosaic]], [[fx.scatter]], [[fx.tinted_glass]], [[fx.stained_glass]], [[fx.vignette]], [[fx.vortex]] |
 | [[menu.effects.custom]] | [[fx.bump_map]] |
-| [[menu.effects.distort]] | [[fx.blocks]], [[fx.displace]], [[fx.mesh_warp]], [[fx.offset]], [[fx.pixelate]], [[fx.ripple]], [[fx.swirl]], [[fx.tile]], [[fx.wet_paint]], [[fx.whirlpool]], [[fx.wind]] |
+| [[menu.effects.distort]] | [[fx.blocks]], [[fx.displace]], [[fx.mesh_warp]], [[fx.offset]], [[fx.pixelate]], [[fx.ripple]], [[fx.swirl]], [[fx.tile]], [[fx.wet_paint]], [[fx.whirlpool]], [[fx.wind]], [[fx.polar_coordinates]] |
+| [[menu.effects.glitch]] | [[fx.rgb_split]], [[fx.scanlines]], [[fx.pixel_sort]], [[fx.compression_blocks]], [[fx.band_shift]] |
+| [[menu.effects.light]] | [[fx.lighting]], [[fx.lens_flare]], [[fx.light_rays]], [[fx.bloom]], [[fx.light_leak]] |
 | [[menu.effects.noise]] | [[fx.add_noise]], [[fx.maximum]], [[fx.median]], [[fx.minimum]], [[fx.remove_moire]], [[fx.remove_noise]] |
 | [[menu.effects.sharpen]] | [[fx.adaptive_unsharp]], [[fx.directional_sharpen]], [[fx.high_pass]], [[fx.sharpen]], [[fx.unsharp_mask]] |
-| [[menu.effects.texture]] | [[fx.cobblestone]], [[fx.wrinkles]], [[fx.etching]], [[fx.plastic]], [[fx.relief_sculpture]], [[fx.stone]] |
-| [[menu.effects.transform]] | [[fx.deinterlace]], [[fx.invert_colors]], [[fx.posterize]] |
+| [[menu.effects.texture]] | [[fx.cobblestone]], [[fx.wrinkles]], [[fx.etching]], [[fx.plastic]], [[fx.relief_sculpture]], [[fx.stone]], [[fx.embossed_paper]], [[fx.gypsum_cast]], [[fx.film_clumping]], [[fx.cracked_surface]], [[fx.quilt_squares]] |
+| [[menu.effects.transform]] | [[fx.deinterlace]], [[fx.invert_colors]], [[fx.posterize]], [[fx.broadcast_safe]] |
 
 ## Finestre di dialogo speciali {#special-dialogs}
 
@@ -74,6 +78,19 @@ finestra di dialogo), **Sposta su**, **Sposta giù** ed **Elimina**.
 
 [[menu.effects > menu.effects.flatten]] rende permanenti gli effetti: una
 bitmap mantiene ciò che mostra e un oggetto vettoriale diventa una bitmap.
+
+### Su tutte le pagine
+
+In un disegno di più pagine, la finestra di dialogo di un effetto mostra la
+casella [[dialog.fx_all_pages]] mentre è selezionata un'immagine. Se è
+spuntata, OK applica l'effetto anche a ogni immagine di ogni pagina, in un solo
+passo di annullamento. Le immagini bloccate e quelle su livelli bloccati
+restano come sono.
+
+[[menu.effects > menu.effects.all_pages]] fa lo stesso con gli effetti che
+l'immagine selezionata ha già, compresi quelli senza finestra di dialogo: ogni
+altra immagine riceve lo stesso elenco di effetti, in un solo passo di
+annullamento.
 
 ## Il selettore di effetti {#effect-picker}
 

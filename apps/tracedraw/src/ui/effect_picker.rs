@@ -7,6 +7,7 @@
 use crate::app::App;
 use crate::i18n::tr;
 use crate::theme::Tokens;
+use crate::ui::tips::RichTip;
 use egui::{Context, Sense, Vec2};
 
 /// Picture side, pixels.
@@ -115,7 +116,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                     Filter::Recent => tr("effect_picker.recent"),
                     Filter::Group(i) => groups.get(i).map(|(k, _)| tr(k)).unwrap_or_default(),
                 };
-                egui::ComboBox::from_id_salt("effect_picker_group")
+                crate::ui::keynav::ComboBox::from_id_salt("effect_picker_group")
                     .selected_text(label)
                     .width(150.0)
                     .height(400.0)
@@ -137,7 +138,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                     });
             });
             ui.checkbox(&mut picker.as_lens, tr("effect_picker.as_lens"))
-                .on_hover_text(tr("effect_picker.as_lens_tip"));
+                .rich_tip(tr("effect_picker.as_lens_tip"));
             if !has {
                 ui.label(
                     egui::RichText::new(tr("effect_picker.select_first"))
@@ -224,7 +225,7 @@ pub fn show(app: &mut App, ctx: &Context) {
                                 pic.max.y + 3.0,
                             );
                             painter.galley(at, galley, Tokens::text());
-                            let resp = resp.on_hover_text(tr(group));
+                            let resp = resp.rich_tip(tr(group));
                             if resp.clicked() {
                                 chosen = Some(id);
                             }

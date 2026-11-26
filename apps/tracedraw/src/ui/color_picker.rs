@@ -6,10 +6,15 @@
 //! colour keeps its model: a CMYK colour is edited in CMYK, an RGB one in
 //! RGB, and a Model list switches it on demand (the colour converts and
 //! the object holds a colour of the new model). A click outside the
-//! popup or Esc closes it.
+//! popup or Esc closes it. The dotted strip at the popup's top drags it
+//! elsewhere (off the object it colours), and it stays there while open.
+//! Under the sliders a harmony list and a row of swatches offer colours
+//! that go with the one picked; a click on a swatch picks it (#1498).
 
+use crate::ui::btn_icons::IconUi;
 use crate::i18n::tr;
 use crate::theme::Tokens;
+use crate::ui::tips::RichTip;
 use egui::{Color32, Id, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use tracedraw_core::Color;
 
@@ -29,6 +34,112 @@ struct Open {
     hue: f32,
     /// The popup's size, as measured on the frame before.
     size: Vec2,
+    /// How far the popup was dragged by its strip from where it opened.
+    offset: Vec2,
+    /// The harmony whose swatches show under the sliders (#1498).
+    harmony: crate::palette::Harmony,
+}
+
+/// The harmony a picker shows when it opens.
+const FIRST_HARMONY: crate::palette::Harmony = crate::palette::Harmony::Complementary;
+
+/// The swatches of `harmony` for colour `c`, each in the model `c` is
+/// edited in, so a pick keeps the colour's model.
+pub fn harmony_swatches(c: Color, harmony: crate::palette::Harmony) -> Vec<Color> {
+    let model = edit_model(c);
+    harmony
+        .colors(c)
+        .into_iter()
+        .map(|h| h.convert_to(model))
+        .collect()
+}
+
+/// The id of the `i`th harmony swatch of picker `id`.
+fn harmony_swatch_id(id: Id, i: usize) -> Id {
+    id.with(("harmony_swatch", i))
+}
+
+/// The harmony list and its swatches; true when a swatch was clicked,
+/// `c` then being its colour.
+fn harmony_row(ui: &mut Ui, id: Id, c: &mut Color, harmony: &mut crate::palette::Harmony) -> bool {
+    use crate::palette::Harmony;
+    let mut picked = false;
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(tr("color_picker.harmony"))
+                .color(Tokens::text_dim())
+                .size(11.0),
+        );
+        crate::ui::keynav::ComboBox::from_id_salt(id.with("harmony"))
+            .selected_text(tr(harmony.key()))
+            .width(130.0)
+            .show_ui(ui, |ui| {
+                for h in Harmony::ALL {
+                    ui.selectable_value(harmony, h, tr(h.key()))
+                        .rich_tip(crate::ui::tips::keyed(h.key()));
+                }
+            })
+            .response
+            .rich_tip(crate::ui::tips::keyed("color_picker.harmony"));
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        for (i, h) in harmony_swatches(*c, *harmony).into_iter().enumerate() {
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(28.0, 18.0), Sense::hover());
+            let resp = ui
+                .interact(rect, harmony_swatch_id(id, i), Sense::click())
+                .rich_tip(crate::app::color_description(h));
+            let [r, g, b] = h.to_rgb8();
+            ui.painter()
+                .rect_filled(rect.shrink(1.0), 2.0, Color32::from_rgb(r, g, b));
+            let border = if resp.hovered() {
+                Tokens::text()
+            } else {
+                Tokens::control_border()
+            };
+            ui.painter().rect_stroke(
+                rect,
+                2.0,
+                Stroke::new(1.0, border),
+                egui::StrokeKind::Inside,
+            );
+            if resp.clicked() && h != *c {
+                *c = h;
+                picked = true;
+            }
+        }
+    });
+    picked
+}
+
+/// A dotted strip `width` points wide that drags what it sits on: the
+/// distance the pointer moved over it this frame.
+pub fn drag_strip(ui: &mut Ui, size: Vec2) -> Vec2 {
+    let (r, resp) = ui.allocate_exact_size(size, Sense::drag());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::Grab);
+    let c = if resp.hovered() || resp.dragged() {
+        Tokens::text()
+    } else {
+        Tokens::text_dim()
+    };
+    let p = ui.painter();
+    let (cols, rows) = if size.x >= size.y {
+        (((size.x - 4.0) / 5.0).floor().clamp(1.0, 12.0) as i32, 2)
+    } else {
+        (2, ((size.y - 4.0) / 5.0).floor().clamp(1.0, 12.0) as i32)
+    };
+    let step = 4.0;
+    let start = r.center() - Vec2::new((cols - 1) as f32, (rows - 1) as f32) * step / 2.0;
+    for i in 0..cols {
+        for j in 0..rows {
+            p.circle_filled(start + Vec2::new(i as f32, j as f32) * step, 1.0, c);
+        }
+    }
+    if resp.dragged() {
+        resp.drag_delta()
+    } else {
+        Vec2::ZERO
+    }
 }
 
 /// The swatch and popup of the picker shown last, for checks.
@@ -79,10 +190,302 @@ pub fn edit_model(c: Color) -> &'static str {
     }
 }
 
+/// The Model list's entry that makes the colour the registration colour
+/// (it prints on every separation), after the models.
+pub const REGISTRATION: &str = "Registration";
+
+/// The Model list's entry that keeps the colour in RGB and shows it by
+/// its hexadecimal code, typed or pasted, without sliders (#2606).
+pub const HEX: &str = "HEX";
+
+/// Where Model list `id` keeps that HEX was chosen.
+fn hex_choice_id(id: Id) -> Id {
+    id.with("hex_view")
+}
+
+/// Whether Model list `id` shows `c` as HEX: chosen there, over an RGB
+/// colour. The sliders give way to the code then (#2606).
+pub fn shows_hex(ctx: &egui::Context, id: Id, c: Color) -> bool {
+    matches!(c, Color::Rgb { .. })
+        && ctx.data(|d| d.get_temp::<bool>(hex_choice_id(id))) == Some(true)
+}
+
+/// The entry the Model list shows as chosen for `c`.
+pub fn list_model(c: Color) -> &'static str {
+    match c {
+        Color::Registration => REGISTRATION,
+        other => edit_model(other),
+    }
+}
+
+/// `c` after `choice` is picked in the Model list: the colour converted
+/// to that model, or the registration colour.
+pub fn choose_model(c: Color, choice: &str) -> Color {
+    if choice == REGISTRATION {
+        Color::Registration
+    } else {
+        c.convert_to(choice)
+    }
+}
+
+/// The Model list (the docker's models, HEX, then the registration
+/// colour). True when a choice changed the colour.
+pub fn model_list(ui: &mut Ui, id: Id, c: &mut Color) -> bool {
+    let shown = if shows_hex(ui.ctx(), id, *c) {
+        HEX
+    } else {
+        list_model(*c)
+    };
+    let mut changed = false;
+    let mut hex_choice = None;
+    crate::ui::keynav::ComboBox::from_id_salt(id)
+        .selected_text(if shown == REGISTRATION {
+            tr("docker.registration")
+        } else {
+            shown.to_string()
+        })
+        .width(96.0)
+        .show_ui(ui, |ui| {
+            for m in crate::ui::color_docker::MODELS {
+                if ui.selectable_label(shown == m, m).clicked() && shown != m {
+                    *c = choose_model(*c, m);
+                    hex_choice = Some(false);
+                    changed = true;
+                }
+            }
+            // HEX: the colour in RGB, read and typed as its code (#2606).
+            if ui
+                .selectable_label(shown == HEX, HEX)
+                .rich_tip(crate::ui::tips::keyed("docker.hex_color"))
+                .clicked()
+                && shown != HEX
+            {
+                let rgb = c.convert_to("RGB");
+                changed = rgb != *c;
+                *c = rgb;
+                hex_choice = Some(true);
+            }
+            ui.separator();
+            let reg = shown == REGISTRATION;
+            if ui
+                .iselectable(reg, "docker.registration")
+                .rich_tip(tr("docker.registration_tip"))
+                .clicked()
+                && !reg
+            {
+                *c = choose_model(*c, REGISTRATION);
+                hex_choice = Some(false);
+                changed = true;
+            }
+        });
+    if let Some(on) = hex_choice {
+        ui.data_mut(|d| d.insert_temp(hex_choice_id(id), on));
+    }
+    changed
+}
+
 /// A colour chosen in the viewer (hue, saturation, brightness) as a
-/// colour of `model`.
+/// colour of `model`. In CMYK the square spans the ink space itself
+/// (#907): left to right the hue's inks go from none to full, top to
+/// bottom black ink goes from 0 to 100%, so every corner is a CMYK
+/// extreme (paper, the hue's solid inks, K 100, the hue's inks over
+/// K 100) instead of a screen colour the press cannot print.
 pub fn from_viewer(h: f32, s: f32, b: f32, model: &str) -> Color {
-    Color::Hsb { h, s, b }.convert_to(model)
+    if model == "CMYK" {
+        let [c, m, y] = hue_inks(h);
+        let s = unit(s);
+        Color::Cmyk {
+            c: c * s,
+            m: m * s,
+            y: y * s,
+            k: 1.0 - unit(b),
+        }
+    } else {
+        Color::Hsb { h, s, b }.convert_to(model)
+    }
+}
+
+/// `v` within 0..1 (0 for NaN).
+fn unit(v: f32) -> f32 {
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(0.0, 1.0)
+    }
+}
+
+/// The C, M and Y inks of hue `h` at full strength: the complement of
+/// the hue's pure screen colour, so one ink is solid, one is off and the
+/// third blends between hues.
+fn hue_inks(h: f32) -> [f32; 3] {
+    let h = if h.is_finite() { h } else { 0.0 };
+    tracedraw_core::color::hsb_to_rgb(h.rem_euclid(360.0), 1.0, 1.0).map(|v| 1.0 - unit(v))
+}
+
+/// Where the viewer shows `c` (hue, saturation, brightness), the way
+/// back of [`from_viewer`] for the colour's edit model: in CMYK its inks
+/// (black ink sets the height, the strongest of C, M and Y the width,
+/// their balance the hue), else its screen look.
+pub fn viewer_point(c: Color) -> (f32, f32, f32) {
+    if edit_model(c) == "CMYK" {
+        if let Color::Cmyk { c, m, y, k } = c.process().convert_to("CMYK") {
+            let (c, m, y) = (unit(c), unit(m), unit(y));
+            let s = c.max(m).max(y);
+            let (h, _, _) = tracedraw_core::color::rgb_to_hsb(1.0 - c, 1.0 - m, 1.0 - y);
+            return (h, s, 1.0 - unit(k));
+        }
+    }
+    let (h, s, b) = c.to_hsb();
+    (h as f32, s as f32, b as f32)
+}
+
+/// Whether the popup closes: on Esc, or on a press outside it and its
+/// swatch. While its Model list is open a press is not outside: the list
+/// opens below the popup and reaches past it, and a press on its lower
+/// entries (Lab, Grayscale, YIQ) is a choice (#440).
+fn closes(pressed_at: Option<Pos2>, esc: bool, popup: Rect, swatch: Rect, list_open: bool) -> bool {
+    esc || (!list_open && pressed_at.is_some_and(|p| !popup.contains(p) && !swatch.contains(p)))
+}
+
+/// The picker waiting for a click on the drawing to give it a colour
+/// (its eyedropper was pressed, #814).
+fn pick_request_id() -> Id {
+    Id::new("color_pick_request")
+}
+
+/// The colour a click on the drawing gave, with the picker that asked.
+fn pick_result_id() -> Id {
+    Id::new("color_pick_result")
+}
+
+/// A pick request: the picker that asked and the frame its eyedropper
+/// button was last drawn in (#1246).
+#[derive(Clone, Copy, Debug)]
+struct PickRequest {
+    id: Id,
+    frame: u64,
+}
+
+/// A picker's eyedropper is waiting for a click on the drawing.
+///
+/// A request outlives its picker when the picker closes while it
+/// waits (the Edit Fill or Outline Pen dialog closed with OK, a
+/// popup's picker closed by a click beside it): the crosshair pointer
+/// and the colour readout then followed the pointer everywhere and
+/// the next click on the drawing went nowhere (#1246). So a request
+/// counts only while its eyedropper button is being drawn (the button
+/// renews it every frame); a request not renewed since the frame
+/// before is dropped here.
+pub fn picking(ctx: &egui::Context) -> bool {
+    let now = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| match d.get_temp::<PickRequest>(pick_request_id()) {
+        Some(r) if now.saturating_sub(r.frame) <= 1 => true,
+        Some(_) => {
+            d.remove::<PickRequest>(pick_request_id());
+            false
+        }
+        None => false,
+    })
+}
+
+/// Picker `id` waits for a click on the drawing to give it a colour.
+pub fn start_pick(ctx: &egui::Context, id: Id) {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| d.insert_temp(pick_request_id(), PickRequest { id, frame }));
+}
+
+/// Is picker `id` the one waiting? Drawn, its button renews the request
+/// so it lives on (see [`picking`]).
+fn waiting(ui: &Ui, id: Id) -> bool {
+    let now = ui.ctx().cumulative_frame_nr();
+    ui.data_mut(|d| match d.get_temp::<PickRequest>(pick_request_id()) {
+        Some(r) if r.id == id => {
+            d.insert_temp(pick_request_id(), PickRequest { id, frame: now });
+            true
+        }
+        _ => false,
+    })
+}
+
+/// The click on the drawing gave `c` (none: the pick was cancelled); the
+/// picker that asked takes it when it is next drawn.
+pub fn finish_pick(ctx: &egui::Context, c: Option<Color>) {
+    ctx.data_mut(|d| {
+        let asked = d.get_temp::<PickRequest>(pick_request_id());
+        d.remove::<PickRequest>(pick_request_id());
+        if let (Some(r), Some(c)) = (asked, c) {
+            d.insert_temp(pick_result_id(), (r.id, c));
+        }
+    });
+}
+
+/// For a tool that is not a picker (Remove Background's eyedropper):
+/// keep the request of `id` alive while `on`, drop it when not, and give
+/// back the colour a click on the drawing picked for it, once.
+pub fn pick_for(ctx: &egui::Context, id: Id, on: bool) -> Option<Color> {
+    let now = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| {
+        let picked = match d.get_temp::<(Id, Color)>(pick_result_id()) {
+            Some((asked, c)) if asked == id => {
+                d.remove::<(Id, Color)>(pick_result_id());
+                Some(c)
+            }
+            _ => None,
+        };
+        let ours = matches!(d.get_temp::<PickRequest>(pick_request_id()), Some(r) if r.id == id);
+        if on && picked.is_none() {
+            d.insert_temp(pick_request_id(), PickRequest { id, frame: now });
+        } else if ours {
+            d.remove::<PickRequest>(pick_request_id());
+        }
+        picked
+    })
+}
+
+/// The colour picked from the drawing for the picker `id`, once.
+fn take_pick(ui: &Ui, id: Id) -> Option<Color> {
+    ui.data_mut(|d| match d.get_temp::<(Id, Color)>(pick_result_id()) {
+        Some((asked, c)) if asked == id => {
+            d.remove::<(Id, Color)>(pick_result_id());
+            Some(c)
+        }
+        _ => None,
+    })
+}
+
+/// The eyedropper of picker `id`: pressed, the next click on the drawing
+/// gives `c` the colour there (Esc cancels); pressed again, it stops
+/// waiting (#814). True when `c` changed.
+pub fn eyedropper(ui: &mut Ui, id: Id, c: &mut Color) -> bool {
+    let mut changed = false;
+    if let Some(p) = take_pick(ui, id) {
+        *c = p;
+        changed = true;
+    }
+    let waiting = waiting(ui, id);
+    let (r, resp) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
+    if waiting {
+        ui.painter().rect_filled(r, 2.0, Tokens::tool_active());
+    } else if resp.hovered() {
+        ui.painter().rect_filled(r, 2.0, Tokens::tool_hover());
+    }
+    crate::ui::icons::draw(
+        ui.painter(),
+        r.shrink(3.0),
+        crate::tools::Tool::ColorEyedropper,
+        Tokens::icon(),
+    );
+    if resp
+        .rich_tip(crate::tools::Tool::ColorEyedropper.name())
+        .clicked()
+    {
+        if waiting {
+            finish_pick(ui.ctx(), None);
+        } else {
+            start_pick(ui.ctx(), id);
+        }
+    }
+    changed
 }
 
 /// A colour swatch that opens the picker. True when the colour changed.
@@ -94,6 +497,7 @@ pub fn color_button(ui: &mut Ui, c: &mut Color) -> bool {
 /// swatch and a down arrow (the Properties docker's outline colour).
 pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -> bool {
     let (frame, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.rich_tip(crate::ui::tips::keyed("color_picker.button"));
     let id = resp.id.with("color_picker");
     let [r, g, b] = c.to_rgb8();
     let swatch = if arrow {
@@ -130,20 +534,67 @@ pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -
         Stroke::new(1.0, Tokens::control_border()),
         egui::StrokeKind::Inside,
     );
+    picker_popup(ui, id, swatch, c, resp.clicked())
+}
+
+/// Open picker `id` for `c` (it shows where [`picker_beside`] draws it).
+pub fn open_picker(ctx: &egui::Context, id: Id, c: Color) {
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            Open {
+                hue: viewer_point(c).0,
+                size: FIRST_SIZE,
+                offset: Vec2::ZERO,
+                harmony: FIRST_HARMONY,
+            },
+        )
+    });
+}
+
+/// Picker `id` is open.
+#[cfg(test)]
+pub fn picker_open(ctx: &egui::Context, id: Id) -> bool {
+    ctx.data(|d| d.get_temp::<Open>(id).is_some())
+}
+
+/// The popup of picker `id` beside `anchor` while it is open (opened by
+/// [`open_picker`], from a control that is not its swatch: the Other
+/// colour of a palette menu, which closes when the picker opens, #1262).
+/// True when the colour changed.
+pub fn picker_beside(ui: &mut Ui, id: Id, anchor: Rect, c: &mut Color) -> bool {
+    picker_popup(ui, id, anchor, c, false)
+}
+
+/// The popup of picker `id` beside `swatch`; `clicked` opens or closes it.
+fn picker_popup(ui: &mut Ui, id: Id, swatch: Rect, c: &mut Color, clicked: bool) -> bool {
     let mut open = ui.data(|d| d.get_temp::<Open>(id));
-    if resp.clicked() {
+    // A colour its eyedropper asked for, picked from the drawing.
+    let mut changed = false;
+    if let Some(p) = take_pick(ui, id) {
+        *c = p;
+        changed = true;
+    }
+    let was_picking = picking(ui.ctx());
+    if clicked {
         open = match open {
             Some(_) => None,
             None => Some(Open {
-                hue: c.to_hsb().0 as f32,
+                hue: viewer_point(*c).0,
                 size: FIRST_SIZE,
+                offset: Vec2::ZERO,
+                harmony: FIRST_HARMONY,
             }),
         };
     }
-    let mut changed = false;
     if let Some(mut st) = open {
         let screen = ui.ctx().content_rect();
-        let rect = place(swatch, st.size, screen);
+        let placed = place(swatch, st.size, screen);
+        // Dragged by its strip, kept inside the window.
+        let lo = screen.min + Vec2::splat(MARGIN);
+        let hi = (screen.max - st.size - Vec2::splat(MARGIN)).max(lo);
+        let rect = Rect::from_min_size((placed.min + st.offset).clamp(lo, hi), st.size);
+        st.offset = rect.min - placed.min;
         let model = edit_model(*c);
         let area = egui::Area::new(id.with("area"))
             .order(egui::Order::Foreground)
@@ -152,6 +603,7 @@ pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_width(CONTENT_WIDTH);
+                    st.offset += drag_strip(ui, Vec2::new(CONTENT_WIDTH, 8.0));
                     if let Some((h, s, b)) = crate::ui::color_docker::viewer(ui, st.hue, *c) {
                         st.hue = h;
                         *c = from_viewer(h, s, b, model);
@@ -167,22 +619,21 @@ pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -
                                 .color(Tokens::text_dim())
                                 .size(11.0),
                         );
-                        egui::ComboBox::from_id_salt(id.with("model"))
-                            .selected_text(model)
-                            .width(96.0)
-                            .show_ui(ui, |ui| {
-                                for m in crate::ui::color_docker::MODELS {
-                                    if ui.selectable_label(model == m, m).clicked() && model != m {
-                                        *c = c.convert_to(m);
-                                        changed = true;
-                                    }
-                                }
-                            });
+                        changed |= model_list(ui, id.with("model"), c);
+                        changed |= eyedropper(ui, id, c);
                     });
                     let model = edit_model(*c);
                     let mut m = c.convert_to(model);
-                    if crate::ui::color_docker::sliders(ui, &mut m) {
+                    // HEX shows the code alone, in the field under (#2606).
+                    if !shows_hex(ui.ctx(), id.with("model"), *c)
+                        && crate::ui::color_docker::sliders(ui, &mut m)
+                    {
                         *c = m;
+                        changed = true;
+                    }
+                    // A code typed or pasted sets the colour (#2606).
+                    if hex_field(ui, id, c) {
+                        st.hue = viewer_point(*c).0;
                         changed = true;
                     }
                     ui.label(
@@ -190,6 +641,11 @@ pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -
                             .color(Tokens::text_dim())
                             .size(11.0),
                     );
+                    ui.add_space(4.0);
+                    if harmony_row(ui, id, c, &mut st.harmony) {
+                        st.hue = viewer_point(*c).0;
+                        changed = true;
+                    }
                 });
             });
         let popup = area.response.rect;
@@ -204,8 +660,10 @@ pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -
                 i.key_pressed(egui::Key::Escape),
             )
         });
-        let outside = pressed_at.is_some_and(|p| !popup.contains(p) && !swatch.contains(p));
-        open = (!outside && !esc).then_some(st);
+        let list_open = egui::Popup::is_any_open(ui.ctx());
+        // The click that picks a colour from the drawing keeps it open.
+        let pressed_at = pressed_at.filter(|_| !was_picking);
+        open = (!closes(pressed_at, esc && !was_picking, popup, swatch, list_open)).then_some(st);
         ui.data_mut(|d| {
             d.insert_temp(last_id(), Shown { swatch, popup });
         });
@@ -219,12 +677,129 @@ pub fn color_button_sized(ui: &mut Ui, c: &mut Color, size: Vec2, arrow: bool) -
     changed
 }
 
+/// The colour's hexadecimal code, typed or pasted: "#364C9F", "364c9f"
+/// or "#36f" sets the colour when Enter is pressed or the field is left;
+/// anything else leaves it. While the field has the focus it keeps what
+/// is being typed; otherwise it shows the colour's code. A colour of
+/// another model than RGB takes the typed colour in its own model
+/// (#2606). True when the colour changed.
+pub fn hex_field(ui: &mut Ui, id: Id, c: &mut Color) -> bool {
+    let edit_id = id.with("hex");
+    let buffer_id = edit_id.with("text");
+    let focused = ui.memory(|m| m.has_focus(edit_id));
+    let mut text = if focused {
+        ui.data(|d| d.get_temp::<String>(buffer_id))
+            .unwrap_or_else(|| c.to_hex())
+    } else {
+        c.to_hex()
+    };
+    let r = ui
+        .horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(tr("docker.hex"))
+                    .color(Tokens::text_dim())
+                    .size(11.0),
+            );
+            ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .id(edit_id)
+                    .desired_width(70.0)
+                    .char_limit(9)
+                    .font(egui::TextStyle::Monospace),
+            )
+            .rich_tip(crate::ui::tips::keyed("docker.hex_color"))
+        })
+        .inner;
+    let mut changed = false;
+    if r.lost_focus() {
+        ui.data_mut(|d| d.remove::<String>(buffer_id));
+        if let Some(typed) = Color::from_hex(&text) {
+            let model = edit_model(*c);
+            let nc = if model == typed.model_name() {
+                typed
+            } else {
+                typed.convert_to(model)
+            };
+            if nc.to_hex() != c.to_hex() || nc.model_name() != c.model_name() {
+                *c = nc;
+                changed = true;
+            }
+        }
+    } else if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(buffer_id, text));
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn screen() -> Rect {
         Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 900.0))
+    }
+
+    /// The hexadecimal field takes a typed or pasted code: #364C9F sets an
+    /// RGB colour to 54, 76, 159 when Enter is pressed; a CMYK colour
+    /// takes it in CMYK; a code that does not read leaves the colour, and
+    /// the field shows the colour's code again (#2606).
+    #[test]
+    fn a_typed_hexadecimal_code_sets_the_colour() {
+        let ctx = crate::theme::ui_context();
+        let id = Id::new("hex_test");
+        let edit = id.with("hex");
+        let frame = |c: &mut Color, events: Vec<egui::Event>| -> bool {
+            let input = egui::RawInput {
+                screen_rect: Some(screen()),
+                events,
+                ..Default::default()
+            };
+            let mut changed = false;
+            let mut out = ctx.run_ui(input, |ui| {
+                changed |= hex_field(ui, id, c);
+            });
+            out.textures_delta.clear();
+            changed
+        };
+        let key = |k: egui::Key| egui::Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let type_code = |c: &mut Color, code: &str| -> bool {
+            frame(c, Vec::new());
+            ctx.memory_mut(|m| m.request_focus(edit));
+            frame(c, Vec::new());
+            // Clear what the field holds, type the code, press Enter.
+            let mut clear = vec![key(egui::Key::End)];
+            clear.extend((0..10).map(|_| key(egui::Key::Backspace)));
+            let mut changed = frame(c, clear);
+            changed |= frame(c, vec![egui::Event::Text(code.into())]);
+            changed |= frame(c, vec![key(egui::Key::Enter)]);
+            changed |= frame(c, Vec::new());
+            changed
+        };
+        let mut c = Color::rgb8(255, 255, 255);
+        assert!(type_code(&mut c, "#364C9F"));
+        assert_eq!(c.to_rgb8(), [54, 76, 159]);
+        assert_eq!(c.model_name(), "RGB");
+        // Without the # and in small letters too.
+        assert!(type_code(&mut c, "ff8000"));
+        assert_eq!(c.to_rgb8(), [255, 128, 0]);
+        // A CMYK colour stays CMYK.
+        let mut k = Color::cmyk_pct(0.0, 0.0, 0.0, 100.0);
+        assert!(type_code(&mut k, "#364C9F"));
+        assert_eq!(k.model_name(), "CMYK");
+        assert_eq!(
+            k.to_hex(),
+            Color::rgb8(54, 76, 159).convert_to("CMYK").to_hex()
+        );
+        // A code that does not read changes nothing.
+        let before = c;
+        assert!(!type_code(&mut c, "#zz12"));
+        assert_eq!(c, before);
     }
 
     #[test]
@@ -298,6 +873,159 @@ mod tests {
         assert_eq!(edit_model(Color::Registration), "CMYK");
     }
 
+    /// In CMYK the viewer spans the inks (#907): the way back of every
+    /// point gives the point again, so the ring sits where it was put
+    /// and can reach the edges and corners.
+    #[test]
+    fn the_cmyk_viewer_round_trips_its_points() {
+        for h in [0.0f32, 30.0, 90.0, 180.0, 250.0, 330.0] {
+            for s in [0.0f32, 0.25, 1.0] {
+                for b in [0.0f32, 0.4, 1.0] {
+                    let c = from_viewer(h, s, b, "CMYK");
+                    let Color::Cmyk { c: cc, m, y, k } = c else {
+                        panic!("{c:?}");
+                    };
+                    assert!(cc + m + y + k <= 3.0 + 1e-5, "ink limit {c:?}");
+                    let (h2, s2, b2) = viewer_point(c);
+                    assert!(
+                        (s2 - s).abs() < 1e-4 && (b2 - b).abs() < 1e-4,
+                        "{h} {s} {b}: {s2} {b2}"
+                    );
+                    if s > 0.0 {
+                        let dh = (h2 - h).rem_euclid(360.0);
+                        assert!(dh.min(360.0 - dh) < 0.1, "{h} {s} {b}: {h2}");
+                    }
+                }
+            }
+        }
+        // A spot ink is shown by its process inks.
+        let spot = Color::Spot {
+            ink: 1,
+            tint: 1.0,
+            c: 0.0,
+            m: 1.0,
+            y: 1.0,
+            k: 0.0,
+        };
+        let (_, s, b) = viewer_point(spot);
+        assert!((s - 1.0).abs() < 1e-4 && (b - 1.0).abs() < 1e-4, "{s} {b}");
+        // Nonsense from a file does not panic.
+        let odd = from_viewer(f32::NAN, f32::NAN, f32::INFINITY, "CMYK");
+        assert!(matches!(odd, Color::Cmyk { .. }));
+    }
+
+    /// #2606: HEX in a picker's Model list keeps the colour in RGB and
+    /// shows it by its code; only over an RGB colour, and per list.
+    #[test]
+    fn the_model_list_offers_hex() {
+        let ctx = egui::Context::default();
+        let id = Id::new("hex_test_model");
+        let rgb = Color::rgb8(0x36, 0x4c, 0x9f);
+        assert!(!shows_hex(&ctx, id, rgb));
+        ctx.data_mut(|d| d.insert_temp(hex_choice_id(id), true));
+        assert!(shows_hex(&ctx, id, rgb));
+        assert!(!shows_hex(&ctx, Id::new("another"), rgb));
+        assert!(!shows_hex(&ctx, id, rgb.convert_to("CMYK")));
+        assert!(!crate::ui::color_docker::MODELS.contains(&HEX));
+        assert_eq!(rgb.convert_to("CMYK").convert_to("RGB").model_name(), "RGB");
+    }
+
+    /// The Model list offers the registration colour after the models, as
+    /// the reference program's list does; it shows as chosen for that
+    /// colour, and a model chosen from it converts it like any colour
+    /// (#286).
+    #[test]
+    fn the_model_list_offers_the_registration_colour() {
+        let red = Color::rgb8(220, 30, 30);
+        let reg = choose_model(red, REGISTRATION);
+        assert_eq!(reg, Color::Registration);
+        assert_eq!(list_model(reg), REGISTRATION);
+        assert_eq!(list_model(red), "RGB");
+        let back = choose_model(reg, "CMYK");
+        assert!(matches!(back, Color::Cmyk { .. }), "{back:?}");
+        assert_eq!(list_model(back), "CMYK");
+        assert!(!crate::ui::color_docker::MODELS.contains(&REGISTRATION));
+    }
+
+    /// A press below the popup closes it, unless the Model list is open
+    /// there: its lower entries reach past the popup (#440).
+    #[test]
+    fn a_choice_in_the_model_list_keeps_the_popup_open() {
+        let popup = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(250.0, 330.0));
+        let swatch = Rect::from_min_size(Pos2::new(50.0, 100.0), Vec2::new(40.0, 18.0));
+        let below = Some(Pos2::new(150.0, 450.0));
+        assert!(closes(below, false, popup, swatch, false));
+        assert!(!closes(below, false, popup, swatch, true));
+        assert!(!closes(
+            Some(Pos2::new(150.0, 200.0)),
+            false,
+            popup,
+            swatch,
+            false
+        ));
+        assert!(closes(None, true, popup, swatch, true), "Esc always closes");
+    }
+
+    /// The harmony swatches keep the colour's model, and a click on one in
+    /// the open picker picks it (#1498).
+    #[test]
+    fn a_harmony_swatch_picks_its_colour() {
+        use crate::palette::Harmony;
+        let red = Color::rgb8(255, 0, 0);
+        let comp = harmony_swatches(red, Harmony::Complementary);
+        assert_eq!(comp.len(), 2);
+        assert_eq!(comp[1].to_rgb8(), [0, 255, 255]);
+        assert!(comp.iter().all(|c| matches!(c, Color::Rgb { .. })));
+        let cmyk = Color::cmyk_pct(0.0, 100.0, 100.0, 0.0);
+        for h in Harmony::ALL {
+            let swatches = harmony_swatches(cmyk, h);
+            assert!(swatches.len() >= 2, "{h:?}");
+            assert!(
+                swatches.iter().all(|c| matches!(c, Color::Cmyk { .. })),
+                "{h:?} keeps CMYK"
+            );
+        }
+
+        let ctx = crate::theme::ui_context();
+        let id = Id::new("harmony_test_picker");
+        let mut c = red;
+        let anchor = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(40.0, 18.0));
+        open_picker(&ctx, id, c);
+        let run = |c: &mut Color, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen()),
+                events,
+                ..Default::default()
+            };
+            let mut changed = false;
+            let mut out = ctx.run_ui(input, |ui| {
+                changed = picker_beside(ui, id, anchor, c);
+            });
+            out.textures_delta.clear();
+            changed
+        };
+        run(&mut c, Vec::new());
+        run(&mut c, Vec::new());
+        let at = ctx
+            .read_response(harmony_swatch_id(id, 1))
+            .expect("the second swatch")
+            .rect
+            .center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(&mut c, vec![egui::Event::PointerMoved(at)]);
+        run(&mut c, vec![button(true)]);
+        let changed = run(&mut c, vec![button(false)]);
+        assert!(changed, "the click picks the swatch");
+        assert_eq!(c.to_rgb8(), [0, 255, 255]);
+        assert!(matches!(c, Color::Rgb { .. }));
+        assert!(picker_open(&ctx, id), "the picker stays open");
+    }
+
     /// A click on a swatch near the window's right edge opens the popup
     /// on its left, inside the window, and the swatch's colour stays CMYK.
     #[test]
@@ -334,5 +1062,30 @@ mod tests {
         assert!(screen().contains_rect(shown.popup), "{shown:?}");
         assert!(shown.popup.right() <= shown.swatch.left(), "{shown:?}");
         assert!(matches!(c, Color::Cmyk { .. }));
+        // Its dotted strip drags it off what it covers; it stays open
+        // there, inside the window.
+        let grip = Pos2::new(shown.popup.center().x, shown.popup.top() + 10.0);
+        let to = grip + Vec2::new(-300.0, 150.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(&ctx, &mut c, vec![egui::Event::PointerMoved(grip)]);
+        run(&ctx, &mut c, vec![button(grip, true)]);
+        for k in 1..=5 {
+            let p = grip + (to - grip) * (k as f32 / 5.0);
+            run(&ctx, &mut c, vec![egui::Event::PointerMoved(p)]);
+        }
+        run(&ctx, &mut c, vec![button(to, false)]);
+        run(&ctx, &mut c, Vec::new());
+        let moved = last_shown(&ctx).expect("still open");
+        let d = moved.popup.min - shown.popup.min;
+        assert!(
+            (d.x + 300.0).abs() < 2.0 && (d.y - 150.0).abs() < 2.0,
+            "{d:?}"
+        );
+        assert!(screen().contains_rect(moved.popup));
     }
 }

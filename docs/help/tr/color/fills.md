@@ -50,6 +50,18 @@ panelinin dolgu bölümündeki ayarları:
 
 Türün altındaki bir şerit, renklerin tüm akışını çizileceği gibi gösterir.
 
+## Dolguyu Düzenle iletişim kutusu {#edit-fill}
+
+<kbd>F11</kbd> seçimin dolgusu için [[edit_fill.title]] iletişim kutusunu
+açar. Bir gradyan için önizleme, [[edit_fill.fill_picker]], tür, tekrar ve
+renk bandı gösterilir: seçmek için düğüme tıklayın, taşımak için sürükleyin,
+eklemek veya kaldırmak için çift tıklayın. Bandın altında düğümün rengi,
+saydamlığı, konumu ve [[edit_fill.midpoint]] ile [[edit_fill.reverse]]
+bulunur. [[edit_fill.transform]] döndürme, merkez ve kenar boşluğunu içerir.
+**Tamam** değiştirdiklerinizi [[edit_fill.overprint]] ile uygular. İletişim kutusu açıkken seçim, dolguyu siz değiştirdikçe gösterir; **İptal** veya <kbd>Esc</kbd> eski dolguyu geri getirir.
+
+![Dolguyu Düzenle iletişim kutusu](../../img/color-fills-edit-fill.png)
+
 ## Etkileşimli Dolgu aracı {#interactive-fill}
 
 [[tool.interactive_fill]] aracı (<kbd>G</kbd>) dolguları nesnenin üzerinde
@@ -75,9 +87,9 @@ bile olsa, herhangi bir kapalı alanı o alandan yeni bir nesne oluşturarak
 doldurur. Çevresindeki nesneler olduğu gibi kalır.
 
 1. [[tool.area_fill]] aracını seçin.
-2. Özellik çubuğunda dolguyu ve anahattı seçin: **Varsayılanı kullan** (yeni
-   nesnelerin dolgusu ve anahattı; bu dolgu yoksa alan görünsün diye bir
-   renk), **Belirt** (yanındaki renk ve anahat için kalınlık) veya **Yok**.
+2. Özellik çubuğunda dolguyu ve anahattı seçin: **Belirt** (yanındaki renk
+   ve anahat için kalınlık), **Varsayılanı kullan** (yeni nesnelerin dolgusu ve
+   anahattı; bu dolgu yoksa alan görünsün diye bir renk) veya **Yok**.
 3. Alanın içine tıklayın.
 
 Yeni nesne etkin katmanın en üstüne gider ve seçilir. Bir anahattın üzerine
@@ -109,6 +121,9 @@ bulunur. Bir ağın satırlarını ve sütunlarını değiştirmek renklerini ko
 - [[docker.fill_texture]] dolgusu üretilmiş, doğal görünümlü bir dokudur:
   renkleri ve ölçeğiyle birlikte [[texture.clouds]], [[texture.marble]],
   [[texture.noise]] veya [[texture.wood]].
+- [[texture.holographic]] ve [[texture.holo_glitter]] sabit bir holografik folyo görünümü verir: koyu ve açık
+  alanlar (A ve B renkleri) arasında gökkuşağı renkleri, simli olan parlak
+  tanelerle. Bakış açısıyla değişmez; PDF ve SVG onu resim olarak taşır.
 
 ## Bir nesnede birden çok dolgu {#several-fills}
 

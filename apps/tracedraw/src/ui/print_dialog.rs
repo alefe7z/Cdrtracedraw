@@ -482,7 +482,7 @@ fn tab_general(app: &mut App, ui: &mut Ui, o: Pos2, st: &mut PrintState) {
         .cloned();
     lbl(ui, o, 24.0, 108.0, &tr("prt.status"), true);
     let status = match &info {
-        Some(p) if !p.status.is_empty() => p.status.clone(),
+        Some(p) if p.state != crate::printers::PrinterState::Unknown => tr(p.state.key()),
         Some(p) if p.default => tr("prt.status_default"),
         _ => tr("prt.status_ready"),
     };
@@ -602,17 +602,17 @@ fn tab_general(app: &mut App, ui: &mut Ui, o: Pos2, st: &mut PrintState) {
         &mut st.pages,
         pages_on,
     );
-    let parities = [tr("prt.even_odd"), tr("prt.even"), tr("prt.odd")];
+    let parities = [tr("prt.even_odd"), tr("prt.odd"), tr("prt.even")];
     combo(
         ui,
         "prt_parity",
         o,
         rect(128.0, 281.0, 233.0, 305.0),
-        parities[st.ex.parity.min(2)].clone(),
+        parities[st.parity.min(2)].clone(),
         pages_on || st.range == 0,
         |ui| {
             for (i, p) in parities.iter().enumerate() {
-                ui.selectable_value(&mut st.ex.parity, i, p.as_str());
+                ui.selectable_value(&mut st.parity, i, p.as_str());
             }
         },
     );
@@ -790,7 +790,7 @@ pub(crate) fn save_style_window(app: &mut App, ctx: &Context, st: &mut PrintStat
         prefs.styles.clear();
         let list = &mut app.settings.printing.styles;
         list.retain(|s| s.name != name_t);
-        list.push(crate::prefs::PrintStyle {
+        list.push(crate::prefs::NamedPrintStyle {
             name: name_t,
             prefs,
         });

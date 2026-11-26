@@ -9,7 +9,7 @@ un patrón o una textura.
 - Con la herramienta [[tool.transparency]]: haga clic en un objeto y elija un
   tipo de transparencia en la barra de propiedades, o arrastre sobre el objeto
   para obtener una transparencia degradada de opaco (donde pulsa) a
-  transparente (donde suelta).
+  transparente (donde suelta). Los nodos del degradado aparecen entonces en el objeto, como con la herramienta [[tool.interactive_fill]]: arrastre el inicio, el final o el nodo redondo de inclinación; arrastre la barra entre dos nodos (el punto medio) para mover dónde la mezcla llega a la mitad; haga doble clic en la línea para añadir un nodo y en un nodo para quitarlo.
 - En la sección [[docker.transparency]] del panel [[docker.properties]].
 
 ## Ajustes {#settings}
@@ -30,6 +30,8 @@ un patrón o una textura.
   [[transparency.target_outline]] o a [[transparency.target_all]].
 - **Congelar**: mantiene lo que se ve a través tal como está ahora, aunque se
   muevan los objetos de debajo.
+
+Para quitarla, haga clic en [[toolbar.clear_transparency]] al final de la barra de propiedades (o elija [[transparency.none]] como tipo).
 
 Para copiar la transparencia de otro objeto, use
 [[menu.object > menu.object.copy_effect > menu.object.copy_transparency_from]].

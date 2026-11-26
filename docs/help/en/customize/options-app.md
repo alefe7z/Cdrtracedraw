@@ -12,7 +12,14 @@ sets how the program works. Choose a page from the list on the left.
 - [[options.show_new_document_dialog]] (on): ask for the settings of a new
   drawing; see [Creating a drawing](../get-started/new-document.md).
 - [[options.show_splash]] (on).
+- [[options.hardware_acceleration]] (on): draw the window with the graphics card chosen beside it ([[options.gpu_automatic]] at first); off, with the computer's software renderer. It takes effect at the next start. If the window cannot open that way, TraceDraw starts again with the software renderer, then with OpenGL, and keeps the one that worked.
 - [[options.undo_levels]]: how many steps you can undo (150 at first).
+
+On a computer, the page also has a choice that puts Minimize, Maximize and
+Close buttons at the right end of the menu bar (off at first). It is for a
+window without a title bar, such as under a tiling window manager. With it
+on, dragging the empty part of the menu bar moves the window, and a double
+click there maximizes or restores it.
 
 ## Display {#display}
 
@@ -25,6 +32,13 @@ sets how the program works. Choose a page from the list on the left.
 - [[options.full_screen_preview]]: [[options.show_page_border]].
 - [[options.wheel_default_action]]: [[options.wheel_zoom]] (at first) or
   [[options.wheel_scroll]].
+- [[options.open_view]]: [[options.open_view_page]] (at first),
+  [[options.open_view_objects]], [[options.open_view_width]],
+  [[options.open_view_height]], [[options.open_view_actual]],
+  [[options.open_view_percent]] (a zoom of your own, typed beside the list,
+  with the page in the middle of the window) or
+  [[options.open_view_saved]] (the page, place and zoom kept each time a
+  TraceDraw file is saved).
 - [[options.ruler_calibration]]: hold a ruler against the screen and change
   the [[options.screen_resolution]] until the marks match, so that zoom 100%
   shows real sizes. [[options.reset]] puts back 96.
@@ -48,6 +62,7 @@ sets how the program works. Choose a page from the list on the left.
 - [[options.node_shape]] for [[options.node_cusp]], [[options.node_smooth]]
   and [[options.node_symmetrical]] nodes.
 - [[options.show_curve_direction]].
+- [[options.corner_widgets]].
 - [[options.colors]]: the [[options.main_color]] of selected nodes and handles
   and the [[options.secondary_color]].
 - [[options.unselected_nodes_filled]].
@@ -91,8 +106,36 @@ See [Snapping](../pages-layout/snapping.md).
 
 ![The Text page of the CD Draw options](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]: how much <kbd>Ctrl+8</kbd> and
-  <kbd>Ctrl+2</kbd> grow and shrink the selected text (1 point).
-- [[options.default_font]] and [[options.default_size]] of new text.
-- [[menu.text.use_hyphenation]], [[menu.text.show_non_printing]] and
-  [[menu.text.show_text_frames]].
+The page has five tabs.
+
+- [[options.display]]: [[options.keyboard_text_increment]] (how much <kbd>Ctrl+8</kbd>
+  and <kbd>Ctrl+2</kbd> grow and shrink the selected text, 1 point), the
+  [[options.default_font]] and [[options.default_size]] of new text, and
+  [[menu.text.show_non_printing]].
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]: [[menu.text.show_text_frames]],
+  [[menu.text.use_hyphenation]] and the [[options.hyphenation_patterns]]
+  (built-in, or a hyphenation dictionary for your language).
+  - [[options.default_tab_spacing]]: where <kbd>Tab</kbd> goes in a paragraph without tab stops of its own (12.7 mm, half an inch).
+- [[docker.fonts]]: [[options.show_recent_fonts]] at the top of the font lists,
+  the [[options.recent_font_count]] (5, up to 20) and the
+  [[options.font_sample_size]].
+- [[options.spelling]]: [[writing.ignore_digits]], [[writing.ignore_capitals]]
+  and [[options.add_to_autocorrect]], so a word you correct in the spell checker
+  is corrected as you type next time; and the [[options.dictionaries]] it uses,
+  see [Dictionaries](../text/writing-tools.md#dictionaries).
+- [[dialog.autocorrect]]: what is corrected as you type; see
+  [Autocorrect](../text/writing-tools.md#autocorrect).
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

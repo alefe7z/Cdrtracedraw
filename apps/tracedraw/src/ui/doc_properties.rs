@@ -1,4 +1,4 @@
-//! File > Document Properties: the drawing's language, title, subject,
+//! File > Document Info: the drawing's language, title, subject,
 //! author, copyright, tags, notes and rating, edited until OK, over a
 //! scrolling report of the file, the document, its colour settings and
 //! what it holds (objects, text, bitmaps, styles, effects, fills,
@@ -8,11 +8,12 @@ use crate::app::App;
 use crate::doc_stats::DocStats;
 use crate::i18n::{tr, trf};
 use crate::theme::Tokens;
+use crate::ui::tips::RichTip;
 use egui::{Context, RichText, Ui};
 use tracedraw_core::Command;
 
 /// Languages offered, as their tag and their own name.
-pub const LANGUAGES: [(&str, &str); 30] = [
+pub const LANGUAGES: [(&str, &str); 33] = [
     ("ar", "العربية"),
     ("bn", "বাংলা"),
     ("cs-CZ", "Čeština"),
@@ -21,6 +22,7 @@ pub const LANGUAGES: [(&str, &str); 30] = [
     ("el-GR", "Ελληνικά"),
     ("en-GB", "English (United Kingdom)"),
     ("en-US", "English (United States)"),
+    ("eo", "Esperanto"),
     ("es-ES", "Español (España)"),
     ("es-MX", "Español (México)"),
     ("fi-FI", "Suomi"),
@@ -33,6 +35,7 @@ pub const LANGUAGES: [(&str, &str); 30] = [
     ("it-IT", "Italiano"),
     ("ja-JP", "日本語"),
     ("ko-KR", "한국어"),
+    ("lo-LA", "ພາສາລາວ"),
     ("nl-NL", "Nederlands"),
     ("no-NO", "Norsk"),
     ("pl-PL", "Polski"),
@@ -41,6 +44,7 @@ pub const LANGUAGES: [(&str, &str); 30] = [
     ("ru-RU", "Русский"),
     ("sv-SE", "Svenska"),
     ("tr-TR", "Türkçe"),
+    ("vi-VN", "Tiếng Việt"),
     ("zh-CN", "中文 (简体)"),
     ("zh-TW", "中文 (繁體)"),
 ];
@@ -293,6 +297,7 @@ fn report(app: &App, ui: &mut Ui, st: &DocStats) {
         "docprops.fill_pattern",
         "docprops.fill_texture",
         "docprops.fill_mesh",
+        "docprops.fill_procedural",
     ]
     .iter()
     .enumerate()
@@ -359,7 +364,7 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut DocPropsState, close: &mut 
                     .show(ui, |ui| {
                         let w = inner.width() - 90.0;
                         ui.label(tr("options.language"));
-                        egui::ComboBox::from_id_salt("docprops_lang")
+                        crate::ui::keynav::ComboBox::from_id_salt("docprops_lang")
                             .width(w - 8.0)
                             .selected_text(if st.language.is_empty() {
                                 tr("docprops.rating_none")
@@ -375,7 +380,12 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut DocPropsState, close: &mut 
                                 for (tag, name) in LANGUAGES {
                                     ui.selectable_value(&mut st.language, tag.to_string(), name);
                                 }
-                            });
+                            })
+                            .response
+                            .rich_tip(crate::ui::tips::pair(
+                                "options.language",
+                                "docprops.language_desc",
+                            ));
                         ui.end_row();
                         for (key, v) in [
                             ("dialog.title", &mut st.title),
@@ -385,7 +395,10 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut DocPropsState, close: &mut 
                             ("docprops.tags", &mut st.tags),
                         ] {
                             ui.label(tr(key));
-                            ui.add(egui::TextEdit::singleline(v).desired_width(w));
+                            let desc =
+                                format!("docprops.{}_desc", key.rsplit('.').next().unwrap_or(key));
+                            ui.add(egui::TextEdit::singleline(v).desired_width(w))
+                                .rich_tip(crate::ui::tips::pair(key, &desc));
                             ui.end_row();
                         }
                         ui.label(tr("dialog.notes"));
@@ -394,23 +407,27 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut DocPropsState, close: &mut 
                                 .id(crate::ui::dialogs::multiline_id(1))
                                 .desired_rows(3)
                                 .desired_width(w),
-                        );
+                        )
+                        .rich_tip(crate::ui::tips::pair("dialog.notes", "docprops.notes_desc"));
                         ui.end_row();
                         ui.label(tr("dialog.rating"));
-                        egui::ComboBox::from_id_salt("docprops_rating")
+                        crate::ui::keynav::ComboBox::from_id_salt("docprops_rating")
                             .width(w - 8.0)
                             .selected_text(rating_label(st.rating))
                             .show_ui(ui, |ui| {
                                 for r in 0..=5u8 {
                                     ui.selectable_value(&mut st.rating, r, rating_label(r));
                                 }
-                            });
+                            })
+                            .response
+                            .rich_tip(crate::ui::tips::pair(
+                                "dialog.rating",
+                                "docprops.rating_desc",
+                            ));
                         ui.end_row();
                     });
                 ui.add_space(6.0);
-                egui::Frame::new()
-                    .fill(egui::Color32::WHITE)
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(0xC8)))
+                crate::ui::color_management::tab_page()
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .show(ui, |ui| {
                         ui.set_width(inner.width() - 18.0);
@@ -429,17 +446,19 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut DocPropsState, close: &mut 
                 ui.horizontal(|ui| {
                     help = ui
                         .add_sized([27.0, 27.0], egui::Button::new("?"))
-                        .on_hover_text(tr("dialog.help"))
+                        .rich_tip(crate::ui::tips::keyed("dialog.help_button"))
                         .clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_sized([100.0, 27.0], egui::Button::new(tr("dialog.cancel")))
+                            .rich_tip(crate::ui::tips::keyed("dialog.cancel"))
                             .clicked()
                         {
                             *close = true;
                         }
                         if ui
                             .add_sized([100.0, 27.0], egui::Button::new(tr("dialog.ok")))
+                            .rich_tip(crate::ui::tips::keyed("dialog.ok"))
                             .clicked()
                             || crate::ui::dialogs::enter_pressed(ui)
                         {

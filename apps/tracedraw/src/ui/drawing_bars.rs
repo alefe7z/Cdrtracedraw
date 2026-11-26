@@ -4,6 +4,7 @@
 //! Knife (a straight or freehand cut, a gap along it, the pieces kept as
 //! one object).
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::i18n::tr;
 use crate::recognize::LEVEL_KEYS;
@@ -22,9 +23,9 @@ fn dim(ui: &mut Ui, text: String) {
 }
 
 /// A level list, off to highest.
-fn level(ui: &mut Ui, id: &str, tip: &str, v: &mut u8) {
+pub(crate) fn level(ui: &mut Ui, id: &str, tip: &str, v: &mut u8) {
     let mut cur = (*v).min(5);
-    egui::ComboBox::from_id_salt(id)
+    crate::ui::keynav::ComboBox::from_id_salt(id)
         .selected_text(tr(LEVEL_KEYS[cur as usize]))
         .width(90.0)
         .show_ui(ui, |ui| {
@@ -55,6 +56,11 @@ pub fn drawing_bar(app: &mut App, ui: &mut Ui) {
                 "recognize.smoothing_tip",
                 &mut app.recognize.smoothing,
             );
+            ui.checkbox(
+                &mut app.recognize.scribble_erases,
+                tr("recognize.scribble_erases"),
+            )
+            .rich_tip(crate::ui::tips::keyed("recognize.scribble_erases"));
             crate::ui::propbar::sep(ui);
             dim(ui, tr("status_hint.shape_recognition"));
         }
@@ -69,6 +75,9 @@ pub fn drawing_bar(app: &mut App, ui: &mut Ui) {
                     .range(0.0..=1000.0)
                     .suffix(format!(" {}", app.units.short())),
             );
+            let r = r
+                .rich_tip(crate::ui::tips::keyed("sketch.join_distance"))
+                .rich_disabled_tip(crate::ui::tips::keyed("sketch.join_distance"));
             if r.changed() {
                 app.sketch.join_distance = app.units.to_mm(d).clamp(0.0, 1000.0);
             }
@@ -94,7 +103,8 @@ pub fn knife_bar(app: &mut App, ui: &mut Ui) {
         (KnifeMode::Freehand, "knife.freehand"),
     ] {
         if ui
-            .selectable_label(app.knife.mode == mode, tr(key))
+            .iselectable(app.knife.mode == mode, key)
+            .rich_tip(crate::ui::tips::keyed(key))
             .clicked()
         {
             app.knife.mode = mode;
@@ -103,14 +113,14 @@ pub fn knife_bar(app: &mut App, ui: &mut Ui) {
     crate::ui::propbar::sep(ui);
     let split = app.knife.gap <= 0.0;
     if ui
-        .selectable_label(split, tr("knife.split"))
+        .iselectable(split, "knife.split")
         .rich_tip(tr("knife.split_tip"))
         .clicked()
     {
         app.knife.gap = 0.0;
     }
     if ui
-        .selectable_label(!split, tr("knife.gap"))
+        .iselectable(!split, "knife.gap")
         .rich_tip(tr("knife.gap_tip"))
         .clicked()
         && split
@@ -125,6 +135,9 @@ pub fn knife_bar(app: &mut App, ui: &mut Ui) {
             .range(0.0..=1000.0)
             .suffix(format!(" {}", app.units.short())),
     );
+    let r = r
+        .rich_tip(crate::ui::tips::keyed("knife.gap_width"))
+        .rich_disabled_tip(crate::ui::tips::keyed("knife.gap_width"));
     if r.changed() {
         app.knife.gap = app.units.to_mm(w).clamp(0.0, 1000.0);
     }

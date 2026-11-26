@@ -1,7 +1,7 @@
 # Blends
 
 A blend draws a series of intermediate steps between two objects, changing
-shape, size and color from one to the other. Use it for smooth shading,
+shape, size, color and transparency from one to the other. Use it for smooth shading,
 repeated patterns or a shape that turns into another.
 
 ## To blend two objects {#create}
@@ -22,6 +22,11 @@ With the panel:
 
 Both objects stay objects of the drawing: move, resize or recolor either one
 and the steps follow. Deleting the end object removes the blend.
+
+With the Pick tool, a click on the steps between the two objects
+selects the whole blend, the start and end objects together, so a drag moves
+it anywhere as one. A click on the start or end object itself selects that
+object alone, to resize, recolor or edit it.
 
 ## Blend settings {#settings}
 
@@ -44,16 +49,63 @@ applies at once.
 
 The tool's property bar has the steps, rotation and the two accelerations.
 
+### Controls on the canvas {#canvas-controls}
+
+Pick a blend with the [[tool.blend]] tool (click its start or end object, or a
+step) to show its controls: a square on the start object, a crossed square on
+the end object, the line between them and two sliders on it, the object
+acceleration above and the color acceleration below.
+
+- Drag a slider toward the start or the end to crowd the steps or the colors
+  there. The blend follows live, each drag is one undo step, and the property
+  bar follows. A slider goes as far one way as the other: at 100 % the middle
+  step sits right by the start object, at -100 % right by the end object.
+- Drag an end square to move its object, so the blend changes direction. Drop
+  it on another object to make that object the new start or end, with the
+  blend's settings.
+- Drag the round handle in the middle of the line (a blend without a path) to
+  bend the line into a curve: the steps follow it, and Spacing and Rotate all
+  objects work along it as along a path. Drop the handle back on the straight
+  line, or click **Straighten** in the panel, to make it straight again.
+
+When both ends are groups (a sun of many colored strokes, say), tick **Blend
+object by object** in the panel: each object of one group blends into the
+matching object of the other in its own colors, instead of each group
+blending as one shape.
+
+The object acceleration moves the steps toward one end also when the blend
+follows no path. A bitmap effect on the start object keeps the blend drawn.
+
+![A blend made with the Blend tool, bent into a curve by its round handle](../../img/effects-blend-bend.png)
+
 ## Blending along a path {#path}
 
 1. Select the blend.
-2. Click **New path** in the [[docker.blend]] panel and click a curve.
+2. Click [[docker.new_path]] in the [[docker.blend]] panel or on the Blend
+   tool's property bar, and click a curve.
 
 The steps follow the curve. **Rotate all objects** turns each step along the
 curve, and [[docker.blend_full_path]] places the first and last steps at the
 ends of the curve.
 
+The blend stays a blend: its steps, spacing, acceleration, rotation and
+colours still change it. To put the start and end objects anywhere along the
+curve, set [[docker.blend_path_start]] and [[docker.blend_path_end]], in % of
+the curve's length: each object moves there and the steps run between them.
+[[docker.detach_path]] takes the blend off the curve, a straight blend again.
+
 ## Removing or splitting a blend {#clear}
 
 **Clear blend** removes the steps and leaves both objects. **Break apart**
-turns the steps into objects of their own.
+turns the steps into objects of their own, grouped.
+[[menu.object > menu.object.break_blend_apart]] (<kbd>Ctrl+K</kbd>, also on the
+right-click menu) does the same.
+
+## Saving as `.cdr` {#cdr}
+
+A blend saved as `.cdr` (version 9 or later) stays a blend: the file
+holds the two objects and the blend record between them, so the program
+that opens the file shows the steps and lets you change the blend. The
+steps, spacing and the two objects go into the file; acceleration,
+rotation, a path and the colour direction come back in TraceDraw
+(version 14 or later), other programs start from their defaults.

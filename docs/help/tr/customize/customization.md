@@ -1,5 +1,7 @@
 # Özelleştirme seçenekleri
 
+> *Makine çevirisi: bu sayfa İngilizce sürümün gerisinde kalabilir.*
+
 [[menu.tools > menu.tools.options > menu.tools.options_customization]]
 arayüzün görünümünü, kendi klavye kısayollarınızı, hangi çubukların
 görüneceğini ve renk paletinin nasıl davranacağını ayarlar.
@@ -11,8 +13,12 @@ görüneceğini ve renk paletinin nasıl davranacağını ayarlar.
 - [[options.center_dialogs]]: iletişim kutuları pencerenin ortasında açılır;
   kapalıyken onları bıraktığınız yerde açılırlar.
 - [[options.ui_shadows]] (daha az gölge yavaş grafik donanımına yardımcı
+- [[options.translucent_menus]]: open menus let the drawing show through them, at the [[options.menu_opacity]] beside the box (off by default).
   olur).
 - [[options.colored_icons]]: her araç grubu kendi rengini alır.
+- [[options.docker_tabs_icons_only]]: pencerenin kenarlarındaki panel
+  sekmeleri yalnızca resimlerini gösterir, ad ipucunda yer alır. Kapalıyken
+  resmi ve adı gösterir; sığandan fazla sekmesi olan sütun kayar.
 - [[options.ui_size]]: menülerin, çubukların, simgelerin ve panellerin,
   sisteminizin monitöre verdiği ölçeklemeye göre ne kadar büyük olduğu
   (başlangıçta %100). [[options.reset_to_default]] %100'e geri döner. Arayüz
@@ -44,6 +50,14 @@ onu kaldırır; varsayılanlara sıfırlamak hepsini kaldırır. Araç tuşları
 harf veya <kbd>Shift</kbd> ile bir harftir. Bkz.
 [Klavye kısayolları](../reference/keyboard-shortcuts.md).
 
+Bir komutun birden çok kısayolu olabilir: yeni bir tuş mevcut olanlara eklenir
+(yerleşik tuş yanında çalışmaya devam eder) ve her tuşun kendi silme düğmesi
+vardır. Bir menü komutunu çalıştıran çubuk düğmeleri (Yeni, Aç, Kaydet, Geri
+Al, Yakınlaştır ve diğerleri) de menü komutlarıyla aynı kısayolları alır;
+menülerin yalnızca bazen gösterdiği satırlar da öyle. **Araç çubuğu
+düğmeleri** listesi Standart ve Yakınlaştırma çubuklarının tüm düğmelerini
+içerir: çubuktan kaldırdığınız bir düğmeyi oradan geri sürükleyin.
+
 ## Komut Çubukları {#command-bars}
 
 ![Özelleştirme seçeneklerinin Komut Çubukları sayfası](../../img/customize-customization-command-bars.png)
@@ -57,15 +71,32 @@ harf veya <kbd>Shift</kbd> ile bir harftir. Bkz.
 [[options.other]] altında: [[bars.lock]] ve
 [[options.show_outline_flyout]].
 
+[[options.toolbar_drag_hint]]
+
 ## Renk Paleti {#color-palette}
 
 ![Özelleştirme seçeneklerinin Renk Paleti sayfası](../../img/customize-customization-color-palette.png)
 
 - [[options.palette_auto_update]] ve [[options.palette_show_document]]
   (ikisi de açık).
+- Varsayılan paletin [[options.palette_position]] (Üst, Alt, Sol, Sağ veya
+  Serbest), paletin kendi menüsündeki gibi; araç çubukları kilitliyken
+  değişmez.
 - [[options.palette_swatches]]: [[options.palette_no_color]] (açık) ve
   [[options.palette_right_button]] öğesinin ne yaptığı:
   [[options.palette_set_outline]] (başlangıçta) veya
   [[options.palette_context_menu]] öğesini açmak.
 
 Bkz. [Renk paletleri](../color/palettes.md).
+
+## Bağlam menüleri {#context-menus}
+
+Özelleştirme altında [[options.context_menus]] seçeneğini kullanarak 32 bağlam menüsü konumunu birbirinden bağımsız yönetin. [[options.context_menu_scene]] ile bir konum seçin, bir işlemi bulmak için [[options.context_menu_search]] alanını kullanın ve o konumda gizlemek için onay kutusunun işaretini kaldırın. Geçerli seçim kullanamasa bile işlemler bu listede kalır.
+
+Tüm işlemler varsayılan olarak görünür. Her konumun kendi seçenekleri vardır: tuvalde bir nesne işlemini gizlemek, Nesneler panelinde gizlemez. Hedef katmanlar ve yazı tipi koleksiyonları gibi dinamik listeler tek bir işlem olarak yönetilir; bu nedenle adlarını değiştirmek seçimlerinizi sıfırlamaz.
+
+[[options.context_menu_reset]] seçili menüyü, [[options.context_menu_reset_all]] ise tüm menüleri geri yükler. [[dialog.ok]] seçimleri uygulama ayarlarına kaydeder; [[dialog.cancel]], Escape veya kapatma düğmesi, Seçenekler açıldığında var olan seçimleri geri yükler. Ana menüler, kısayollar ve komut araması özgün komutları sunmaya devam eder.
+
+Girintili alt öğeleri görmek için bir alt menüyü genişletin. Aynı düzeydeki öğeleri yeniden sıralamak için satırın tutamacını sürükleyin veya [[options.context_menu_move_up]] ve [[options.context_menu_move_down]] düğmelerini kullanın. Bir üst menü taşındığında alt öğeleri de taşınır; öğeler başka bir üst menüye aktarılamaz. Arama, eşleşen öğelerin üst menü yolunu görünür tutar. Menüyü geri yüklemek görünürlüğü ve sıralamayı sıfırlar; Seçenekler’i iptal etmek her ikisini de iletişim kutusu açıldığındaki durumuna döndürür.
+
+Belge paletinin renk örneği menüsü ve Palet Yöneticisindeki girdisi ayrı ayarlara sahiptir. Dinamik hedefler kendi sıralarını korur; belge stilleri listesi Nesne Stilleri içindeki sabit işlemler arasında kalır. Sonraki sürümlerde eklenen yeni işlemler görünür kalır ve aynı düzeyde kaydedilmiş öğelerden sonra yer alır.

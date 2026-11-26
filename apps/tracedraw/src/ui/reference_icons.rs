@@ -164,6 +164,7 @@ fn raster(name: &str, side: u32, color: Color32, accents: bool) -> Option<egui::
                 zoom,
                 origin_x: 0.0,
                 origin_y: f64::from(side),
+                stretch_y: 1.0,
             },
             ..Default::default()
         },
@@ -195,7 +196,7 @@ pub fn draw(painter: &Painter, rect: Rect, name: &'static str, color: Color32) -
     let side = (rect.width() * ctx.pixels_per_point())
         .ceil()
         .clamp(8.0, 256.0) as u32;
-    let accents = super::icons::colored() && color == crate::theme::Tokens::icon();
+    let accents = super::icons_cd::colored() && color == crate::theme::Tokens::icon();
     let key = egui::Id::new(("reference_bar_vector_v2", name, side, color, accents));
     let texture = cached_texture(ctx, key, || {
         raster(name, side, color, accents).map(|image| {

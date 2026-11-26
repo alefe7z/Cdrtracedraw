@@ -316,21 +316,45 @@ fn segments(path: &BezPath) -> Vec<PathSeg> {
     path.segments().collect()
 }
 
-/// End points of the outline's segments, without repeats.
-fn nodes_of(path: &BezPath) -> Vec<Point> {
+/// End points of the outline's segments within `tol` of `p`, without
+/// repeats. Only the few near the pointer are compared with each other:
+/// comparing every node with every other took seconds a frame on a
+/// combined curve of tens of thousands of nodes (#764).
+fn nodes_near(path: &BezPath, p: Point, tol: f64) -> Vec<Point> {
     let mut out: Vec<Point> = Vec::new();
     for el in path.elements() {
         use tracedraw_core::geometry::PathEl;
-        let p = match el {
-            PathEl::MoveTo(p) | PathEl::LineTo(p) => *p,
-            PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => *p,
+        let n = match el {
+            PathEl::MoveTo(n) | PathEl::LineTo(n) => *n,
+            PathEl::QuadTo(_, n) | PathEl::CurveTo(_, _, n) => *n,
             PathEl::ClosePath => continue,
         };
-        if !out.iter().any(|q| (*q - p).hypot() < 1e-9) {
-            out.push(p);
+        if (n - p).hypot() > tol {
+            continue;
+        }
+        if !out.iter().any(|q| (*q - n).hypot() < 1e-9) {
+            out.push(n);
         }
     }
     out
+}
+
+/// The segment's control points come within `tol` of `p` (the segment
+/// lies inside their box, so one that does not cannot either).
+fn may_reach(seg: &PathSeg, p: Point, tol: f64) -> bool {
+    let pts: &[Point] = match seg {
+        PathSeg::Line(l) => &[l.p0, l.p1],
+        PathSeg::Quad(q) => &[q.p0, q.p1, q.p2],
+        PathSeg::Cubic(c) => &[c.p0, c.p1, c.p2, c.p3],
+    };
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for q in pts {
+        x0 = x0.min(q.x);
+        y0 = y0.min(q.y);
+        x1 = x1.max(q.x);
+        y1 = y1.max(q.y);
+    }
+    p.x >= x0 - tol && p.x <= x1 + tol && p.y >= y0 - tol && p.y <= y1 + tol
 }
 
 /// The point halfway along a segment.
@@ -410,6 +434,219 @@ fn add_on(
     }
 }
 
+/// The points of `geo` for the modes on, with no pointer to measure
+/// from, each with the mode that offers it: the outlines' nodes and
+/// segment midpoints, an ellipse's quadrants and the centres. What a
+/// guideline being dragged lines up with along its axis (#1645).
+pub fn points_with_modes(geo: &[Geo], modes: &SnapModes) -> Vec<(Point, SnapMode)> {
+    let mut out = Vec::new();
+    for g in geo {
+        match g {
+            Geo::Outline { path, points } => {
+                if !*points {
+                    continue;
+                }
+                if modes.node {
+                    out.extend(
+                        tracedraw_core::nodes::nodes(path)
+                            .iter()
+                            .map(|n| (n.pos, SnapMode::Node)),
+                    );
+                }
+                if modes.midpoint {
+                    out.extend(
+                        segments(path)
+                            .iter()
+                            .map(|s| (midpoint(s), SnapMode::Midpoint)),
+                    );
+                }
+            }
+            Geo::Nodes(ns) => {
+                if modes.node {
+                    out.extend(ns.iter().map(|n| (*n, SnapMode::Node)));
+                }
+            }
+            Geo::Ellipse {
+                center,
+                rx,
+                ry,
+                arc,
+            } => {
+                if modes.quadrant {
+                    let inside = |deg: f64| match arc {
+                        None => true,
+                        Some((a, b)) => {
+                            let sweep = (b - a).rem_euclid(360.0);
+                            (deg - a).rem_euclid(360.0) <= sweep + 1e-9
+                        }
+                    };
+                    for deg in [0.0, 90.0, 180.0, 270.0] {
+                        if inside(deg) {
+                            let a = deg.to_radians();
+                            out.push((*center + *rx * a.cos() + *ry * a.sin(), SnapMode::Quadrant));
+                        }
+                    }
+                }
+            }
+            Geo::Center(c) => {
+                if modes.center {
+                    out.push((*c, SnapMode::Center));
+                }
+            }
+            Geo::Baseline(..) => {}
+        }
+    }
+    out.retain(|(p, _)| p.x.is_finite() && p.y.is_finite());
+    out
+}
+
+/// Where a straight line along one axis meets `geo` as it slides
+/// across: a vertical line (`x_axis`, the values are x coordinates) or a
+/// horizontal one. The points of [`points_with_modes`]; the places where
+/// an outline turns back across the line's direction (a curve's outermost
+/// point that is no node, where the line touches it: Tangent); and the
+/// outline's straight sides that run along the line (Edge). Each comes
+/// with the point the line touches and its mode. With `span`, the line
+/// is only that stretch of the other axis (the side of a box being
+/// resized): what lies off it, by more than `tol`, does not count; a
+/// side running along the line counts where it overlaps the stretch.
+pub fn axis_stops(
+    geo: &[Geo],
+    modes: &SnapModes,
+    x_axis: bool,
+    span: Option<(f64, f64)>,
+    tol: f64,
+) -> Vec<(f64, Point, SnapMode)> {
+    let along = |p: Point| if x_axis { p.x } else { p.y };
+    let across = |p: Point| if x_axis { p.y } else { p.x };
+    let (lo, hi) = match span {
+        Some((a, b)) => (a.min(b) - tol, a.max(b) + tol),
+        None => (f64::NEG_INFINITY, f64::INFINITY),
+    };
+    let on_span = |p: Point| (lo..=hi).contains(&across(p));
+    let mut out: Vec<(f64, Point, SnapMode)> = points_with_modes(geo, modes)
+        .into_iter()
+        .filter(|(p, _)| on_span(*p))
+        .map(|(p, m)| (along(p), p, m))
+        .collect();
+    for g in geo {
+        let Geo::Outline { path, points: true } = g else {
+            continue;
+        };
+        if span.is_some() {
+            let b = path.bounding_box();
+            let (b0, b1) = if x_axis { (b.y0, b.y1) } else { (b.x0, b.x1) };
+            if b1 < lo || b0 > hi {
+                continue;
+            }
+        }
+        for seg in path.segments() {
+            match seg {
+                PathSeg::Line(l) => {
+                    if !modes.edge {
+                        continue;
+                    }
+                    // A side along the line: where it overlaps the stretch.
+                    let (a, b) = (l.p0, l.p1);
+                    if (along(a) - along(b)).abs() > 1e-9 {
+                        continue;
+                    }
+                    let (s0, s1) = (across(a).min(across(b)), across(a).max(across(b)));
+                    if s1 < lo || s0 > hi {
+                        continue;
+                    }
+                    let mid = if span.is_some() {
+                        ((s0.max(lo) + s1.min(hi)) / 2.0).clamp(s0, s1)
+                    } else {
+                        (s0 + s1) / 2.0
+                    };
+                    let p = if x_axis {
+                        Point::new(a.x, mid)
+                    } else {
+                        Point::new(mid, a.y)
+                    };
+                    out.push((along(p), p, SnapMode::Edge));
+                }
+                _ if modes.tangent => {
+                    for t in turning_params(&seg, x_axis) {
+                        let p = seg.eval(t);
+                        if on_span(p) {
+                            out.push((along(p), p, SnapMode::Tangent));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out.retain(|(v, p, _)| v.is_finite() && p.x.is_finite() && p.y.is_finite());
+    out
+}
+
+/// Parameters strictly inside a curved segment where it runs across the
+/// x axis (`x_axis`: its x is at a turning point) or the y axis: the
+/// roots of that coordinate's derivative, solved in closed form.
+fn turning_params(seg: &PathSeg, x_axis: bool) -> Vec<f64> {
+    let c = |v: Vec2| if x_axis { v.x } else { v.y };
+    let mut ts = Vec::new();
+    match seg {
+        PathSeg::Line(_) => {}
+        PathSeg::Quad(q) => {
+            // 2((1 - t) a + t b) = 0.
+            let (a, b) = (c(q.p1 - q.p0), c(q.p2 - q.p1));
+            if (a - b).abs() > 1e-12 {
+                ts.push(a / (a - b));
+            }
+        }
+        PathSeg::Cubic(k) => {
+            // 3((1 - t)^2 a + 2 (1 - t) t b + t^2 d) = 0.
+            let (a, b, d) = (c(k.p1 - k.p0), c(k.p2 - k.p1), c(k.p3 - k.p2));
+            let qa = a - 2.0 * b + d;
+            let qb = 2.0 * (b - a);
+            let qc = a;
+            if qa.abs() < 1e-12 {
+                if qb.abs() > 1e-12 {
+                    ts.push(-qc / qb);
+                }
+            } else {
+                let disc = qb * qb - 4.0 * qa * qc;
+                if disc >= 0.0 {
+                    let r = disc.sqrt();
+                    ts.push((-qb + r) / (2.0 * qa));
+                    ts.push((-qb - r) / (2.0 * qa));
+                }
+            }
+        }
+    }
+    ts.retain(|t| t.is_finite() && *t > 1e-6 && *t < 1.0 - 1e-6);
+    ts
+}
+
+/// [`geometry`] of a top-level object on the page, with the centre of
+/// its box for the objects whose own geometry has no centre (groups,
+/// texts, open curves, symbols, clip frames): the Pick tool and every
+/// snapping drag can take any object by its middle (#2004).
+pub fn object_geometry(s: &Shape, baselines: BaselinesOf, out: &mut Vec<Geo>) {
+    if !s.visible {
+        return;
+    }
+    let start = out.len();
+    geometry(s, Affine::IDENTITY, baselines, out);
+    let composite = matches!(
+        s.kind,
+        ShapeKind::Group { .. } | ShapeKind::ClipFrame { .. }
+    );
+    let own_centre = !composite && out.len() > start && matches!(out.last(), Some(Geo::Center(_)));
+    if own_centre {
+        return;
+    }
+    let b = s.bounds();
+    let c = b.center();
+    if b.width().is_finite() && b.height().is_finite() && c.x.is_finite() && c.y.is_finite() {
+        out.push(Geo::Center(c));
+    }
+}
+
 /// Every snap target of `geo` within `tol` of `p`, with its distance, for
 /// the modes on. `from` is where the line being drawn starts (for tangent
 /// and perpendicular points).
@@ -432,11 +669,14 @@ pub fn targets(
                     continue;
                 }
                 if modes.node && points {
-                    for n in nodes_of(path) {
+                    for n in nodes_near(path, p, tol) {
                         add(&mut out, p, n, SnapMode::Node, tol);
                     }
                 }
                 for (si, seg) in segments(path).into_iter().enumerate() {
+                    if !may_reach(&seg, p, tol) {
+                        continue;
+                    }
                     let nearest = seg.nearest(p, 1e-6);
                     if nearest.distance_sq.sqrt() > tol {
                         continue;
@@ -529,6 +769,18 @@ pub fn targets(
         }
     }
     if modes.intersection {
+        // Each segment near the pointer is cut once into short chords
+        // (an eighth of the radius), keeping only those that come within
+        // the radius (a crossing farther away is no target); chords that
+        // cross give a start from which the crossing of the curves is
+        // refined. Solving curve against curve for every pair took most
+        // of a frame on a page of thousands of curves (#345).
+        let reach = Rect::new(p.x - tol, p.y - tol, p.x + tol, p.y + tol);
+        let step = (tol / 8.0).max(1e-6);
+        let pieces: Vec<Vec<Chord>> = near
+            .iter()
+            .map(|(_, _, s)| chords_in(s, reach, step))
+            .collect();
         for i in 0..near.len() {
             for j in i + 1..near.len() {
                 let (_, _, a) = &near[i];
@@ -537,11 +789,16 @@ pub fn targets(
                 let at_end = |s: &PathSeg, q: Point| {
                     (s.eval(0.0) - q).hypot() < 1e-6 || (s.eval(1.0) - q).hypot() < 1e-6
                 };
-                for q in intersections(a, b) {
-                    if at_end(a, q) && at_end(b, q) {
-                        continue;
+                for ca in &pieces[i] {
+                    for cb in &pieces[j] {
+                        let Some(q) = crossing(a, ca, b, cb, step) else {
+                            continue;
+                        };
+                        if at_end(a, q) && at_end(b, q) {
+                            continue;
+                        }
+                        add(&mut out, p, q, SnapMode::Intersection, tol);
                     }
-                    add(&mut out, p, q, SnapMode::Intersection, tol);
                 }
             }
         }
@@ -549,40 +806,89 @@ pub fn targets(
     out
 }
 
-/// Where two segments cross.
-fn intersections(a: &PathSeg, b: &PathSeg) -> Vec<Point> {
-    let lines_of = |s: &PathSeg| -> Vec<Line> {
-        match s {
-            PathSeg::Line(l) => vec![*l],
-            _ => {
-                let mut pts = Vec::new();
-                let mut path = BezPath::new();
-                path.move_to(s.eval(0.0));
-                path.push(match s {
-                    PathSeg::Quad(q) => tracedraw_core::geometry::PathEl::QuadTo(q.p1, q.p2),
-                    PathSeg::Cubic(c) => {
-                        tracedraw_core::geometry::PathEl::CurveTo(c.p1, c.p2, c.p3)
-                    }
-                    PathSeg::Line(l) => tracedraw_core::geometry::PathEl::LineTo(l.p1),
-                });
-                tracedraw_core::geometry::flatten(&path, 1e-4, &mut |el| match el {
-                    tracedraw_core::geometry::PathEl::MoveTo(p)
-                    | tracedraw_core::geometry::PathEl::LineTo(p) => pts.push(p),
-                    _ => {}
-                });
-                pts.windows(2).map(|w| Line::new(w[0], w[1])).collect()
-            }
-        }
+/// A chord of a segment: its line and the parameters of its ends.
+struct Chord {
+    line: Line,
+    t0: f64,
+    t1: f64,
+}
+
+/// The chords of `s`, about `step` long, that reach into `r`.
+fn chords_in(s: &PathSeg, r: Rect, step: f64) -> Vec<Chord> {
+    let meets = |l: &Line| {
+        l.p0.x.min(l.p1.x) <= r.x1
+            && l.p0.x.max(l.p1.x) >= r.x0
+            && l.p0.y.min(l.p1.y) <= r.y1
+            && l.p0.y.max(l.p1.y) >= r.y0
     };
-    let mut out = Vec::new();
-    for l in lines_of(b) {
-        for hit in a.intersect_line(l) {
-            if (0.0..=1.0).contains(&hit.line_t) {
-                out.push(l.eval(hit.line_t));
-            }
+    let n = match s {
+        PathSeg::Line(_) => 0.0,
+        // The control polygon is at least as long as the curve.
+        PathSeg::Quad(q) => ((q.p1 - q.p0).hypot() + (q.p2 - q.p1).hypot()) / step,
+        PathSeg::Cubic(c) => {
+            ((c.p1 - c.p0).hypot() + (c.p2 - c.p1).hypot() + (c.p3 - c.p2).hypot()) / step
         }
     }
+    .ceil()
+    .clamp(1.0, 512.0) as usize;
+    let mut out = Vec::new();
+    let mut prev = (0.0, s.eval(0.0));
+    for k in 1..=n {
+        let t = k as f64 / n as f64;
+        let q = s.eval(t);
+        let line = Line::new(prev.1, q);
+        if meets(&line) {
+            out.push(Chord {
+                line,
+                t0: prev.0,
+                t1: t,
+            });
+        }
+        prev = (t, q);
+    }
     out
+}
+
+/// Where segments `a` and `b` cross near their chords `ca` and `cb`: the
+/// chords' crossing, refined onto both curves by Newton's method (kept
+/// as it is when the refinement wanders off).
+fn crossing(a: &PathSeg, ca: &Chord, b: &PathSeg, cb: &Chord, step: f64) -> Option<Point> {
+    let (la, lb) = (&ca.line, &cb.line);
+    let (d, e) = (la.p1 - la.p0, lb.p1 - lb.p0);
+    let den = d.cross(e);
+    if den.abs() < 1e-18 {
+        return None;
+    }
+    let w = lb.p0 - la.p0;
+    let fa = w.cross(e) / den;
+    let fb = w.cross(d) / den;
+    let eps = 1e-9;
+    if !(-eps..=1.0 + eps).contains(&fa) || !(-eps..=1.0 + eps).contains(&fb) {
+        return None;
+    }
+    let chord_hit = la.p0 + d * fa;
+    if matches!((a, b), (PathSeg::Line(_), PathSeg::Line(_))) {
+        return Some(chord_hit);
+    }
+    let (mut t, mut u) = (ca.t0 + fa * (ca.t1 - ca.t0), cb.t0 + fb * (cb.t1 - cb.t0));
+    for _ in 0..8 {
+        let gap = a.eval(t) - b.eval(u);
+        if gap.hypot() < 1e-10 {
+            break;
+        }
+        // a(t) - b(u) = 0: the columns are a'(t) and -b'(u).
+        let (m1, m2) = (deriv(a, t), -deriv(b, u));
+        let det = m1.cross(m2);
+        if det.abs() < 1e-18 {
+            break;
+        }
+        let c = -gap;
+        t = (t + c.cross(m2) / det).clamp(0.0, 1.0);
+        u = (u + m1.cross(c) / det).clamp(0.0, 1.0);
+    }
+    let q = a.eval(t);
+    let refined = (q - b.eval(u)).hypot() < 1e-7 && (q - chord_hit).hypot() <= step;
+    Some(if refined { q } else { chord_hit })
 }
 
 /// The best target: the nearest point (node, intersection, midpoint,
@@ -677,6 +983,26 @@ mod tests {
         assert!(snap(&[r], Point::new(10.0, 6.0), None).is_none());
     }
 
+    /// Only the nodes near the pointer are offered, each once (a closed
+    /// outline's last node is its first), whatever the outline's size.
+    #[test]
+    fn nodes_near_the_pointer_are_offered_once() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        for i in 1..20_000 {
+            path.line_to((i as f64, (i % 2) as f64));
+        }
+        path.line_to((0.0, 0.0));
+        path.close_path();
+        let near = nodes_near(&path, Point::new(0.0, 0.2), 0.5);
+        assert_eq!(near, vec![Point::new(0.0, 0.0)]);
+        assert!(nodes_near(&path, Point::new(500.0, 500.0), 1.0).is_empty());
+        assert_eq!(
+            nodes_near(&path, Point::new(7.0, 1.0), 0.5),
+            vec![Point::new(7.0, 1.0)]
+        );
+    }
+
     #[test]
     fn modes_turn_off() {
         let r = rect(0.0, 0.0, 40.0, 20.0);
@@ -708,6 +1034,37 @@ mod tests {
         let t = snap(&[a, b], Point::new(10.3, 19.6), None).unwrap();
         assert_eq!(t.mode, SnapMode::Intersection);
         assert!((t.point - Point::new(10.0, 20.0)).hypot() < 1e-6, "{t:?}");
+    }
+
+    /// Two curves cross where their equations meet, exactly, not where
+    /// a flattened copy of them would.
+    #[test]
+    fn curves_snap_to_their_exact_crossing() {
+        let curve = |path: BezPath| {
+            Shape::new(
+                ShapeId(5),
+                ShapeKind::Path {
+                    path,
+                    closed: false,
+                },
+            )
+        };
+        let mut a = BezPath::new();
+        a.move_to((0.0, 0.0));
+        a.curve_to((5.0, 20.0), (15.0, 20.0), (20.0, 0.0));
+        let mut b = BezPath::new();
+        b.move_to((0.0, 12.0));
+        b.curve_to((7.0, 9.0), (13.0, 18.0), (20.0, 14.0));
+        let t = snap(
+            &[curve(a.clone()), curve(b.clone())],
+            Point::new(4.0, 11.5),
+            None,
+        )
+        .unwrap();
+        assert_eq!(t.mode, SnapMode::Intersection, "{t:?}");
+        let (sa, sb) = (a.segments().next().unwrap(), b.segments().next().unwrap());
+        let on = |s: &PathSeg| s.nearest(t.point, 1e-12).distance_sq.sqrt();
+        assert!(on(&sa) < 1e-7 && on(&sb) < 1e-7, "{t:?}");
     }
 
     #[test]
@@ -745,6 +1102,7 @@ mod tests {
                 start_deg: 0.0,
                 end_deg: 90.0,
                 pie: false,
+                inner: 0.0,
             }),
         };
         let g = geo_of(&[e]);
@@ -839,5 +1197,97 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.mode, SnapMode::Center);
+    }
+
+    /// Groups, open curves and other objects without a centre of their
+    /// own offer the middle of their box; a rectangle keeps its one
+    /// centre (#2004).
+    #[test]
+    fn every_object_offers_a_centre() {
+        let none = |_: &Shape, _: Affine| Vec::new();
+        let centres = |s: &Shape| {
+            let mut g = Vec::new();
+            object_geometry(s, &none, &mut g);
+            g.iter()
+                .filter_map(|g| match g {
+                    Geo::Center(c) => Some(*c),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let group = Shape::new(
+            ShapeId(3),
+            ShapeKind::Group {
+                children: vec![rect(0.0, 0.0, 10.0, 10.0), rect(30.0, 0.0, 40.0, 20.0)],
+            },
+        );
+        // The two boxes' centres and the group's.
+        let c = centres(&group);
+        assert_eq!(c.len(), 3, "{c:?}");
+        assert!(c.contains(&Point::new(20.0, 10.0)), "{c:?}");
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((10.0, 0.0));
+        path.line_to((10.0, 30.0));
+        let open = Shape::new(
+            ShapeId(4),
+            ShapeKind::Path {
+                path,
+                closed: false,
+            },
+        );
+        assert_eq!(centres(&open), vec![Point::new(5.0, 15.0)]);
+        assert_eq!(
+            centres(&rect(0.0, 0.0, 40.0, 20.0)),
+            vec![Point::new(20.0, 10.0)]
+        );
+    }
+
+    /// Where a line along an axis stops: the points, a curve's outermost
+    /// point, a straight side along it; with a stretch, only what lies
+    /// on it (#2004).
+    #[test]
+    fn lines_along_an_axis_stop_on_points_curves_and_sides() {
+        let modes = SnapModes {
+            midpoint: false,
+            center: false,
+            ..SnapModes::default()
+        };
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.curve_to((0.0, 20.0), (40.0, 20.0), (40.0, 0.0));
+        path.line_to((60.0, 0.0));
+        path.line_to((60.0, 50.0));
+        let s = Shape::new(
+            ShapeId(5),
+            ShapeKind::Path {
+                path,
+                closed: false,
+            },
+        );
+        let g = geo_of(&[s]);
+        // Horizontal lines: the bump's top at y = 15 (x = 20).
+        let ys = axis_stops(&g, &modes, false, None, 1.0);
+        assert!(
+            ys.iter().any(|(v, p, m)| (*v - 15.0).abs() < 1e-9
+                && (*p - Point::new(20.0, 15.0)).hypot() < 1e-9
+                && *m == SnapMode::Tangent),
+            "{ys:?}"
+        );
+        // Vertical lines: the side x = 60 from y 0 to 50, also on a
+        // stretch from y 20 to 30 that holds none of its nodes.
+        let xs = axis_stops(&g, &modes, true, Some((20.0, 30.0)), 1.0);
+        assert!(
+            xs.iter()
+                .any(|(v, p, m)| *v == 60.0 && *m == SnapMode::Edge && p.y == 25.0),
+            "{xs:?}"
+        );
+        // The nodes at y = 0 lie off that stretch.
+        assert!(!xs.iter().any(|(_, _, m)| *m == SnapMode::Node), "{xs:?}");
+        // Without a stretch they count.
+        let xs = axis_stops(&g, &modes, true, None, 1.0);
+        assert!(xs
+            .iter()
+            .any(|(v, _, m)| *v == 40.0 && *m == SnapMode::Node));
     }
 }

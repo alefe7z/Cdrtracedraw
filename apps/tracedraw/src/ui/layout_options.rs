@@ -782,7 +782,7 @@ pub fn apply_presets(app: &mut App, form: &PresetForm) {
 
 /// Text for a guideline in the lists: its position from the ruler origin
 /// (and angle).
-fn guide_text(app: &App, g: &Guide) -> String {
+pub(crate) fn guide_text(app: &App, g: &Guide) -> String {
     let u = app.units;
     let (o, _) = g.line.point_and_direction();
     let r = app.to_ruler(o);
@@ -929,7 +929,7 @@ pub fn guidelines_docker(app: &mut App, ui: &mut Ui) {
             .clicked()
         {
             if let Some(i) = single {
-                if let Some(g) = app.page_guides().get(i).copied() {
+                if let Some(g) = app.page_guides().get(i).cloned() {
                     if g.locked {
                         app.status = tr("status.guideline_locked");
                     } else {
@@ -975,14 +975,15 @@ pub fn guidelines_docker(app: &mut App, ui: &mut Ui) {
         .selected_guides
         .first()
         .and_then(|i| guides.get(*i))
-        .copied();
+        .cloned();
     egui::Grid::new("guide_look")
         .num_columns(2)
         .spacing([6.0, 4.0])
         .show(ui, |ui| {
             row_label(ui, "guides.color");
             let current = first
-                .map(|g| app.guide_color(&g))
+                .as_ref()
+                .map(|g| app.guide_color(g))
                 .unwrap_or(app.doc().metadata.guides.color);
             if let Some(c) = color_button(ui, current) {
                 if any {
@@ -1001,7 +1002,7 @@ pub fn guidelines_docker(app: &mut App, ui: &mut Ui) {
             }
             ui.end_row();
             row_label(ui, "guides.style");
-            let style = first.map(|g| g.style).unwrap_or_default();
+            let style = first.as_ref().map(|g| g.style).unwrap_or_default();
             ui.add_enabled_ui(any, |ui| {
                 egui::ComboBox::from_id_salt("guide_style")
                     .selected_text(tr(style_key(style)))
@@ -1098,7 +1099,7 @@ fn guide_kind_tab(app: &mut App, ui: &mut Ui, kind: GuideKind) {
                     .clicked()
                 {
                     if let Some(i) = single {
-                        if let Some(g) = app.page_guides().get(i).copied() {
+                        if let Some(g) = app.page_guides().get(i).cloned() {
                             if g.locked {
                                 app.status = tr("status.guideline_locked");
                             } else {

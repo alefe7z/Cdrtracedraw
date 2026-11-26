@@ -51,6 +51,18 @@ wypełnienia panelu [[docker.properties]]:
 
 Pasek pod typem pokazuje cały przebieg kolorów tak, jak zostanie narysowany.
 
+## Okno dialogowe Edytuj wypełnienie {#edit-fill}
+
+<kbd>F11</kbd> otwiera okno [[edit_fill.title]] z wypełnieniem zaznaczenia.
+Dla gradientu pokazuje podgląd, [[edit_fill.fill_picker]], typ, powtarzanie i
+pasek kolorów: kliknij węzeł, aby go wybrać, przeciągnij, aby go przesunąć,
+kliknij dwukrotnie, aby dodać lub usunąć węzeł. Pod paskiem: kolor,
+przezroczystość, położenie i [[edit_fill.midpoint]] węzła oraz
+[[edit_fill.reverse]]. [[edit_fill.transform]] zawiera obrót, środek i
+margines krawędzi. **OK** stosuje to, co zmieniono, z [[edit_fill.overprint]]. Gdy okno dialogowe jest otwarte, zaznaczenie pokazuje wypełnienie na bieżąco podczas zmian; **Anuluj** lub <kbd>Esc</kbd> przywraca poprzednie wypełnienie.
+
+![Okno dialogowe Edytuj wypełnienie](../../img/color-fills-edit-fill.png)
+
 ## Narzędzie Wypełnienie interaktywne {#interactive-fill}
 
 Narzędzie [[tool.interactive_fill]] (<kbd>G</kbd>) edytuje wypełnienia
@@ -77,10 +89,10 @@ przez kilka nakładających się obiektów, tworząc nowy obiekt w kształcie te
 obszaru. Otaczające go obiekty pozostają bez zmian.
 
 1. Wybierz narzędzie [[tool.area_fill]].
-2. Wybierz wypełnienie i kontur na pasku właściwości: **Użyj domyślnego**
-   (wypełnienie i kontur nowych obiektów; kolor, gdy jest to brak wypełnienia,
-   aby obszar był widoczny), **Określ** (kolor, a dla konturu również szerokość,
-   obok) lub **Brak**.
+2. Wybierz wypełnienie i kontur na pasku właściwości: **Określ** (kolor, a
+   dla konturu również szerokość, obok), **Użyj domyślnego** (wypełnienie i
+   kontur nowych obiektów; kolor, gdy jest to brak wypełnienia, aby obszar był
+   widoczny) lub **Brak**.
 3. Kliknij wewnątrz obszaru.
 
 Nowy obiekt trafia na wierzch aktywnej warstwy i zostaje zaznaczony. Kliknięcie
@@ -113,6 +125,9 @@ kolory.
 - Wypełnienie [[docker.fill_texture]] to generowana tekstura o naturalnym
   wyglądzie: [[texture.clouds]], [[texture.marble]], [[texture.noise]] lub
   [[texture.wood]], z własnymi kolorami i skalą.
+- [[texture.holographic]] i [[texture.holo_glitter]] dają stały wygląd folii holograficznej: kolory tęczy między
+  ciemnymi i jasnymi plamami (kolory A i B), brokat z błyszczącymi ziarnami.
+  Nie zmienia się z kątem patrzenia; PDF i SVG zapisują go jako obraz.
 
 ## Kilka wypełnień jednego obiektu {#several-fills}
 

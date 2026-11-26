@@ -115,7 +115,10 @@ for a gradient, the kind, colours, angle and edge pad. See
   **Object > Create > Vector Pattern Fill**. It becomes the default fill
   for new objects; apply it to a selection from the Properties panel
   (**Fill > Pattern**). See [the vector pattern notes](../behavior/vector-pattern-fill.md).
-- **Texture** fills are generated: clouds, marble, noise and wood.
+- **Texture** fills are generated: clouds, marble, noise and wood, and
+  two fixed holographic foil looks, **Holographic** and **Holo glitter**
+  (rainbow colours between dark and light patches, the same on screen,
+  in print and in PDF and SVG exports, where they go in as a picture).
 
 ### Mesh fill
 
@@ -199,15 +202,15 @@ the first selected object; **Break Link to Style** unlinks objects. The
 The same panel shows the fill and outline that new objects take, for
 three kinds: graphics, artistic text and paragraph text. Choose a colour
 with nothing selected, or use **From Selection** and **Reset** there.
-**Tools > Save Settings as Default** keeps them for new drawings. See
+**Tools > Save as Defaults** keeps them for new drawings. See
 [the object style notes](../behavior/object-styles.md).
 
 ## Colour on screen and in print
 
 - **View > Proof Colors**, or the button at the right end of the status
   bar, shows the drawing as CMYK would print it.
-- Colour profiles and rendering intents are set in **Color Management**
-  (on the standard toolbar's **Launch** button). See
+- Colour profiles and rendering intents are set in **Tools > Color
+  Management**. See
   [the colour management notes](../behavior/colour-management.md).
 
 ## Where next

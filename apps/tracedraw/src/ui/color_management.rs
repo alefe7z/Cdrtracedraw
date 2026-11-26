@@ -5,11 +5,13 @@
 //! and import policies. Nothing changes until OK. See
 //! docs/behavior/colour-management.md.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::color_policy::{FoundOrName, FoundProfile, Space, PRESETS};
 use crate::i18n::{tr, trf};
 use crate::settings::{ColorPrefs, ColorPreset};
 use crate::theme::Tokens;
+use crate::ui::tips::RichTip;
 use egui::{Context, RichText, Ui};
 
 const INTENTS: [&str; 4] = [
@@ -93,19 +95,43 @@ pub(crate) fn tab_header(ui: &mut Ui, tab: &mut usize, labels: &[String]) {
             let on = *tab == i;
             let text = RichText::new(l.as_str()).size(13.0);
             let b = egui::Button::new(text)
-                .fill(if on {
-                    egui::Color32::WHITE
-                } else {
-                    Tokens::panel()
-                })
-                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(0xC8)))
+                .fill(if on { Tokens::field() } else { Tokens::panel() })
+                .stroke(egui::Stroke::new(1.0, Tokens::border()))
                 .corner_radius(0.0)
                 .min_size(egui::vec2(80.0, 26.0));
-            if ui.add(b).clicked() {
+            if ui
+                .add(b)
+                .rich_tip_with(|| format!("{l}\n{}", tr("dialog.tab_desc")))
+                .clicked()
+            {
                 *tab = i;
             }
         }
     });
+}
+
+/// The tip of the combo `id`: what it sets.
+fn combo_tip(id: &str) -> String {
+    let (title, desc) = match id {
+        "cm_doc_rgb" | "cm_def_rgb" => ("color_mgmt.rgb_profile", "color_mgmt.rgb_profile_desc"),
+        "cm_doc_cmyk" | "cm_def_cmyk" => {
+            ("color_mgmt.cmyk_profile", "color_mgmt.cmyk_profile_desc")
+        }
+        "cm_doc_gray" | "cm_def_gray" => {
+            ("color_mgmt.gray_profile", "color_mgmt.gray_profile_desc")
+        }
+        "cm_doc_mode" | "cm_def_mode" => {
+            ("color_mgmt.primary_mode", "color_mgmt.primary_mode_desc")
+        }
+        "cm_doc_intent" | "cm_def_intent" => ("color_mgmt.intent", "color_mgmt.intent_desc"),
+        "cm_open_cmyk" => ("color_mgmt.open_policy", "color_mgmt.open_policy_desc"),
+        "cm_imp_cmyk" => ("color_mgmt.import_policy", "color_mgmt.import_policy_desc"),
+        _ => (
+            "color_mgmt.spot_definition",
+            "color_mgmt.spot_definition_desc",
+        ),
+    };
+    crate::ui::tips::pair(title, desc)
 }
 
 /// A titled divider: the title, then a line to the right edge.
@@ -117,9 +143,18 @@ fn section(ui: &mut Ui, title: &str) {
         let y = r.center().y;
         ui.painter().line_segment(
             [egui::pos2(r.left() + 6.0, y), egui::pos2(r.right(), y)],
-            egui::Stroke::new(1.0, egui::Color32::from_gray(0xC8)),
+            egui::Stroke::new(1.0, Tokens::border()),
         );
     });
+}
+
+/// The page under a dialog's tabs: the colour of fields in the theme
+/// (white in the light ones), so its labels read in every theme (#904).
+pub(crate) fn tab_page() -> egui::Frame {
+    let (fill, line) = crate::theme::theme().dialog_page();
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, line))
 }
 
 /// A profile combo: the default one first under "Default profiles", then
@@ -143,7 +178,7 @@ fn profile_combo(
     } else {
         shown.clone()
     };
-    egui::ComboBox::from_id_salt(id)
+    crate::ui::keynav::ComboBox::from_id_salt(id)
         .width(360.0)
         .selected_text(label)
         .show_ui(ui, |ui| {
@@ -165,7 +200,7 @@ fn profile_combo(
             }
             ui.label(RichText::new(tr("color_mgmt.other_profiles")).color(Tokens::ACCENT));
             if ui
-                .selectable_label(false, tr("color_mgmt.load_profiles"))
+                .iselectable(false, "color_mgmt.load_profiles")
                 .clicked()
             {
                 load = true;
@@ -173,29 +208,33 @@ fn profile_combo(
             for p in found.iter().filter(|p| p.space == space) {
                 if ui
                     .selectable_label(shown == p.name, p.name.as_str())
-                    .on_hover_text(p.path.as_str())
+                    .rich_tip(p.path.as_str())
                     .clicked()
                 {
                     *choice = Some(FoundOrName::Found(p.clone()));
                 }
             }
-        });
+        })
+        .response
+        .rich_tip(combo_tip(id));
     load
 }
 
 fn combo_u8(ui: &mut Ui, id: &str, v: &mut u8, keys: &[&str]) {
-    egui::ComboBox::from_id_salt(id)
+    crate::ui::keynav::ComboBox::from_id_salt(id)
         .width(360.0)
         .selected_text(tr(keys[(*v as usize).min(keys.len() - 1)]))
         .show_ui(ui, |ui| {
             for (i, k) in keys.iter().enumerate() {
                 ui.selectable_value(v, i as u8, tr(k));
             }
-        });
+        })
+        .response
+        .rich_tip(combo_tip(id));
 }
 
 fn intent_combo(ui: &mut Ui, id: &str, v: &mut String) {
-    egui::ComboBox::from_id_salt(id)
+    crate::ui::keynav::ComboBox::from_id_salt(id)
         .width(360.0)
         .selected_text(intent_label(v))
         .show_ui(ui, |ui| {
@@ -204,7 +243,9 @@ fn intent_combo(ui: &mut Ui, id: &str, v: &mut String) {
                     *v = i.to_string();
                 }
             }
-        });
+        })
+        .response
+        .rich_tip(combo_tip(id));
 }
 
 fn intent_label(name: &str) -> String {
@@ -217,13 +258,15 @@ fn intent_label(name: &str) -> String {
 }
 
 fn mode_combo(ui: &mut Ui, id: &str, rgb: &mut bool) {
-    egui::ComboBox::from_id_salt(id)
+    crate::ui::keynav::ComboBox::from_id_salt(id)
         .width(360.0)
         .selected_text(if *rgb { "RGB" } else { "CMYK" })
         .show_ui(ui, |ui| {
             ui.selectable_value(rgb, false, "CMYK");
             ui.selectable_value(rgb, true, "RGB");
-        });
+        })
+        .response
+        .rich_tip(combo_tip(id));
 }
 
 /// Right-aligned labels in a two-column grid.
@@ -253,7 +296,7 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut ColorManagementState, close
                 area.min + egui::vec2(15.0, 12.0),
                 egui::pos2(area.max.x - 15.0, area.max.y - 56.0),
             );
-            // The white page under the tabs fills what the tabs leave.
+            // The page under the tabs fills what the tabs leave.
             let page_h = inner.height() - 26.0 - 24.0;
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                 tab_header(
@@ -261,9 +304,7 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut ColorManagementState, close
                     &mut st.tab,
                     &[tr("color_mgmt.tab_document"), tr("color_mgmt.tab_default")],
                 );
-                egui::Frame::new()
-                    .fill(egui::Color32::WHITE)
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(0xC8)))
+                tab_page()
                     .inner_margin(egui::Margin::symmetric(40, 12))
                     .show(ui, |ui| {
                         ui.set_min_size(egui::vec2(inner.width() - 82.0, page_h));
@@ -285,17 +326,19 @@ pub fn dialog(app: &mut App, ctx: &Context, st: &mut ColorManagementState, close
                 ui.horizontal(|ui| {
                     help = ui
                         .add_sized([27.0, 27.0], egui::Button::new("?"))
-                        .on_hover_text(tr("dialog.help"))
+                        .rich_tip(crate::ui::tips::keyed("dialog.help_button"))
                         .clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add_sized([100.0, 27.0], egui::Button::new(tr("dialog.cancel")))
+                            .rich_tip(crate::ui::tips::keyed("dialog.cancel"))
                             .clicked()
                         {
                             *close = true;
                         }
                         if ui
                             .add_sized([100.0, 27.0], egui::Button::new(tr("dialog.ok")))
+                            .rich_tip(crate::ui::tips::keyed("dialog.ok"))
                             .clicked()
                             || crate::ui::dialogs::enter_pressed(ui)
                         {
@@ -352,8 +395,10 @@ fn document_tab(app: &App, ui: &mut Ui, st: &mut ColorManagementState, load: &mu
     });
     ui.separator();
     ui.vertical_centered(|ui| {
-        ui.radio_value(&mut st.convert, false, tr("color_mgmt.assign"));
-        ui.radio_value(&mut st.convert, true, tr("color_mgmt.convert"));
+        ui.radio_value(&mut st.convert, false, tr("color_mgmt.assign"))
+            .rich_tip(crate::ui::tips::keyed("color_mgmt.assign"));
+        ui.radio_value(&mut st.convert, true, tr("color_mgmt.convert"))
+            .rich_tip(crate::ui::tips::keyed("color_mgmt.convert"));
     });
     egui::Grid::new("cm_doc")
         .num_columns(2)
@@ -421,7 +466,7 @@ fn default_tab(ui: &mut Ui, st: &mut ColorManagementState, load: &mut Option<Spa
         } else {
             preset_label(&d.preset)
         };
-        egui::ComboBox::from_id_salt("cm_preset")
+        crate::ui::keynav::ComboBox::from_id_salt("cm_preset")
             .width(300.0)
             .selected_text(shown)
             .show_ui(ui, |ui| {
@@ -449,10 +494,12 @@ fn default_tab(ui: &mut Ui, st: &mut ColorManagementState, load: &mut Option<Spa
                         }
                     }
                 }
-            });
+            })
+            .response
+            .rich_tip(crate::ui::tips::keyed("color_mgmt.preset"));
         if ui
             .button("\u{1F4BE}")
-            .on_hover_text(tr("color_mgmt.save_preset"))
+            .rich_tip(crate::ui::tips::keyed("color_mgmt.save_preset"))
             .clicked()
         {
             st.new_preset = Some(String::new());
@@ -460,7 +507,7 @@ fn default_tab(ui: &mut Ui, st: &mut ColorManagementState, load: &mut Option<Spa
         let user = d.presets.iter().any(|p| p.name == d.preset);
         if ui
             .add_enabled(user, egui::Button::new("\u{1F5D1}"))
-            .on_hover_text(tr("color_mgmt.delete_preset"))
+            .rich_tip_always(crate::ui::tips::keyed("color_mgmt.delete_preset"))
             .clicked()
         {
             let name = d.preset.clone();
@@ -472,8 +519,14 @@ fn default_tab(ui: &mut Ui, st: &mut ColorManagementState, load: &mut Option<Spa
         let mut done = false;
         ui.horizontal(|ui| {
             ui.label(tr("color_mgmt.preset_name"));
-            ui.text_edit_singleline(name);
-            if ui.button(tr("dialog.ok")).clicked() && !name.trim().is_empty() {
+            ui.text_edit_singleline(name)
+                .rich_tip(crate::ui::tips::keyed("color_mgmt.preset_name"));
+            if ui
+                .button(tr("dialog.ok"))
+                .rich_tip(crate::ui::tips::keyed("dialog.ok"))
+                .clicked()
+                && !name.trim().is_empty()
+            {
                 done = true;
             }
         });
@@ -552,7 +605,7 @@ fn default_tab(ui: &mut Ui, st: &mut ColorManagementState, load: &mut Option<Spa
         .spacing([8.0, 8.0])
         .show(ui, |ui| {
             row(ui, &tr("color_mgmt.engine"));
-            egui::ComboBox::from_id_salt("cm_engine")
+            crate::ui::keynav::ComboBox::from_id_salt("cm_engine")
                 .width(360.0)
                 .selected_text(if d.builtin_engine {
                     tr("color_mgmt.engine_builtin")
@@ -566,13 +619,21 @@ fn default_tab(ui: &mut Ui, st: &mut ColorManagementState, load: &mut Option<Spa
                         true,
                         tr("color_mgmt.engine_builtin"),
                     );
-                });
+                })
+                .response
+                .rich_tip(crate::ui::tips::keyed("color_mgmt.engine"));
             ui.end_row();
             ui.label("");
             ui.vertical(|ui| {
-                ui.checkbox(&mut d.preserve_pure_black, tr("color_mgmt.preserve_black"));
-                ui.checkbox(&mut d.map_gray_to_black, tr("color_mgmt.map_gray"));
-                ui.checkbox(&mut d.black_point_compensation, tr("dialog.black_point"));
+                ui.checkbox(&mut d.preserve_pure_black, tr("color_mgmt.preserve_black"))
+                    .rich_tip(crate::ui::tips::keyed("color_mgmt.preserve_black"));
+                ui.checkbox(&mut d.map_gray_to_black, tr("color_mgmt.map_gray"))
+                    .rich_tip(crate::ui::tips::keyed("color_mgmt.map_gray"));
+                ui.checkbox(&mut d.black_point_compensation, tr("dialog.black_point"))
+                    .rich_tip(crate::ui::tips::pair(
+                        "dialog.black_point",
+                        "color_mgmt.black_point_desc",
+                    ));
             });
             ui.end_row();
         });
@@ -586,22 +647,20 @@ fn default_tab(ui: &mut Ui, st: &mut ColorManagementState, load: &mut Option<Spa
         .num_columns(2)
         .spacing([8.0, 8.0])
         .show(ui, |ui| {
-            row(ui, "RGB:");
-            combo_u8(ui, "cm_open_rgb", &mut d.open_rgb, &open_keys);
-            ui.end_row();
+            // CMYK only: a drawing carries its CMYK profile and no RGB
+            // or grayscale one, so rows for those changed nothing.
             row(ui, "CMYK:");
             combo_u8(ui, "cm_open_cmyk", &mut d.open_cmyk, &open_keys);
-            ui.end_row();
-            row(ui, &tr("color_mgmt.grayscale"));
-            combo_u8(ui, "cm_open_gray", &mut d.open_gray, &open_keys);
             ui.end_row();
             ui.label("");
             ui.vertical(|ui| {
                 ui.checkbox(
                     &mut d.warn_open_mismatch,
                     tr("color_mgmt.warn_mismatch_box"),
-                );
-                ui.checkbox(&mut d.warn_open_missing, tr("color_mgmt.warn_missing_box"));
+                )
+                .rich_tip(crate::ui::tips::keyed("color_mgmt.warn_mismatch_box"));
+                ui.checkbox(&mut d.warn_open_missing, tr("color_mgmt.warn_missing_box"))
+                    .rich_tip(crate::ui::tips::keyed("color_mgmt.warn_missing_box"));
             });
             ui.end_row();
         });
@@ -611,46 +670,26 @@ fn default_tab(ui: &mut Ui, st: &mut ColorManagementState, load: &mut Option<Spa
         .num_columns(2)
         .spacing([8.0, 8.0])
         .show(ui, |ui| {
-            row(ui, "RGB:");
-            combo_u8(ui, "cm_imp_rgb", &mut d.import_rgb, &import_keys);
-            ui.end_row();
             row(ui, "CMYK:");
             combo_u8(ui, "cm_imp_cmyk", &mut d.import_cmyk, &import_keys);
-            ui.end_row();
-            row(ui, &tr("color_mgmt.grayscale"));
-            combo_u8(ui, "cm_imp_gray", &mut d.import_gray, &import_keys);
             ui.end_row();
             ui.label("");
             ui.vertical(|ui| {
                 ui.checkbox(
                     &mut d.warn_import_mismatch,
                     tr("color_mgmt.warn_mismatch_box"),
-                );
+                )
+                .rich_tip(crate::ui::tips::keyed("color_mgmt.warn_mismatch_box"));
                 ui.checkbox(
                     &mut d.warn_import_missing,
                     tr("color_mgmt.warn_missing_box"),
-                );
+                )
+                .rich_tip(crate::ui::tips::keyed("color_mgmt.warn_missing_box"));
             });
             ui.end_row();
         });
-    ui.separator();
-    egui::Grid::new("cm_spot")
-        .num_columns(2)
-        .spacing([8.0, 8.0])
-        .show(ui, |ui| {
-            row(ui, &tr("color_mgmt.spot_definition"));
-            combo_u8(
-                ui,
-                "cm_spot",
-                &mut d.spot_definition,
-                &[
-                    "color_mgmt.spot_lab",
-                    "color_mgmt.spot_cmyk",
-                    "color_mgmt.spot_rgb",
-                ],
-            );
-            ui.end_row();
-        });
+    // No Spot color definition: a spot ink is defined by its CMYK values
+    // alone, so a choice of Lab or RGB values changed nothing.
 }
 
 fn preset_label(key: &str) -> String {
@@ -775,6 +814,46 @@ mod tests {
             frame(&ctx, &mut app, true);
             assert!(matches!(app.dialog, Dialog::None));
         }
+    }
+
+    /// The Default tab shows no choice that changes nothing: drawings
+    /// carry a CMYK profile alone, so the open and import policies have a
+    /// CMYK row only, and spot inks are defined by CMYK values alone, so
+    /// there is no Spot color definition.
+    #[test]
+    fn the_default_tab_has_no_choices_that_change_nothing() {
+        let mut app = App::headless();
+        app.dialog = Dialog::ColorManagement(Box::new(ColorManagementState {
+            tab: 1,
+            ..Default::default()
+        }));
+        let ctx = crate::theme::ui_context();
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 4000.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| crate::ui::dialogs::show(&mut app, ui.ctx()));
+            out.textures_delta.clear();
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::epaint::Shape::Text(t) => Some(t.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect();
+        }
+        let count = |s: &str| texts.iter().filter(|t| t.as_str() == s).count();
+        assert!(count(&tr("color_mgmt.open_policy")) == 1, "{texts:?}");
+        assert_eq!(count("RGB:"), 0, "{texts:?}");
+        assert_eq!(count(&tr("color_mgmt.grayscale")), 0, "{texts:?}");
+        assert_eq!(count("CMYK:"), 2, "open and import: {texts:?}");
+        assert_eq!(count(&tr("color_mgmt.spot_definition")), 0);
     }
 
     #[test]

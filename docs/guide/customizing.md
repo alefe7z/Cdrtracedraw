@@ -38,6 +38,11 @@ everything back. Highlights:
   in the toolbox.
 - **Commands**: your own keyboard shortcuts (below).
 - **Command Bars**: which bars show.
+- **Context Menus**: show or hide operations in each right-click menu.
+  Expand submenus to see their children, then drag a handle or use Move Up
+  and Move Down to reorder items at the same level. Search keeps the parent
+  path visible. Restore a menu to reset both visibility and order. See
+  [context menu customization](../behavior/context-menus.md).
 - **Color Palette**: the No Color well, what the right mouse button does
   on the palette, and the document palette.
 
@@ -54,14 +59,14 @@ rectangle corners, polygon points and table rows and columns.
 - **Printing**: what the Print dialog starts with.
 - **File Formats**: what Export starts with, where imported objects go,
   and the `.cdr` version for new drawings.
-- **Bitmap Tracing**: the Quick Trace preset and the defaults of every
+- **Bitmap Tracing**: the Automatic trace preset and the defaults of every
   trace.
 - **Warnings**: which messages to show.
 
-**Layout > Document Options** holds the settings of the drawing itself:
+**Page > Document Setup** holds the settings of the drawing itself:
 page size, layout, background, bleed, rulers, grid and guidelines. Its
 **Save as Default** keeps the grid, ruler and guideline settings for new
-drawings, and **Tools > Save Settings as Default** keeps the default
+drawings, and **Tools > Save as Defaults** keeps the default
 properties of new objects.
 
 Detail: [the Options notes](../behavior/options.md).
@@ -70,8 +75,8 @@ Detail: [the Options notes](../behavior/options.md).
 
 A workspace is how the window is set up: which bars show and where, the
 toolbox, shortcuts, palette options and the interface's look. To pick a
-built-in one: **Window > Workspace**, then **Default**, **Lite**,
-**Classic**, **Illustration**, **Page Layout** or **Touch**.
+built-in one: **Window > Workspace**, then **Standard**, **Minimal**,
+**Compact**, **Drawing**, **Publishing** or **Touch**.
 
 **Touch** is for touch screens: the interface is drawn 1.4 times larger,
 and two fingers pan and pinch to zoom with any tool.
@@ -114,6 +119,7 @@ in [the shortcut notes](../behavior/shortcuts.md); a few to know:
 | `Ctrl+G`, `Ctrl+U` | Group, Ungroup |
 | `Ctrl+Q` | Convert to curves |
 | `Ctrl+Space` | the Pick tool, from any tool |
+| `Space` | the Pick tool; on the Pick tool, back to the tool before it |
 | `F4`, `Shift+F4` | Zoom to fit, zoom to page |
 | `Alt+Q` | Snapping off and on |
 | `Alt+Enter` | Properties panel |
@@ -139,10 +145,11 @@ yours. Tool keys (single letters such as `Z` for Zoom) are listed under
 
 ## Languages
 
-The interface comes in 18 languages: English, Chinese (Simplified),
+The interface comes in 21 languages: English, Chinese (Simplified),
 Hindi, Spanish, French, Arabic (with a right-to-left layout), Bengali,
 Russian, Portuguese (Brazil), Indonesian, German, Japanese, Chinese
-(Traditional), Italian, Dutch, Polish, Turkish and Czech.
+(Traditional), Italian, Dutch, Polish, Turkish, Czech, Lao, Vietnamese
+and Esperanto.
 
 To switch: **Tools > Options > Global > General**, choose the language.
 It changes at once. Shortcuts are the same in every language.
@@ -191,6 +198,19 @@ any format CD Draw opens and any it writes:
 tracedraw-cli convert poster.cdr poster.pdf
 TRACEDRAW_DPI=300 tracedraw-cli convert poster.tdraw poster.png
 ```
+
+A file opened while TraceDraw runs (from the file manager, Finder on
+macOS, Open with or Share on Android, or the command line) opens in a tab
+of the running window; `tracedraw --new-instance
+file.cdr` opens a window of its own.
+
+### AI agents
+
+`tracedraw --mcp` serves the editor to AI agents over the Model Context
+Protocol. To let an agent on your computer edit the drawing open in your
+window, turn on **Tools > Options > Global > General > Let AI agents on
+this computer edit the open drawing** (off to start with). See
+[the MCP notes](../behavior/mcp.md).
 
 ## Where next
 

@@ -6,6 +6,7 @@
 use crate::app::App;
 use crate::effects_ui::TransparencySettings;
 use tracedraw_core::document::{Shape, ShapeKind};
+use tracedraw_core::geometry::Affine;
 use tracedraw_core::live::{Effect, MergeMode};
 use tracedraw_core::patch::{
     fill_changes, fill_mixed, stroke_changes, stroke_mixed, FillField, FillMix, StrokeField,
@@ -30,10 +31,25 @@ fn leaves(s: &Shape, out: &mut Vec<Shape>) {
     }
 }
 
+/// [`leaves`] by reference, without copies.
+fn leaf_refs<'a>(s: &'a Shape, out: &mut Vec<&'a Shape>) {
+    match &s.kind {
+        ShapeKind::Group { children } if !children.is_empty() => {
+            for c in children {
+                leaf_refs(c, out);
+            }
+        }
+        ShapeKind::ClipFrame { frame, .. } => leaf_refs(frame, out),
+        _ => out.push(s),
+    }
+}
+
 thread_local! {
-    /// The revision after the last uniform amount change, so the next one
-    /// can replace it (see [`App::patch_transparency`]).
-    static LAST_AMOUNT_STEP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    /// The revision after the last uniform amount change (or stop or
+    /// foreground/background drag) and its field, so the next one of the
+    /// same field can replace it (see [`App::patch_transparency`]).
+    static LAST_AMOUNT_STEP: std::cell::Cell<Option<(u64, TransparencyField)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// The transparency of one object as the Transparency part shows it.
@@ -48,6 +64,75 @@ pub struct ShapeTransparency {
     pub target: u8,
 }
 
+/// Uniform transparency of `amount` % kept with a merge mode other than
+/// Normal: the object is drawn through a mask of one grey (its lightness
+/// is the opacity), so the merge mode applies as for the other kinds, as
+/// the reference program offers it for uniform transparency too.
+pub fn uniform_mask(amount: f64) -> Fill {
+    Fill::Solid(tracedraw_core::Color::Gray {
+        v: (1.0 - (amount / 100.0).clamp(0.0, 1.0)) as f32,
+    })
+}
+
+/// The amount (%) of a [`uniform_mask`] colour.
+fn uniform_amount(c: tracedraw_core::Color) -> f64 {
+    let [r, g, b] = c.to_rgb_f32();
+    let v = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
+    // The grey is kept in single precision: rounded back to what was set.
+    (((1.0 - v) * 100.0).clamp(0.0, 100.0) * 1e4).round() / 1e4
+}
+
+/// Give the gradient mask `f` the kind `kind`. A mask that is still the
+/// plain one, opaque at one end and clear at the other, is made clear at
+/// the centre and opaque at the edge for a kind with a centre (radial,
+/// conical, square: their first stop is the centre) and opaque at the
+/// start for the others, so a radial transparency fades in towards its
+/// centre and its centre node is black (#2377). A mask with other stops
+/// keeps them as they are.
+pub fn set_mask_kind(f: &mut tracedraw_core::Fountain, kind: tracedraw_core::style::FountainKind) {
+    use tracedraw_core::style::FountainKind as K;
+    use tracedraw_core::Color;
+    let centred = |k: K| matches!(k, K::Radial | K::Conical | K::Square);
+    let plain = f.stops.len() == 2
+        && f.stops[0].pos == 0.0
+        && f.stops[1].pos == 1.0
+        && f.stops.iter().all(|s| s.opacity == 1.0)
+        && {
+            let (a, b) = (f.stops[0].color, f.stops[1].color);
+            (a == Color::WHITE && b == Color::BLACK) || (a == Color::BLACK && b == Color::WHITE)
+        };
+    if plain {
+        let (first, last) = if centred(kind) {
+            (Color::BLACK, Color::WHITE)
+        } else {
+            (Color::WHITE, Color::BLACK)
+        };
+        f.stops[0].color = first;
+        f.stops[1].color = last;
+    }
+    f.kind = kind;
+}
+
+/// The transparency effect and the opacity that stand for uniform
+/// transparency of `amount` % with `merge`.
+pub fn uniform_transparency(amount: f64, merge: MergeMode, target: u8) -> (Option<Effect>, f64) {
+    // Normal on the whole object is the object's opacity; on the fill or
+    // the outline alone it is a mask of one grey with that target, which
+    // the opacity cannot say.
+    if merge == MergeMode::Normal && target >= 2 {
+        (None, 1.0 - (amount / 100.0).clamp(0.0, 1.0))
+    } else {
+        (
+            Some(Effect::Transparency {
+                mask: uniform_mask(amount),
+                merge,
+                target,
+            }),
+            1.0,
+        )
+    }
+}
+
 impl ShapeTransparency {
     pub fn of(s: &Shape) -> Self {
         let mask = s.effects.iter().find_map(|e| match e {
@@ -59,12 +144,16 @@ impl ShapeTransparency {
             _ => None,
         });
         match mask {
+            // Uniform transparency with a merge mode: a mask of one grey.
+            Some((Fill::Solid(c), merge, target)) => ShapeTransparency {
+                kind: 1,
+                amount: uniform_amount(c),
+                mask: None,
+                merge,
+                target,
+            },
             Some((mask, merge, target)) => ShapeTransparency {
-                kind: match mask {
-                    Fill::Pattern(_) => 3,
-                    Fill::Texture(_) => 4,
-                    _ => 2,
-                },
+                kind: mask_kind(&mask),
                 amount: 0.0,
                 mask: Some(mask),
                 merge,
@@ -92,8 +181,37 @@ pub enum TransparencyField {
     MaskAngle,
     /// A fountain mask's type (linear, radial...).
     MaskKind,
+    /// The whole mask: a preset, or a type with a mask of its own kind
+    /// (vector, bitmap or two-colour pattern, texture).
+    Mask,
+    /// A fountain mask's stops (each stop's grey and position).
+    MaskStops,
+    /// A two-colour pattern's or a texture's foreground and background
+    /// greys.
+    MaskColors,
     Merge,
     Target,
+}
+
+/// The kind number of [`ShapeTransparency::kind`] a mask stands for.
+pub fn mask_kind(mask: &Fill) -> usize {
+    match mask {
+        Fill::Pattern(_) => 3,
+        Fill::Texture(_) => 4,
+        _ => 2,
+    }
+}
+
+/// The foreground and background greys of a two-colour pattern or a
+/// texture mask.
+pub fn mask_colors(mask: &Fill) -> Option<(tracedraw_core::Color, tracedraw_core::Color)> {
+    match mask {
+        Fill::Pattern(tracedraw_core::Pattern::TwoColor { front, back, .. }) => {
+            Some((*front, *back))
+        }
+        Fill::Texture(t) => Some((t.color_a, t.color_b)),
+        _ => None,
+    }
 }
 
 /// Which transparency settings differ across `ts`.
@@ -141,24 +259,65 @@ pub fn transparency_mixed(ts: &[ShapeTransparency]) -> Vec<TransparencyField> {
 impl App {
     /// The objects the selection's fill and outline editors show and
     /// change: the selected objects, a group standing for what is in it.
+    /// The first of [`Self::paint_targets`], without copying the others
+    /// (the bars ask for it every frame, #345).
+    pub fn first_paint_target(&self) -> Option<Shape> {
+        let selected = self.selected_rc();
+        let mut first = Vec::new();
+        for s in selected.iter() {
+            leaf_refs(s, &mut first);
+            if let Some(f) = first.first() {
+                return Some((*f).clone());
+            }
+        }
+        None
+    }
+
+    /// Whether the painted objects of the selection overprint their fill
+    /// (`fill`) or their outline: `Some(true)` all of them, `Some(false)`
+    /// none, `None` mixed or nothing selected. Read by reference, as the
+    /// status bar asks it every frame.
+    pub fn selection_overprint(&self, fill: bool) -> Option<bool> {
+        let name = if fill {
+            "overprint_fill"
+        } else {
+            "overprint_outline"
+        };
+        *self.from_selection(name, |selected| overprint_of(selected, fill))
+    }
+
     pub fn paint_targets(&self) -> Vec<Shape> {
         let mut out = Vec::new();
-        for s in self.selected_shapes() {
-            leaves(&s, &mut out);
+        for s in self.selected_rc().iter() {
+            leaves(s, &mut out);
         }
         out
     }
 
     /// How the outlines of the selection differ.
     pub fn selection_stroke_mix(&self) -> StrokeMix {
-        let shapes = self.paint_targets();
-        stroke_mixed(shapes.iter().map(|s| s.stroke.as_ref()))
+        // Asked by the bars and the status bar every frame.
+        (*self.from_selection("stroke_mix", |selected| {
+            let mut shapes = Vec::new();
+            for s in selected {
+                leaf_refs(s, &mut shapes);
+            }
+            stroke_mixed(shapes.iter().map(|s| s.stroke.as_ref()))
+        }))
+        .clone()
     }
 
     /// How the fills of the selection differ.
     pub fn selection_fill_mix(&self) -> FillMix {
-        let shapes = self.paint_targets();
-        fill_mixed(shapes.iter().map(|s| &s.fill))
+        // Asked by the bars and the status bar every frame.
+        (*self.from_selection("fill_mix", |selected| {
+            let mut shapes = Vec::new();
+            for s in selected {
+                leaf_refs(s, &mut shapes);
+            }
+            fill_mixed(shapes.iter().map(|s| &s.fill))
+        }))
+        .clone()
     }
 
     /// An outline editor showed `old` and the user made it `new`: send the
@@ -197,7 +356,9 @@ impl App {
             }
         }
         let before = self.engine.revision();
+        self.palette_hold = true;
         let color = self.patch_selection_stroke_as(old, new, touched).or(kept);
+        self.palette_hold = false;
         let after = self.engine.revision();
         self.live_stroke = (after != before).then_some((after, color));
     }
@@ -269,7 +430,8 @@ impl App {
     /// A fill editor showed `old` and the user made it `new`: a new type
     /// or a uniform colour goes to every selected object as it is (as
     /// [`App::apply_fill`]), a gradient setting goes into each object's
-    /// own gradient. `touched` adds fields set to the value they showed.
+    /// own gradient and a pattern placement setting into each object's
+    /// own pattern. `touched` adds fields set to the value they showed.
     pub fn patch_selection_fill(&mut self, old: &Fill, new: &Fill, touched: &[FillField]) {
         if self.selection.is_empty() {
             return;
@@ -283,7 +445,13 @@ impl App {
         if fields.is_empty() {
             return;
         }
-        if fields.contains(&FillField::All) || !matches!(new, Fill::Fountain(_)) {
+        let own_fields = match new {
+            Fill::Fountain(_) => !fields.contains(&FillField::All),
+            Fill::Pattern(_) => fields.iter().all(|f| f.is_placement()),
+            Fill::Procedural(_) => !fields.contains(&FillField::All),
+            _ => false,
+        };
+        if !own_fields {
             self.apply_fill(new.clone());
             return;
         }
@@ -293,6 +461,37 @@ impl App {
             fill: new.clone(),
             fields,
         });
+    }
+
+    /// The Interactive Fill bar's Reverse (#4274): every selected object
+    /// with a gradient gets its colours the other way round (each its own
+    /// gradient, nodes and midpoints mirrored), one undo step. The number
+    /// of objects changed.
+    pub fn reverse_selection_gradients(&mut self) -> usize {
+        let changes: Vec<(tracedraw_core::ShapeId, Fill)> = self
+            .selected_shapes()
+            .iter()
+            .filter_map(|s| match &s.fill {
+                Fill::Fountain(f) if f.stops.len() > 1 => {
+                    let mut f = f.clone();
+                    crate::ui::edit_fill::reverse(&mut f);
+                    Some((s.id, Fill::Fountain(f)))
+                }
+                _ => None,
+            })
+            .collect();
+        if changes.is_empty() {
+            return 0;
+        }
+        let mark = self.engine.begin_group();
+        for (id, fill) in &changes {
+            self.run(Command::SetFill {
+                shapes: vec![*id],
+                fill: fill.clone(),
+            });
+        }
+        self.engine.end_group(mark, "Reverse Gradient");
+        changes.len()
     }
 
     /// The transparency of each object the Transparency part changes.
@@ -315,13 +514,19 @@ impl App {
         if shapes.is_empty() || fields.is_empty() {
             return;
         }
-        let mut cmds = Vec::new();
+        let mut changes = Vec::with_capacity(shapes.len());
         for s in &shapes {
             let mut t = ShapeTransparency::of(s);
             for f in fields {
                 match f {
                     TransparencyField::Kind => {
                         let kind = settings.kind as usize + 1;
+                        // An object with no transparency takes the merge
+                        // mode and target the bar shows (#3581).
+                        if t.kind == 0 {
+                            t.merge = settings.merge;
+                            t.target = settings.target;
+                        }
                         if kind != t.kind {
                             t.kind = kind;
                             t.mask = (kind > 1).then(|| settings.mask.clone());
@@ -344,7 +549,7 @@ impl App {
                                 if *f == TransparencyField::MaskAngle {
                                     m.angle = from.angle;
                                 } else {
-                                    m.kind = from.kind;
+                                    set_mask_kind(m, from.kind);
                                 }
                             }
                             _ => {
@@ -353,7 +558,55 @@ impl App {
                             }
                         }
                     }
-                    TransparencyField::Merge => t.merge = settings.merge,
+                    TransparencyField::Mask => {
+                        t.kind = mask_kind(&settings.mask);
+                        t.mask = Some(settings.mask.clone());
+                    }
+                    TransparencyField::MaskStops => {
+                        let Fill::Fountain(from) = &settings.mask else {
+                            continue;
+                        };
+                        match &mut t.mask {
+                            Some(Fill::Fountain(m)) => m.stops = from.stops.clone(),
+                            _ => {
+                                t.kind = 2;
+                                t.mask = Some(settings.mask.clone());
+                            }
+                        }
+                    }
+                    TransparencyField::MaskColors => {
+                        let Some((fg, bg)) = mask_colors(&settings.mask) else {
+                            continue;
+                        };
+                        match &mut t.mask {
+                            Some(Fill::Pattern(tracedraw_core::Pattern::TwoColor {
+                                front,
+                                back,
+                                ..
+                            })) => {
+                                *front = fg;
+                                *back = bg;
+                            }
+                            Some(Fill::Texture(x)) => {
+                                x.color_a = fg;
+                                x.color_b = bg;
+                            }
+                            // Other masks have no two greys to set.
+                            _ => {}
+                        }
+                    }
+                    TransparencyField::Merge => {
+                        // On an object with no transparency the merge mode
+                        // still mixes it with what is beneath: uniform
+                        // transparency of nothing with that mode (#3581).
+                        if t.kind == 0 && settings.merge != MergeMode::Normal {
+                            t.kind = 1;
+                            t.mask = None;
+                            t.amount = 0.0;
+                            t.target = settings.target;
+                        }
+                        t.merge = settings.merge;
+                    }
                     TransparencyField::Target => t.target = settings.target,
                 }
             }
@@ -363,51 +616,80 @@ impl App {
                 .filter(|e| !matches!(e, Effect::Transparency { .. }))
                 .cloned()
                 .collect();
+            let mut opacity = 1.0;
             if let (true, Some(mask)) = (t.kind > 1, t.mask.clone()) {
                 effects.push(Effect::Transparency {
                     mask,
                     merge: t.merge,
                     target: t.target,
                 });
+            } else if t.kind == 1 {
+                let (effect, o) = uniform_transparency(t.amount, t.merge, t.target);
+                effects.extend(effect);
+                opacity = o;
             }
-            cmds.push(Command::SetEffects {
+            changes.push(tracedraw_core::command::EffectsAndOpacity {
                 shape: s.id,
                 effects,
-            });
-            let opacity = if t.kind == 1 {
-                1.0 - (t.amount / 100.0).clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            cmds.push(Command::SetOpacity {
-                shapes: vec![s.id],
                 opacity,
             });
         }
+        // One command for every object: the drawing is walked once, not
+        // twice for each object (#1335).
+        let cmds = [Command::SetEffectsAndOpacity { changes }];
         // A run of amount changes (a slider being dragged) is one step:
         // the step this made last is replaced while nothing else happened.
-        let amount = fields == [TransparencyField::Amount];
-        if amount
+        // So is a run of stop or foreground/background changes (a field
+        // being dragged in the Properties docker).
+        let run = match fields {
+            [f @ (TransparencyField::Amount
+            | TransparencyField::MaskStops
+            | TransparencyField::MaskColors)] => Some(*f),
+            _ => None,
+        };
+        if run.is_some()
             && self.engine.undo_label() == Some("Transparency")
-            && LAST_AMOUNT_STEP.with(|c| c.get()) == Some(self.engine.revision())
+            && LAST_AMOUNT_STEP.with(|c| c.get()) == run.map(|f| (self.engine.revision(), f))
         {
             let _ = self.engine.undo();
         }
         if let Err(e) = self.engine.run_batch("Transparency", &cmds) {
             self.status = e.to_string();
         }
-        let rev = amount.then(|| self.engine.revision());
+        let rev = run.map(|f| (self.engine.revision(), f));
         LAST_AMOUNT_STEP.with(|c| c.set(rev));
     }
 
-    /// The corners of the selected rectangles, and which of their values
-    /// differ: `[kind, top left, top right, bottom right, bottom left
-    /// (the radii in `Corners` order), scaling]`.
+    /// The transform a rectangle is seen through: its own under its
+    /// parents'.
+    pub fn seen_transform(&self, s: &Shape) -> Affine {
+        self.doc()
+            .parent_transform(s.id)
+            .map_or(s.transform, |pt| pt * s.transform)
+    }
+
+    /// A rectangle's corners as the bar shows them: measured on the page
+    /// and in the order they lie there (the top left field is the corner
+    /// seen at the top left, also on a rectangle turned by 180 degrees,
+    /// flipped or stretched across its own side, #1670), at the size they
+    /// are drawn: a size given larger than the rectangle holds shows as
+    /// the size it is shrunk to (#1757). `None` for other kinds.
+    pub fn corners_as_seen(&self, s: &Shape) -> Option<Corners> {
+        Some(s.drawn_page_corners()?.as_seen(self.seen_transform(s)))
+    }
+
+    /// The corners of the selected rectangles as the bar shows them
+    /// (`corners_as_seen`), and which of their values differ: `[kind, top
+    /// left, top right, bottom left, bottom right (the radii in `Corners`
+    /// order), scaling]`.
     pub fn selection_corner_mix(&self) -> Option<(Corners, [bool; 6])> {
-        let all: Vec<Corners> = self
-            .selected_shapes()
+        *self.from_selection("corner_mix", |shapes| self.corner_mix_of(shapes))
+    }
+
+    fn corner_mix_of(&self, shapes: &[Shape]) -> Option<(Corners, [bool; 6])> {
+        let all: Vec<Corners> = shapes
             .iter()
-            .filter_map(|s| s.page_corners())
+            .filter_map(|s| self.corners_as_seen(s))
             .collect();
         let first = *all.first()?;
         let mut mix = [false; 6];
@@ -419,6 +701,33 @@ impl App {
             mix[5] |= c.fixed != first.fixed;
         }
         Some((first, mix))
+    }
+}
+
+/// [`App::selection_overprint`] of the objects `selected`.
+fn overprint_of(selected: &[Shape], fill: bool) -> Option<bool> {
+    let mut leaves = Vec::new();
+    for s in selected {
+        leaf_refs(s, &mut leaves);
+    }
+    let count = leaves
+        .iter()
+        .filter(|s| {
+            if fill {
+                s.overprint_fill
+            } else {
+                s.overprint_outline
+            }
+        })
+        .count();
+    if leaves.is_empty() {
+        None
+    } else if count == leaves.len() {
+        Some(true)
+    } else if count == 0 {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -468,6 +777,46 @@ mod tests {
         app.doc().find_shape(id).unwrap().stroke.clone().unwrap()
     }
 
+    /// Reverse on the Interactive Fill bar turns each selected gradient
+    /// round on its own (#4274): blue to white becomes white to blue,
+    /// red to black black to red; an object without a gradient stays as
+    /// it is; one undo step puts all back.
+    #[test]
+    fn reverse_turns_each_selected_gradient_round() {
+        let mut app = App::headless();
+        let (a, b) = two_rects(&mut app);
+        let red = Color::rgb8(255, 0, 0);
+        app.run(Command::SetFill {
+            shapes: vec![a],
+            fill: Fill::linear(BLUE, Color::WHITE, 0.0),
+        });
+        app.run(Command::SetFill {
+            shapes: vec![b],
+            fill: Fill::linear(red, Color::BLACK, 0.0),
+        });
+        let c = app
+            .new_shape(ShapeKind::Rect {
+                rect: Rect::new(60.0, 0.0, 80.0, 20.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .unwrap();
+        let plain = app.doc().find_shape(c).unwrap().fill.clone();
+        app.select(vec![a, b, c]);
+        assert_eq!(app.reverse_selection_gradients(), 2);
+        let ends = |app: &App, id| match &app.doc().find_shape(id).unwrap().fill {
+            Fill::Fountain(f) => (f.stops[0].color, f.stops[f.stops.len() - 1].color),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(ends(&app, a), (Color::WHITE, BLUE));
+        assert_eq!(ends(&app, b), (Color::BLACK, red));
+        assert_eq!(app.doc().find_shape(c).unwrap().fill, plain);
+        assert_eq!(app.engine.undo_label(), Some("Reverse Gradient"));
+        app.undo();
+        assert_eq!(ends(&app, a), (BLUE, Color::WHITE));
+        assert_eq!(ends(&app, b), (red, Color::BLACK));
+    }
+
     #[test]
     fn a_width_change_keeps_each_outline_colour() {
         let mut app = App::headless();
@@ -488,6 +837,36 @@ mod tests {
         let _ = app.engine.undo();
         assert_eq!(stroke_of(&app, a).width, 1.0);
         assert_eq!(stroke_of(&app, b).width, 3.0);
+    }
+
+    /// What the bars show of the selection is worked out once and kept
+    /// with it (50,000 selected objects took a fifth of a second a
+    /// frame), and worked out anew when the selection, the drawing or an
+    /// undo changes it.
+    #[test]
+    fn kept_selection_answers_follow_changes() {
+        let mut app = App::headless();
+        let (a, b) = two_rects(&mut app);
+        let more: Vec<_> = (0..10).map(|_| two_rects(&mut app).0).collect();
+        app.select(vec![a]);
+        assert!(!app.selection_stroke_mix().has(StrokeField::Width));
+        app.select(vec![a, b]);
+        assert!(app.selection_stroke_mix().has(StrokeField::Width));
+        app.select(more.clone());
+        assert!(!app.selection_stroke_mix().has(StrokeField::Width));
+        let mut all = more.clone();
+        all.push(b);
+        app.select(all);
+        assert!(app.selection_stroke_mix().has(StrokeField::Width));
+        assert!(app.selection_stroke_mix().has(StrokeField::Width));
+        let old = Some(stroke_of(&app, b));
+        let mut new = old.clone();
+        new.as_mut().unwrap().width = 1.0;
+        app.patch_selection_stroke(&old, &new, &[StrokeField::Width]);
+        assert!(!app.selection_stroke_mix().has(StrokeField::Width));
+        let _ = app.engine.undo();
+        assert!(app.selection_stroke_mix().has(StrokeField::Width));
+        assert_eq!(app.selection_overprint(true), Some(false));
     }
 
     /// Every outline attribute the panel edits changes only itself: the
@@ -677,6 +1056,78 @@ mod tests {
         assert!(transparency_mixed(&ts).is_empty());
     }
 
+    /// A whole mask, the stops of a gradient mask and the two greys of a
+    /// two-colour pattern or texture mask each patch only that part; a
+    /// run of stop changes is one undo step (#1439, #1203).
+    #[test]
+    fn masks_stops_and_greys_patch_their_part() {
+        use tracedraw_core::style::{Pattern, Stop};
+        let mut app = App::headless();
+        let (a, b) = two_rects(&mut app);
+        app.select(vec![a, b]);
+        // A whole mask: a two-colour pattern on both.
+        let pattern = TransparencySettings::default_mask(2, 0.0);
+        let settings = TransparencySettings {
+            kind: 2,
+            mask: pattern.clone(),
+            ..Default::default()
+        };
+        app.patch_transparency(&settings, &[TransparencyField::Mask]);
+        let ts = app.selection_transparency();
+        assert!(ts
+            .iter()
+            .all(|t| t.kind == 3 && t.mask == Some(pattern.clone())));
+        // The greys: only front and back change, the tile stays.
+        let mut grey = settings.clone();
+        if let Fill::Pattern(Pattern::TwoColor { front, back, .. }) = &mut grey.mask {
+            *front = Color::Gray { v: 0.25 };
+            *back = Color::Gray { v: 0.75 };
+        }
+        app.patch_transparency(&grey, &[TransparencyField::MaskColors]);
+        let ts = app.selection_transparency();
+        assert_eq!(
+            ts[0].mask.as_ref().and_then(mask_colors),
+            Some((Color::Gray { v: 0.25 }, Color::Gray { v: 0.75 }))
+        );
+        // Stops: a gradient mask takes the new stops and keeps its angle.
+        app.select(vec![a]);
+        let mut fountain = Fill::linear(Color::WHITE, Color::BLACK, 30.0);
+        let settings = TransparencySettings {
+            kind: 1,
+            mask: fountain.clone(),
+            ..Default::default()
+        };
+        app.patch_transparency(&settings, &[TransparencyField::Mask]);
+        let steps = app.engine.history_labels().0.len();
+        for v in [0.9, 0.8, 0.7] {
+            if let Fill::Fountain(f) = &mut fountain {
+                f.angle = 0.0;
+                f.stops = vec![
+                    Stop::new(0.0, Color::Gray { v }),
+                    Stop::new(0.4, Color::Gray { v: 0.5 }),
+                    Stop::new(1.0, Color::BLACK),
+                ];
+            }
+            let s = TransparencySettings {
+                kind: 1,
+                mask: fountain.clone(),
+                ..Default::default()
+            };
+            app.patch_transparency(&s, &[TransparencyField::MaskStops]);
+        }
+        assert_eq!(app.engine.history_labels().0.len(), steps + 1);
+        let ts = app.selection_transparency();
+        let Some(Fill::Fountain(f)) = &ts[0].mask else {
+            panic!("a gradient mask");
+        };
+        assert_eq!(f.stops.len(), 3);
+        assert_eq!(f.stops[0].color, Color::Gray { v: 0.7 });
+        assert!((f.angle - 30.0).abs() < 1e-9);
+        // The greys leave a gradient mask alone.
+        app.patch_transparency(&grey, &[TransparencyField::MaskColors]);
+        assert_eq!(app.selection_transparency()[0].mask, ts[0].mask);
+    }
+
     #[test]
     fn corner_values_that_differ_are_found() {
         let mut app = App::headless();
@@ -687,5 +1138,156 @@ mod tests {
         app.select(vec![a, b]);
         let (_, mix) = app.selection_corner_mix().unwrap();
         assert!(mix[1] && !mix[0] && !mix[5]);
+    }
+}
+
+#[cfg(test)]
+mod picture_tests {
+    use crate::app::App;
+    use crate::effects_ui::TransparencySettings;
+    use crate::mixed::TransparencyField as F;
+    use tracedraw_core::document::ShapeKind;
+    use tracedraw_core::geometry::Rect;
+    use tracedraw_core::live::MergeMode;
+    use tracedraw_core::{Color, Command, Fill};
+
+    /// #3565: a picture (PNG or JPEG) over a red square takes the
+    /// Properties docker's uniform transparency and its merge mode.
+    #[test]
+    fn a_picture_takes_transparency_and_merge_mode() {
+        let mut app = App::headless();
+        let r = app
+            .new_shape(ShapeKind::Rect {
+                rect: Rect::new(0.0, 0.0, 200.0, 200.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .unwrap();
+        let red = Fill::Solid(Color::rgb8(255, 0, 0));
+        app.run(Command::SetFill {
+            shapes: vec![r],
+            fill: red,
+        });
+        let dir = std::env::temp_dir().join(format!("td-3565-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for ext in ["png", "jpg"] {
+            let path = dir.join(format!("blue.{ext}"));
+            image::RgbImage::from_pixel(100, 100, image::Rgb([0, 0, 255]))
+                .save(&path)
+                .unwrap();
+            app.import_bitmap(&path);
+            let id = app.selection[0];
+            let b = app.doc().find_shape(id).unwrap().bounds();
+            let middle = |app: &App| {
+                let page = app.doc().pages[0].id;
+                let img = tracedraw_render::render_page_image(app.doc(), page, 25.4).unwrap();
+                let y = img.height() as f64 - b.center().y;
+                let c = img
+                    .pixel(b.center().x as u32, y as u32)
+                    .unwrap()
+                    .demultiply();
+                (c.red(), c.blue())
+            };
+            assert!(middle(&app).0 < 5, "{ext}: the picture hides the red");
+            let mut set = TransparencySettings::default();
+            set.set_kind(0);
+            app.patch_transparency(&set, &[F::Kind]);
+            let (r, b2) = middle(&app);
+            assert!(
+                (120..=135).contains(&r) && (120..=135).contains(&b2),
+                "{ext}: half"
+            );
+            set.merge = MergeMode::Multiply;
+            app.patch_transparency(&set, &[F::Merge]);
+            let (r, b2) = middle(&app);
+            assert!(
+                (120..=135).contains(&r) && b2 < 5,
+                "{ext}: blue times red is black"
+            );
+            app.run(Command::DeleteShapes { shapes: vec![id] });
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use tracedraw_core::geometry::Rect;
+    use tracedraw_core::Color;
+
+    /// A merge mode picked on the bar mixes the object with what is
+    /// beneath (#3581): picked on an object with no transparency it
+    /// applies at once, and picked before the kind it is kept when the
+    /// kind is chosen.
+    #[test]
+    fn a_merge_mode_picked_first_or_alone_mixes_the_object() {
+        let mut app = App::headless();
+        let rect = |app: &mut App, r: Rect, c: Color| {
+            let id = app
+                .new_shape(ShapeKind::Rect {
+                    rect: r,
+                    radius: 0.0,
+                    corners: None,
+                })
+                .unwrap();
+            app.run(Command::SetFill {
+                shapes: vec![id],
+                fill: Fill::Solid(c),
+            });
+            app.run(Command::SetStroke {
+                shapes: vec![id],
+                stroke: None,
+            });
+            id
+        };
+        rect(
+            &mut app,
+            Rect::new(10.0, 10.0, 60.0, 60.0),
+            Color::rgb8(40, 120, 220),
+        );
+        let top = rect(
+            &mut app,
+            Rect::new(20.0, 20.0, 50.0, 50.0),
+            Color::rgb8(240, 200, 40),
+        );
+        let page = app.page;
+        let middle = |app: &App| {
+            let pm = tracedraw_render::render_page_image(app.doc(), page, 25.4).unwrap();
+            let at = |y| pm.pixel(35, y).unwrap().demultiply();
+            let p = if at(35).red() == 255 && at(35).blue() == 255 {
+                at(pm.height() - 35)
+            } else {
+                at(35)
+            };
+            (p.red(), p.green(), p.blue())
+        };
+        assert_eq!(middle(&app), (240, 200, 40));
+        app.select(vec![top]);
+        // Multiply alone: the object multiplies with the blue beneath.
+        let mut set = app.transparency_default.clone();
+        set.merge = MergeMode::Multiply;
+        app.patch_transparency(&set, &[TransparencyField::Merge]);
+        let (r, g, b) = middle(&app);
+        assert!(
+            r < 60 && (88..=100).contains(&g) && b < 50,
+            "{:?}",
+            (r, g, b)
+        );
+        let t = ShapeTransparency::of(app.doc().find_shape(top).unwrap());
+        assert_eq!((t.kind, t.amount, t.merge), (1, 0.0, MergeMode::Multiply));
+        // Normal again: the object as it was.
+        set.merge = MergeMode::Normal;
+        app.patch_transparency(&set, &[TransparencyField::Merge]);
+        assert_eq!(middle(&app), (240, 200, 40));
+        // Picked before the kind: an object with none takes it with the
+        // kind.
+        let other = rect(&mut app, Rect::new(70.0, 10.0, 90.0, 30.0), Color::WHITE);
+        app.select(vec![other]);
+        set.merge = MergeMode::Difference;
+        set.kind = 1;
+        app.patch_transparency(&set, &[TransparencyField::Kind]);
+        let t = ShapeTransparency::of(app.doc().find_shape(other).unwrap());
+        assert_eq!((t.kind, t.merge), (2, MergeMode::Difference));
     }
 }

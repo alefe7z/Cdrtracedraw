@@ -16,6 +16,12 @@ pub enum AssetSource {
         page: PageId,
         shapes: Vec<ShapeId>,
     },
+    /// A slice: an area of a page (page millimetres) with everything
+    /// that shows in it.
+    Area {
+        page: PageId,
+        rect: tracedraw_core::geometry::Rect,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +32,9 @@ pub struct ExportAsset {
     pub format: usize,
     /// Resolution of raster formats (dpi).
     pub dpi: f64,
+    /// JPEG and TIFF colour mode, an index into `EXPORT_COLOR_MODES`
+    /// (#1763).
+    pub color_mode: usize,
     /// Exported by Export; unticked assets stay in the list.
     pub checked: bool,
 }
@@ -35,9 +44,10 @@ pub struct ExportAsset {
 pub struct ExportAssets {
     pub assets: Vec<ExportAsset>,
     pub folder: Option<PathBuf>,
-    /// Format and resolution new assets start with.
+    /// Format, resolution and colour mode new assets start with.
     pub format: usize,
     pub dpi: f64,
+    pub color_mode: usize,
 }
 
 impl ExportAssets {
@@ -50,6 +60,7 @@ impl ExportAssets {
                 .position(|(_, e)| *e == "png")
                 .unwrap_or(0),
             dpi: 150.0,
+            color_mode: 0,
         }
     }
 }
@@ -116,7 +127,11 @@ impl App {
                 (p.id, name)
             })
             .collect();
-        let (format, dpi) = (self.export_assets.format, self.export_assets.dpi);
+        let (format, dpi, color_mode) = (
+            self.export_assets.format,
+            self.export_assets.dpi,
+            self.export_assets.color_mode,
+        );
         for (id, name) in pages {
             if self
                 .export_assets
@@ -131,6 +146,7 @@ impl App {
                 source: AssetSource::Page(id),
                 format,
                 dpi,
+                color_mode,
                 checked: true,
             });
         }
@@ -160,8 +176,59 @@ impl App {
             },
             format: self.export_assets.format,
             dpi: self.export_assets.dpi,
+            color_mode: self.export_assets.color_mode,
             checked: true,
         });
+    }
+
+    /// Slices from the selection: the box of each selected object, cut
+    /// into `rows` x `cols` equal areas, each an asset of its own that
+    /// exports everything showing in it (not only the object), named
+    /// after the object (or "Slice") with its row and column when cut.
+    pub fn add_slice_assets(&mut self, rows: u32, cols: u32) {
+        let (rows, cols) = (rows.clamp(1, 50), cols.clamp(1, 50));
+        let boxes: Vec<(String, tracedraw_core::geometry::Rect)> = self
+            .selected_shapes()
+            .iter()
+            .map(|s| {
+                let name = s
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| crate::i18n::tr("export_docker.slice"));
+                (name, self.own_visual_bounds(s))
+            })
+            .filter(|(_, r)| r.width() > 1e-6 && r.height() > 1e-6)
+            .collect();
+        for (name, b) in boxes {
+            let (w, h) = (b.width() / cols as f64, b.height() / rows as f64);
+            for r in 0..rows {
+                for c in 0..cols {
+                    let rect = tracedraw_core::geometry::Rect::new(
+                        b.x0 + c as f64 * w,
+                        b.y0 + r as f64 * h,
+                        b.x0 + (c + 1) as f64 * w,
+                        b.y0 + (r + 1) as f64 * h,
+                    );
+                    let n = self.export_assets.assets.len() + 1;
+                    let label = if rows * cols > 1 {
+                        format!("{name} {}-{}", r + 1, c + 1)
+                    } else {
+                        format!("{name} {n}")
+                    };
+                    self.export_assets.assets.push(ExportAsset {
+                        name: label,
+                        source: AssetSource::Area {
+                            page: self.page,
+                            rect,
+                        },
+                        format: self.export_assets.format,
+                        dpi: self.export_assets.dpi,
+                        color_mode: self.export_assets.color_mode,
+                        checked: true,
+                    });
+                }
+            }
+        }
     }
 
     /// Assets whose page or objects are gone are dropped; objects that
@@ -176,6 +243,7 @@ impl App {
                 shapes.retain(|id| doc.find_shape(*id).is_some());
                 pages.contains(page) && !shapes.is_empty()
             }
+            AssetSource::Area { page, .. } => pages.contains(page),
         });
         self.export_assets.assets = assets;
     }
@@ -195,6 +263,7 @@ impl App {
             let mut st = ExportState {
                 format: asset.format,
                 dpi: asset.dpi.max(crate::ui::dialogs::MIN_EXPORT_DPI),
+                color_mode: asset.color_mode,
                 ..ExportState::default()
             };
             match &asset.source {
@@ -206,6 +275,11 @@ impl App {
                     self.page = *page;
                     self.selection = shapes.clone();
                     st.selection_only = true;
+                }
+                AssetSource::Area { page, rect } => {
+                    self.page = *page;
+                    self.selection.clear();
+                    st.area = Some(*rect);
                 }
             }
             match crate::export::export(self, &path, &st) {
@@ -219,22 +293,92 @@ impl App {
     }
 
     /// The docker's Export button: into the chosen folder (asked for when
-    /// none is set yet).
+    /// none is set yet) on the desktop; in a browser and on Android, where
+    /// no folder can be picked, as one zip file, downloaded or saved where
+    /// the system's picker says (#1399).
     pub fn export_assets(&mut self) {
-        let folder = self
-            .export_assets
-            .folder
-            .clone()
-            .or_else(crate::files::pick_folder);
-        let Some(folder) = folder else {
-            return;
+        let folder = match crate::files::FolderUse::ExportAssets.action() {
+            crate::files::FolderAction::PickFolder(token) => {
+                if let Some(folder) = self.export_assets.folder.clone() {
+                    self.export_assets_to_folder(folder);
+                } else {
+                    crate::files::pick_folder_with(token, None, |app, folder| {
+                        app.export_assets_to_folder(folder);
+                    });
+                }
+                return;
+            }
+            crate::files::FolderAction::SaveZip => {
+                self.export_assets_through_picker();
+                return;
+            }
+            crate::files::FolderAction::OpenFiles | crate::files::FolderAction::Unavailable(_) => {
+                None
+            }
         };
+        let Some(folder) = folder else { return };
+        self.export_assets_to_folder(folder);
+    }
+
+    fn export_assets_to_folder(&mut self, folder: PathBuf) {
         self.export_assets.folder = Some(folder.clone());
         let (written, errors) = self.export_assets_to(&folder);
-        self.status = match errors.first() {
-            None => crate::i18n::trf("export_docker.done", &[("n", &written.to_string())]),
-            Some((name, e)) => format!("{name}: {e}"),
-        };
+        self.status = export_status(written, &errors);
+    }
+
+    /// The name of the zip file of the assets: the drawing's.
+    fn export_assets_zip_name(&self) -> String {
+        let stem = self
+            .file
+            .as_ref()
+            .and_then(|f| f.file_stem())
+            .map(|s| s.to_string_lossy().to_string())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "assets".into());
+        crate::files::safe_file_name(&stem)
+    }
+
+    /// Every checked asset in one zip file, under a folder called `top`:
+    /// the zip's bytes, the number written and the errors met.
+    pub fn export_assets_zip(
+        &mut self,
+        top: &str,
+    ) -> Result<(Vec<u8>, usize, Vec<(String, String)>), String> {
+        let mut result = (0, Vec::new());
+        let zip = crate::files::zip_written(top, |dir| result = self.export_assets_to(dir))?;
+        Ok((zip, result.0, result.1))
+    }
+
+    /// The assets as one zip file: the save picker (Android) or the
+    /// download (browser) names it after the drawing, and it is made and
+    /// written once the place is known.
+    fn export_assets_through_picker(&mut self) {
+        if !self.export_assets.assets.iter().any(|a| a.checked) {
+            return;
+        }
+        let name = self.export_assets_zip_name();
+        crate::files::Dialog::new()
+            .add_filter("ZIP", &["zip"])
+            .set_file_name(format!("{name}.zip"))
+            .save_file(self, move |app, path| {
+                app.status = match app.export_assets_zip(&name).and_then(|(zip, n, errors)| {
+                    crate::files::write(&path, zip)
+                        .map(|()| (n, errors))
+                        .map_err(|e| e.to_string())
+                }) {
+                    Ok((n, errors)) => export_status(n, &errors),
+                    Err(e) => e,
+                };
+            });
+    }
+}
+
+/// The status line after exporting assets: how many were written, or the
+/// first error.
+fn export_status(written: usize, errors: &[(String, String)]) -> String {
+    match errors.first() {
+        None => crate::i18n::trf("export_docker.done", &[("n", &written.to_string())]),
+        Some((name, e)) => format!("{name}: {e}"),
     }
 }
 
@@ -251,6 +395,7 @@ mod tests {
             source: AssetSource::Page(PageId(1)),
             format,
             dpi: 72.0,
+            color_mode: 0,
             checked,
         };
         let png = EXPORT_FORMATS
@@ -274,6 +419,40 @@ mod tests {
             .collect();
         assert_eq!(names, ["Logo.png", "logo (2).png", "Logo.pdf"]);
         assert_eq!(paths.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [0, 1, 2]);
+    }
+
+    /// In a browser and on Android (#1399) the checked assets go out as
+    /// one zip file named after the drawing, each under its folder.
+    #[test]
+    fn assets_export_as_one_zip_where_no_folder_can_be_picked() {
+        let mut app = App::headless();
+        app.add_page();
+        app.export_assets = ExportAssets::new();
+        app.add_page_assets();
+        let svg = EXPORT_FORMATS
+            .iter()
+            .position(|(_, e)| *e == "svg")
+            .unwrap();
+        for a in &mut app.export_assets.assets {
+            a.format = svg;
+        }
+        app.export_assets.assets[1].checked = false;
+        assert_eq!(app.export_assets_zip_name(), "assets");
+        app.file = Some(PathBuf::from("/drawings/Flyer.tdraw"));
+        assert_eq!(app.export_assets_zip_name(), "Flyer");
+        let (zip, written, errors) = app.export_assets_zip("Flyer").unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(written, 1);
+        let archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+        let names: Vec<String> = archive
+            .file_names()
+            .map(|n| n.unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["Flyer/Page 1.svg"]);
+        assert_eq!(
+            export_status(written, &errors),
+            crate::i18n::trf("export_docker.done", &[("n", "1")])
+        );
     }
 
     #[test]
@@ -317,11 +496,98 @@ mod tests {
         let ratio = png.width() as f64 / png.height() as f64;
         assert!((ratio - 1.5).abs() < 0.05, "{ratio}");
         assert!(!dir.join("Page 2.png").exists());
+        // A CMYK JPEG asset is written in CMYK; new assets start with
+        // the colour mode of the docker's row (#1763).
+        app.export_assets.format = EXPORT_FORMATS
+            .iter()
+            .position(|(_, e)| *e == "jpg")
+            .unwrap();
+        app.export_assets.color_mode = 1;
+        app.export_assets.assets.clear();
+        app.add_selection_asset();
+        assert_eq!(app.export_assets.assets[0].color_mode, 1);
+        let (written, errors) = app.export_assets_to(&dir);
+        assert!(errors.is_empty() && written == 1, "{errors:?}");
+        let jpg = std::fs::read(dir.join("Badge 1.jpg")).unwrap();
+        assert!(jpg.windows(5).any(|w| w == b"Adobe"), "CMYK JPEG");
+        app.export_assets.assets[0].color_mode = 0;
+        app.export_assets_to(&dir);
+        let jpg = std::fs::read(dir.join("Badge 1.jpg")).unwrap();
+        assert!(!jpg.windows(5).any(|w| w == b"Adobe"), "RGB JPEG");
+        app.select(vec![id]);
+        app.add_page_assets();
         // The current page and selection are as they were.
         assert_eq!((app.page, app.selection.clone()), (page, sel));
         // A deleted object drops its asset.
         app.run(tracedraw_core::Command::DeleteShapes { shapes: vec![id] });
         app.prune_export_assets();
+        assert_eq!(app.export_assets.assets.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Add Slices: each selected object's area cut into the grid, each
+    /// piece an asset exporting everything that shows in it (here a red
+    /// square under the frame), at the piece's size.
+    #[test]
+    fn slices_export_the_areas_with_what_shows_in_them() {
+        let mut app = App::headless();
+        let layer = app.active_layer().expect("a layer");
+        let rect = |app: &mut App, r: tracedraw_core::Rect, fill: tracedraw_core::Fill| {
+            let id = app.engine.new_shape_id();
+            let mut s = tracedraw_core::Shape::new(
+                id,
+                tracedraw_core::ShapeKind::Rect {
+                    rect: r,
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            s.fill = fill;
+            s.stroke = None;
+            app.run(tracedraw_core::Command::AddShape { layer, shape: s });
+            id
+        };
+        let red = tracedraw_core::Fill::Solid(tracedraw_core::Color::rgb8(255, 0, 0));
+        rect(
+            &mut app,
+            tracedraw_core::Rect::new(20.0, 20.0, 60.0, 40.0),
+            red,
+        );
+        let frame = rect(
+            &mut app,
+            tracedraw_core::Rect::new(20.0, 20.0, 60.0, 40.0),
+            tracedraw_core::Fill::None,
+        );
+        app.select(vec![frame]);
+        app.export_assets = ExportAssets::new();
+        app.add_slice_assets(1, 2);
+        let names: Vec<_> = app
+            .export_assets
+            .assets
+            .iter()
+            .map(|a| a.name.clone())
+            .collect();
+        assert_eq!(names, ["Slice 1-1", "Slice 1-2"]);
+        let AssetSource::Area { rect: r, .. } = app.export_assets.assets[1].source else {
+            panic!("an area");
+        };
+        assert!(
+            (r.x0 - 40.0).abs() < 1e-6 && (r.x1 - 60.0).abs() < 1e-6,
+            "{r:?}"
+        );
+        let dir = std::env::temp_dir().join(format!("td-slices-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (written, errors) = app.export_assets_to(&dir);
+        assert!(errors.is_empty() && written == 2, "{errors:?}");
+        let png = image::open(dir.join("Slice 1-2.png")).unwrap().to_rgba8();
+        // 20 x 20 mm, and red: the square under the frame shows in it.
+        let ratio = png.width() as f64 / png.height() as f64;
+        assert!((ratio - 1.0).abs() < 0.05, "{ratio}");
+        let mid = png.get_pixel(png.width() / 2, png.height() / 2);
+        assert!(mid[0] > 200 && mid[1] < 60 && mid[3] > 200, "{mid:?}");
+        // Nothing selected, nothing is added.
+        app.select(Vec::new());
+        app.add_slice_assets(2, 2);
         assert_eq!(app.export_assets.assets.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }

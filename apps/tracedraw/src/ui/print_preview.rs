@@ -129,6 +129,40 @@ pub fn shown_page(
     Some(plate_page(page, p))
 }
 
+/// The page shown with the inks ticked: every ink, the sheet as it is; one
+/// ink, its plate in grey (black = full ink); some, the colours those
+/// inks print (#571). With `one_in_color` one ink alone shows the colour
+/// it prints too, cyan ink in cyan (#1652).
+pub fn shown_page_inks(
+    doc: &Document,
+    sheet: usize,
+    inks: &[bool],
+    separations: bool,
+    one_in_color: bool,
+) -> Option<tracedraw_core::document::Page> {
+    let page = doc.pages.get(sheet)?;
+    let all = plates(doc);
+    let on: Vec<usize> = (0..all.len())
+        .filter(|i| inks.get(*i).copied().unwrap_or(true))
+        .collect();
+    if !separations || on.len() == all.len() {
+        return Some(page.clone());
+    }
+    if let ([one], false) = (on.as_slice(), one_in_color) {
+        return shown_page(doc, sheet, one + 1, true);
+    }
+    let mut process = [false; 4];
+    let mut spots = Vec::new();
+    for i in on {
+        match all[i].0 {
+            crate::export::Plate::Process(k) if k < 4 => process[k] = true,
+            crate::export::Plate::Spot(id) => spots.push(id),
+            _ => {}
+        }
+    }
+    Some(crate::export::inks_page(page, process, &spots, &doc.inks))
+}
+
 /// The plate's name, translated for the process inks.
 fn plate_name(i: usize, name: &str) -> String {
     match i {
@@ -1282,6 +1316,7 @@ fn render_sheet(
             zoom,
             origin_x: 0.0,
             origin_y: page.size.height * zoom,
+            stretch_y: 1.0,
         },
         preview: None,
         wireframe: false,

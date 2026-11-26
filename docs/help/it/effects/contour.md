@@ -25,6 +25,22 @@ Con il pannello:
 
 I gruppi e le bitmap non possono ricevere un contorno concentrico.
 
+## Maniglie sul disegno {#handles}
+
+Con lo strumento contorno, un oggetto con un contorno concentrico mostra una
+linea dal centro del suo lato destro: verso l'esterno per un contorno
+esterno, verso l'interno per uno interno o verso il centro.
+
+- Trascina il **quadrato** alla fine della linea per cambiare fin dove arriva
+  il contorno. I passi restano gli stessi, più distanti o più vicini.
+- Trascina la **barra** sulla linea, al primo passo, per cambiare il numero di
+  passi: verso l'oggetto per averne di più, lontano per averne meno.
+  L'ultimo passo resta dov'è. Un contorno verso il centro non ha la barra,
+  perché prende tutti i passi che ci stanno.
+
+Il contorno segue mentre trascini, e ogni trascinamento si annulla in un solo
+passo.
+
 ## Impostazioni del contorno concentrico {#settings}
 
 La barra delle proprietà e il pannello mostrano le impostazioni del contorno
@@ -48,3 +64,5 @@ I passaggi esterni vengono disegnati dietro l'oggetto, quelli interni davanti.
 
 **Cancella contorno** rimuove il contorno concentrico; **Separa** trasforma i
 passaggi in oggetti.
+I passaggi escono raggruppati accanto all'oggetto. [[menu.object > menu.object.break_contour_apart]] (<kbd>Ctrl+K</kbd>,
+anche nel menu del tasto destro) fa lo stesso.

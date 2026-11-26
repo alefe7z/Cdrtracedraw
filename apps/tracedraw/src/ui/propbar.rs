@@ -3,6 +3,7 @@
 //! spin arrows, icon buttons that stay pressed, the object origin selector,
 //! and the page, object, outline and zoom bars built from them.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::{App, Units};
 use crate::i18n::tr;
 use crate::theme::Tokens;
@@ -18,9 +19,9 @@ use tracedraw_core::{
 /// Two fields stacked: 19 px each, sharing their middle border.
 pub const BAR_H: f32 = 37.0;
 const ROW: f32 = 19.0;
-/// Icon buttons are 28 px square with an 18 px icon.
-/// A property bar button's side: 28 px at the medium button size.
-fn btn() -> f32 {
+/// A property bar button's side: 28 px at the medium button size, with
+/// a [`Tokens::prop_icon`] icon.
+pub(crate) fn btn() -> f32 {
     crate::theme::Tokens::prop_button()
 }
 
@@ -39,6 +40,10 @@ pub enum Pic {
     /// Fit page to drawing: a page shrunk onto the object on it.
     FitPage,
     Nudge,
+    /// Super nudge: the nudge arrows with a plus (#2608).
+    SuperNudge,
+    /// Micro nudge: the nudge arrows with a minus (#2608).
+    MicroNudge,
     DupX,
     DupY,
     TreatFilled,
@@ -61,6 +66,9 @@ pub enum Pic {
     CornerRound,
     CornerScallop,
     CornerChamfer,
+    /// Clear the rounding of a curve's corners: a sharp corner and a
+    /// small cross.
+    CornerClear,
     /// Relative corner scaling: a small corner, a larger one, an arrow.
     CornerScaling,
     ToFront,
@@ -338,6 +346,14 @@ pub fn draw_pic(painter: &Painter, r: Rect, pic: Pic, color: Color32) {
             arrow_h(8.0, 1.0, 15.0);
             arrow_v(8.0, 1.0, 15.0);
         }
+        Pic::SuperNudge | Pic::MicroNudge => {
+            arrow_h(6.0, 0.5, 11.5);
+            arrow_v(6.0, 0.5, 11.5);
+            line((11.5, 13.5), (15.5, 13.5), s);
+            if pic == Pic::SuperNudge {
+                line((13.5, 11.5), (13.5, 15.5), s);
+            }
+        }
         Pic::DupX | Pic::DupY => {
             outline(&[(1.5, 1.5), (9.0, 1.5), (9.0, 9.0), (1.5, 9.0)], thin);
             outline(&[(5.0, 5.0), (12.5, 5.0), (12.5, 12.5), (5.0, 12.5)], thin);
@@ -556,6 +572,14 @@ pub fn draw_pic(painter: &Painter, r: Rect, pic: Pic, color: Color32) {
                 pts.push(q(r, 8.0 + 6.0 * t.cos(), 8.0 - 6.0 * t.sin()));
             }
             painter.add(epaint::PathShape::line(pts, s));
+        }
+        Pic::CornerClear => {
+            painter.add(epaint::PathShape::line(
+                vec![q(r, 2.0, 15.0), q(r, 2.0, 2.0), q(r, 15.0, 2.0)],
+                s,
+            ));
+            line((8.0, 8.0), (14.0, 14.0), s);
+            line((14.0, 8.0), (8.0, 14.0), s);
         }
         Pic::CornerScallop => {
             line((2.0, 15.0), (2.0, 8.0), s);
@@ -1244,25 +1268,7 @@ fn draw_arrange_pic(painter: &Painter, r: Rect, pic: Pic, color: Color32) {
 }
 
 pub(crate) fn frame(ui: &Ui, rect: Rect, hovered: bool, pressed: bool) {
-    if pressed {
-        ui.painter()
-            .rect_filled(rect, 0.0, crate::theme::Tokens::field());
-        ui.painter().rect_stroke(
-            rect.shrink(0.5),
-            0.0,
-            Stroke::new(1.0, Tokens::control_border()),
-            egui::StrokeKind::Middle,
-        );
-    } else if hovered {
-        ui.painter()
-            .rect_filled(rect, 0.0, crate::theme::Tokens::hovered_row());
-        ui.painter().rect_stroke(
-            rect.shrink(0.5),
-            0.0,
-            Stroke::new(1.0, crate::theme::Tokens::selected_row()),
-            egui::StrokeKind::Middle,
-        );
-    }
+    crate::theme::paint_icon_button(ui.painter(), rect, hovered, pressed);
 }
 
 /// An icon button of the bar; `pressed` draws it pushed in.
@@ -1278,13 +1284,54 @@ pub fn pic_button(ui: &mut Ui, pic: Pic, tip: &str, enabled: bool, pressed: bool
     frame(ui, rect, enabled && resp.hovered(), pressed);
     draw_pic(
         ui.painter(),
-        Rect::from_center_size(rect.center(), Vec2::splat(18.0)),
+        Rect::from_center_size(rect.center(), Vec2::splat(Tokens::prop_icon())),
         pic,
+        icon_color(enabled),
+    );
+    resp.rich_tip(tip)
+}
+
+/// The colour of a bar icon: the theme's icon colour, or its colour for
+/// commands that cannot run now. That was the panels' line colour, which
+/// on the Dark theme is darker than the bar, so the Shape tool's node
+/// buttons, greyed with no node chosen, could hardly be seen (#2065).
+pub fn icon_color(enabled: bool) -> egui::Color32 {
+    if enabled {
+        Tokens::icon()
+    } else {
+        Tokens::icon_off()
+    }
+}
+
+/// An icon button of the bar showing a tool's own icon (the toolbox's),
+/// for a button that picks that tool; `pressed` draws it pushed in
+/// (#1485).
+pub fn tool_button(
+    ui: &mut Ui,
+    tool: crate::tools::Tool,
+    tip: &str,
+    enabled: bool,
+    pressed: bool,
+) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(
+        Vec2::splat(btn()),
         if enabled {
-            Tokens::icon()
+            Sense::click()
         } else {
-            Tokens::border()
+            Sense::hover()
         },
+    );
+    frame(ui, rect, enabled && resp.hovered(), pressed);
+    let color = if enabled {
+        crate::ui::icons::tool_color(tool, Tokens::icon())
+    } else {
+        icon_color(false)
+    };
+    crate::ui::icons::draw(
+        ui.painter(),
+        Rect::from_center_size(rect.center(), Vec2::splat(Tokens::prop_icon())),
+        tool,
+        color,
     );
     resp.rich_tip(tip)
 }
@@ -1302,7 +1349,9 @@ pub fn sep(ui: &mut Ui) {
 
 /// A small label picture before a field.
 pub(crate) fn label_pic(ui: &mut Ui, pic: Pic, tip: &str) {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(16.0, ROW), Sense::hover());
+    // A drag on the picture slides the field after it (#3044).
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(16.0, ROW), Sense::DRAG);
+    crate::ui::field::label_slides(ui, &resp);
     draw_pic(
         ui.painter(),
         Rect::from_center_size(rect.center(), Vec2::splat(13.0)),
@@ -1312,12 +1361,53 @@ pub(crate) fn label_pic(ui: &mut Ui, pic: Pic, tip: &str) {
     resp.rich_tip(tip);
 }
 
+/// A row with a label picture and what follows it (a field), all of it
+/// showing the tip of `key` (its name and the `key_desc` description).
+pub(crate) fn tip_row<R>(ui: &mut Ui, pic: Pic, key: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let tip = crate::ui::tips::keyed(key);
+    crate::ui::tips::tip_over(ui, &tip, |ui| {
+        row(ui, |ui| {
+            draw_label_pic(ui, pic);
+            add(ui)
+        })
+    })
+}
+
+/// [`tip_row`] with a text label ("X:") in place of the picture.
+pub(crate) fn tip_text_row<R>(
+    ui: &mut Ui,
+    label: &str,
+    key: &str,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let tip = crate::ui::tips::keyed(key);
+    crate::ui::tips::tip_over(ui, &tip, |ui| {
+        row(ui, |ui| {
+            label_text(ui, label);
+            add(ui)
+        })
+    })
+}
+
+/// A label picture without a tip of its own.
+fn draw_label_pic(ui: &mut Ui, pic: Pic) {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(16.0, ROW), Sense::DRAG);
+    crate::ui::field::label_slides(ui, &resp);
+    draw_pic(
+        ui.painter(),
+        Rect::from_center_size(rect.center(), Vec2::splat(13.0)),
+        pic,
+        Tokens::icon(),
+    );
+}
+
 /// A text label before a field ("X:", "Units:").
 pub(crate) fn label_text(ui: &mut Ui, text: &str) {
-    ui.add_sized(
+    let resp = ui.add_sized(
         [16.0, ROW],
-        egui::Label::new(egui::RichText::new(text).size(12.0)),
+        egui::Label::new(egui::RichText::new(text).size(12.0)).sense(Sense::DRAG),
     );
+    crate::ui::field::label_slides(ui, &resp);
 }
 
 /// A distance field in the ruler unit, through the drawing scale (a
@@ -1353,7 +1443,13 @@ fn distance_in(
 
 /// [`distance`] for a value the selected objects do not share: the field
 /// is empty, a typed value goes to all of them.
-fn distance_mixed(ui: &mut Ui, app: &App, mm: f64, width: f32, mixed: bool) -> Option<f64> {
+pub(crate) fn distance_mixed(
+    ui: &mut Ui,
+    app: &App,
+    mm: f64,
+    width: f32,
+    mixed: bool,
+) -> Option<f64> {
     distance_in_mixed(ui, app, mm, width, Some(1.0), app.units.world_mm(), mixed)
 }
 
@@ -1374,58 +1470,22 @@ fn distance_in_mixed(
         1.0
     };
     let mut v = mm / unit_mm;
+    // The field's own arrows and wheel step by `step` units; the bar had
+    // a second pair beside them doing the same (#488).
     let r = ui.add_sized(
         [width, ROW],
         crate::ui::field::NumField::new(&mut v)
-            .fixed_decimals(d.min(3))
-            .max_decimals(d)
+            .length_decimals(d)
             .suffix(format!(" {}", u.short()))
             .unit_mm(u.mm())
+            .step(step.unwrap_or(1.0))
             .mixed(mixed),
     );
-    let mut out = None;
     // Typed values apply with Enter or when the field is left.
     if r.changed() && (mixed || (v * unit_mm - mm).abs() > 1e-12) {
-        out = Some(v * unit_mm);
+        return Some(v * unit_mm);
     }
-    if let Some(step) = step {
-        if let Some(delta) = spin(ui) {
-            out = Some((mm / unit_mm + delta * step) * unit_mm);
-        }
-    }
-    out
-}
-
-/// Two tiny arrows side by side; returns -1 or +1 when clicked.
-fn spin(ui: &mut Ui) -> Option<f64> {
-    let mut out = None;
-    for (dir, up) in [(-1.0, false), (1.0, true)] {
-        let (rect, resp) = ui.allocate_exact_size(Vec2::new(10.0, ROW), Sense::click());
-        frame(ui, rect, resp.hovered(), false);
-        let c = rect.center();
-        let pts = if up {
-            vec![
-                c + Vec2::new(-3.0, 1.5),
-                c + Vec2::new(3.0, 1.5),
-                c + Vec2::new(0.0, -2.0),
-            ]
-        } else {
-            vec![
-                c + Vec2::new(-3.0, -1.5),
-                c + Vec2::new(3.0, -1.5),
-                c + Vec2::new(0.0, 2.0),
-            ]
-        };
-        ui.painter().add(epaint::PathShape::convex_polygon(
-            pts,
-            Tokens::text_dim(),
-            Stroke::NONE,
-        ));
-        if resp.clicked() {
-            out = Some(dir);
-        }
-    }
-    out
+    None
 }
 
 /// Two rows stacked in the bar's height.
@@ -1467,7 +1527,7 @@ pub fn guide_bar(app: &mut App, ui: &mut Ui) {
     use tracedraw_core::document::GuideLine;
     let guides = app.page_guides();
     let single = match app.selected_guides.as_slice() {
-        [i] => guides.get(*i).copied(),
+        [i] => guides.get(*i).cloned(),
         _ => None,
     };
     let Some(g) = single else {
@@ -1508,7 +1568,7 @@ pub fn guide_bar(app: &mut App, ui: &mut Ui) {
         if ui
             .add_sized(
                 [70.0, ROW],
-                egui::DragValue::new(&mut angle)
+                crate::ui::field::NumField::new(&mut angle)
                     .speed(1.0)
                     .max_decimals(2)
                     .suffix("°"),
@@ -1537,38 +1597,72 @@ pub fn guide_bar(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// The page bar's list of sizes: the presets by group, then Custom
+/// (#650), which is the one ticked when the page matches no preset and
+/// opens the Page Size dialog with the page's width and height to type
+/// any size, and Edit This List, which opens Document Setup > Page Size
+/// to save or delete sizes.
+fn page_size_list(app: &mut App, ui: &mut Ui, current: &str, size: Size) {
+    let saved = app.settings.page_sizes.clone();
+    if let Some((_, s)) = crate::ui::dialogs::paper_preset_menu(ui, current, &saved) {
+        let landscape = size.width > size.height;
+        let s = if landscape {
+            Size::new(s.height.max(s.width), s.height.min(s.width))
+        } else {
+            Size::new(s.width.min(s.height), s.width.max(s.height))
+        };
+        resize_pages(app, s);
+        app.fit_pending = true;
+    }
+    ui.separator();
+    let custom = crate::ui::dialogs::paper_name(size, &saved).is_none();
+    if ui
+        .iselectable(custom, "toolbar.custom_page")
+        .clicked()
+    {
+        app.dialog = crate::ui::dialogs::Dialog::PageSize {
+            width: size.width,
+            height: size.height,
+            all_pages: app.settings.page_size_all,
+        };
+    }
+    if ui.ibutton("toolbar.edit_page_sizes").clicked() {
+        app.dialog = crate::ui::dialogs::Dialog::Options;
+        app.options_page = crate::ui::dialogs::OptionsPage::PageSize;
+        ui.close();
+    }
+}
+
+/// Autofit Page's popup (there is one property bar).
+pub(crate) fn autofit_popup_id() -> egui::Id {
+    egui::Id::new("autofit_page_popup")
+}
+
 pub fn page_bar(app: &mut App, ui: &mut Ui) {
     let size = app.page_size();
-    let name = crate::ui::dialogs::paper_name_of(size);
-    let current = name
-        .map(crate::ui::dialogs::paper_label)
+    let current = crate::ui::dialogs::paper_name(size, &app.settings.page_sizes)
         .unwrap_or_else(|| tr("toolbar.custom"));
     ui.allocate_ui_with_layout(
         Vec2::new(200.0, BAR_H),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            egui::ComboBox::from_id_salt("page_size_bar")
-                .selected_text(current)
+            crate::ui::keynav::ComboBox::from_id_salt("page_size_bar")
+                .selected_text(current.clone())
                 .width(192.0)
                 .height(400.0)
-                .show_ui(ui, |ui| {
-                    if let Some((_, s)) = crate::ui::dialogs::paper_list(ui, name.unwrap_or("")) {
-                        resize_pages(app, crate::ui::dialogs::paper_turned(s, size));
-                        app.fit_pending = true;
-                    }
-                });
+                .show_ui(ui, |ui| page_size_list(app, ui, &current, size))
+                .response
+                .rich_tip(crate::ui::tips::keyed("toolbar.page_size"));
         },
     );
     let mut new_size = None;
     stacked(ui, |ui| {
-        row(ui, |ui| {
-            label_pic(ui, Pic::PageWidth, &tr("toolbar.page_width"));
+        tip_row(ui, Pic::PageWidth, "toolbar.page_width", |ui| {
             if let Some(w) = paper_distance(ui, app, size.width, 92.0, Some(1.0)) {
                 new_size = Some(Size::new(w, size.height));
             }
         });
-        row(ui, |ui| {
-            label_pic(ui, Pic::PageHeight, &tr("toolbar.page_height"));
+        tip_row(ui, Pic::PageHeight, "toolbar.page_height", |ui| {
             if let Some(h) = paper_distance(ui, app, size.height, 92.0, Some(1.0)) {
                 new_size = Some(Size::new(size.width, h));
             }
@@ -1580,12 +1674,13 @@ pub fn page_bar(app: &mut App, ui: &mut Ui) {
         }
     }
     // Fit page to drawing, as Layout has it (#236); pale on an empty
-    // page.
-    let has_objects = app
-        .doc()
-        .page(app.page)
-        .ok()
-        .is_some_and(|p| p.layers.iter().any(|l| !l.shapes.is_empty()));
+    // page, or with All Pages on when no page has anything on it.
+    let has_objects = |p: &tracedraw_core::Page| p.layers.iter().any(|l| !l.shapes.is_empty());
+    let has_objects = if app.settings.page_size_all {
+        app.doc().pages.iter().any(has_objects)
+    } else {
+        app.doc().page(app.page).ok().is_some_and(has_objects)
+    };
     // Autofit Page: a popup with the margin to leave around the drawing
     // (kept in the preferences) and the button that fits the page.
     let fit = pic_button(
@@ -1595,16 +1690,20 @@ pub fn page_bar(app: &mut App, ui: &mut Ui) {
         has_objects,
         false,
     );
-    let popup_id = ui.make_persistent_id("autofit_page_popup");
+    let popup_id = autofit_popup_id();
     if fit.clicked() {
         egui::Popup::toggle_id(ui.ctx(), popup_id);
     }
     let ctx = ui.ctx().clone();
     let mut fitted = false;
+    // Clicks inside (the margin field, the Live preview box) keep it
+    // open, so the preview can be switched and watched (#659).
     egui::Popup::new(popup_id, ctx.clone(), fit.rect, ui.layer_id())
         .open_memory(None)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             ui.set_min_width(190.0);
+            // The Live preview box on the margin's row, right of the field.
             ui.horizontal(|ui| {
                 ui.label(tr("toolbar.fit_margin"));
                 ui.add_space(8.0);
@@ -1612,20 +1711,35 @@ pub fn page_bar(app: &mut App, ui: &mut Ui) {
                 if let Some(m) = paper_distance(ui, app, margin, 88.0, Some(1.0)) {
                     app.settings.fit_page_margin = m.max(0.0);
                 }
+                ui.add_space(6.0);
+                ui.checkbox(
+                    &mut app.settings.fit_page_preview,
+                    tr("toolbar.autofit_live_preview"),
+                );
             });
             ui.add_space(4.0);
             if ui
                 .add_sized(
                     Vec2::new(ui.available_width(), 24.0),
-                    egui::Button::new(tr("toolbar.autofit_page")),
+                    crate::ui::btn_icons::Ib::new("toolbar.autofit_page"),
                 )
                 .clicked()
             {
                 fitted = true;
             }
         });
+    // While the popup is open the page it would make shows on the canvas,
+    // following the margin as it is typed (#594), unless Live preview is
+    // off (#659).
+    let preview = app.settings.fit_page_preview && egui::Popup::is_id_open(&ctx, popup_id);
+    app.autofit_preview = preview.then(|| {
+        (
+            app.settings.fit_page_margin.max(0.0),
+            ctx.cumulative_frame_nr(),
+        )
+    });
     if fitted {
-        app.fit_page_to_drawing_with_margin(app.settings.fit_page_margin);
+        app.autofit_pages(app.settings.fit_page_margin, app.settings.page_size_all);
         app.fit_pending = true;
         egui::Popup::close_id(&ctx, popup_id);
     }
@@ -1633,14 +1747,12 @@ pub fn page_bar(app: &mut App, ui: &mut Ui) {
     let portrait = size.height >= size.width;
     if pic_button(ui, Pic::Portrait, &tr("dialog.portrait"), true, portrait).clicked() && !portrait
     {
-        resize_pages(app, Size::new(size.height, size.width));
-        app.fit_pending = true;
+        turn_pages(app, size);
     }
     if pic_button(ui, Pic::Landscape, &tr("dialog.landscape"), true, !portrait).clicked()
         && portrait
     {
-        resize_pages(app, Size::new(size.height, size.width));
-        app.fit_pending = true;
+        turn_pages(app, size);
     }
     sep(ui);
     if pic_button(
@@ -1648,27 +1760,27 @@ pub fn page_bar(app: &mut App, ui: &mut Ui) {
         Pic::AllPages,
         &tr("toolbar.all_pages_tip"),
         true,
-        app.page_size_all,
+        app.settings.page_size_all,
     )
     .clicked()
     {
-        app.page_size_all = true;
+        app.settings.page_size_all = true;
     }
     if pic_button(
         ui,
         Pic::CurrentPage,
         &tr("toolbar.current_page_tip"),
         true,
-        !app.page_size_all,
+        !app.settings.page_size_all,
     )
     .clicked()
     {
-        app.page_size_all = false;
+        app.settings.page_size_all = false;
     }
     sep(ui);
     ui.label(tr("toolbar.units_label"));
     let mut u = app.units;
-    egui::ComboBox::from_id_salt("units_bar")
+    crate::ui::keynav::ComboBox::from_id_salt("units_bar")
         .selected_text(u.label())
         .width(120.0)
         .height(400.0)
@@ -1676,27 +1788,23 @@ pub fn page_bar(app: &mut App, ui: &mut Ui) {
             for v in Units::ALL {
                 ui.selectable_value(&mut u, v, v.label());
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("toolbar.units"));
     app.units = u;
+    crate::ui::dimension_bar::drawing_scale_combo(app, ui, "page_drawing_scale");
     sep(ui);
-    label_pic(ui, Pic::Nudge, &tr("toolbar.nudge_tip"));
-    if let Some(n) = distance(ui, app, app.nudge_mm, 84.0, Some(0.1)) {
-        if n > 0.0 {
-            app.nudge_mm = n;
-        }
-    }
+    nudge_part(app, ui);
     sep(ui);
     let dup = app.duplicate_offset;
     let mut new_dup = None;
     stacked(ui, |ui| {
-        row(ui, |ui| {
-            label_pic(ui, Pic::DupX, &tr("toolbar.duplicate_x_tip"));
+        tip_row(ui, Pic::DupX, "toolbar.duplicate_x_tip", |ui| {
             if let Some(x) = distance(ui, app, dup.x, 92.0, Some(0.1)) {
                 new_dup = Some(tracedraw_core::geometry::Vec2::new(x, dup.y));
             }
         });
-        row(ui, |ui| {
-            label_pic(ui, Pic::DupY, &tr("toolbar.duplicate_y_tip"));
+        tip_row(ui, Pic::DupY, "toolbar.duplicate_y_tip", |ui| {
             if let Some(y) = distance(ui, app, dup.y, 92.0, Some(0.1)) {
                 new_dup = Some(tracedraw_core::geometry::Vec2::new(dup.x, y));
             }
@@ -1720,21 +1828,51 @@ pub fn page_bar(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// The nudge distances the arrow keys move the selection by: Nudge, then
+/// Super nudge (Shift) over Micro nudge (Ctrl), the values Document
+/// Options > Rulers sets, here with nothing selected and with objects
+/// selected so they change without opening the dialog (#2608).
+pub fn nudge_part(app: &mut App, ui: &mut Ui) {
+    tip_row(ui, Pic::Nudge, "toolbar.nudge_tip", |ui| {
+        if let Some(n) = distance(ui, app, app.nudge_mm, 84.0, Some(0.1)) {
+            if n > 0.0 {
+                app.nudge_mm = n;
+            }
+        }
+    });
+    let (sup, micro) = (app.settings.super_nudge_mm, app.settings.micro_nudge_mm);
+    let (mut new_sup, mut new_micro) = (None, None);
+    stacked(ui, |ui| {
+        tip_row(ui, Pic::SuperNudge, "toolbar.super_nudge_tip", |ui| {
+            new_sup = distance(ui, app, sup, 84.0, Some(0.1));
+        });
+        tip_row(ui, Pic::MicroNudge, "toolbar.micro_nudge_tip", |ui| {
+            new_micro = distance(ui, app, micro, 84.0, Some(0.01));
+        });
+    });
+    if let Some(v) = new_sup.filter(|v| *v > 0.0) {
+        app.settings.super_nudge_mm = v;
+    }
+    if let Some(v) = new_micro.filter(|v| *v > 0.0) {
+        app.settings.micro_nudge_mm = v;
+    }
+}
+
 /// Resize the current page, or every page when "all pages" is on, as one
 /// undo step.
+/// Portrait or Landscape on the property bar: the pages turned, the zoom
+/// and the page's centre on screen kept (#3434).
+pub fn turn_pages(app: &mut App, size: Size) {
+    app.keeping_page_centre(|app| resize_pages(app, Size::new(size.height, size.width)));
+}
+
 pub fn resize_pages(app: &mut App, size: Size) {
-    let pages: Vec<_> = if app.page_size_all {
+    let pages: Vec<_> = if app.settings.page_size_all {
         app.doc().pages.iter().map(|p| p.id).collect()
     } else {
         vec![app.page]
     };
-    let cmds: Vec<Command> = pages
-        .into_iter()
-        .map(|page| Command::ResizePage { page, size })
-        .collect();
-    if let Err(e) = app.engine.run_batch("Page Size", &cmds) {
-        app.status = e.to_string();
-    }
+    app.resize_pages_about_centre(&pages, size, "Page Size");
 }
 
 // ----- the object bar ---------------------------------------------------
@@ -1799,7 +1937,7 @@ fn origin_selector(ui: &mut Ui, app: &mut App) {
 /// The rotation of the single selected object (degrees), from its
 /// transform.
 fn selection_angle(app: &App) -> f64 {
-    let shapes = app.selected_shapes();
+    let shapes = app.selected_rc();
     if shapes.len() != 1 {
         return 0.0;
     }
@@ -1813,6 +1951,91 @@ fn selection_angle(app: &App) -> f64 {
 }
 
 /// Position, size, scale, rotation and mirroring of the selection.
+/// The rotation angle: the selection's own, turned by what is typed or
+/// stepped, each arrow click or wheel turn on its own, about the centre of
+/// rotation the user moved, else about `refp` (#2478: a typed angle
+/// turned about the box's centre even with the centre of rotation moved).
+fn rotation_field(app: &mut App, ui: &mut Ui, refp: Point) -> egui::Response {
+    let refp = app.moved_rotation_center().unwrap_or(refp);
+    let angle = selection_angle(app);
+    let mut a = angle;
+    let r = ui.add_sized(
+        [64.0, ROW + 4.0],
+        crate::ui::field::NumField::new(&mut a)
+            .speed(1.0)
+            .fixed_decimals(1)
+            .suffix(" \u{00B0}"),
+    );
+    if r.changed() && (a - angle).abs() > 1e-9 {
+        app.transform_selection(
+            Affine::translate(refp.to_vec2())
+                * Affine::rotate((a - angle).to_radians())
+                * Affine::translate(-refp.to_vec2()),
+        );
+    }
+    r
+}
+
+/// The scale that takes a selection `now` wide and high to the size
+/// typed, `to`. A side with no size (a horizontal line's height, a
+/// vertical line's width) cannot scale and stays as it is, so the other
+/// side can still be typed (#2762). `None` when nothing would change.
+pub(crate) fn size_scale(now: (f64, f64), to: (f64, f64)) -> Option<(f64, f64)> {
+    let axis = |old: f64, new: f64| -> Option<f64> {
+        if old <= 1e-9 {
+            Some(1.0)
+        } else if new > 1e-6 {
+            Some(new / old)
+        } else {
+            None
+        }
+    };
+    let f = (axis(now.0, to.0)?, axis(now.1, to.1)?);
+    ((f.0 - 1.0).abs() > 1e-12 || (f.1 - 1.0).abs() > 1e-12).then_some(f)
+}
+
+/// A percentage follows a single object's own axes. Several objects
+/// retain the property bar's relative page-axis scaling.
+fn percentage_scale_transform(app: &App, sx: f64, sy: f64, reference: Point) -> Option<Affine> {
+    if !sx.is_finite()
+        || !sy.is_finite()
+        || sx <= 0.0
+        || sy <= 0.0
+        || !reference.x.is_finite()
+        || !reference.y.is_finite()
+    {
+        return None;
+    }
+    let shapes = app.selected_rc();
+    let scale = Affine::scale_non_uniform(sx, sy);
+    let linear = match shapes.as_slice() {
+        [shape] if sx != sy => {
+            let [a, b, c, d, _, _] = shape.transform.as_coeffs();
+            let basis = Affine::new([a, b, c, d, 0.0, 0.0]);
+            let (x, y) = tracedraw_core::document::axis_scale(basis);
+            let determinant = basis.determinant();
+            if !basis.as_coeffs().iter().all(|v| v.is_finite())
+                || !determinant.is_finite()
+                || determinant.abs() <= 1e-12 * x * y
+            {
+                return None;
+            }
+            basis * scale * basis.inverse()
+        }
+        _ => scale,
+    };
+    let transform =
+        Affine::translate(reference.to_vec2()) * linear * Affine::translate(-reference.to_vec2());
+    (transform.as_coeffs().iter().all(|v| v.is_finite())
+        && shapes.iter().all(|shape| {
+            (transform * shape.transform)
+                .as_coeffs()
+                .iter()
+                .all(|v| v.is_finite())
+        }))
+    .then_some(transform)
+}
+
 pub fn object_bar(app: &mut App, ui: &mut Ui) {
     let Some(b) = app.selection_bounds() else {
         return;
@@ -1822,14 +2045,12 @@ pub fn object_bar(app: &mut App, ui: &mut Ui) {
     let refp = origin_point(b, app.object_origin);
     let mut moved: Option<Point> = None;
     stacked(ui, |ui| {
-        row(ui, |ui| {
-            label_text(ui, "X:");
+        tip_text_row(ui, "X:", "toolbar.object_x", |ui| {
             if let Some(x) = distance(ui, app, refp.x - o.x, 100.0, None) {
                 moved = Some(Point::new(x + o.x, refp.y));
             }
         });
-        row(ui, |ui| {
-            label_text(ui, "Y:");
+        tip_text_row(ui, "Y:", "toolbar.object_y", |ui| {
             if let Some(y) = distance(ui, app, refp.y - o.y, 100.0, None) {
                 moved = Some(Point::new(refp.x, y + o.y));
             }
@@ -1843,90 +2064,102 @@ pub fn object_bar(app: &mut App, ui: &mut Ui) {
     let mut size: Option<(f64, f64)> = None;
     let locked = app.scale_locked;
     stacked(ui, |ui| {
-        row(ui, |ui| {
-            label_pic(ui, Pic::Width, &tr("toolbar.object_width"));
+        tip_row(ui, Pic::Width, "toolbar.object_width", |ui| {
             if let Some(nw) = distance(ui, app, w, 92.0, None) {
                 let nh = if locked && w > 1e-9 { h * nw / w } else { h };
                 size = Some((nw, nh));
             }
         });
-        row(ui, |ui| {
-            label_pic(ui, Pic::Height, &tr("toolbar.object_height"));
+        tip_row(ui, Pic::Height, "toolbar.object_height", |ui| {
             if let Some(nh) = distance(ui, app, h, 92.0, None) {
                 let nw = if locked && h > 1e-9 { w * nh / h } else { w };
                 size = Some((nw, nh));
             }
         });
     });
-    // Scale factors (relative: the field shows 100% and applies the change).
-    let mut scale: Option<(f64, f64)> = None;
+    // Scale factors: one object shows how far it is scaled from the size
+    // it was drawn or imported at (#2693); several show 100%. A value
+    // typed scales the selection from what it shows.
+    let shown = app.scale_shown();
+    let mut scale: Option<Affine> = None;
     stacked(ui, |ui| {
         for horizontal in [true, false] {
-            row(ui, |ui| {
-                let mut pct = 100.0f64;
-                let r = ui.add_sized(
-                    [64.0, ROW],
-                    crate::ui::field::NumField::new(&mut pct)
-                        .speed(0.5)
-                        .fixed_decimals(1)
-                        .suffix(" %"),
-                );
-                if (r.lost_focus() || r.drag_stopped()) && (pct - 100.0).abs() > 1e-9 && pct > 0.0 {
-                    let f = pct / 100.0;
-                    scale = Some(if locked {
-                        (f, f)
-                    } else if horizontal {
-                        (f, 1.0)
-                    } else {
-                        (1.0, f)
-                    });
-                }
+            let key = if horizontal {
+                "toolbar.scale_x"
+            } else {
+                "toolbar.scale_y"
+            };
+            let now = if horizontal { shown.0 } else { shown.1 };
+            crate::ui::tips::tip_over(ui, crate::ui::tips::keyed(key), |ui| {
+                row(ui, |ui| {
+                    let mut pct = now;
+                    let r = ui.add_sized(
+                        [64.0, ROW],
+                        crate::ui::field::NumField::new(&mut pct)
+                            .speed(0.5)
+                            .fixed_decimals(1)
+                            .suffix(" %"),
+                    );
+                    if r.changed() && (pct - now).abs() > 1e-9 && pct > 0.0 && now > 1e-9 {
+                        let f = pct / now;
+                        let (sx, sy) = if locked {
+                            (f, f)
+                        } else if horizontal {
+                            (f, 1.0)
+                        } else {
+                            (1.0, f)
+                        };
+                        scale = percentage_scale_transform(app, sx, sy, refp);
+                    }
+                })
             });
         }
     });
-    if pic_button(
-        ui,
-        Pic::Lock(locked),
-        &tr("toolbar.lock_ratio"),
-        true,
-        locked,
-    )
-    .clicked()
-    {
-        app.scale_locked = !locked;
-    }
+    // The lock over the 100% button, which makes the size as it is now
+    // read 100% in the scale fields (#2761); stacked so the bar keeps its
+    // width.
+    stacked(ui, |ui| {
+        let w = btn().max(30.0);
+        let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, ROW), Sense::click());
+        frame(ui, rect, resp.hovered(), locked);
+        draw_pic(
+            ui.painter(),
+            Rect::from_center_size(rect.center(), Vec2::splat(ROW - 4.0)),
+            Pic::Lock(locked),
+            icon_color(true),
+        );
+        if resp.rich_tip(tr("toolbar.lock_ratio")).clicked() {
+            app.scale_locked = !locked;
+        }
+        if ui
+            .add_sized(
+                [w, ROW],
+                egui::Button::new(egui::RichText::new("100%").size(10.0))
+                    .wrap_mode(egui::TextWrapMode::Extend),
+            )
+            .rich_tip(crate::ui::tips::keyed("toolbar.scale_set_100"))
+            .clicked()
+        {
+            app.set_scale_as_100();
+        }
+    });
     if let Some((nw, nh)) = size {
-        if nw > 1e-6 && nh > 1e-6 && w > 1e-9 && h > 1e-9 {
-            scale = Some((nw / w, nh / h));
+        if let Some((sx, sy)) = size_scale((w, h), (nw, nh)) {
+            scale = Some(
+                Affine::translate(refp.to_vec2())
+                    * Affine::scale_non_uniform(sx, sy)
+                    * Affine::translate(-refp.to_vec2()),
+            );
         }
     }
-    if let Some((sx, sy)) = scale {
-        app.transform_selection(
-            Affine::translate(refp.to_vec2())
-                * Affine::scale_non_uniform(sx, sy)
-                * Affine::translate(-refp.to_vec2()),
-        );
+    if let Some(transform) = scale {
+        app.transform_selection(transform);
     }
     sep(ui);
-    // Rotation angle: the object's own, about the reference point.
-    let angle = selection_angle(app);
-    let mut a = angle;
-    label_pic(ui, Pic::Rotate, &tr("toolbar.rotation_angle"));
-    let r = ui.add_sized(
-        [64.0, ROW + 4.0],
-        crate::ui::field::NumField::new(&mut a)
-            .speed(1.0)
-            .fixed_decimals(1)
-            .suffix(" \u{00B0}"),
-    );
-    if (r.lost_focus() || r.drag_stopped()) && (a - angle).abs() > 1e-9 {
-        let c = refp;
-        app.transform_selection(
-            Affine::translate(c.to_vec2())
-                * Affine::rotate((a - angle).to_radians())
-                * Affine::translate(-c.to_vec2()),
-        );
-    }
+    crate::ui::tips::tip_over(ui, crate::ui::tips::keyed("toolbar.rotation_angle"), |ui| {
+        draw_label_pic(ui, Pic::Rotate);
+        rotation_field(app, ui, refp);
+    });
     sep(ui);
     if pic_button(ui, Pic::MirrorH, &tr("toolbar.mirror_h"), true, false).clicked() {
         app.mirror(true);
@@ -1957,8 +2190,9 @@ pub const OUTLINE_UNITS: [Units; 5] = [
     Units::Pixels,
 ];
 
-/// The widths the outline width list offers in unit `u`: round values in
-/// that unit, given back in millimetres (the model's unit).
+/// The widths the outline width lists offer in unit `u`: round values in
+/// that unit, given back in millimetres (the model's unit). The property
+/// bar, the callout bar and the Outline Pen dialog all offer this one list.
 pub fn outline_width_presets(u: Units) -> Vec<f64> {
     let list: &[f64] = match u {
         Units::Points => &OUTLINE_WIDTHS_PT,
@@ -1979,10 +2213,15 @@ fn outline_decimals(u: Units) -> usize {
     }
 }
 
+/// An outline width (mm) as a number in unit `u`, without the unit
+/// ("0.75"): what the Outline Pen dialog's list shows beside its unit box.
+pub fn outline_width_number(w: f64, u: Units) -> String {
+    crate::ui::field::format_number(u.from_mm(w), false, 0, Some(outline_decimals(u)))
+}
+
 /// An outline width (mm) in unit `u`, as the lists show it ("0.75 pt").
 pub fn outline_width_label(w: f64, u: Units) -> String {
-    let v = crate::ui::field::format_number(u.from_mm(w), false, 0, Some(outline_decimals(u)));
-    format!("{v} {}", u.short())
+    format!("{} {}", outline_width_number(w, u), u.short())
 }
 
 /// Text for an outline width in the outline unit ("Hairline", "None").
@@ -1997,7 +2236,7 @@ pub fn outline_text(app: &App, width: Option<f64>) -> String {
 /// The outline unit picker (points, millimetres, ...), next to a width.
 pub(crate) fn outline_unit_combo(ui: &mut Ui, salt: &str, current: Units) -> Option<Units> {
     let mut picked = None;
-    egui::ComboBox::from_id_salt(salt)
+    crate::ui::keynav::ComboBox::from_id_salt(salt)
         .selected_text(current.short())
         .width(44.0)
         .show_ui(ui, |ui| {
@@ -2036,6 +2275,55 @@ pub(crate) fn parse_outline_width(text: &str, units: Units) -> Option<Option<f64
     })
 }
 
+/// The widest outline the wheel steps to, mm (what a typed width is
+/// held to).
+const OUTLINE_WHEEL_MAX_MM: f64 = 1000.0;
+
+/// The width the wheel steps to from `width` in the outline width list
+/// (no outline, hairline, then the widths of unit `u`): the next one up
+/// (wheel up) or down. Past the list's widest width the wheel goes on in
+/// steps of the list's last gap (16, 20, 24 pt and on), up to 1000 mm; it
+/// stopped at the widest (16 pt), so wider outlines had to be typed
+/// (#3050). `None` at the end (#663).
+pub(crate) fn outline_width_step(width: Option<f64>, up: bool, u: Units) -> Option<Option<f64>> {
+    let hair = tracedraw_core::Stroke::HAIRLINE;
+    let presets = outline_width_presets(u);
+    let list: Vec<Option<f64>> = [None, Some(hair)]
+        .into_iter()
+        .chain(presets.iter().copied().map(Some))
+        .collect();
+    // Where `width` falls among the list's widths (no outline below all).
+    let key = |w: Option<f64>| w.map_or(-1.0, |w| w.max(hair));
+    let at = key(width);
+    let eps = 1e-9;
+    // Beyond the widest: a grid of the last gap, in the unit's own
+    // numbers so the steps read round.
+    let n = presets.len();
+    if n >= 2 {
+        let last = u.from_mm(presets[n - 1]);
+        let gap = last - u.from_mm(presets[n - 2]);
+        let v = u.from_mm(at.max(0.0));
+        let max = u.from_mm(OUTLINE_WHEEL_MAX_MM);
+        if gap > 0.0 && v > last - eps * last.max(1.0) {
+            let k = (v - last) / gap;
+            let on = (k - k.round()).abs() < 1e-6;
+            if up {
+                let next = last + gap * if on { k.round() + 1.0 } else { k.ceil() };
+                return (next <= max + 1e-9).then(|| Some(u.to_mm(next)));
+            }
+            let below = if on { k.round() - 1.0 } else { k.floor() };
+            if below >= 0.0 {
+                return Some(Some(u.to_mm(last + gap * below)));
+            }
+        }
+    }
+    if up {
+        list.into_iter().find(|w| key(*w) > at + eps)
+    } else {
+        list.into_iter().rev().find(|w| key(*w) < at - eps)
+    }
+}
+
 /// Take the outline off the selection, or off new objects when nothing is
 /// selected.
 fn set_no_outline(app: &mut App) {
@@ -2050,14 +2338,48 @@ fn set_no_outline(app: &mut App) {
     }
 }
 
+/// The rows of the outline width list: None, Hairline and the usual
+/// widths; returns the one clicked. A width and its unit stay on one row
+/// and the list grows wider than the box when they need it ("0.75 pt"
+/// broke in two in a narrow list, #2651).
+fn outline_width_rows(
+    app: &App,
+    ui: &mut Ui,
+    width: Option<f64>,
+    mixed: bool,
+) -> Option<Option<f64>> {
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+    let mut picked = None;
+    if ui
+        .iselectable(!mixed && width.is_none(), "toolbar.none")
+        .clicked()
+    {
+        picked = Some(None);
+    }
+    if ui.iselectable(false, "toolbar.hairline").clicked() {
+        picked = Some(Some(tracedraw_core::Stroke::HAIRLINE));
+    }
+    for w in outline_width_presets(app.outline_units()) {
+        if ui
+            .selectable_label(false, outline_text(app, Some(w)))
+            .clicked()
+        {
+            picked = Some(Some(w));
+        }
+    }
+    picked
+}
+
 /// The outline width: a box typed into (Enter or leaving it applies, Esc
-/// puts it back) and an arrow dropping the usual widths. Returns the
-/// width picked or typed.
+/// puts it back) and an arrow dropping the usual widths; with `wheel`,
+/// the mouse wheel over it steps through those widths. Returns the width
+/// picked, typed or stepped to.
 fn outline_width_box(
     app: &mut App,
     ui: &mut Ui,
     width: Option<f64>,
     mixed: bool,
+    wheel: bool,
 ) -> Option<Option<f64>> {
     let ctx = ui.ctx().clone();
     let popup_id = ui.make_persistent_id("outline_width_list");
@@ -2082,6 +2404,7 @@ fn outline_width_box(
                     .desired_width(72.0),
             )
             .rich_tip(tr("toolbar.outline_width"));
+        crate::ui::field::select_all_when_focused(ui, &resp, stored.is_none(), &buf);
         if resp.has_focus() {
             ui.data_mut(|d| d.insert_temp(id, buf.clone()));
         } else if stored.is_some() || resp.lost_focus() {
@@ -2091,8 +2414,14 @@ fn outline_width_box(
                 picked = parse_outline_width(&buf, app.outline_units());
             }
         }
-        let (arrow_rect, arrow) =
-            ui.allocate_exact_size(egui::vec2(16.0, resp.rect.height()), egui::Sense::click());
+        let (arrow_rect, arrow) = ui.allocate_exact_size(
+            egui::vec2(16.0, resp.rect.height()),
+            egui::Sense::click_and_drag(),
+        );
+        let arrow = arrow.rich_tip(crate::ui::tips::pair(
+            "toolbar.outline_width",
+            "toolbar.outline_widths_desc",
+        ));
         if arrow.hovered() {
             ui.painter().rect_filled(
                 arrow_rect.shrink(1.0),
@@ -2113,9 +2442,71 @@ fn outline_width_box(
         if arrow.clicked() {
             egui::Popup::toggle_id(&ctx, popup_id);
         }
-        resp.rect.union(arrow_rect)
+        crate::ui::keynav::list_button_keys(&ctx, &arrow, popup_id);
+        (resp.rect.union(arrow_rect), arrow)
     });
-    let anchor = inner.inner;
+    let (anchor, arrow) = inner.inner;
+    // A drag left or right (down or up) on the arrow or on the pen picture
+    // before the box slides the width through the list, a step every few
+    // pixels, as on the other number fields (#3862, #1303).
+    let drag_id = id.with("drag");
+    let apart = crate::ui::field::take_label_drag(ui, anchor).filter(|d| *d != egui::Vec2::ZERO);
+    let dragged = arrow.dragged() && !crate::ui::overflow::finger_sliding(&ctx);
+    if dragged || apart.is_some() {
+        ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        let d = apart.unwrap_or_default() + if dragged { arrow.drag_delta() } else { egui::Vec2::ZERO };
+        let acc = ui.data(|m| m.get_temp::<f32>(drag_id)).unwrap_or(0.0) + d.x - d.y;
+        let steps = (acc / crate::ui::field::DRAG_PX_PER_STEP).trunc() as i32;
+        ui.data_mut(|m| {
+            m.insert_temp(
+                drag_id,
+                acc - steps as f32 * crate::ui::field::DRAG_PX_PER_STEP,
+            )
+        });
+        if steps != 0 {
+            ui.data_mut(|d| d.remove::<String>(id));
+            let mut w = width;
+            for _ in 0..steps.unsigned_abs().min(64) {
+                match outline_width_step(w, steps > 0, app.outline_units()) {
+                    Some(next) => w = next,
+                    None => break,
+                }
+            }
+            if w != width {
+                picked = Some(w);
+            }
+        }
+    } else {
+        ui.data_mut(|m| m.remove::<f32>(drag_id));
+    }
+    // The wheel over the closed list: the next width up or down, one step
+    // per notch (#663). An event of a notch or more is one step whatever
+    // its size (browsers send a notch as 100 points or 3 lines); parts of
+    // a notch from a touchpad or a fine wheel add up until they make one,
+    // and start again when the wheel turns the other way or the pointer
+    // leaves the box.
+    let acc_id = id.with("wheel");
+    if wheel && !egui::Popup::is_id_open(&ctx, popup_id) && ui.rect_contains_pointer(anchor) {
+        if let Some(steps) = crate::ui::field::wheel_steps(ui, acc_id) {
+            if steps != 0 {
+                // A width being typed goes; the step counts from the one held.
+                ui.data_mut(|d| d.remove::<String>(id));
+                ui.memory_mut(|m| m.surrender_focus(id));
+                let mut w = width;
+                for _ in 0..steps.unsigned_abs().min(64) {
+                    match outline_width_step(w, steps > 0, app.outline_units()) {
+                        Some(next) => w = next,
+                        None => break,
+                    }
+                }
+                if w != width {
+                    picked = Some(w);
+                }
+            }
+        }
+    } else {
+        ui.data_mut(|d| d.remove::<f32>(acc_id));
+    }
     egui::Popup::new(popup_id, ctx.clone(), anchor, ui.layer_id())
         .open_memory(None)
         .width(anchor.width())
@@ -2123,23 +2514,10 @@ fn outline_width_box(
             egui::ScrollArea::vertical()
                 .max_height(400.0)
                 .show(ui, |ui| {
-                    if ui
-                        .selectable_label(!mixed && width.is_none(), tr("toolbar.none"))
-                        .clicked()
-                    {
-                        picked = Some(None);
+                    if let Some(p) = outline_width_rows(app, ui, width, mixed) {
+                        picked = Some(p);
                     }
-                    if ui.selectable_label(false, tr("toolbar.hairline")).clicked() {
-                        picked = Some(Some(tracedraw_core::Stroke::HAIRLINE));
-                    }
-                    for w in outline_width_presets(app.outline_units()) {
-                        if ui
-                            .selectable_label(false, outline_text(app, Some(w)))
-                            .clicked()
-                        {
-                            picked = Some(Some(w));
-                        }
-                    }
+                    crate::ui::keynav::scroll_into_view(ui);
                 });
         });
     if picked.is_some() {
@@ -2154,12 +2532,28 @@ pub fn outline_part(app: &mut App, ui: &mut Ui) {
     use tracedraw_core::patch::StrokeField;
     // The first object's outline; values that differ across the selection
     // show empty. Each control changes only its own value on each object.
-    let first = app.paint_targets().into_iter().next();
-    let stroke = first.as_ref().and_then(|s| s.stroke.clone());
+    let first = app.first_paint_target();
+    // Nothing selected (a drawing tool): the outline new objects get, set
+    // here before drawing (#1892).
+    let defaults = app.selection.is_empty();
+    let stroke = if defaults {
+        app.default_stroke()
+    } else {
+        first.as_ref().and_then(|s| s.stroke.clone())
+    };
     let mix = app.selection_stroke_mix();
     label_pic(ui, Pic::Pen, &tr("toolbar.outline_width"));
     let width = stroke.as_ref().map(|s| s.width);
-    match outline_width_box(app, ui, width, mix.presence || mix.has(StrokeField::Width)) {
+    // The wheel changes the selection's outline only, never asks about
+    // the outline of new objects at each notch.
+    let wheel = !app.selection.is_empty();
+    match outline_width_box(
+        app,
+        ui,
+        width,
+        mix.presence || mix.has(StrokeField::Width),
+        wheel,
+    ) {
         Some(None) => set_no_outline(app),
         Some(Some(w)) => app.apply_outline_width(w),
         None => {}
@@ -2170,7 +2564,7 @@ pub fn outline_part(app: &mut App, ui: &mut Ui) {
     // Line style: solid or one of the dash presets.
     let dash = stroke.as_ref().map(|s| s.dash.clone()).unwrap_or_default();
     let dash_shown = !mix.has(StrokeField::Dash);
-    egui::ComboBox::from_id_salt("line_style_bar")
+    crate::ui::keynav::ComboBox::from_id_salt("line_style_bar")
         .selected_text(if dash_shown {
             dash_label(&dash)
         } else {
@@ -2189,6 +2583,14 @@ pub fn outline_part(app: &mut App, ui: &mut Ui) {
                     .selectable_label(dash_shown && dash.as_slice() == d, dash_label(d))
                     .clicked()
                 {
+                    if defaults {
+                        let mut st = stroke.clone().unwrap_or_default();
+                        st.set_dash(d);
+                        app.request_default_change(crate::defaults::DefaultChange::Outline(Some(
+                            st,
+                        )));
+                        continue;
+                    }
                     // Each object (each one in a group too) keeps the
                     // rest of its own outline.
                     let cmds: Vec<Command> = app
@@ -2196,7 +2598,8 @@ pub fn outline_part(app: &mut App, ui: &mut Ui) {
                         .iter()
                         .filter_map(|s| {
                             let mut st = s.stroke.clone()?;
-                            st.dash = d.to_vec();
+                            // Round dots take round caps (#3404).
+                            st.set_dash(d);
                             Some(Command::SetStroke {
                                 shapes: vec![s.id],
                                 stroke: Some(st),
@@ -2209,10 +2612,12 @@ pub fn outline_part(app: &mut App, ui: &mut Ui) {
                 }
             }
             ui.separator();
-            if ui.button(tr("docker.edit_line_style")).clicked() {
+            if ui.ibutton("docker.edit_line_style").clicked() {
                 crate::ui::line_style::request(ui);
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("toolbar.line_style"));
     // Arrowheads at the start and the end.
     for start in [true, false] {
         let current = stroke
@@ -2230,7 +2635,7 @@ pub fn outline_part(app: &mut App, ui: &mut Ui) {
         } else {
             StrokeField::EndArrow
         });
-        egui::ComboBox::from_id_salt(if start {
+        crate::ui::keynav::ComboBox::from_id_salt(if start {
             "arrow_start_bar"
         } else {
             "arrow_end_bar"
@@ -2247,6 +2652,18 @@ pub fn outline_part(app: &mut App, ui: &mut Ui) {
                     .selectable_label(shown && current == a, arrow_label(&a))
                     .clicked()
                 {
+                    if defaults {
+                        let mut st = stroke.clone().unwrap_or_default();
+                        if start {
+                            st.start_arrow = a.clone();
+                        } else {
+                            st.end_arrow = a.clone();
+                        }
+                        app.request_default_change(crate::defaults::DefaultChange::Outline(Some(
+                            st,
+                        )));
+                        continue;
+                    }
                     // Each object (each one in a group too) keeps the
                     // rest of its own outline.
                     let cmds: Vec<Command> = app
@@ -2270,7 +2687,13 @@ pub fn outline_part(app: &mut App, ui: &mut Ui) {
                     }
                 }
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed(if start {
+            "toolbar.start_arrow"
+        } else {
+            "toolbar.end_arrow"
+        }));
     }
 }
 
@@ -2282,17 +2705,24 @@ pub(crate) const DASHES: &[&[f64]] = &[
     &[8.0, 3.0],
     &[6.0, 2.0, 1.0, 2.0],
     &[6.0, 2.0, 1.0, 2.0, 1.0, 2.0],
+    // Round dots (#3404): dashes of no length with round caps.
+    &tracedraw_core::Stroke::ROUND_DOTS,
 ];
 
 pub(crate) fn dash_label(d: &[f64]) -> String {
     if d.is_empty() {
-        return "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".into();
+        return "\u{2015}\u{2015}\u{2015}\u{2015}\u{2015}".into();
     }
     // A few characters drawing the pattern.
     let mut s = String::new();
     for (i, v) in d.iter().cycle().take(d.len() * 3).enumerate() {
         let n = (*v / 2.0).round().clamp(1.0, 4.0) as usize;
-        let c = if i % 2 == 0 { '\u{2500}' } else { ' ' };
+        let c = match (i % 2 == 0, *v <= 0.0) {
+            // A dash of no length is a round dot (#3404).
+            (true, true) => '\u{2022}',
+            (true, false) => '\u{2015}',
+            _ => ' ',
+        };
         for _ in 0..n {
             s.push(c);
         }
@@ -2306,13 +2736,13 @@ pub(crate) fn dash_label(d: &[f64]) -> String {
 fn arrow_label(a: &tracedraw_core::Arrowhead) -> String {
     use tracedraw_core::Arrowhead as A;
     match a {
-        A::None => "\u{2500}".into(),
-        A::Arrow => "\u{2500}\u{25B6}".into(),
-        A::OpenArrow => "\u{2500}>".into(),
-        A::Circle => "\u{2500}\u{25CF}".into(),
-        A::Square => "\u{2500}\u{25A0}".into(),
-        A::Bar => "\u{2500}|".into(),
-        A::Diamond => "\u{2500}\u{25C6}".into(),
+        A::None => "\u{2015}".into(),
+        A::Arrow => "\u{2015}\u{25B6}".into(),
+        A::OpenArrow => "\u{2015}>".into(),
+        A::Circle => "\u{2015}\u{23FA}".into(),
+        A::Square => "\u{2015}\u{25A0}".into(),
+        A::Bar => "\u{2015}|".into(),
+        A::Diamond => "\u{2015}\u{2666}".into(),
         A::Custom { name, .. } => name.clone(),
     }
 }
@@ -2324,7 +2754,7 @@ fn arrow_label(a: &tracedraw_core::Arrowhead) -> String {
 pub fn ellipse_part(app: &mut App, ui: &mut Ui) {
     // The selection's arc when an ellipse is selected, else the tool's.
     let selected: Vec<(tracedraw_core::ShapeId, tracedraw_core::geometry::Rect)> = app
-        .selected_shapes()
+        .selected_rc()
         .iter()
         .filter_map(|s| match &s.kind {
             ShapeKind::Ellipse { rect, .. } => Some((s.id, *rect)),
@@ -2332,7 +2762,7 @@ pub fn ellipse_part(app: &mut App, ui: &mut Ui) {
         })
         .collect();
     let current = app
-        .selected_shapes()
+        .selected_rc()
         .iter()
         .find_map(|s| match &s.kind {
             ShapeKind::Ellipse { arc, .. } => Some(*arc),
@@ -2344,11 +2774,7 @@ pub fn ellipse_part(app: &mut App, ui: &mut Ui) {
         Some(a) if a.pie => 1,
         Some(_) => 2,
     };
-    let mut arc = current.unwrap_or(tracedraw_core::EllipseArc {
-        start_deg: 90.0,
-        end_deg: 90.0,
-        pie: true,
-    });
+    let mut arc = current.unwrap_or(crate::app::DEFAULT_ELLIPSE_ARC);
     let mut new = current;
     for (i, pic, key) in [
         (0, Pic::Ellipse, "toolbar.ellipse_tip"),
@@ -2368,23 +2794,30 @@ pub fn ellipse_part(app: &mut App, ui: &mut Ui) {
     let angles_on = mode != 0;
     stacked(ui, |ui| {
         for start in [true, false] {
-            row(ui, |ui| {
-                let mut v = if start { arc.start_deg } else { arc.end_deg };
-                let r = ui.add_enabled(
-                    angles_on,
-                    crate::ui::field::NumField::new(&mut v)
-                        .speed(1.0)
-                        .fixed_decimals(1)
-                        .suffix(" \u{00B0}"),
-                );
-                if angles_on && (r.lost_focus() || r.drag_stopped()) {
-                    if start {
-                        arc.start_deg = v;
-                    } else {
-                        arc.end_deg = v;
+            let key = if start {
+                "toolbar.arc_start"
+            } else {
+                "toolbar.arc_end"
+            };
+            crate::ui::tips::tip_over(ui, crate::ui::tips::keyed(key), |ui| {
+                row(ui, |ui| {
+                    let mut v = if start { arc.start_deg } else { arc.end_deg };
+                    let r = ui.add_enabled(
+                        angles_on,
+                        crate::ui::field::NumField::new(&mut v)
+                            .speed(1.0)
+                            .fixed_decimals(1)
+                            .suffix(" \u{00B0}"),
+                    );
+                    if angles_on && r.changed() {
+                        if start {
+                            arc.start_deg = v;
+                        } else {
+                            arc.end_deg = v;
+                        }
+                        new = Some(arc);
                     }
-                    new = Some(arc);
-                }
+                })
             });
         }
     });
@@ -2399,6 +2832,59 @@ pub fn ellipse_part(app: &mut App, ui: &mut Ui) {
     {
         std::mem::swap(&mut arc.start_deg, &mut arc.end_deg);
         new = Some(arc);
+        // New pies and arcs keep their angles as typed, now the other
+        // way round (Options > Tools > Ellipse, #1436).
+        app.settings.ellipse_clockwise = !app.settings.ellipse_clockwise;
+    }
+    // A pie's inner radius makes it a ring sector, a thick arc.
+    let ring_on = mode == 1;
+    let mut inner = (arc.inner * 100.0).round();
+    let r = ui
+        .add_enabled(
+            ring_on,
+            crate::ui::field::NumField::new(&mut inner)
+                .range(0.0..=99.0)
+                .speed(1.0)
+                .prefix(tr("toolbar.arc_inner_prefix"))
+                .suffix(" %"),
+        )
+        .rich_tip(crate::ui::tips::pair(
+            "toolbar.arc_inner",
+            "toolbar.arc_inner_desc",
+        ));
+    if ring_on && r.changed() {
+        arc.inner = (inner / 100.0).clamp(0.0, 0.99);
+        new = Some(arc);
+    }
+    // Divide into Slices (#4209): the selected ellipses or pies into
+    // that many equal wedges.
+    if !selected.is_empty() {
+        let id = egui::Id::new("divide_slices_count");
+        let mut n: u32 = ui.data_mut(|d| d.get_temp(id)).unwrap_or(4);
+        let r = ui
+            .add(
+                crate::ui::field::NumField::new(&mut n)
+                    .range(2..=crate::slices::MAX_PARTS)
+                    .width(44.0),
+            )
+            .rich_tip(crate::ui::tips::pair(
+                "toolbar.slices",
+                "toolbar.slices_desc",
+            ));
+        if r.changed() {
+            ui.data_mut(|d| d.insert_temp(id, n));
+        }
+        if ui
+            .add_enabled(app.can_divide_slices(), crate::ui::btn_icons::Ib::new("toolbar.slices"))
+            .rich_tip(crate::ui::tips::pair(
+                "toolbar.slices",
+                "toolbar.slices_desc",
+            ))
+            .clicked()
+        {
+            app.divide_into_slices(n.clamp(2, crate::slices::MAX_PARTS));
+            return;
+        }
     }
     if new != current {
         app.ellipse_arc = new;
@@ -2420,7 +2906,27 @@ pub fn ellipse_part(app: &mut App, ui: &mut Ui) {
     }
 }
 
-/// Points and sharpness of polygons and stars (sharpness 1 to 99);
+/// A star's sharpness from the percent typed in a sharpness field: 1 to
+/// 99, or -1 to -99 for an inverted star whose inner points lie past the
+/// centre (#1331). 0 would be no star: it keeps the side of `was`, at 1.
+pub fn sharpness_from_pct(pct: f64, was: f64) -> f64 {
+    if !pct.is_finite() {
+        return was;
+    }
+    let pct = pct.round().clamp(-99.0, 99.0);
+    if pct == 0.0 {
+        if was < 0.0 {
+            -0.01
+        } else {
+            0.01
+        }
+    } else {
+        pct / 100.0
+    }
+}
+
+/// Points and sharpness of polygons and stars (sharpness 1 to 99, or
+/// -1 to -99 inverted);
 /// complex stars count their sharpness in
 /// steps (1 up to what their points allow). With the Star tool, the Star
 /// and Complex Star buttons pick what it draws.
@@ -2433,9 +2939,10 @@ pub fn polygon_part(app: &mut App, ui: &mut Ui, star: bool) {
         f64,
         Option<u32>,
         f64,
+        f64,
     );
     let selected: Vec<Sel> = app
-        .selected_shapes()
+        .selected_rc()
         .iter()
         .filter_map(|s| match &s.kind {
             ShapeKind::Polygon {
@@ -2444,7 +2951,8 @@ pub fn polygon_part(app: &mut App, ui: &mut Ui, star: bool) {
                 sharpness,
                 complex,
                 twist,
-            } => Some((s.id, *rect, *points, *sharpness, *complex, *twist)),
+                bend,
+            } => Some((s.id, *rect, *points, *sharpness, *complex, *twist, *bend)),
             _ => None,
         })
         .collect();
@@ -2469,16 +2977,24 @@ pub fn polygon_part(app: &mut App, ui: &mut Ui, star: bool) {
             .map(|s| (s.2, s.4.unwrap_or(1)))
             .unwrap_or((app.complex_points, app.complex_sharpness));
         let (n0, k0) = (n, k);
-        ui.label(tr("toolbar.points_sides"));
-        ui.add_sized(
-            [56.0, ROW + 4.0],
-            crate::ui::field::NumField::new(&mut n).range(COMPLEX_STAR_MIN_POINTS..=500),
-        );
-        ui.label(tr("toolbar.sharpness"));
+        crate::ui::tips::tip_over(ui, crate::ui::tips::keyed("toolbar.points_tip"), |ui| {
+            ui.label(tr("toolbar.points_sides"));
+            ui.add_sized(
+                [56.0, ROW + 4.0],
+                crate::ui::field::NumField::new(&mut n).range(COMPLEX_STAR_MIN_POINTS..=500),
+            );
+        });
         let max = complex_star_max_sharpness(n);
-        ui.add_sized(
-            [56.0, ROW + 4.0],
-            crate::ui::field::NumField::new(&mut k).range(1..=max),
+        crate::ui::tips::tip_over(
+            ui,
+            crate::ui::tips::keyed("toolbar.complex_sharpness_tip"),
+            |ui| {
+                ui.label(tr("toolbar.sharpness"));
+                ui.add_sized(
+                    [56.0, ROW + 4.0],
+                    crate::ui::field::NumField::new(&mut k).range(1..=max),
+                );
+            },
         );
         let k = k.clamp(1, complex_star_max_sharpness(n));
         if n != n0 || k != k0 {
@@ -2495,6 +3011,7 @@ pub fn polygon_part(app: &mut App, ui: &mut Ui, star: bool) {
                         sharpness: 0.0,
                         complex: Some(k),
                         twist: 0.0,
+                        bend: 0.0,
                     },
                 })
                 .collect();
@@ -2510,25 +3027,32 @@ pub fn polygon_part(app: &mut App, ui: &mut Ui, star: bool) {
         .first()
         .map(|s| (s.2, s.3))
         .unwrap_or((app.polygon_points, app.star_sharpness));
-    let star = star || selected.first().is_some_and(|s| s.3 > 0.0);
+    let star = star
+        || selected
+            .first()
+            .is_some_and(|s| tracedraw_core::geometry::is_star_sharpness(s.3));
     let (n0, s0) = (n, sharp);
-    ui.label(tr("toolbar.points_sides"));
-    ui.add_sized(
-        [56.0, ROW + 4.0],
-        crate::ui::field::NumField::new(&mut n).range(3..=500),
-    );
+    crate::ui::tips::tip_over(ui, crate::ui::tips::keyed("toolbar.points_tip"), |ui| {
+        ui.label(tr("toolbar.points_sides"));
+        ui.add_sized(
+            [56.0, ROW + 4.0],
+            crate::ui::field::NumField::new(&mut n).range(3..=500),
+        );
+    });
     if star {
-        ui.label(tr("toolbar.sharpness"));
-        let mut pct = (sharp * 100.0).round();
-        if ui
-            .add_sized(
-                [56.0, ROW + 4.0],
-                crate::ui::field::NumField::new(&mut pct).range(1.0..=99.0),
-            )
-            .changed()
-        {
-            sharp = (pct / 100.0).clamp(0.01, 0.99);
-        }
+        crate::ui::tips::tip_over(ui, crate::ui::tips::keyed("toolbar.sharpness_tip"), |ui| {
+            ui.label(tr("toolbar.sharpness"));
+            let mut pct = (sharp * 100.0).round();
+            if ui
+                .add_sized(
+                    [56.0, ROW + 4.0],
+                    crate::ui::field::NumField::new(&mut pct).range(-99.0..=99.0),
+                )
+                .changed()
+            {
+                sharp = sharpness_from_pct(pct, sharp);
+            }
+        });
     }
     if n != n0 || (sharp - s0).abs() > 1e-9 {
         app.polygon_points = n;
@@ -2536,15 +3060,21 @@ pub fn polygon_part(app: &mut App, ui: &mut Ui, star: bool) {
         let cmds: Vec<Command> = selected
             .iter()
             .filter(|s| s.4.is_none())
-            .map(|(id, rect, _, old, _, twist)| Command::SetShapeKind {
+            .map(|(id, rect, _, old, _, twist, bend)| Command::SetShapeKind {
                 shape: *id,
                 kind: ShapeKind::Polygon {
                     rect: *rect,
                     points: n,
-                    sharpness: if *old > 0.0 || star { sharp } else { 0.0 },
+                    sharpness: if tracedraw_core::geometry::is_star_sharpness(*old) || star {
+                        sharp
+                    } else {
+                        0.0
+                    },
                     complex: None,
-                    // A twisted star keeps its turn.
+                    // A twisted star keeps its turn, and bent sides
+                    // their bend (#2451).
                     twist: *twist,
+                    bend: *bend,
                 },
             })
             .collect();
@@ -2553,6 +3083,22 @@ pub fn polygon_part(app: &mut App, ui: &mut Ui, star: bool) {
                 app.status = e.to_string();
             }
         }
+    }
+    // Divide into Triangles (#4210): the selected polygons or stars into
+    // one triangle per side, to the centre.
+    if !selected.is_empty()
+        && ui
+            .add_enabled(
+                app.can_divide_triangles(),
+                crate::ui::btn_icons::Ib::new("toolbar.triangles"),
+            )
+            .rich_tip(crate::ui::tips::pair(
+                "toolbar.triangles",
+                "toolbar.triangles_desc",
+            ))
+            .clicked()
+    {
+        app.divide_into_triangles();
     }
 }
 
@@ -2571,15 +3117,16 @@ pub fn char_offset_part(app: &mut App, ui: &mut Ui) {
                  val: &mut f64,
                  range: std::ops::RangeInclusive<f64>,
                  suffix: &str| {
-        ui.label(label).rich_tip(tr(tip));
-        ui.add_sized(
-            [72.0, ROW + 4.0],
-            crate::ui::field::NumField::new(val)
-                .range(range)
-                .max_decimals(1)
-                .suffix(suffix),
-        )
-        .rich_tip(tr(tip));
+        crate::ui::tips::tip_over(ui, crate::ui::tips::keyed(tip), |ui| {
+            ui.label(label);
+            ui.add_sized(
+                [72.0, ROW + 4.0],
+                crate::ui::field::NumField::new(val)
+                    .range(range)
+                    .max_decimals(1)
+                    .suffix(suffix),
+            );
+        });
     };
     field(
         ui,
@@ -2600,7 +3147,7 @@ pub fn char_offset_part(app: &mut App, ui: &mut Ui) {
     field(
         ui,
         "toolbar.char_angle",
-        "\u{2220}",
+        "\u{00B0}",
         &mut a,
         -360.0..=360.0,
         " \u{b0}",
@@ -2618,6 +3165,73 @@ pub fn char_offset_part(app: &mut App, ui: &mut Ui) {
     }
 }
 
+/// The character width (#2190) and the Superscript and Subscript buttons
+/// (#2164) of the characters being edited, as [`char_offset_part`]
+/// finds them: the Shape tool's chosen character nodes, else every
+/// character of the selected texts. A click on the lit button puts the
+/// characters back on the baseline. Each change is one undo step.
+pub fn char_width_position_part(app: &mut App, ui: &mut Ui) {
+    use tracedraw_core::TextPosition;
+    let Some((mut width, position)) = app.char_width_position() else {
+        return;
+    };
+    let w0 = width;
+    crate::ui::tips::tip_over(ui, crate::ui::tips::keyed("docker.char_width"), |ui| {
+        crate::ui::text_docker::char_width_icon(ui);
+        ui.add_sized(
+            [72.0, ROW + 4.0],
+            crate::ui::field::NumField::new(&mut width)
+                .range(crate::ui::text_docker::CHAR_WIDTH_RANGE)
+                .max_decimals(1)
+                .suffix(" %"),
+        );
+    });
+    if (width - w0).abs() > 1e-9 {
+        app.set_char_attrs("Character Width", move |sp| sp.width_pct = width);
+    }
+    for (p, valign, key) in [
+        (
+            TextPosition::Superscript,
+            egui::Align::TOP,
+            "docker.superscript",
+        ),
+        (
+            TextPosition::Subscript,
+            egui::Align::BOTTOM,
+            "docker.subscript",
+        ),
+    ] {
+        let on = position == p;
+        // An X with a small 2 raised or lowered beside it, laid out so no
+        // font needs the superscript or subscript digit.
+        let color = ui.visuals().text_color();
+        let mut label = egui::text::LayoutJob::default();
+        label.append(
+            "X",
+            0.0,
+            egui::TextFormat::simple(egui::FontId::proportional(13.0), color),
+        );
+        label.append(
+            "2",
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(8.0),
+                color,
+                valign,
+                ..Default::default()
+            },
+        );
+        if ui
+            .add_sized([28.0, ROW + 4.0], egui::Button::selectable(on, label))
+            .rich_tip(crate::ui::tips::keyed(key))
+            .clicked()
+        {
+            let target = if on { TextPosition::Normal } else { p };
+            app.set_char_attrs("Character Position", move |sp| sp.position = target);
+        }
+    }
+}
+
 /// A change the rectangle part of the bar makes to corners.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CornerEdit {
@@ -2626,6 +3240,8 @@ pub enum CornerEdit {
     Size(usize, f64),
     /// Relative corner scaling on or off.
     Scaling(bool),
+    /// Every edge's bow, 0 straight to 1 a quarter circle (#2188).
+    Bulge(f64),
 }
 
 impl CornerEdit {
@@ -2642,25 +3258,38 @@ impl CornerEdit {
                 }
             }
             CornerEdit::Scaling(relative) => c.fixed = !relative,
+            CornerEdit::Bulge(v) => {
+                let v = if v.is_finite() {
+                    v.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                c.bulge = [v; 4];
+            }
         }
         c
     }
 }
 
 /// Apply a corner edit to the selected rectangles, or to the defaults for
-/// new ones when none is selected.
+/// new ones when none is selected. A size is for the corner seen at that
+/// position on the page: on a rectangle turned by 180 degrees, flipped
+/// or stretched across its own side, the top left field edits the corner
+/// that lies at the top left (#1670).
 pub fn edit_corners(app: &mut App, edit: CornerEdit) {
     let together = app.corners_together;
     let cmds: Vec<Command> = app
-        .selected_shapes()
+        .selected_rc()
         .iter()
         .filter_map(|s| {
-            let kind = s.with_page_corners(edit.apply(s.page_corners()?, together))?;
+            let t = app.seen_transform(s);
+            let seen = edit.apply(s.page_corners()?.as_seen(t), together);
+            let kind = s.with_page_corners(Corners::from_seen(seen, t))?;
             (kind != s.kind).then_some(Command::SetShapeKind { shape: s.id, kind })
         })
         .collect();
     let any_rect = app
-        .selected_shapes()
+        .selected_rc()
         .iter()
         .any(|s| matches!(s.kind, ShapeKind::Rect { .. }));
     if !any_rect {
@@ -2674,6 +3303,7 @@ pub fn edit_corners(app: &mut App, edit: CornerEdit) {
         CornerEdit::Kind(_) => "Corner Style",
         CornerEdit::Size(..) => "Corner Radius",
         CornerEdit::Scaling(_) => "Corner Scaling",
+        CornerEdit::Bulge(_) => "Edge Bulge",
     };
     if let Err(e) = app.engine.run_batch(label, &cmds) {
         app.status = e.to_string();
@@ -2681,13 +3311,14 @@ pub fn edit_corners(app: &mut App, edit: CornerEdit) {
 }
 
 /// Rectangle corners: the corner style, the four sizes (top left over
-/// bottom left, then top right over bottom right) with the lock that edits
-/// them together, and relative corner scaling.
+/// bottom left, then top right over bottom right, each the corner seen at
+/// that position on the page) with the lock that edits them together, and
+/// relative corner scaling.
 pub fn rectangle_part(app: &mut App, ui: &mut Ui) {
     let current = app
-        .selected_shapes()
+        .selected_rc()
         .iter()
-        .find_map(|s| s.page_corners())
+        .find_map(|s| app.corners_as_seen(s))
         .unwrap_or(app.rect_corners);
     // Values that differ across the selected rectangles show as mixed.
     let mix = app.selection_corner_mix().map_or([false; 6], |(_, m)| m);
@@ -2716,11 +3347,19 @@ pub fn rectangle_part(app: &mut App, ui: &mut Ui) {
     ] {
         stacked(ui, |ui| {
             for i in column {
-                row(ui, |ui| {
-                    let mixed = mix.get(i + 1).copied().unwrap_or(false);
-                    if let Some(v) = distance_mixed(ui, app, current.radii[i], 66.0, mixed) {
-                        edit = Some(CornerEdit::Size(i, v));
-                    }
+                let key = match i {
+                    Corners::TOP_LEFT => "toolbar.corner_top_left",
+                    Corners::TOP_RIGHT => "toolbar.corner_top_right",
+                    Corners::BOTTOM_LEFT => "toolbar.corner_bottom_left",
+                    _ => "toolbar.corner_bottom_right",
+                };
+                crate::ui::tips::tip_over(ui, crate::ui::tips::keyed(key), |ui| {
+                    row(ui, |ui| {
+                        let mixed = mix.get(i + 1).copied().unwrap_or(false);
+                        if let Some(v) = distance_mixed(ui, app, current.radii[i], 66.0, mixed) {
+                            edit = Some(CornerEdit::Size(i, v));
+                        }
+                    })
                 });
             }
         });
@@ -2750,6 +3389,35 @@ pub fn rectangle_part(app: &mut App, ui: &mut Ui) {
     {
         edit = Some(CornerEdit::Scaling(!relative));
     }
+    // The edges' bow (#2188): a share of a quarter circle, the largest
+    // edge's when they differ; the Shape tool's edge handles bow one.
+    // Shown with the Rectangle and Shape tools, or once a rectangle
+    // bows, so the Pick tool's full bar keeps its room.
+    let show_bulge = matches!(
+        app.tool,
+        crate::tools::Tool::Rectangle | crate::tools::Tool::Shape
+    ) || current.has_bulge();
+    if !show_bulge {
+        if let Some(e) = edit {
+            edit_corners(app, e);
+        }
+        return;
+    }
+    sep(ui);
+    let mut bulge = ((0..4).map(|i| current.edge_bulge(i)).fold(0.0, f64::max) * 100.0).round();
+    ui.label(egui::RichText::new(tr("toolbar.edge_bulge_short")).size(12.0));
+    if ui
+        .add(
+            crate::ui::field::NumField::new(&mut bulge)
+                .range(0.0..=100.0)
+                .suffix(" %")
+                .width(44.0),
+        )
+        .rich_tip(crate::ui::tips::keyed("toolbar.edge_bulge"))
+        .changed()
+    {
+        edit = Some(CornerEdit::Bulge(bulge / 100.0));
+    }
     if let Some(e) = edit {
         edit_corners(app, e);
     }
@@ -2760,7 +3428,7 @@ pub fn rectangle_part(app: &mut App, ui: &mut Ui) {
 /// drawn.
 pub fn kind_part(app: &mut App, ui: &mut Ui) -> bool {
     let kinds: Vec<u8> = app
-        .selected_shapes()
+        .selected_rc()
         .iter()
         .map(|s| match s.kind {
             ShapeKind::Rect { .. } => 1,
@@ -2848,17 +3516,13 @@ pub fn zoom_bar(app: &mut App, ui: &mut Ui) {
 /// parts (break apart); `None` when nothing applies.
 pub fn arrange_offers(shapes: &[tracedraw_core::Shape]) -> Option<(bool, bool, bool)> {
     let many = shapes.len() >= 2;
+    // A clip frame whose frame is a group ungroups, one whose frame is a
+    // curve of several parts breaks apart (#1605, #1607).
     let groups = shapes
         .iter()
-        .any(|s| matches!(s.kind, ShapeKind::Group { .. }));
+        .any(|s| matches!(s.kind, ShapeKind::Group { .. }) || s.is_clip_frame_of_group());
     let parts = shapes.iter().any(|s| match &s.kind {
-        ShapeKind::Path { path, .. } => {
-            path.elements()
-                .iter()
-                .filter(|e| matches!(e, tracedraw_core::geometry::PathEl::MoveTo(_)))
-                .count()
-                > 1
-        }
+        ShapeKind::Path { .. } | ShapeKind::ClipFrame { .. } => s.breaks_into_parts(),
         _ => false,
     });
     (many || groups || parts).then_some((many, groups, parts))
@@ -2866,7 +3530,7 @@ pub fn arrange_offers(shapes: &[tracedraw_core::Shape]) -> Option<(bool, bool, b
 
 pub fn arrange_part(app: &mut App, ui: &mut Ui) -> bool {
     use crate::ops::Shaping;
-    let shapes = app.selected_shapes();
+    let shapes = app.selected_rc();
     let Some((many, groups, parts)) = arrange_offers(&shapes) else {
         return false;
     };
@@ -2986,7 +3650,11 @@ pub fn arrange_part(app: &mut App, ui: &mut Ui) -> bool {
             false,
         ),
     ] {
-        let on = if need_many { many } else { !shapes.is_empty() };
+        let on = if need_many {
+            app.shaping_ready(op)
+        } else {
+            !shapes.is_empty()
+        };
         let tip = format!("{}\n{}", tr(key), tr(hint));
         if pic_button(ui, pic, &tip, on, false).clicked() {
             app.shaping(op);
@@ -2996,7 +3664,7 @@ pub fn arrange_part(app: &mut App, ui: &mut Ui) -> bool {
     if pic_button(
         ui,
         Pic::AlignDistribute,
-        &tip("menu.object.align_distribute_docker", "Ctrl+Shift+A"),
+        &tip("menu.object.align_distribute_docker", ""),
         true,
         false,
     )
@@ -3034,29 +3702,61 @@ fn wrap_style_list(app: &mut App, ui: &mut Ui) {
     let button = ui
         .add_enabled(
             !app.selection.is_empty(),
-            egui::Button::new("\u{25BE}").small(),
+            egui::Button::new("\u{23F7}").small(),
         )
         .rich_tip(tr("context.wrap_style"));
     if button.clicked() {
         egui::Popup::toggle_id(&ctx, popup_id);
     }
+    crate::ui::keynav::list_button_keys(&ctx, &button, popup_id);
     egui::Popup::new(popup_id, ctx.clone(), button.rect, ui.layer_id())
         .open_memory(None)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .width(260.0)
         .show(|ui| {
-            for (mode, side) in tracedraw_core::TextWrap::STYLES {
-                let here = on && current.mode == mode && current.side == side;
-                if ui
-                    .selectable_label(here, tr(wrap_style_key(mode, side)))
-                    .clicked()
-                {
-                    app.set_wrap_style(mode, side);
+            // As the reference program lists them (#661): a title, None,
+            // the contour and the square styles under their headings, and
+            // the offset, greyed out while nothing wraps (typing one
+            // would turn wrapping back on).
+            ui.label(egui::RichText::new(tr("context.wrap_style")).strong());
+            if ui.iselectable(!on, "context.wrap_none").clicked() && on {
+                let shapes = app.selection.clone();
+                app.run(tracedraw_core::Command::SetWrapText {
+                    shapes,
+                    wrap: false,
+                });
+            }
+            use tracedraw_core::WrapMode;
+            for (heading, contour) in [
+                ("context.wrap_contour", true),
+                ("context.wrap_square", false),
+            ] {
+                ui.separator();
+                ui.label(egui::RichText::new(tr(heading)).strong());
+                for (mode, side) in tracedraw_core::TextWrap::STYLES {
+                    if (mode == WrapMode::Contour) != contour {
+                        continue;
+                    }
+                    let here = on && current.mode == mode && current.side == side;
+                    if ui.selectable_label(here, tr(wrap_side_key(side))).clicked() {
+                        app.set_wrap_style(mode, side);
+                    }
                 }
             }
             ui.separator();
-            wrap_offset_field(app, ui, current.offset);
+            ui.add_enabled_ui(on, |ui| wrap_offset_field(app, ui, current.offset));
         });
+}
+
+/// A wrap style's side under its Contour or Square heading.
+fn wrap_side_key(side: tracedraw_core::WrapSide) -> &'static str {
+    use tracedraw_core::WrapSide as S;
+    match side {
+        S::Left => "context.wrap_flows_left",
+        S::Right => "context.wrap_flows_right",
+        S::Straddle => "context.wrap_straddle",
+        S::AboveBelow => "context.wrap_above_below",
+    }
 }
 
 /// The text wrap offset field (property bar list and context menu).
@@ -3070,10 +3770,12 @@ pub fn wrap_offset_field(app: &mut App, ui: &mut Ui, offset: f64) {
     });
 }
 
-/// Wrap Paragraph Text, To Front and To Back of the layer and Convert to
-/// Curves, for the selected objects.
-pub fn order_part(app: &mut App, ui: &mut Ui) {
-    let wrap = app.selected_shapes().iter().any(|s| s.wrap_text);
+/// Wrap Paragraph Text and its list of wrap styles, for the selected
+/// objects: on every object's bar, so that paragraph text alone, a
+/// picture alone or any one object shows it, not only a mixed selection
+/// (#2620, discussion #2618).
+pub fn wrap_part(app: &mut App, ui: &mut Ui) {
+    let wrap = app.selected_rc().iter().any(|s| s.wrap_text);
     if pic_button(
         ui,
         Pic::WrapText,
@@ -3090,11 +3792,17 @@ pub fn order_part(app: &mut App, ui: &mut Ui) {
         });
     }
     wrap_style_list(app, ui);
+}
+
+/// Wrap Paragraph Text, To Front and To Back of the layer and Convert to
+/// Curves, for the selected objects.
+pub fn order_part(app: &mut App, ui: &mut Ui) {
+    wrap_part(app, ui);
     if pic_button(ui, Pic::ToFront, &tr("toolbar.to_front"), true, false).clicked() {
-        app.order(0);
+        app.order_page(true);
     }
     if pic_button(ui, Pic::ToBack, &tr("toolbar.to_back"), true, false).clicked() {
-        app.order(3);
+        app.order_page(false);
     }
     let curves_ok = app.can_convert_to_curves();
     if pic_button(
@@ -3114,6 +3822,407 @@ pub fn order_part(app: &mut App, ui: &mut Ui) {
 mod tests {
     use super::*;
     use tracedraw_core::geometry::Rect as R;
+
+    /// A horizontal line has no height and a vertical one no width: the
+    /// other side typed on the bar still sizes it (#2762).
+    #[test]
+    fn a_straight_line_takes_the_size_typed_on_its_long_side() {
+        assert_eq!(size_scale((50.0, 0.0), (100.0, 0.0)), Some((2.0, 1.0)));
+        assert_eq!(size_scale((0.0, 40.0), (0.0, 10.0)), Some((1.0, 0.25)));
+        // Its missing side typed does nothing; nor does the same size.
+        assert_eq!(size_scale((50.0, 0.0), (50.0, 30.0)), None);
+        assert_eq!(size_scale((50.0, 20.0), (50.0, 20.0)), None);
+        // A side typed as nothing is refused.
+        assert_eq!(size_scale((50.0, 20.0), (0.0, 20.0)), None);
+        assert_eq!(size_scale((50.0, 20.0), (25.0, 40.0)), Some((0.5, 2.0)));
+    }
+
+    #[test]
+    fn single_object_scale_transform_rejects_invalid_matrices_and_values() {
+        let mut app = App::headless();
+        let kind = ShapeKind::Rect {
+            rect: R::new(0.0, 0.0, 40.0, 20.0),
+            radius: 0.0,
+            corners: None,
+        };
+        let id = app.new_shape(kind.clone()).expect("rectangle");
+        app.select(vec![id]);
+        for (sx, sy) in [
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (f64::NAN, 1.0),
+            (2.0, f64::INFINITY),
+        ] {
+            assert!(percentage_scale_transform(&app, sx, sy, Point::ZERO).is_none());
+        }
+        assert!(percentage_scale_transform(&app, 2.0, 1.0, Point::new(f64::NAN, 0.0)).is_none());
+        for transform in [
+            Affine::new([1.0, 1.0, 1.0, 1.0, 0.0, 0.0]),
+            Affine::new([f64::NAN, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            Affine::scale_non_uniform(f64::MAX, 1.0),
+        ] {
+            let id = app
+                .new_shape_styled(kind.clone(), |s| s.transform = transform)
+                .expect("rectangle");
+            app.select(vec![id]);
+            let before = app.engine.history_labels().0.len();
+            assert!(percentage_scale_transform(&app, 2.0, 1.0, Point::ZERO).is_none());
+            assert_eq!(app.engine.history_labels().0.len(), before);
+        }
+    }
+
+    /// A bar button that cannot run now is drawn greyed but plain to see
+    /// in every theme: on the Dark theme the Shape tool's node buttons,
+    /// with no node chosen, were drawn in the panels' line colour, darker
+    /// than the bar (#2065).
+    #[test]
+    fn greyed_bar_icons_stand_out_from_the_bar_in_every_theme() {
+        fn luminance(c: egui::Color32) -> f32 {
+            let f = |v: u8| {
+                let v = v as f32 / 255.0;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
+        }
+        fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
+            let (a, b) = (luminance(a), luminance(b));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        }
+        let ctx = crate::theme::ui_context();
+        for theme in crate::theme::Theme::ALL {
+            crate::theme::set_theme(theme);
+            let (off, on, bar) = (icon_color(false), icon_color(true), Tokens::panel());
+            assert_eq!(off, Tokens::icon_off(), "{theme:?}");
+            assert!(contrast(off, bar) >= 1.5, "{theme:?}: {off:?} on {bar:?}");
+            // Still apart from the buttons that can run.
+            assert_ne!(off, on, "{theme:?}");
+            // The button paints its picture in that colour.
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                pic_button(ui, Pic::BreakCurve, "Break", false, false);
+            });
+            out.textures_delta.clear();
+            fn collect(s: &epaint::Shape, out: &mut Vec<egui::Color32>) {
+                match s {
+                    epaint::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+                    epaint::Shape::Path(p) => {
+                        out.push(p.fill);
+                        if let epaint::ColorMode::Solid(c) = p.stroke.color {
+                            out.push(c);
+                        }
+                    }
+                    epaint::Shape::LineSegment { stroke, .. } => out.push(stroke.color),
+                    epaint::Shape::Circle(c) => out.extend([c.fill, c.stroke.color]),
+                    epaint::Shape::Rect(r) => out.extend([r.fill, r.stroke.color]),
+                    _ => {}
+                }
+            }
+            let mut colours = Vec::new();
+            for c in &out.shapes {
+                collect(&c.shape, &mut colours);
+            }
+            assert!(colours.contains(&off), "{theme:?}: {colours:?}");
+            assert!(
+                !colours.contains(&Tokens::border()) || Tokens::border() == off,
+                "{theme:?}"
+            );
+        }
+        crate::theme::set_theme(crate::theme::Theme::Light);
+    }
+
+    /// The size and position fields show the decimals a value needs, at
+    /// least one and up to the drawing precision, with no trailing zeros:
+    /// 20.0 mm, 20.5 mm, 20.125 mm; a value typed with more decimals is
+    /// kept as typed (#1761).
+    #[test]
+    fn distance_fields_show_only_the_decimals_needed() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.units = Units::Millimeters;
+        app.settings.precision = 3;
+        let run = |app: &App, mm: f64, events: Vec<egui::Event>| {
+            let mut got = None;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| got = distance(ui, app, mm, 90.0, Some(1.0)),
+            );
+            out.textures_delta.clear();
+            let texts: Vec<(String, egui::Rect)> = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    epaint::Shape::Text(t) => Some((
+                        t.galley.text().to_string(),
+                        t.galley.rect.translate(t.pos.to_vec2()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            (got, texts)
+        };
+        for (mm, shown) in [
+            (20.0, "20.0 mm"),
+            (20.5, "20.5 mm"),
+            (20.125, "20.125 mm"),
+            (0.0, "0.0 mm"),
+            (-0.0001, "0.0 mm"),
+            (-3.25, "-3.25 mm"),
+            (20.12345, "20.123 mm"),
+            (19.9999, "20.0 mm"),
+        ] {
+            let (_, texts) = run(&app, mm, Vec::new());
+            assert!(texts.iter().any(|(t, _)| t == shown), "{mm}: {texts:?}");
+        }
+        // More precision in Options shows more decimals, still trimmed.
+        app.settings.precision = 5;
+        let (_, texts) = run(&app, 20.12345, Vec::new());
+        assert!(texts.iter().any(|(t, _)| t == "20.12345 mm"), "{texts:?}");
+        let (_, texts) = run(&app, 20.5, Vec::new());
+        assert!(texts.iter().any(|(t, _)| t == "20.5 mm"), "{texts:?}");
+        // No decimals asked for: none shown.
+        app.settings.precision = 0;
+        let (_, texts) = run(&app, 20.0, Vec::new());
+        assert!(texts.iter().any(|(t, _)| t == "20 mm"), "{texts:?}");
+        // Typed with more decimals than shown: kept as typed.
+        app.settings.precision = 3;
+        let (_, texts) = run(&app, 20.0, Vec::new());
+        let at = texts
+            .iter()
+            .find(|(t, _)| t == "20.0 mm")
+            .map(|(_, r)| r.center())
+            .expect("the field");
+        run(&app, 20.0, vec![egui::Event::PointerMoved(at)]);
+        for pressed in [true, false] {
+            run(
+                &app,
+                20.0,
+                vec![egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        run(&app, 20.0, vec![egui::Event::Text("20.12345".into())]);
+        let key = |k: egui::Key| egui::Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (got, _) = run(&app, 20.0, vec![key(egui::Key::Enter)]);
+        assert_eq!(got, Some(20.12345));
+    }
+
+    /// The rotation field's arrows turn the selection a degree at each
+    /// click, also when the box was clicked into first (its value
+    /// selected): only the first click used to turn it, the one that took
+    /// the focus from the box. The wheel over the box turns it too.
+    #[test]
+    fn every_click_on_the_rotation_arrows_turns_the_selection() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let id = app
+            .new_shape(ShapeKind::Rect {
+                rect: R::new(10.0, 10.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rect");
+        app.select(vec![id]);
+        let origin = egui::pos2(100.0, 100.0);
+        let run = |app: &mut App, events: Vec<egui::Event>| -> egui::Rect {
+            let mut rect = egui::Rect::NOTHING;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Area::new(egui::Id::new("rotation"))
+                        .fixed_pos(origin)
+                        .show(ui.ctx(), |ui| {
+                            rect = rotation_field(app, ui, Point::new(35.0, 25.0)).rect;
+                        });
+                },
+            );
+            out.textures_delta.clear();
+            rect
+        };
+        run(&mut app, Vec::new());
+        let field = run(&mut app, Vec::new());
+        let click = |app: &mut App, at: egui::Pos2| {
+            run(app, vec![egui::Event::PointerMoved(at)]);
+            for pressed in [true, false] {
+                run(
+                    app,
+                    vec![egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            run(app, Vec::new());
+        };
+        let up = egui::pos2(
+            field.right() + crate::ui::field::SPIN_W / 2.0,
+            field.top() + field.height() * 0.25,
+        );
+        // Into the box (its value selected), then the up arrow twice.
+        click(&mut app, field.center());
+        click(&mut app, up);
+        click(&mut app, up);
+        assert!(
+            (selection_angle(&app) - 2.0).abs() < 1e-6,
+            "{}",
+            selection_angle(&app)
+        );
+        // Once more, the box no longer holding the focus.
+        click(&mut app, up);
+        assert!(
+            (selection_angle(&app) - 3.0).abs() < 1e-6,
+            "{}",
+            selection_angle(&app)
+        );
+        // The wheel over the box: down a degree.
+        run(&mut app, vec![egui::Event::PointerMoved(field.center())]);
+        run(
+            &mut app,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(
+            (selection_angle(&app) - 2.0).abs() < 1e-6,
+            "{}",
+            selection_angle(&app)
+        );
+        // One undo step a click.
+        app.undo();
+        assert!((selection_angle(&app) - 3.0).abs() < 1e-6);
+        // With the centre of rotation moved to a corner, the arrow turns
+        // the object about that corner, which stays put (#2478).
+        let corner = |app: &App| {
+            app.doc().shape_on_page(id).expect("rect").transform * Point::new(10.0, 10.0)
+        };
+        let before = corner(&app);
+        app.set_pivot(before);
+        click(&mut app, up);
+        assert!(
+            (selection_angle(&app) - 4.0).abs() < 1e-6,
+            "{}",
+            selection_angle(&app)
+        );
+        let after = corner(&app);
+        assert!((after - before).hypot() < 1e-6, "{before:?} -> {after:?}");
+    }
+
+    /// #1331: the sharpness box takes a negative value, which inverts the
+    /// selected star, and shows it back as negative.
+    #[test]
+    fn the_sharpness_box_takes_a_negative_value() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let id = app
+            .new_shape(ShapeKind::Polygon {
+                rect: R::new(10.0, 10.0, 50.0, 50.0),
+                points: 5,
+                sharpness: 0.5,
+                complex: None,
+                twist: 0.0,
+                bend: 0.0,
+            })
+            .expect("star");
+        app.select(vec![id]);
+        let key = |key: egui::Key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let sharpness = |app: &App| match &app.engine.document().find_shape(id).expect("star").kind
+        {
+            ShapeKind::Polygon { sharpness, .. } => *sharpness,
+            k => panic!("{k:?}"),
+        };
+        let run = |app: &mut App, events: Vec<egui::Event>| -> String {
+            let mut shown = String::new();
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal(|ui| polygon_part(app, ui, false));
+                },
+            );
+            for shape in out.shapes.iter() {
+                if let egui::epaint::Shape::Text(t) = &shape.shape {
+                    shown.push_str(t.galley.text());
+                    shown.push('|');
+                }
+            }
+            out.textures_delta.clear();
+            shown
+        };
+        run(&mut app, Vec::new());
+        // Tab to the points box, Tab to the sharpness box, type, Enter.
+        run(&mut app, vec![key(egui::Key::Tab)]);
+        run(&mut app, vec![key(egui::Key::Tab)]);
+        run(&mut app, vec![egui::Event::Text("-40".into())]);
+        run(&mut app, vec![key(egui::Key::Enter)]);
+        run(&mut app, Vec::new());
+        assert!((sharpness(&app) + 0.4).abs() < 1e-9, "{}", sharpness(&app));
+        assert!((app.star_sharpness + 0.4).abs() < 1e-9);
+        // The box shows it back.
+        let shown = run(&mut app, Vec::new());
+        assert!(shown.contains("-40"), "{shown}");
+        // The outline is the inverted star: inner points past the centre.
+        let inner = match &app.engine.document().find_shape(id).expect("star").kind {
+            ShapeKind::Polygon { rect, .. } => {
+                let path = app
+                    .engine
+                    .document()
+                    .find_shape(id)
+                    .expect("star")
+                    .local_path();
+                let c = rect.center();
+                let second = path.elements()[1].end_point().expect("point");
+                (second - c).y
+            }
+            k => panic!("{k:?}"),
+        };
+        // The first inner point (right of the top vertex, above the
+        // centre on a plain star) lies below the centre.
+        assert!(inner < 0.0, "{inner}");
+        // 0 is no star: the box keeps the star's side.
+        assert_eq!(sharpness_from_pct(0.0, -0.4), -0.01);
+        assert_eq!(sharpness_from_pct(0.0, 0.4), 0.01);
+        assert_eq!(sharpness_from_pct(-150.0, 0.4), -0.99);
+        assert_eq!(sharpness_from_pct(f64::NAN, -0.4), -0.4);
+    }
 
     #[test]
     fn shaping_and_grouping_show_for_several_objects_groups_and_parts() {
@@ -3164,6 +4273,43 @@ mod tests {
     /// The page bar draws with its Fit page to drawing button on a page
     /// with objects and on an empty one (where the button is pale), and
     /// the icon is on the 16-grid like the others (#236).
+    /// #3450: the page bar (nothing selected) has the drawing scale
+    /// beside Units, as the scale is the whole drawing's; it was only on
+    /// the Dimension tools' bar.
+    #[test]
+    fn the_page_bar_shows_the_drawing_scale() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let p = crate::drawing_scale::PRESETS
+            .iter()
+            .find(|p| p.label == "1:100")
+            .copied()
+            .expect("1:100");
+        app.set_drawing_scale_preset(&p);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(3000.0, 60.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            ui.horizontal(|ui| page_bar(&mut app, ui));
+        });
+        out.textures_delta.clear();
+        let mut texts = Vec::new();
+        fn walk(s: &egui::Shape, texts: &mut Vec<String>) {
+            match s {
+                egui::Shape::Text(t) => texts.push(t.galley.text().to_string()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, texts)),
+                _ => {}
+            }
+        }
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut texts));
+        assert!(texts.iter().any(|t| t == "1:100"), "{texts:?}");
+        assert!(texts.contains(&tr("dimension.drawing_scale")), "{texts:?}");
+    }
+
     #[test]
     fn the_page_bar_draws_with_its_fit_page_button() {
         let ctx = crate::theme::ui_context();
@@ -3193,12 +4339,94 @@ mod tests {
         out.textures_delta.clear();
     }
 
+    /// The page bar's list of sizes ends with Custom..., ticked when the
+    /// page matches no preset; clicking it opens the Page Size dialog with
+    /// the page's own width and height (#650).
+    #[test]
+    fn the_page_size_list_offers_a_custom_size() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let size = Size::new(123.0, 45.0);
+        let custom = tr("toolbar.custom_page");
+        let run = |app: &mut App, events: Vec<egui::Event>| -> Option<egui::Rect> {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| page_size_list(app, ui, "Custom", size),
+            );
+            out.textures_delta.clear();
+            out.shapes.iter().find_map(|c| match &c.shape {
+                epaint::Shape::Text(t) if t.galley.text() == custom => {
+                    Some(t.galley.rect.translate(t.pos.to_vec2()))
+                }
+                _ => None,
+            })
+        };
+        let at = run(&mut app, Vec::new()).expect("a Custom entry").center();
+        run(&mut app, vec![egui::Event::PointerMoved(at)]);
+        for pressed in [true, false] {
+            run(
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        match app.dialog {
+            crate::ui::dialogs::Dialog::PageSize { width, height, .. } => {
+                assert!((width - 123.0).abs() < 1e-9 && (height - 45.0).abs() < 1e-9);
+            }
+            _ => panic!("the Page Size dialog"),
+        }
+    }
+
+    /// With Live preview on the open popup shows the page Autofit Page
+    /// would make; off, the page stays as it is (#659).
+    #[test]
+    fn the_autofit_popup_previews_only_with_live_preview_on() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.new_shape(ShapeKind::Rect {
+            rect: R::new(10.0, 10.0, 60.0, 40.0),
+            radius: 0.0,
+            corners: None,
+        })
+        .expect("a layer");
+        let run = |app: &mut App| {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.horizontal(|ui| page_bar(app, ui));
+            });
+            out.textures_delta.clear();
+        };
+        run(&mut app);
+        assert!(app.autofit_preview.is_none(), "closed");
+        egui::Popup::open_id(&ctx, autofit_popup_id());
+        assert!(app.settings.fit_page_preview, "on at first");
+        run(&mut app);
+        assert!(app.autofit_preview.is_some());
+        assert!(app
+            .autofit_preview_rect(ctx.cumulative_frame_nr())
+            .is_some());
+        app.settings.fit_page_preview = false;
+        run(&mut app);
+        assert!(egui::Popup::is_id_open(&ctx, autofit_popup_id()));
+        assert!(app.autofit_preview.is_none());
+        assert!(app
+            .autofit_preview_rect(ctx.cumulative_frame_nr())
+            .is_none());
+    }
+
     #[test]
     fn page_size_changes_one_page_or_all_in_one_step() {
         let mut app = App::headless();
         app.add_page();
         let depth = app.engine.history_labels().0.len();
-        app.page_size_all = true;
+        app.settings.page_size_all = true;
         resize_pages(&mut app, Size::new(100.0, 50.0));
         assert!(app
             .doc()
@@ -3206,7 +4434,7 @@ mod tests {
             .iter()
             .all(|p| p.size == Size::new(100.0, 50.0)));
         assert_eq!(app.engine.history_labels().0.len(), depth + 1);
-        app.page_size_all = false;
+        app.settings.page_size_all = false;
         resize_pages(&mut app, Size::new(70.0, 70.0));
         let sizes: Vec<Size> = app.doc().pages.iter().map(|p| p.size).collect();
         assert_eq!(
@@ -3216,6 +4444,438 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// The wheel steps through the outline width list: no outline,
+    /// hairline, then the widths of the unit, from wherever the width is
+    /// (#663).
+    #[test]
+    fn the_wheel_steps_through_the_outline_widths() {
+        let hair = tracedraw_core::Stroke::HAIRLINE;
+        for u in OUTLINE_UNITS {
+            let p = outline_width_presets(u);
+            assert_eq!(outline_width_step(None, true, u), Some(Some(hair)));
+            assert_eq!(outline_width_step(None, false, u), None);
+            assert_eq!(outline_width_step(Some(hair), false, u), Some(None));
+            // The first width above the hairline (in inches the first is
+            // the hairline itself).
+            let above = p.iter().copied().find(|w| *w > hair + 1e-9);
+            assert_eq!(outline_width_step(Some(hair), true, u), above.map(Some));
+            assert_eq!(outline_width_step(Some(p[2]), true, u), Some(Some(p[3])));
+            assert_eq!(outline_width_step(Some(p[2]), false, u), Some(Some(p[1])));
+            if p[0] > hair {
+                assert_eq!(outline_width_step(Some(p[0]), false, u), Some(Some(hair)));
+            }
+            // Between two widths: the one above or below.
+            let mid = (p[1] + p[2]) / 2.0;
+            assert_eq!(outline_width_step(Some(mid), true, u), Some(Some(p[2])));
+            assert_eq!(outline_width_step(Some(mid), false, u), Some(Some(p[1])));
+            // Past the widest it goes on in steps of the last gap, and
+            // back down the same way to the list (#3050).
+            let last = *p.last().expect("widths");
+            let gap = u.from_mm(last) - u.from_mm(p[p.len() - 2]);
+            let up1 = outline_width_step(Some(last), true, u)
+                .flatten()
+                .expect("a step past the widest");
+            assert!(
+                (u.from_mm(up1) - (u.from_mm(last) + gap)).abs() < 1e-9,
+                "{u:?}"
+            );
+            let up2 = outline_width_step(Some(up1), true, u)
+                .flatten()
+                .expect("on");
+            assert!((u.from_mm(up2) - (u.from_mm(last) + 2.0 * gap)).abs() < 1e-9);
+            assert_eq!(outline_width_step(Some(up1), false, u), Some(Some(last)));
+            // Off the grid: the grid step above or below.
+            let off = u.to_mm(u.from_mm(last) + 1.5 * gap);
+            let a = outline_width_step(Some(off), true, u)
+                .flatten()
+                .expect("up");
+            assert!((a - up2).abs() < 1e-9);
+            let b = outline_width_step(Some(off), false, u)
+                .flatten()
+                .expect("down");
+            assert!((b - up1).abs() < 1e-9);
+            // At 1000 mm it stops.
+            assert_eq!(outline_width_step(Some(1000.0), true, u), None);
+        }
+        // In points: 16, then 20 and 24 pt.
+        let pt = Units::Points;
+        let p20 = outline_width_step(Some(pt.to_mm(16.0)), true, pt).flatten();
+        assert!((pt.from_mm(p20.expect("20 pt")) - 20.0).abs() < 1e-9);
+    }
+
+    /// Object > Thicker Outline and Thinner Outline step the selection's
+    /// outline through the width list as the wheel does (#2905), keep its
+    /// colour, give an object without an outline a hairline and stop at
+    /// the hairline going down.
+    #[test]
+    fn outline_width_commands_step_the_selection() {
+        let mut app = App::headless();
+        app.set_outline_units(Units::Points);
+        let id = app
+            .new_shape(tracedraw_core::document::ShapeKind::Rect {
+                rect: tracedraw_core::geometry::Rect::new(10.0, 10.0, 40.0, 30.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rect");
+        app.run(tracedraw_core::Command::SetStroke {
+            shapes: vec![id],
+            stroke: None,
+        });
+        app.select(vec![id]);
+        let width = |app: &App| {
+            app.doc()
+                .find_shape(id)
+                .expect("rect")
+                .stroke
+                .as_ref()
+                .map(|s| s.width)
+        };
+        app.step_outline_width(true);
+        assert_eq!(width(&app), Some(tracedraw_core::Stroke::HAIRLINE));
+        let red = tracedraw_core::Color::rgb8(200, 0, 0);
+        let mut k = app.doc().find_shape(id).expect("rect").stroke.clone().expect("outline");
+        k.color = red;
+        app.run(tracedraw_core::Command::SetStroke {
+            shapes: vec![id],
+            stroke: Some(k),
+        });
+        let mut w = width(&app);
+        for _ in 0..4 {
+            app.step_outline_width(true);
+            let next = outline_width_step(w, true, Units::Points).expect("a step");
+            assert_eq!(width(&app), next);
+            w = next;
+        }
+        assert_eq!(
+            app.doc().find_shape(id).expect("rect").stroke.as_ref().map(|s| s.color),
+            Some(red),
+            "its colour kept"
+        );
+        for _ in 0..20 {
+            app.step_outline_width(false);
+        }
+        assert_eq!(width(&app), Some(tracedraw_core::Stroke::HAIRLINE), "down to a hairline");
+        // Nothing selected: nothing changes.
+        app.select(Vec::new());
+        app.step_outline_width(true);
+        assert_eq!(width(&app), Some(tracedraw_core::Stroke::HAIRLINE));
+    }
+
+    /// The outline width box in a property bar longer than the window:
+    /// notch after notch the width steps and the bar stays where it is,
+    /// on the frames between the notches too, where the smoothed scroll
+    /// of a notch slid the bar and took the box away from under the
+    /// pointer (#783).
+    #[test]
+    fn the_wheel_over_the_outline_width_in_a_long_bar_keeps_the_bar_still() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let id = app
+            .new_shape(ShapeKind::Rect {
+                rect: R::new(10.0, 10.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rect");
+        app.select(vec![id]);
+        let p = outline_width_presets(app.outline_units());
+        app.apply_outline_width(p[6]);
+        let width = |app: &App| {
+            app.doc()
+                .find_shape(id)
+                .and_then(|s| s.stroke.as_ref().map(|s| s.width))
+        };
+        let clock = std::cell::Cell::new(0.0f64);
+        let run = |app: &mut App, events: Vec<egui::Event>| -> egui::Rect {
+            let mut box_id = egui::Id::NULL;
+            clock.set(clock.get() + 1.0 / 60.0);
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500.0, 300.0),
+                    )),
+                    events,
+                    time: Some(clock.get()),
+                    ..Default::default()
+                },
+                |ui| {
+                    crate::ui::field::hold_taken_wheel(ui.ctx());
+                    crate::ui::overflow::row(ui, "property_test", |ui| {
+                        ui.add_space(200.0);
+                        box_id = ui.make_persistent_id("outline_width_box");
+                        outline_part(app, ui);
+                        ui.add_space(900.0);
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            ctx.read_response(box_id)
+                .map(|r| r.rect)
+                .unwrap_or(egui::Rect::NOTHING)
+        };
+        for _ in 0..3 {
+            run(&mut app, Vec::new());
+        }
+        let start = run(&mut app, Vec::new());
+        assert!(start.is_positive(), "{start:?}");
+        run(&mut app, vec![egui::Event::PointerMoved(start.center())]);
+        // Clicked into: on a bar the wheel steps only the box clicked
+        // into (#3589).
+        let click = |pressed| egui::Event::PointerButton {
+            pos: start.center(),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        run(&mut app, vec![click(true)]);
+        run(&mut app, vec![click(false)]);
+        for k in 1..=5 {
+            run(
+                &mut app,
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    // Down: the bar slides forward with it.
+                    delta: egui::vec2(0.0, -1.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            for f in 0..5 {
+                let now = run(&mut app, Vec::new());
+                assert!(
+                    (now.left() - start.left()).abs() < 0.5,
+                    "notch {k}, frame {f}: {now:?} from {start:?}"
+                );
+            }
+            assert_eq!(width(&app), Some(p[6 - k]), "notch {k}");
+        }
+    }
+
+    /// A drag right on the outline width box's arrow slides the width up
+    /// through the list, a drag left back down, as on the number fields
+    /// (#3862).
+    #[test]
+    fn a_drag_on_the_outline_width_arrow_slides_the_width() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let id = app
+            .new_shape(ShapeKind::Rect {
+                rect: R::new(10.0, 10.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rect");
+        app.select(vec![id]);
+        let p = outline_width_presets(app.outline_units());
+        app.apply_outline_width(p[4]);
+        let width = |app: &App| {
+            app.doc()
+                .find_shape(id)
+                .and_then(|s| s.stroke.as_ref().map(|s| s.width))
+                .unwrap_or_default()
+        };
+        let clock = std::cell::Cell::new(0.0f64);
+        let run = |app: &mut App, events: Vec<egui::Event>| -> egui::Rect {
+            let mut box_id = egui::Id::NULL;
+            clock.set(clock.get() + 1.0 / 60.0);
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 300.0),
+                    )),
+                    events,
+                    time: Some(clock.get()),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        box_id = ui.make_persistent_id("outline_width_box");
+                        outline_part(app, ui);
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            ctx.read_response(box_id)
+                .map(|r| r.rect)
+                .unwrap_or(egui::Rect::NOTHING)
+        };
+        for _ in 0..3 {
+            run(&mut app, Vec::new());
+        }
+        let field = run(&mut app, Vec::new());
+        assert!(field.is_positive(), "{field:?}");
+        let at = egui::pos2(field.right() + 8.0, field.center().y);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let before = width(&app);
+        run(&mut app, vec![egui::Event::PointerMoved(at)]);
+        run(&mut app, vec![button(at, true)]);
+        for k in 1..=6 {
+            run(
+                &mut app,
+                vec![egui::Event::PointerMoved(at + egui::vec2(6.0 * k as f32, 0.0))],
+            );
+        }
+        let end = at + egui::vec2(36.0, 0.0);
+        run(&mut app, vec![button(end, false)]);
+        let up = width(&app);
+        assert!(up > before, "{before} -> {up}");
+    }
+
+    /// The outline width list keeps each width and its unit on one row,
+    /// however narrow the list (#2651: with short words for None and
+    /// Hairline, as in Chinese, "0.75 pt" broke in two).
+    #[test]
+    fn the_outline_width_list_keeps_a_width_on_one_row() {
+        let ctx = crate::theme::ui_context();
+        App::setup_context(&ctx);
+        for u in OUTLINE_UNITS {
+            let mut app = App::headless();
+            app.settings.outline_units = u.id().to_string();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.allocate_ui(egui::vec2(20.0, 600.0), |ui| {
+                    ui.set_max_width(20.0);
+                    outline_width_rows(&app, ui, None, false);
+                });
+            });
+            out.textures_delta.clear();
+            let rows: Vec<(String, usize)> = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    egui::Shape::Text(t) => {
+                        Some((t.galley.text().to_string(), t.galley.rows.len()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            for w in outline_width_presets(u) {
+                let label = outline_text(&app, Some(w));
+                let row = rows.iter().find(|(t, _)| *t == label);
+                assert_eq!(row.map(|r| r.1), Some(1), "{u:?} {label}: {rows:?}");
+            }
+        }
+    }
+
+    /// The wheel over the property bar's outline width box changes the
+    /// selection's outline to the next width up or down, one undo step a
+    /// notch; with nothing selected it does nothing (#663).
+    #[test]
+    fn the_wheel_over_the_outline_width_changes_it() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        let id = app
+            .new_shape(ShapeKind::Rect {
+                rect: R::new(10.0, 10.0, 60.0, 40.0),
+                radius: 0.0,
+                corners: None,
+            })
+            .expect("rect");
+        app.select(vec![id]);
+        let p = outline_width_presets(app.outline_units());
+        app.apply_outline_width(p[2]);
+        let width = |app: &App| {
+            app.doc()
+                .find_shape(id)
+                .and_then(|s| s.stroke.as_ref().map(|s| s.width))
+        };
+        assert_eq!(width(&app), Some(p[2]));
+        let origin = egui::pos2(100.0, 100.0);
+        let run = |app: &mut App, events: Vec<egui::Event>| -> egui::Rect {
+            let mut box_id = egui::Id::NULL;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::Area::new(egui::Id::new("outline_bar"))
+                        .fixed_pos(origin)
+                        .show(ui.ctx(), |ui| {
+                            ui.horizontal(|ui| {
+                                box_id = ui.make_persistent_id("outline_width_box");
+                                outline_part(app, ui);
+                            });
+                        });
+                },
+            );
+            out.textures_delta.clear();
+            ctx.read_response(box_id)
+                .map(|r| r.rect)
+                .unwrap_or(egui::Rect::NOTHING)
+        };
+        // The bar settles over the first frames.
+        run(&mut app, Vec::new());
+        run(&mut app, Vec::new());
+        let field = run(&mut app, Vec::new());
+        assert!(field.is_positive() && field.top() >= origin.y, "{field:?}");
+        let wheel = |app: &mut App, dy: f32| {
+            run(app, vec![egui::Event::PointerMoved(field.center())]);
+            run(
+                app,
+                vec![egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: egui::vec2(0.0, dy),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        };
+        let depth = app.engine.history_labels().0.len();
+        wheel(&mut app, 1.0);
+        assert_eq!(width(&app), Some(p[3]));
+        wheel(&mut app, -1.0);
+        wheel(&mut app, -1.0);
+        assert_eq!(width(&app), Some(p[1]));
+        assert_eq!(app.engine.history_labels().0.len(), depth + 3);
+        // Parts of a notch (a touchpad, a fine wheel) add up: a quarter
+        // does nothing, four of them make one step.
+        for _ in 0..3 {
+            wheel(&mut app, 0.25);
+            assert_eq!(width(&app), Some(p[1]));
+        }
+        wheel(&mut app, 0.25);
+        assert_eq!(width(&app), Some(p[2]));
+        // A notch of three lines (Firefox) or 100 points (Chrome) is one
+        // step.
+        wheel(&mut app, 3.0);
+        assert_eq!(width(&app), Some(p[3]));
+        run(&mut app, vec![egui::Event::PointerMoved(field.center())]);
+        run(
+            &mut app,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 100.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(width(&app), Some(p[4]));
+        assert_eq!(app.engine.history_labels().0.len(), depth + 6);
+        // Turning back drops the part of a notch gathered so far.
+        wheel(&mut app, 0.75);
+        wheel(&mut app, -0.5);
+        wheel(&mut app, 0.5);
+        assert_eq!(width(&app), Some(p[4]));
+        // Nothing selected: nothing changes, nothing is asked.
+        app.select(Vec::new());
+        wheel(&mut app, 1.0);
+        assert_eq!(width(&app), Some(p[4]));
+        assert_eq!(app.engine.history_labels().0.len(), depth + 6);
+        assert!(matches!(app.dialog, crate::ui::dialogs::Dialog::None));
     }
 
     #[test]
@@ -3305,31 +4965,144 @@ mod tests {
         let depth = app.engine.history_labels().0.len();
         // Together: every corner; the sizes are page millimetres.
         edit_corners(&mut app, CornerEdit::Size(Corners::TOP_RIGHT, 6.0));
-        let s = app.selected_shapes()[0].clone();
+        let s = app.selected_rc()[0].clone();
         assert_eq!(s.page_corners().unwrap().radii, [6.0; 4]);
         assert_eq!(app.engine.history_labels().0.len(), depth + 1);
         assert_eq!(app.engine.undo_label(), Some("Corner Radius"));
         // Unlocked: one corner.
         app.corners_together = false;
         edit_corners(&mut app, CornerEdit::Size(Corners::BOTTOM_LEFT, 1.0));
-        let s = app.selected_shapes()[0].clone();
+        let s = app.selected_rc()[0].clone();
         assert_eq!(s.page_corners().unwrap().radii, [6.0, 6.0, 1.0, 6.0]);
         // Turning relative scaling off keeps the sizes on the page.
         edit_corners(&mut app, CornerEdit::Scaling(false));
-        let s = app.selected_shapes()[0].clone();
+        let s = app.selected_rc()[0].clone();
         let c = s.page_corners().unwrap();
         assert!(c.fixed);
         assert_eq!(c.radii, [6.0, 6.0, 1.0, 6.0]);
         // ... and scaling the rectangle again leaves them alone.
         app.transform_selection(Affine::scale(0.5));
-        let s = app.selected_shapes()[0].clone();
+        let s = app.selected_rc()[0].clone();
         assert_eq!(s.page_corners().unwrap().radii, [6.0, 6.0, 1.0, 6.0]);
         assert_eq!(app.rect_corners, Corners::default());
         // Undo goes back one edit at a time.
         app.undo();
         app.undo();
-        let s = app.selected_shapes()[0].clone();
+        let s = app.selected_rc()[0].clone();
         assert!(!s.page_corners().unwrap().fixed);
+    }
+
+    /// A corner field takes more than half the shorter side when the
+    /// neighbouring corners leave room, and shows the size drawn when what
+    /// is typed is more than the rectangle holds (#1757).
+    #[test]
+    fn a_corner_field_takes_what_the_neighbours_leave() {
+        let mut app = App::headless();
+        app.corners_together = false;
+        let id = app
+            .new_shape(ShapeKind::rect_with_corners(
+                R::new(0.0, 0.0, 100.0, 80.0),
+                Corners::tool_default(),
+            ))
+            .expect("a rectangle");
+        app.select(vec![id]);
+        edit_corners(&mut app, CornerEdit::Size(Corners::TOP_LEFT, 10.0));
+        edit_corners(&mut app, CornerEdit::Size(Corners::TOP_RIGHT, 80.0));
+        let s = app.selected_rc()[0].clone();
+        assert_eq!(s.page_corners().unwrap().radii, [10.0, 80.0, 0.0, 0.0]);
+        assert_eq!(
+            app.corners_as_seen(&s).unwrap().radii,
+            [10.0, 80.0, 0.0, 0.0]
+        );
+        // A quarter circle of 80 about (20, 0), down the whole right side.
+        use tracedraw_core::geometry::Shape as _;
+        let path = s.page_path();
+        assert!(!path.contains(Point::new(95.0, 75.0)));
+        assert!(!path.contains(Point::new(99.5, 30.0)));
+        assert!(path.contains(Point::new(90.0, 30.0)));
+        assert!(path.contains(Point::new(99.5, 0.5)));
+        // 90 on the 80 mm right side: kept, and every corner is drawn and
+        // shown at 80 / 90 of its size.
+        edit_corners(&mut app, CornerEdit::Size(Corners::TOP_RIGHT, 90.0));
+        let s = app.selected_rc()[0].clone();
+        assert_eq!(s.page_corners().unwrap().radii, [10.0, 90.0, 0.0, 0.0]);
+        let seen = app.corners_as_seen(&s).unwrap().radii;
+        assert!((seen[0] - 80.0 / 9.0).abs() < 1e-9 && (seen[1] - 80.0).abs() < 1e-9);
+        // Back within the side, the other corner is as typed again.
+        edit_corners(&mut app, CornerEdit::Size(Corners::TOP_RIGHT, 70.0));
+        let s = app.selected_rc()[0].clone();
+        assert_eq!(
+            app.corners_as_seen(&s).unwrap().radii,
+            [10.0, 70.0, 0.0, 0.0]
+        );
+    }
+
+    /// The corner fields are the corners as they lie on the page: on a
+    /// rectangle turned by 180 degrees or flipped, the top left field
+    /// shows and edits the corner seen at the top left (#1670).
+    #[test]
+    fn corner_fields_edit_the_corner_seen_at_their_position() {
+        use std::f64::consts::PI;
+        use tracedraw_core::geometry::Shape as _;
+        let mut app = App::headless();
+        app.corners_together = false;
+        let id = app
+            .new_shape(ShapeKind::rect_with_corners(
+                R::new(0.0, 0.0, 40.0, 20.0),
+                Corners::tool_default(),
+            ))
+            .expect("a rectangle");
+        app.select(vec![id]);
+        // Turned by 180 degrees about the origin: the page top left (-40,
+        // 0) is the rectangle's own bottom right.
+        app.transform_selection(Affine::rotate(PI));
+        edit_corners(&mut app, CornerEdit::Size(Corners::TOP_LEFT, 5.0));
+        let s = app.selected_rc()[0].clone();
+        assert_eq!(s.page_corners().unwrap().radii, [0.0, 0.0, 0.0, 5.0]);
+        assert_eq!(app.corners_as_seen(&s).unwrap().radii, [5.0, 0.0, 0.0, 0.0]);
+        let (_, mix) = app.selection_corner_mix().unwrap();
+        assert_eq!(mix, [false; 6]);
+        let path = s.page_path();
+        let b = path.bounding_box();
+        assert!((b.x0 + 40.0).abs() < 1e-9 && b.y1.abs() < 1e-9, "{b:?}");
+        // The cut is at the top left of the page, the other corners whole.
+        assert!(!path.contains(Point::new(-39.5, -0.5)));
+        for p in [(-0.5, -0.5), (-39.5, -19.5), (-0.5, -19.5)] {
+            assert!(path.contains(Point::new(p.0, p.1)), "{p:?}");
+        }
+        // Flipped across as well: top left on the page is now the
+        // rectangle's own bottom left.
+        app.transform_selection(Affine::scale_non_uniform(-1.0, 1.0));
+        edit_corners(&mut app, CornerEdit::Size(Corners::TOP_LEFT, 3.0));
+        let s = app.selected_rc()[0].clone();
+        assert_eq!(s.page_corners().unwrap().radii, [0.0, 0.0, 3.0, 5.0]);
+        assert_eq!(app.corners_as_seen(&s).unwrap().radii, [3.0, 5.0, 0.0, 0.0]);
+        let path = s.page_path();
+        let b = path.bounding_box();
+        assert!(!path.contains(Point::new(b.x0 + 0.5, b.y1 - 0.5)));
+        assert!(!path.contains(Point::new(b.x1 - 0.5, b.y1 - 0.5)));
+        assert!(path.contains(Point::new(b.x0 + 0.5, b.y0 + 0.5)));
+        // Two rectangles whose top left corners, as seen, are the same
+        // size are not mixed, whatever their own order.
+        let other = app
+            .new_shape(ShapeKind::rect_with_corners(
+                R::new(50.0, 0.0, 90.0, 20.0),
+                Corners {
+                    radii: [3.0, 5.0, 0.0, 0.0],
+                    ..Corners::tool_default()
+                },
+            ))
+            .expect("a rectangle");
+        app.select(vec![id, other]);
+        let (shown, mix) = app.selection_corner_mix().unwrap();
+        assert_eq!(shown.radii, [3.0, 5.0, 0.0, 0.0]);
+        assert_eq!(mix, [false; 6]);
+        // The lock sets every corner, wherever it lies.
+        app.corners_together = true;
+        edit_corners(&mut app, CornerEdit::Size(Corners::BOTTOM_RIGHT, 2.0));
+        for s in app.selected_rc().iter() {
+            assert_eq!(s.page_corners().unwrap().radii, [2.0; 4]);
+        }
     }
 
     #[test]
@@ -3338,7 +5111,7 @@ mod tests {
         app.tool = crate::tools::Tool::Star;
         app.star_complex = true;
         app.create_box_shape(Point::new(10.0, 10.0), Point::new(50.0, 30.0));
-        let s = app.selected_shapes()[0].clone();
+        let s = app.selected_rc()[0].clone();
         assert!(matches!(
             s.kind,
             ShapeKind::Polygon {
@@ -3365,7 +5138,7 @@ mod tests {
         // Perfect stars stay perfect.
         app.star_complex = false;
         app.create_box_shape(Point::new(10.0, 10.0), Point::new(50.0, 30.0));
-        let s = app.selected_shapes()[0].clone();
+        let s = app.selected_rc()[0].clone();
         assert!(matches!(s.kind, ShapeKind::Polygon { complex: None, .. }));
     }
 
@@ -3375,7 +5148,7 @@ mod tests {
         app.rect_corners = Corners::uniform(2.0, CornerKind::Scallop);
         app.tool = crate::tools::Tool::Rectangle;
         app.create_box_shape(Point::new(10.0, 10.0), Point::new(50.0, 30.0));
-        let s = app.selected_shapes()[0].clone();
+        let s = app.selected_rc()[0].clone();
         let (_, c) = s.kind.rect_corners().unwrap();
         assert_eq!(c, Corners::uniform(2.0, CornerKind::Scallop));
     }

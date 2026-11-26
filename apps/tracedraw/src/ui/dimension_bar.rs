@@ -1,11 +1,13 @@
 //! The dimension tools' property bar (also shown when dimensions are
 //! selected with the Pick tool) and the preview of the dimension being
 //! placed. Bar: Precision, Units, Show units, Prefix, Suffix, Text
-//! position, Text size; then what to click next. Changes apply to the
-//! selected dimensions and to the ones made next.
+//! position, Text size, Drawing scale; the look; more options (extension lines,
+//! horizontal text); then what to click next. Changes
+//! apply to the selected dimensions and to the ones made next.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
-use crate::dimensions::{units_choices, DimensionStyle, TextPosition};
+use crate::dimensions::{units_choices, ArrowStyle, DimensionStyle, LabelAlong, TextPosition};
 use crate::i18n::tr;
 use crate::theme::Tokens;
 use crate::tools::Tool;
@@ -23,7 +25,7 @@ fn dim(ui: &mut Ui, text: String) {
 }
 
 /// What a precision looks like: 1.23 with that many decimals.
-fn precision_sample(p: u8) -> String {
+pub(crate) fn precision_sample(p: u8) -> String {
     let p = p.min(6) as usize;
     format!("{:.p$}", 1.234_567)
 }
@@ -54,21 +56,319 @@ fn text_field(
     }
 }
 
+/// The look of the dimension (#475): the label's font and colour, the
+/// lines' colour and width, the arrowheads and rounded ends.
+fn style_part(app: &mut App, ui: &mut Ui, style: &DimensionStyle) {
+    crate::ui::propbar::sep(ui);
+    let current = if style.font.trim().is_empty() {
+        app.text_default_font.clone()
+    } else {
+        style.font.clone()
+    };
+    let (pick, _) = crate::ui::tips::tip_over(
+        ui,
+        crate::ui::tips::pair("toolbar.font", "dimension.font_desc"),
+        |ui| crate::ui::font_list::font_list_live(app, ui, "dimension_font", &current, 130.0),
+    );
+    if let Some(p) = pick {
+        app.set_dimension_style(|s| s.font = p.family.clone());
+    }
+    let mut text_color = style.text_color;
+    if crate::ui::color_picker::color_button(ui, &mut text_color) && text_color != style.text_color
+    {
+        app.set_dimension_style(|s| s.text_color = text_color);
+    }
+    crate::ui::propbar::sep(ui);
+    dim(ui, tr("dimension.line"));
+    let mut line_color = style.line_color;
+    if crate::ui::color_picker::color_button(ui, &mut line_color) && line_color != style.line_color
+    {
+        app.set_dimension_style(|s| s.line_color = line_color);
+    }
+    let u = app.outline_units();
+    let mut width = u.from_mm(style.line_width);
+    let r = ui
+        .add(
+            NumField::new(&mut width)
+                .speed(u.from_mm(0.05))
+                .range(0.0..=u.from_mm(50.0))
+                .max_decimals(3)
+                .unit_mm(u.mm())
+                .suffix(format!(" {}", u.short()))
+                .width(64.0),
+        )
+        .rich_tip(tr("dimension.line_width"));
+    let width_mm = u.to_mm(width);
+    if r.changed() && (width_mm - style.line_width).abs() > 1e-9 {
+        app.set_dimension_style(|s| s.line_width = width_mm);
+    }
+    let mut arrows = style.arrows;
+    crate::ui::keynav::ComboBox::from_id_salt("dimension_arrows")
+        .selected_text(tr(arrows.key()))
+        .width(90.0)
+        .show_ui(ui, |ui| {
+            for a in ArrowStyle::ALL {
+                ui.selectable_value(&mut arrows, a, tr(a.key()));
+            }
+        })
+        .response
+        .rich_tip(tr("dimension.arrows"));
+    if arrows != style.arrows {
+        app.set_dimension_style(|s| s.arrows = arrows);
+    }
+    let mut round = style.round_ends;
+    if ui
+        .checkbox(&mut round, tr("dimension.round_ends"))
+        .rich_tip(crate::ui::tips::keyed("dimension.round_ends"))
+        .changed()
+    {
+        app.set_dimension_style(|s| s.round_ends = round);
+    }
+}
+
+/// A length as printed, mm, in the drawing's units; applied when it
+/// changes.
+fn length_field(
+    app: &mut App,
+    ui: &mut Ui,
+    key: &str,
+    mm: f64,
+    max: f64,
+    apply: impl Fn(&mut DimensionStyle, f64),
+) {
+    let u = app.units;
+    ui.horizontal(|ui| {
+        ui.label(tr(key));
+        let mut v = u.from_mm(mm);
+        let r = ui.add(
+            NumField::new(&mut v)
+                .speed(u.from_mm(0.1))
+                .range(0.0..=u.from_mm(max))
+                .max_decimals(3)
+                .unit_mm(u.mm())
+                .suffix(format!(" {}", u.short()))
+                .width(64.0),
+        );
+        let next = u.to_mm(v);
+        if r.changed() && next.is_finite() && (next - mm).abs() > 1e-9 {
+            app.set_dimension_style(|s| apply(s, next));
+        }
+    });
+}
+
+/// More options (#644): the extension lines' gap from the object and how
+/// far they run past the dimension line, a horizontal label, and the
+/// lines joined in rounded corners (#641).
+fn options_part(app: &mut App, ui: &mut Ui, style: &DimensionStyle) {
+    let button = ui
+        .add(crate::ui::btn_icons::Ib::with_text(
+            "dimension.options",
+            format!("{} \u{23F7}", tr("dimension.options")),
+        ))
+        .rich_tip(tr("dimension.options"));
+    // The menu stays open while its fields are typed in and stepped; a
+    // click outside closes it.
+    egui::Popup::menu(&button)
+        .id(egui::Id::new("dimension_options_menu"))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            length_field(
+                app,
+                ui,
+                "dimension.extension_gap",
+                style.extension_gap,
+                100.0,
+                |s, v| s.extension_gap = v,
+            );
+            length_field(
+                app,
+                ui,
+                "dimension.extension_overshoot",
+                style.extension_overshoot,
+                100.0,
+                |s, v| s.extension_overshoot = v,
+            );
+            let mut horizontal = style.horizontal_text;
+            if ui
+                .checkbox(&mut horizontal, tr("dimension.horizontal_text"))
+                .changed()
+            {
+                app.set_dimension_style(|s| s.horizontal_text = horizontal);
+            }
+            // Lines joined in corners, rounded (#641).
+            let mut joined = style.joined;
+            if ui
+                .checkbox(&mut joined, tr("dimension.join_lines"))
+                .changed()
+            {
+                app.set_dimension_style(|s| s.joined = joined);
+            }
+            ui.add_enabled_ui(style.joined, |ui| {
+                length_field(
+                    app,
+                    ui,
+                    "dimension.corner_radius",
+                    style.corner_radius,
+                    100.0,
+                    |s, v| s.corner_radius = v,
+                );
+            });
+            ui.separator();
+            text_background_row(app, ui, style);
+            add_dimensions_gap_row(app, ui);
+            // Deleting a measured object takes its dimensions (#4211).
+            ui.checkbox(
+                &mut app.settings.delete_dimensions_with_object,
+                tr("dimension.delete_with_object"),
+            )
+            .rich_tip(crate::ui::tips::keyed("dimension.delete_with_object"));
+        });
+}
+
+/// The label's background (#3531): off, or a colour behind the label,
+/// as the Text tool sets it on the label.
+fn text_background_row(app: &mut App, ui: &mut Ui, style: &DimensionStyle) {
+    use tracedraw_core::Fill;
+    ui.horizontal(|ui| {
+        let mut on = style.text_background.is_some();
+        if ui
+            .checkbox(&mut on, tr("dimension.text_background"))
+            .rich_tip(crate::ui::tips::keyed("dimension.text_background"))
+            .changed()
+        {
+            let bg = on.then_some(Fill::Solid(tracedraw_core::Color::WHITE));
+            app.set_dimension_style(|s| s.text_background = bg.clone());
+        }
+        let current = style
+            .text_background
+            .as_ref()
+            .and_then(|f| f.preview_color());
+        if let Some(c) = current {
+            let mut c2 = c;
+            if crate::ui::color_picker::color_button(ui, &mut c2) && c2 != c {
+                app.set_dimension_style(|s| s.text_background = Some(Fill::Solid(c2)));
+            }
+        }
+    });
+}
+
+/// How far Object > Insert > Add Dimensions puts its dimension lines
+/// from what it measures (#3530).
+fn add_dimensions_gap_row(app: &mut App, ui: &mut Ui) {
+    let u = app.units;
+    let mm = app.add_dimensions_gap();
+    ui.horizontal(|ui| {
+        ui.label(tr("dimension.add_gap"));
+        let mut v = u.from_mm(mm);
+        let r = ui
+            .add(
+                NumField::new(&mut v)
+                    .speed(u.from_mm(0.1))
+                    .range(0.0..=u.from_mm(1000.0))
+                    .max_decimals(3)
+                    .unit_mm(u.mm())
+                    .suffix(format!(" {}", u.short()))
+                    .width(64.0),
+            )
+            .rich_tip(crate::ui::tips::keyed("dimension.add_gap"));
+        let next = u.to_mm(v);
+        if r.changed() && next.is_finite() && (next - mm).abs() > 1e-9 {
+            app.settings.add_dimensions_gap = next.clamp(0.0, 1000.0);
+        }
+    });
+}
+
+/// The document's drawing scale, at hand where dimensions are made: a
+/// plan drawn at 1:100 measures metres in its labels while the page
+/// keeps millimetres (#2772, #1891). Picking a typical scale changes the
+/// whole drawing's scale (Document Setup > Rulers), Custom opens that
+/// page. The page bar (the Pick tool with nothing selected) has it too,
+/// beside Units, as the scale is the whole drawing's (#3450); `salt`
+/// keeps the two lists apart.
+pub(crate) fn drawing_scale_combo(app: &mut App, ui: &mut Ui, salt: &str) {
+    use crate::drawing_scale as ds;
+    let rulers = app.doc().metadata.rulers.clone();
+    let current = ds::matching_preset(&rulers).map(|p| p.label);
+    let shown = current
+        .map(str::to_string)
+        .or_else(|| ds::short_label(&rulers))
+        .unwrap_or_else(|| "1:1".to_string());
+    dim(ui, tr("dimension.drawing_scale"));
+    let mut pick = None;
+    let mut custom = false;
+    crate::ui::keynav::ComboBox::from_id_salt(salt)
+        .selected_text(shown)
+        .width(80.0)
+        .height(320.0)
+        .show_ui(ui, |ui| {
+            for p in ds::PRESETS.iter() {
+                if ui
+                    .selectable_label(current == Some(p.label), p.label)
+                    .clicked()
+                {
+                    pick = Some(*p);
+                }
+            }
+            ui.separator();
+            if ui.ibutton("dimension.drawing_scale_custom").clicked() {
+                custom = true;
+            }
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("dimension.drawing_scale"));
+    if let Some(p) = pick {
+        app.set_drawing_scale_preset(&p);
+    }
+    if custom {
+        app.dialog = crate::ui::dialogs::Dialog::Options;
+        app.options_page = crate::ui::dialogs::OptionsPage::Rulers;
+    }
+}
+
 /// The bar.
 pub fn dimension_bar(app: &mut App, ui: &mut Ui) {
-    let style = app.dimension_style_shown();
+    // The first selected dimension, read once a frame.
+    let first = app.first_selected_dimension();
+    let style = first
+        .map(|d| d.style)
+        .unwrap_or_else(|| app.new_dimension_style());
     dim(ui, tr("dimension.precision"));
     let mut precision = style.precision.min(6);
-    egui::ComboBox::from_id_salt("dimension_precision")
+    crate::ui::keynav::ComboBox::from_id_salt("dimension_precision")
         .selected_text(precision_sample(precision))
         .width(80.0)
         .show_ui(ui, |ui| {
             for p in 0..=6u8 {
                 ui.selectable_value(&mut precision, p, precision_sample(p));
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("dimension.precision"));
     if precision != style.precision.min(6) {
         app.set_dimension_style(|s| s.precision = precision);
+    }
+    // Decimal, fractional, or feet and inches (#4056).
+    dim(ui, tr("options.dimension_style"));
+    let mut notation = style.notation();
+    crate::ui::keynav::ComboBox::from_id_salt("dimension_notation")
+        .selected_text(tr(notation.key()))
+        .width(120.0)
+        .show_ui(ui, |ui| {
+            for n in crate::dimensions::Notation::ALL {
+                ui.selectable_value(
+                    &mut notation,
+                    n,
+                    format!("{}   {}", tr(n.key()), n.sample(style.precision)),
+                );
+            }
+        })
+        .response
+        .rich_tip(crate::ui::tips::pair(
+            "options.dimension_style",
+            "options.dimension_style_tip",
+        ));
+    if notation != style.notation() {
+        app.set_dimension_style(|s| s.set_notation(notation));
     }
     dim(ui, tr("dimension.units"));
     let choices = units_choices();
@@ -78,21 +378,28 @@ pub fn dimension_bar(app: &mut App, ui: &mut Ui) {
         .find(|(id, _)| *id == units)
         .map(|(_, l)| l.clone())
         .unwrap_or_default();
-    egui::ComboBox::from_id_salt("dimension_units")
+    crate::ui::keynav::ComboBox::from_id_salt("dimension_units")
         .selected_text(shown_units)
         .width(120.0)
         .show_ui(ui, |ui| {
             for (id, label) in &choices {
                 ui.selectable_value(&mut units, id.clone(), label);
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("dimension.units"));
     if units != style.units {
         app.set_dimension_style(|s| s.units = units.clone());
     }
     let mut show = style.show_units;
-    if ui.checkbox(&mut show, tr("dimension.show_units")).changed() {
+    if ui
+        .checkbox(&mut show, tr("dimension.show_units"))
+        .rich_tip(crate::ui::tips::keyed("dimension.show_units"))
+        .changed()
+    {
         app.set_dimension_style(|s| s.show_units = show);
     }
+    drawing_scale_combo(app, ui, "dimension_drawing_scale");
     crate::ui::propbar::sep(ui);
     dim(ui, tr("dimension.prefix"));
     text_field(app, ui, "dimension.prefix", &style.prefix, |s, v| {
@@ -105,29 +412,54 @@ pub fn dimension_bar(app: &mut App, ui: &mut Ui) {
     crate::ui::propbar::sep(ui);
     dim(ui, tr("dimension.text_position"));
     let mut pos = style.text_position;
-    egui::ComboBox::from_id_salt("dimension_text_position")
+    crate::ui::keynav::ComboBox::from_id_salt("dimension_text_position")
         .selected_text(tr(pos.key()))
         .width(90.0)
         .show_ui(ui, |ui| {
             for p in TextPosition::ALL {
                 ui.selectable_value(&mut pos, p, tr(p.key()));
             }
-        });
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("dimension.text_position"));
     if pos != style.text_position {
         app.set_dimension_style(|s| s.text_position = pos);
     }
-    let mut size = style.text_size;
+    // Along the line: the middle, toward either end or outside (#1500).
+    let mut along = style.label_along;
+    crate::ui::keynav::ComboBox::from_id_salt("dimension_text_along")
+        .selected_text(tr(along.key()))
+        .width(110.0)
+        .show_ui(ui, |ui| {
+            for a in LabelAlong::ALL {
+                ui.selectable_value(&mut along, a, tr(a.key()));
+            }
+        })
+        .response
+        .rich_tip(crate::ui::tips::keyed("dimension.text_along"));
+    if along != style.label_along {
+        app.set_dimension_style(|s| s.label_along = along);
+    }
+    // In the text units, as the font size of the label itself shows when
+    // it is picked (Options > Text > Text units, #3857); kept in points.
+    let u = app.text_units();
+    let mut size = u.from_pt(style.text_size);
     let r = ui
         .add(
             NumField::new(&mut size)
-                .speed(0.5)
-                .range(1.0..=500.0)
-                .suffix(" pt"),
+                .speed(u.from_pt(0.5))
+                .range(u.from_pt(1.0)..=u.from_pt(500.0))
+                .max_decimals(if u == crate::app::Units::Points { 1 } else { 3 })
+                .unit_mm(u.mm())
+                .suffix(format!(" {}", u.short())),
         )
         .rich_tip(tr("dimension.text_size"));
-    if (r.drag_stopped() || r.lost_focus()) && (size - style.text_size).abs() > 1e-9 {
+    let size = u.to_pt(size);
+    if r.changed() && (size - style.text_size).abs() > 1e-6 {
         app.set_dimension_style(|s| s.text_size = size);
     }
+    style_part(app, ui, &style);
+    options_part(app, ui, &style);
     if matches!(
         app.tool,
         Tool::ParallelDimension
@@ -168,8 +500,23 @@ pub fn draw_preview(app: &App, painter: &Painter) {
     let ctrl = painter
         .ctx()
         .input(|i| i.modifiers.command || i.modifiers.ctrl);
+    // Where a click would put the point: snapped, then constrained. Only
+    // while a dimension is being placed: snapping shows its own marks.
+    let placing = !app.dimension_points.is_empty()
+        && matches!(
+            app.tool,
+            Tool::ParallelDimension
+                | Tool::HorizontalVerticalDimension
+                | Tool::SegmentDimension
+                | Tool::AngularDimension
+        );
+    let at = if placing { app.snap_point(at) } else { at };
     let at = app.dimension_point(at, ctrl);
     let blue = Color32::from_rgb(40, 110, 220);
+    // The length (or angle) so far, beside the pointer (#2624).
+    if let Some(text) = app.dimension_live_text(at) {
+        draw_live_label(painter, app.view.to_screen(at), &text, blue);
+    }
     // The first leg follows the pointer while the second point is wanted.
     if let (
         [first],
@@ -218,10 +565,80 @@ pub fn draw_preview(app: &App, painter: &Painter) {
     }
 }
 
+/// The live measure `text` in a small box below and to the right of the
+/// pointer at `at`, kept inside the drawing area (#2624).
+fn draw_live_label(painter: &Painter, at: egui::Pos2, text: &str, blue: Color32) {
+    let font = egui::FontId::proportional(12.0);
+    let galley = painter.layout_no_wrap(text.to_string(), font, Color32::from_rgb(20, 40, 90));
+    let pad = egui::vec2(5.0, 2.0);
+    let size = galley.size() + pad * 2.0;
+    let clip = painter.clip_rect();
+    let mut min = at + egui::vec2(16.0, 18.0);
+    if min.x + size.x > clip.max.x {
+        min.x = at.x - 16.0 - size.x;
+    }
+    if min.y + size.y > clip.max.y {
+        min.y = at.y - 18.0 - size.y;
+    }
+    let rect = egui::Rect::from_min_size(min, size);
+    painter.rect_filled(
+        rect,
+        3.0,
+        Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+    );
+    painter.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0, blue),
+        egui::epaint::StrokeKind::Inside,
+    );
+    painter.galley(rect.min + pad, galley, Color32::BLACK);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tracedraw_core::geometry::Point;
+
+    /// While a dimension is placed, the length (or angle) so far reads in
+    /// the property bar's units and decimals, from the first point on
+    /// (#2624).
+    #[test]
+    fn the_measure_reads_live_while_the_dimension_is_placed() {
+        let mut app = App::headless();
+        app.tool = Tool::ParallelDimension;
+        assert_eq!(app.dimension_live_text(Point::new(5.0, 5.0)), None);
+        app.dimension_style.units = "cm".into();
+        app.dimension_style.precision = 1;
+        app.dimension_style.show_units = true;
+        app.dimension_points = vec![Point::new(0.0, 0.0)];
+        assert_eq!(
+            app.dimension_live_text(Point::new(215.0, 0.0)).as_deref(),
+            Some("21.5 cm")
+        );
+        // Horizontal/Vertical measures the leg along its axis only.
+        app.tool = Tool::HorizontalVerticalDimension;
+        assert_eq!(
+            app.dimension_live_text(Point::new(30.0, 4.0)).as_deref(),
+            Some("3.0 cm")
+        );
+        // The line being placed keeps the measure of its two points.
+        app.dimension_points = vec![Point::new(0.0, 0.0), Point::new(0.0, 40.0)];
+        assert_eq!(
+            app.dimension_live_text(Point::new(25.0, 20.0)).as_deref(),
+            Some("4.0 cm")
+        );
+        app.tool = Tool::AngularDimension;
+        app.dimension_points = vec![Point::new(0.0, 0.0)];
+        assert_eq!(app.dimension_live_text(Point::new(5.0, 5.0)), None);
+        app.dimension_points = vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0)];
+        // The angular tool's bar sets the angular decimals (#1436).
+        app.set_dimension_style(|s| s.precision = 0);
+        let t = app
+            .dimension_live_text(Point::new(10.0, 10.0))
+            .expect("angle");
+        assert_eq!(t, "45\u{b0}");
+    }
 
     #[test]
     fn the_bar_and_the_preview_draw() {
@@ -261,5 +678,38 @@ mod tests {
         }
         assert_eq!(precision_sample(0), "1");
         assert_eq!(precision_sample(3), "1.235");
+    }
+
+    /// The bar's text size is in the text units, as the label's own font
+    /// size is when it is picked (#3857): millimetres there, millimetres
+    /// here too, not points.
+    #[test]
+    fn the_text_size_shows_in_the_text_units() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.tool = Tool::ParallelDimension;
+        app.settings.text_units = "mm".into();
+        app.set_dimension_style(|s| s.text_size = 72.0);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1600.0, 400.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            ui.horizontal(|ui| dimension_bar(&mut app, ui));
+        });
+        out.textures_delta.clear();
+        let texts: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|t| t.contains("25.4 mm")), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.contains("72 pt")), "{texts:?}");
     }
 }

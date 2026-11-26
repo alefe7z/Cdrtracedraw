@@ -2,10 +2,12 @@
 //! Color acceleration, for the next blend and, live, for the selected one;
 //! Clear Blend and Break Apart for a selected blend.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::i18n::tr;
 use crate::theme::Tokens;
 use crate::ui::field::NumField;
+use crate::ui::tips::RichTip;
 use egui::Ui;
 use tracedraw_core::live::Effect;
 
@@ -41,24 +43,31 @@ pub fn blend_bar(app: &mut App, ui: &mut Ui) {
         ),
     };
     let mut changed = false;
-    dim(ui, tr("docker.steps"));
-    changed |= ui.add(NumField::new(&mut steps).range(1..=999)).changed();
-    dim(ui, tr("docker.rotation"));
-    changed |= ui
-        .add(
-            NumField::new(&mut rotation)
-                .speed(1.0)
-                .range(-3600.0..=3600.0)
-                .suffix("\u{b0}"),
-        )
+    changed |=
+        crate::ui::toolbar::dim_labelled_as(ui, "docker.steps", "toolbar.blend_steps_desc", |ui| {
+            ui.add(NumField::new(&mut steps).range(1..=999))
+        })
         .changed();
+    changed |= crate::ui::toolbar::dim_labelled_as(
+        ui,
+        "docker.rotation",
+        "toolbar.blend_rotation_desc",
+        |ui| {
+            ui.add(
+                NumField::new(&mut rotation)
+                    .speed(1.0)
+                    .range(-3600.0..=3600.0)
+                    .suffix("\u{b0}"),
+            )
+        },
+    )
+    .changed();
     crate::ui::propbar::sep(ui);
     let pct = |ui: &mut Ui, key: &str, v: &mut f64| {
-        dim(ui, tr(key));
         let mut p = (*v * 100.0).round() as i32;
-        let r = ui.add(crate::ui::Rail(
-            egui::Slider::new(&mut p, -100..=100).suffix(" %"),
-        ));
+        let r = crate::ui::toolbar::dim_labelled(ui, key, |ui| {
+            ui.add(crate::ui::Slider::new(&mut p, -100..=100).suffix(" %"))
+        });
         if r.changed() {
             *v = p as f64 / 100.0;
         }
@@ -71,7 +80,7 @@ pub fn blend_bar(app: &mut App, ui: &mut Ui) {
     app.blend_accel_objects = accel_o;
     app.blend_accel_colors = accel_c;
     crate::ui::propbar::sep(ui);
-    match cur {
+    match &cur {
         Some(Effect::Blend { .. }) => {
             if changed {
                 let steps = steps.clamp(1, 999);
@@ -93,11 +102,68 @@ pub fn blend_bar(app: &mut App, ui: &mut Ui) {
                     Some(e)
                 });
             }
-            if ui.button(tr("docker.clear_blend")).clicked() {
+            // Fit the blend to a path, then place its ends along it, or
+            // take it off the path (#2946).
+            if ui
+                .ibutton("docker.new_path")
+                .rich_tip(crate::ui::tips::keyed("docker.new_path"))
+                .clicked()
+            {
+                app.pending_blend_path = true;
+                app.status = tr("status.click_blend_path");
+            }
+            if let Some(Effect::Blend {
+                path: Some(_),
+                options,
+                ..
+            }) = &cur
+            {
+                let (a, b) = options.path_ends();
+                let (mut from, mut to) = (a * 100.0, b * 100.0);
+                let mut moved = false;
+                for (key, v) in [
+                    ("docker.blend_path_start", &mut from),
+                    ("docker.blend_path_end", &mut to),
+                ] {
+                    moved |= crate::ui::toolbar::dim_labelled(ui, key, |ui| {
+                        ui.add(
+                            NumField::new(v)
+                                .range(0.0..=100.0)
+                                .speed(0.5)
+                                .max_decimals(1)
+                                .suffix(" %"),
+                        )
+                    })
+                    .changed();
+                }
+                if moved {
+                    app.set_blend_path_ends(from / 100.0, to / 100.0);
+                }
+                if ui
+                    .ibutton("docker.detach_path")
+                    .rich_tip(crate::ui::tips::keyed("docker.detach_path"))
+                    .clicked()
+                {
+                    app.detach_blend_path();
+                }
+            }
+            crate::ui::propbar::sep(ui);
+            if ui
+                .ibutton("docker.clear_blend")
+                .rich_tip(crate::ui::tips::keyed("docker.clear_blend"))
+                .clicked()
+            {
                 app.clear_blend();
             }
-            if ui.button(tr("docker.break_apart")).clicked() {
-                app.flatten_effects();
+            if ui
+                .ibutton("docker.break_apart")
+                .rich_tip(crate::ui::tips::pair(
+                    "docker.break_apart",
+                    "toolbar.effect_break_apart_desc",
+                ))
+                .clicked()
+            {
+                app.break_effect_groups();
             }
         }
         _ => dim(ui, tr("toolbar.drag_between_objects")),

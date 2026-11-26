@@ -1,6 +1,6 @@
-# Publish to PDF
+# Export as PDF
 
-File > Publish to PDF... (also on the standard toolbar) opens the PDF
+File > Export as PDF... (also on the standard toolbar) opens the PDF
 Settings dialog for the active drawing, with the tabs General, Color,
 Document, Objects, Prepress, Security and the issues tab, then "?", OK
 and Cancel. OK writes the file named on General. The dialog is `ui/publish_pdf.rs`; the file comes from
@@ -15,7 +15,11 @@ and Cancel. OK writes the file named on General. The dialog is `ui/publish_pdf.r
   with more than one open; symbols are renumbered so each drawing's
   instances keep theirs), Current Page, Pages with a list such as
   `1-3, 5` (pages that do not exist are left out; a list that names no
-  page is refused), and Selection (only with a selection).
+  page is refused), and Selection (only with a selection). Selection,
+  once exported with, is where the dialog opens the next time while
+  objects are selected, with the page size chosen for it; any other
+  range exported with starts it at Current document again (#4141,
+  `PublishPrefs::range_selection`).
 - Page size, for Selection: Defined by document (the page with the
   selected objects only) or Defined by selected objects (a page the size
   of the selection's bounds, the default).
@@ -23,12 +27,16 @@ and Cancel. OK writes the file named on General. The dialog is `ui/publish_pdf.r
   PDF/X-3, then the presets saved with "+" (it asks a name; a built-in
   name is not taken; the same name replaces the preset). "-" deletes the
   chosen saved preset. A preset sets the compatibility, output
-  condition, flattening resolution, bookmarks and bleed.
+  condition, flattening resolution, bookmarks, bleed, printers' marks and the Bitmaps
+  choices of Objects (Web: colour and gray pictures to 150 dpi, black and
+  white to 300 dpi, JPEG at quality 75).
 - Compatibility: PDF 1.4, PDF/X-1a:2003, PDF/X-3:2003 or PDF/X-4.
 
 ## Color
 
-For PDF/X: Output condition (FOGRA39 by default) and the note about the
+For PDF/X: Output condition (empty by default: the drawing's CMYK
+profile, shown greyed in the field, see `colour-management.md`, #3829)
+and the note about the
 output intent's profile (the CMYK profile of Colour Management). A plain
 PDF keeps the drawing's colours as they are.
 
@@ -36,6 +44,24 @@ PDF keeps the drawing's colours as they are.
 
 Flatten transparency at (300 dpi), for PDF/X-1a and X-3 only; greyed
 for the others, which keep transparency live.
+
+### Bitmaps
+
+How pictures go into the file (#550; kept in the preferences and in the
+presets; `pdf::tests::pictures_are_downsampled_and_compressed_as_asked`):
+
+| Choice | Default | What it does |
+|---|---|---|
+| Downsample colour images to | off, 300 dpi | A colour picture with more than 1.05 times that resolution as placed (its pixels over its width on the page) is resized to it (Triangle filter); its transparency mask with it. |
+| Downsample gray images to | off, 300 dpi | The same for pictures whose pixels are all gray; gray pictures go in with one channel (DeviceGray) whatever the choice. |
+| Downsample black-and-white images to | off, 1200 dpi | The same for pictures of black and white pixels only; after the filter the pixels go back to black or white. |
+| Compression | ZIP (lossless) | JPEG (DCTDecode) for colour and gray pictures at the Quality (1 to 100, 85 at first); black-and-white pictures, transparency masks and PDF/X-1a pictures (CMYK) stay ZIP. Pictures made while exporting (flattened transparency, bitmap effects) take JPEG too. |
+| Compress text and line art | on | The pages' content streams are compressed (Flate); off, they are written as they are. |
+
+A picture wholly outside the media box (the page and its bleed) cannot
+show, so it stays out of the file; one that reaches the page or the
+bleed goes in whole (#642;
+`pdf::tests::pictures_wholly_outside_the_media_box_stay_out_of_the_file`).
 
 ### Text and fonts
 
@@ -61,7 +87,12 @@ the choices. The writer:
   name carries a six-letter tag (`ABCDEF+Name`). The `W` array gives
   each glyph's advance, and a `ToUnicode` CMap maps each glyph to the
   characters it stands for (a ligature to all of them), so copying and
-  searching give back the text.
+  searching give back the text. A cluster whose glyphs do not each stand
+  for their own characters (several glyphs for one syllable, such as a
+  vowel sign drawn before its consonant or a reph after it, or a glyph
+  the map already gives other characters) is wrapped in marked content
+  `/Span << /ActualText ... >> BDC ... EMC` with its characters in typed
+  order (#599).
 - Places glyphs as the text engine lays them out: one text matrix per
   run of glyphs of one font on one line (size, position, slant, turn,
   the object's transform), with `TJ` adjustments for kerning, tracking
@@ -82,7 +113,7 @@ the choices. The writer:
   curves with invisible text over them.
 - Respects licences: a font whose OS/2 embedding bits allow no
   embedding (restricted licence, or bitmaps only) is never embedded;
-  its text is written as curves. Publish to PDF names those fonts on
+  its text is written as curves. Export as PDF names those fonts on
   the status line, and the preflight's "Font may not be embedded" note
   (`preflight.md`) lists the text that uses them before publishing.
 
@@ -94,9 +125,42 @@ Nothing is flattened into short lines.
 
 ## Prepress
 
-Bleed: the drawing's bleed (Document Properties) to start with, 0 to
+Bleed: the drawing's bleed (Document Info) to start with, 0 to
 50 mm, around every page (trim box the page, media box the page and the
 bleed).
+
+Printers' marks (#789), off by default and kept with the preferences
+and in saved presets (the Prepress preset ticks Crop marks):
+
+All printers' marks (#2197) ticks or unticks every mark below at once,
+and shows ticked when all are.
+
+- Crop marks: 5 mm lines at the page's edges, starting 1.5 mm outside
+  the bleed.
+- Bleed marks (#2197): 3.5 mm lines at the bleed's edges, starting
+  1.5 mm outside it, beside the crop marks; none without a bleed
+  (`imposition::bleed_marks`).
+- Registration marks: a target (2 mm circle with a cross) in the middle
+  of each side.
+- Color bars: the four process inks, their two-ink overprints and the
+  50 % tints, 4 mm patches left of the top target.
+- Densitometer scale (#2197): eleven black steps from 0 to 100 %,
+  right of the top target.
+- File information: the drawing's name, the page's name, the page and
+  page count and the date and time, under the page.
+
+Checks: `imposition::tests::page_marks_sit_around_each_page_in_its_own_coordinates`,
+`ui::publish_pdf::tests::all_printers_marks_and_bleed_marks`.
+
+The marks are the Print dialog's (`printing.md`), made by the same code
+(`imposition::page_marks`, each page on its own fitted sheet). With any
+mark ticked the page grows by a 12 mm margin outside the bleed on every
+side: the MediaBox is the page, the bleed and that margin; the BleedBox
+the page and its bleed; the TrimBox the page. The drawing is clipped to
+the BleedBox so nothing of it reaches the marks. The marks are in the
+registration colour, written on the `All` separation so they print on
+every plate. Links and bookmarks keep pointing at the page. Without
+marks the boxes are as before (BleedBox the media box).
 
 ## Issues
 
@@ -182,6 +246,7 @@ file.
   the information and the content, and the `/UE` and `/Perms` values
   unwrap and decrypt as the standard says.
 - `pdf::pdfx_tests::document_properties_fill_the_information_and_the_xmp`
+- `pdf::tests::pictures_wholly_outside_the_media_box_stay_out_of_the_file`
 - `pdf_crypt::tests::permissions_make_the_p_value`
 - `pdf_crypt::tests::objects_get_their_strings_and_streams_encrypted`
 - `tests::pdf_protection_comes_from_the_environment_values` (command line)

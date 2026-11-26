@@ -3,12 +3,14 @@
 //! angle, Rounded), the rounded corners' radius, then the outline (width,
 //! style, arrowheads) of the selected connectors.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::connectors::ConnectorKind;
 use crate::i18n::tr;
 use crate::theme::Tokens;
 use crate::tools::Tool;
 use crate::ui::field::NumField;
+use crate::ui::tips::RichTip;
 use egui::Ui;
 
 fn tool_of(kind: ConnectorKind) -> Tool {
@@ -45,7 +47,8 @@ pub fn connector_bar(app: &mut App, ui: &mut Ui) {
         ConnectorKind::Rounded,
     ] {
         if ui
-            .selectable_label(shown == kind, tr(kind_key(kind)))
+            .iselectable(shown == kind, kind_key(kind))
+            .rich_tip(crate::ui::tips::keyed(kind_key(kind)))
             .clicked()
         {
             if selected.is_empty() {
@@ -56,21 +59,18 @@ pub fn connector_bar(app: &mut App, ui: &mut Ui) {
         }
     }
     if shown == ConnectorKind::Rounded {
-        ui.label(
-            egui::RichText::new(tr("connector.radius"))
-                .color(Tokens::text_dim())
-                .size(11.0),
-        );
         let mut r = selected
             .first()
             .map(|(_, c)| c.radius)
             .unwrap_or(app.connector_radius);
-        let resp = ui.add(
-            NumField::new(&mut r)
-                .speed(0.1)
-                .range(0.0..=1000.0)
-                .suffix(" mm"),
-        );
+        let resp = crate::ui::toolbar::dim_labelled(ui, "connector.radius", |ui| {
+            ui.add(
+                NumField::new(&mut r)
+                    .speed(0.1)
+                    .range(0.0..=1000.0)
+                    .suffix(" mm"),
+            )
+        });
         if resp.changed() {
             if selected.is_empty() {
                 app.connector_radius = r.clamp(0.0, 1000.0);

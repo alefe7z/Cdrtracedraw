@@ -67,6 +67,9 @@ un mapa de bits.
   [[tool.crop]]; arrastrar una esquina de un mapa de bits con la herramienta
   [[tool.shape]] también lo recorta.
 - [[menu.bitmaps.edit_bitmap]] abre el mapa de bits en otro programa.
+- [[menu.bitmaps.edit_inside]] (or a double click on the picture with the Pick tool) edits its pixels in place, inside TraceDraw: selections, brush, soft eraser, clone, heal, blur, content fill, red eye, layers with opacity, merge modes and masks, quick mask, stretch and warp, restore, tint and replace colour brushes, pixel shapes, liquify, Smart Resize, adjustment layers, a histogram, a remove brush, a brush and a stamp that follow the surface of the photo, and any bitmap effect inside the selection only. Enter finishes, as one undo step.
+- [[menu.bitmaps.remove_background]] hace transparente el fondo de una
+  fotografía.
 - [[menu.bitmaps.remove_background_local]]: [Quitar fondo](remove-background.md).
 - [[menu.bitmaps.break_link]] y [[menu.bitmaps.update_from_link]] actúan
   sobre mapas de bits vinculados a un archivo.

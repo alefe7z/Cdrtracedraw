@@ -2,6 +2,10 @@ name: Bug report
 description: Something does not work as it should.
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        One problem per issue, please: a report with several problems is hard to follow and to close. Something TraceDraw does not do yet is a **Feature request**; a `.cdr` file that opens wrong has its own form.
   - type: textarea
     id: what
     attributes:
@@ -25,6 +29,7 @@ body:
         - Windows
         - macOS
         - Linux
+        - Android
         - In the browser
     validations:
       required: true

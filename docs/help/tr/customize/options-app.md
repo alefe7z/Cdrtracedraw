@@ -13,6 +13,7 @@ bir sayfa seçin.
 - [[options.show_new_document_dialog]] (açık): yeni bir çizimin ayarlarını
   sor; bkz. [Çizim oluşturma](../get-started/new-document.md).
 - [[options.show_splash]] (açık).
+- [[options.hardware_acceleration]] (açık): pencere yanında seçilen ekran kartıyla çizilir (başta [[options.gpu_automatic]]); kapalıyken bilgisayarın yazılım oluşturucusuyla. Bir sonraki açılışta geçerli olur. Pencere böyle açılamazsa TraceDraw yazılım oluşturucuyla, ardından OpenGL ile yeniden başlar ve çalışanı hatırlar.
 - [[options.undo_levels]]: kaç adımı geri alabileceğiniz (başlangıçta 150).
 
 ## Ekran {#display}
@@ -26,6 +27,11 @@ bir sayfa seçin.
 - [[options.full_screen_preview]]: [[options.show_page_border]].
 - [[options.wheel_default_action]]: [[options.wheel_zoom]] (başlangıçta)
   veya [[options.wheel_scroll]].
+- [[options.open_view]]: [[options.open_view_page]] (başlangıçta),
+  [[options.open_view_objects]], [[options.open_view_width]],
+  [[options.open_view_height]], [[options.open_view_actual]], [[options.open_view_percent]] veya
+  [[options.open_view_saved]] (her TraceDraw dosyası kaydedilişinde saklanan
+  sayfa, yer ve yakınlaştırma).
 - [[options.ruler_calibration]]: ekrana bir cetvel tutun ve işaretler
   eşleşene kadar [[options.screen_resolution]] değerini değiştirin; böylece
   %100 yakınlaştırma gerçek boyutları gösterir. [[options.reset]] 96 değerine
@@ -50,6 +56,7 @@ bir sayfa seçin.
 - [[options.node_cusp]], [[options.node_smooth]] ve
   [[options.node_symmetrical]] düğümler için [[options.node_shape]].
 - [[options.show_curve_direction]].
+- [[options.corner_widgets]].
 - [[options.colors]]: seçili düğümlerin ve tutamaçların
   [[options.main_color]] öğesi ve [[options.secondary_color]].
 - [[options.unselected_nodes_filled]].
@@ -94,9 +101,36 @@ Bkz. [Yakalama](../pages-layout/snapping.md).
 
 ![CD Draw seçeneklerinin Metin sayfası](../../img/customize-options-app-text.png)
 
-- [[options.keyboard_text_increment]]: <kbd>Ctrl+8</kbd> ve
-  <kbd>Ctrl+2</kbd> tuşlarının seçili metni ne kadar büyütüp küçülttüğü (1
-  punto).
-- Yeni metnin [[options.default_font]] ve [[options.default_size]] değeri.
-- [[menu.text.use_hyphenation]], [[menu.text.show_non_printing]] ve
-  [[menu.text.show_text_frames]].
+Sayfada beş sekme vardır.
+
+- [[options.display]]: [[options.keyboard_text_increment]] (<kbd>Ctrl+8</kbd>
+  ve <kbd>Ctrl+2</kbd> seçili metni ne kadar büyütüp küçültür, 1 punto), yeni
+  metnin [[options.default_font]] ve [[options.default_size]] değerleri ve
+  [[menu.text.show_non_printing]].
+  - [[options.text_units]] pt, mm, cm, in, px…
+- [[options.paragraph_text]]: [[menu.text.show_text_frames]],
+  [[menu.text.use_hyphenation]] ve [[options.hyphenation_patterns]]
+  (yerleşik ya da dilinize ait bir heceleme sözlüğü).
+  - [[options.default_tab_spacing]]: kendi sekme durakları olmayan bir paragrafta <kbd>Tab</kbd> tuşunun gittiği yer (12,7 mm, yarım inç).
+- [[docker.fonts]]: yazı tipi listelerinin başında
+  [[options.show_recent_fonts]], [[options.recent_font_count]] (5, en çok 20)
+  ve [[options.font_sample_size]].
+- [[options.spelling]]: [[writing.ignore_digits]], [[writing.ignore_capitals]]
+  ve [[options.add_to_autocorrect]]; yazım denetiminde düzelttiğiniz bir sözcük
+  bir dahaki sefere yazarken düzeltilir; ve kullandığı
+  [[options.dictionaries]], bkz. [Sözlükler](../text/writing-tools.md#dictionaries).
+- [[dialog.autocorrect]]: yazarken neyin düzeltildiği; bkz.
+  [Otomatik Düzelt](../text/writing-tools.md#autocorrect).
+
+## [[benchmark.title]] {#benchmark}
+
+[[menu.help > menu.help.benchmark]]: [[menu.help.benchmark_tip]]
+
+[[benchmark.intro]]
+
+- [[benchmark.quick]]: [[benchmark.quick_tip]]
+- [[benchmark.advanced]]: [[benchmark.advanced_tip]] [[benchmark.advanced_warning]]
+- [[benchmark.zoom_title]]: [[benchmark.zoom_smooth]], [[benchmark.zoom_instant]] ([[benchmark.zoom_instant_tip]]) [[benchmark.zoom_light]].
+- [[benchmark.test_without_card]]: [[benchmark.restart_tip]]
+
+[[options.light_zoom]]: [[options.light_zoom_tip]]

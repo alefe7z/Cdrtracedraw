@@ -1,10 +1,118 @@
 //! Hyphenation: break points inside a word (character indices after which
-//! a hyphen may be inserted). Uses a compact Liang-style pattern set for
+//! a hyphen may be inserted). Uses the pattern file the app installs (a
+//! hyphenation dictionary of Liang patterns, `hyph_*.dic`, see
+//! [`PatternSet::parse`]); otherwise a compact Liang-style pattern set for
 //! English and Portuguese plus a vowel/consonant heuristic for everything
 //! else. Minimum 2 letters before and 3 after a break by default.
 
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
+
+/// Patterns read from a hyphenation dictionary: one or two levels (the
+/// second after `NEXTLEVEL`; a word breaks where either level allows it),
+/// and the fewest letters before and after a break.
+#[derive(Debug, Clone, Default)]
+pub struct PatternSet {
+    levels: Vec<Patterns>,
+    longest: usize,
+    pub left_min: usize,
+    pub right_min: usize,
+}
+
+impl PatternSet {
+    /// Read a hyphenation dictionary already decoded: the first line names
+    /// its character set, `LEFTHYPHENMIN` and `RIGHTHYPHENMIN` lines set
+    /// the minimums, `NEXTLEVEL` starts a second level, `%` and `#` start
+    /// comments, and every other line is a Liang pattern (digits between
+    /// letters, `.` for the word's ends). Patterns with a replacement
+    /// (`/`) are left out. `None` when no pattern is found.
+    pub fn parse(text: &str) -> Option<PatternSet> {
+        let mut set = PatternSet {
+            levels: vec![Patterns::new()],
+            longest: 0,
+            left_min: MIN_BEFORE,
+            right_min: MIN_AFTER,
+        };
+        for (n, line) in text.lines().enumerate() {
+            let line = line.trim_start_matches('\u{feff}').trim();
+            if n == 0 || line.is_empty() || line.starts_with('%') || line.starts_with('#') {
+                continue;
+            }
+            let mut words = line.split_whitespace();
+            let first = words.next().unwrap_or("");
+            let number = || words.clone().next().and_then(|v| v.parse::<usize>().ok());
+            match first {
+                "LEFTHYPHENMIN" => {
+                    if let Some(v) = number() {
+                        set.left_min = v.max(1);
+                    }
+                    continue;
+                }
+                "RIGHTHYPHENMIN" => {
+                    if let Some(v) = number() {
+                        set.right_min = v.max(1);
+                    }
+                    continue;
+                }
+                "NEXTLEVEL" => {
+                    set.levels.push(Patterns::new());
+                    continue;
+                }
+                _ => {}
+            }
+            if first.chars().all(|c| c.is_ascii_uppercase() || c == '_') || first.contains('/') {
+                continue;
+            }
+            let (letters, digits) = parse_one(first);
+            if letters.is_empty() {
+                continue;
+            }
+            set.longest = set.longest.max(letters.chars().count());
+            if let Some(level) = set.levels.last_mut() {
+                level.insert(letters.to_lowercase(), digits);
+            }
+        }
+        set.levels.retain(|l| !l.is_empty());
+        (!set.levels.is_empty()).then_some(set)
+    }
+
+    /// How many patterns the levels hold.
+    pub fn len(&self) -> usize {
+        self.levels.iter().map(HashMap::len).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The break points of `word` (small letters).
+    fn points(&self, lower: &[char]) -> Vec<usize> {
+        let mut out = Vec::new();
+        for level in &self.levels {
+            out.extend(liang(
+                lower,
+                level,
+                self.longest,
+                self.left_min,
+                self.right_min,
+            ));
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
+/// The installed pattern file, if any.
+fn installed() -> &'static RwLock<Option<Arc<PatternSet>>> {
+    static SET: OnceLock<RwLock<Option<Arc<PatternSet>>>> = OnceLock::new();
+    SET.get_or_init(|| RwLock::new(None))
+}
+
+/// Hyphenate with `set` from now on (`None`: the built-in patterns).
+pub fn set_patterns(set: Option<PatternSet>) {
+    *installed().write().unwrap_or_else(|e| e.into_inner()) = set.map(Arc::new);
+}
 
 /// Words with hyphens the user placed (custom optional hyphens): the word
 /// in lower case and its break points, used before the patterns.
@@ -35,25 +143,57 @@ const PATTERNS_PT: &str = "1ba 1be 1bi 1bo 1bu 1ca 1ce 1ci 1co 1cu 1da 1de 1di 1
 
 type Patterns = HashMap<String, Vec<u8>>;
 
+/// One pattern as its letters and the level of each gap (one more than
+/// the letters).
+fn parse_one(pat: &str) -> (String, Vec<u8>) {
+    let mut letters = String::new();
+    let mut digits: Vec<u8> = Vec::new();
+    let mut pending = 0u8;
+    for c in pat.chars() {
+        if let Some(d) = c.to_digit(10) {
+            pending = d as u8;
+        } else {
+            digits.push(pending);
+            pending = 0;
+            letters.push(c);
+        }
+    }
+    digits.push(pending);
+    (letters, digits)
+}
+
 fn parse(src: &str) -> Patterns {
-    let mut map = HashMap::new();
-    for pat in src.split_whitespace() {
-        let mut letters = String::new();
-        let mut digits: Vec<u8> = Vec::new();
-        let mut pending = 0u8;
-        for c in pat.chars() {
-            if let Some(d) = c.to_digit(10) {
-                pending = d as u8;
-            } else {
-                digits.push(pending);
-                pending = 0;
-                letters.push(c);
+    src.split_whitespace().map(parse_one).collect()
+}
+
+/// Liang's algorithm: the odd gaps of `lower` (small letters) under
+/// `pats`, at least `left` letters from the start and `right` from the end.
+fn liang(lower: &[char], pats: &Patterns, longest: usize, left: usize, right: usize) -> Vec<usize> {
+    let dotted: Vec<char> = std::iter::once('.')
+        .chain(lower.iter().copied())
+        .chain(std::iter::once('.'))
+        .collect();
+    let n = dotted.len();
+    let mut levels = vec![0u8; n + 1];
+    for start in 0..n {
+        for end in start + 1..=n.min(start + longest) {
+            let key: String = dotted[start..end].iter().collect();
+            if let Some(d) = pats.get(&key) {
+                for (k, v) in d.iter().enumerate() {
+                    let idx = start + k;
+                    if idx < levels.len() && *v > levels[idx] {
+                        levels[idx] = *v;
+                    }
+                }
             }
         }
-        digits.push(pending);
-        map.insert(letters, digits);
     }
-    map
+    // levels[j] is the gap before dotted[j]; a break after `i` letters of
+    // the word is the gap before lower[i], that is before dotted[i + 1].
+    (1..lower.len())
+        .filter(|&i| levels.get(i + 1).is_some_and(|l| l % 2 == 1))
+        .filter(|&i| i >= left && lower.len() - i >= right)
+        .collect()
 }
 
 fn patterns(lang: &str) -> &'static Patterns {
@@ -69,55 +209,100 @@ fn patterns(lang: &str) -> &'static Patterns {
 /// Liang's algorithm over the pattern set, then the heuristic for words
 /// the patterns leave unbroken.
 /// Words with a capital letter (names, acronyms) are not broken.
+/// Punctuation before or after the word ("parola," at a line's end, a
+/// quotation) is left aside and the letters between broken; an apostrophe
+/// inside the word ("dell'anno", "l’università") is kept for the patterns
+/// that know it, and without a pattern file only the part after the last
+/// one breaks (#255).
 pub fn break_points_lang(word: &str, lang: &str) -> Vec<usize> {
-    let chars: Vec<char> = word.chars().collect();
+    let all: Vec<char> = word.chars().collect();
     // The user's own hyphens win, capitals or not.
-    if let Some(p) = custom()
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&word.to_lowercase())
-    {
+    let mine = |w: &str| {
+        custom()
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&w.to_lowercase())
+            .cloned()
+    };
+    if let Some(p) = mine(word) {
         return p
             .iter()
             .copied()
-            .filter(|&i| i > 0 && i < chars.len())
+            .filter(|&i| i > 0 && i < all.len())
             .collect();
     }
-    if chars.len() < MIN_BEFORE + MIN_AFTER
-        || !chars.iter().all(|c| c.is_alphabetic())
-        || chars.iter().any(|c| c.is_uppercase())
-    {
+    let Some(start) = all.iter().position(|c| c.is_alphabetic()) else {
         return Vec::new();
-    }
-    let lower: Vec<char> = chars.iter().flat_map(|c| c.to_lowercase()).collect();
-    let dotted: Vec<char> = std::iter::once('.')
-        .chain(lower.iter().copied())
-        .chain(std::iter::once('.'))
-        .collect();
-    let n = dotted.len();
-    let mut levels = vec![0u8; n + 1];
-    let pats = patterns(lang);
-    for start in 0..n {
-        for end in start + 1..=n.min(start + 8) {
-            let key: String = dotted[start..end].iter().collect();
-            if let Some(d) = pats.get(&key) {
-                for (k, v) in d.iter().enumerate() {
-                    let idx = start + k;
-                    if idx < levels.len() && *v > levels[idx] {
-                        levels[idx] = *v;
-                    }
-                }
-            }
+    };
+    let end = all
+        .iter()
+        .rposition(|c| c.is_alphabetic())
+        .map_or(start, |i| i + 1);
+    let chars = &all[start..end];
+    let shift = |p: Vec<usize>| -> Vec<usize> { p.into_iter().map(|i| i + start).collect() };
+    if start > 0 || end < all.len() {
+        let core: String = chars.iter().collect();
+        if let Some(p) = mine(&core) {
+            return shift(
+                p.into_iter()
+                    .filter(|&i| i > 0 && i < chars.len())
+                    .collect(),
+            );
         }
     }
-    // levels[j] is the gap before dotted[j]; a break after `i` letters of
-    // the word is the gap before lower[i], that is before dotted[i + 1].
-    let mut out: Vec<usize> = (1..chars.len())
-        .filter(|&i| levels.get(i + 1).is_some_and(|l| l % 2 == 1))
-        .filter(|&i| i >= MIN_BEFORE && chars.len() - i >= MIN_AFTER)
+    if !chars.iter().all(|c| c.is_alphabetic() || is_apostrophe(*c)) {
+        return Vec::new();
+    }
+    let lower: Vec<char> = chars
+        .iter()
+        .flat_map(|c| c.to_lowercase())
+        .map(|c| if is_apostrophe(c) { '\'' } else { c })
         .collect();
+    // A pattern file: words with a capital first letter break too (nouns
+    // in some languages); other capitals (acronyms, names in capitals,
+    // inner capitals) do not.
+    let set = installed()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if set.is_none() {
+        // The built-in patterns know no apostrophes: the part after the
+        // last one.
+        if let Some(a) = chars.iter().rposition(|c| is_apostrophe(*c)) {
+            let after = a + 1;
+            let p = break_points_with(&chars[after..], &lower[after..], lang, None);
+            return shift(p.into_iter().map(|i| i + after).collect());
+        }
+    }
+    shift(break_points_with(chars, &lower, lang, set.as_deref()))
+}
+
+/// A straight or a typographic apostrophe.
+fn is_apostrophe(c: char) -> bool {
+    c == '\'' || c == '\u{2019}'
+}
+
+/// The break points of a word of letters (`chars`, and `lower` in small
+/// letters) with the pattern file `set`, else the built-in patterns.
+fn break_points_with(
+    chars: &[char],
+    lower: &[char],
+    lang: &str,
+    set: Option<&PatternSet>,
+) -> Vec<usize> {
+    if let Some(set) = set {
+        if chars.iter().skip(1).any(|c| c.is_uppercase()) || lower.len() != chars.len() {
+            return Vec::new();
+        }
+        return set.points(lower);
+    }
+    if chars.len() < MIN_BEFORE + MIN_AFTER || chars.iter().any(|c| c.is_uppercase()) {
+        return Vec::new();
+    }
+    let pats = patterns(lang);
+    let mut out = liang(lower, pats, 8, MIN_BEFORE, MIN_AFTER);
     if out.is_empty() {
-        out = heuristic(&lower);
+        out = heuristic(lower);
     }
     out.sort_unstable();
     out.dedup();
@@ -203,6 +388,62 @@ mod tests {
         assert!(break_points("CD Draw").is_empty());
         assert!(break_points("Portugal").is_empty());
         assert!(break_points("UNESCO").is_empty());
+    }
+
+    /// A hyphenation dictionary: the minimums, comments, a second level,
+    /// replacement patterns left out; installed, it replaces the built-in
+    /// patterns, and a capital first letter no longer stops a break.
+    #[test]
+    fn pattern_files() {
+        let text = "UTF-8\nLEFTHYPHENMIN 1\nRIGHTHYPHENMIN 1\n% a comment\n1ba\n1na\nc1k/k=k,1,2\nNEXTLEVEL\n1nas\n";
+        let set = PatternSet::parse(text).expect("patterns");
+        assert_eq!((set.left_min, set.right_min), (1, 1));
+        assert_eq!(set.len(), 3);
+        assert_eq!(
+            set.points(&"banana".chars().collect::<Vec<_>>()),
+            vec![2, 4]
+        );
+        assert_eq!(
+            set.points(&"bananas".chars().collect::<Vec<_>>()),
+            vec![2, 4]
+        );
+        assert!(PatternSet::parse("UTF-8\n% nothing\n").is_none());
+        // As installed (not installed here: other tests run meanwhile).
+        let with = |w: &str| {
+            let chars: Vec<char> = w.chars().collect();
+            let lower: Vec<char> = w.to_lowercase().chars().collect();
+            break_points_with(&chars, &lower, "en", Some(&set))
+        };
+        assert_eq!(with("Banana"), vec![2, 4]);
+        assert!(with("BANANA").is_empty());
+        assert!(with("baNana").is_empty());
+        assert!(
+            break_points("Banana").is_empty(),
+            "built-in: names stay whole"
+        );
+    }
+
+    /// A word with punctuation round it breaks between its letters, the
+    /// points counted in the whole word; an apostrophe inside it is kept
+    /// (the built-in patterns break after it only); other marks inside a
+    /// word still keep it whole (#255).
+    #[test]
+    fn punctuation_round_a_word_and_apostrophes_inside_it() {
+        let bare = break_points("information");
+        assert!(!bare.is_empty());
+        assert_eq!(break_points("information,"), bare);
+        assert_eq!(break_points("information."), bare);
+        let shifted: Vec<usize> = bare.iter().map(|i| i + 1).collect();
+        assert_eq!(break_points("\u{201c}information\u{201d}"), shifted);
+        let after: Vec<usize> = break_points("information").iter().map(|i| i + 2).collect();
+        assert_eq!(break_points("l'information"), after);
+        assert_eq!(break_points("l\u{2019}information"), after);
+        assert!(break_points("e-mail").is_empty());
+        assert!(break_points("...").is_empty());
+        // A pattern set that knows the apostrophe breaks before it.
+        let set = PatternSet::parse("UTF-8\n1l'\n").expect("set");
+        let w: Vec<char> = "dell'anno".chars().collect();
+        assert_eq!(break_points_with(&w, &w, "it", Some(&set)), vec![3]);
     }
 
     #[test]

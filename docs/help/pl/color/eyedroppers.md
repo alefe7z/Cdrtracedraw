@@ -7,6 +7,9 @@ próbki narzędzie przełącza się na stosowanie; kliknij przycisk pobierania, 
 pobrać próbkę ponownie. <kbd>Esc</kbd> porzuca próbkę i wraca do narzędzia
 [[tool.pick]].
 
+Wskaźnik jest pipetą, gdy narzędzie pobiera próbkę, i wiadrem z farbą, gdy ją
+nakłada. Obrazy podają swój kolor także w grupie lub ramce.
+
 ## Kroplomierz koloru {#color-eyedropper}
 
 1. Wybierz narzędzie [[tool.color_eyedropper]].
@@ -20,6 +23,11 @@ pobrać próbkę ponownie. <kbd>Esc</kbd> porzuca próbkę i wraca do narzędzia
    wewnątrz pustego kształtu zamkniętego wypełnia go.
 
 Pasek właściwości pokazuje pobrany kolor.
+
+Gdy przesuwasz wskaźnik, aby pobrać kolor, małe pole obok pokazuje kolor pod
+nim: próbkę, nazwę koloru, jeśli jest kolorem palety lub farbą dodatkową, jego
+wartości w trybie kolorów rysunku (CMYK lub RGB) i wartość szesnastkową.
+Kroplomierz próbnika kolorów pokazuje to samo pole.
 
 ## Kroplomierz atrybutów {#attributes-eyedropper}
 

@@ -1,19 +1,37 @@
-//! Autocorrect (Text > Writing Tools > Autocorrect): corrections made
-//! while typing, once the word is finished with a space or punctuation.
-//! Rules: capitalise the first letter of a sentence, fix two initial
-//! capitals ("THis"), typographic quotes by language, and the user's
-//! replacement table ("(c)" to "©"). Options persist in settings.
+//! Autocorrect (Tools > Options > Text > Autocorrect, also Text > Writing
+//! Tools > Autocorrect): corrections made while typing, once the word is
+//! finished with a space or punctuation. Rules: capitalise the first
+//! letter of a sentence, fix two initial capitals ("THis"), capitalise
+//! the names of days, typographic quotes by language or as chosen
+//! (straight after numbers if asked), the user's replacement table
+//! ("(c)" to "©"), and a hyperlink for a typed web address. Options
+//! persist in settings.
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutocorrectPrefs {
-    /// Apply the rules while typing.
+    /// Apply the rules while typing (an internal switch; the options
+    /// page turns each rule on and off).
     pub enabled: bool,
     pub capitalize_sentences: bool,
     pub fix_two_initial_capitals: bool,
+    /// "monday" to "Monday".
+    pub capitalize_days: bool,
+    /// A typed web address gives the text object that hyperlink.
+    pub auto_hyperlinks: bool,
+    /// The language whose quotation marks are used (`""`: the
+    /// interface language).
+    pub quote_language: String,
     pub typographic_quotes: bool,
+    /// A quote right after a digit stays straight (6' 2").
+    pub straight_after_numbers: bool,
+    /// Opening and closing quotes chosen by hand (`None`: the language's).
+    pub single_quotes: Option<[char; 2]>,
+    pub double_quotes: Option<[char; 2]>,
+    /// Apply the replacement table while typing.
+    pub replace_while_typing: bool,
     /// (abbreviation, replacement) pairs, matched as whole words.
     pub replacements: Vec<(String, String)>,
 }
@@ -24,7 +42,14 @@ impl Default for AutocorrectPrefs {
             enabled: true,
             capitalize_sentences: true,
             fix_two_initial_capitals: true,
+            capitalize_days: false,
+            auto_hyperlinks: false,
+            quote_language: String::new(),
             typographic_quotes: true,
+            straight_after_numbers: false,
+            single_quotes: None,
+            double_quotes: None,
+            replace_while_typing: true,
             replacements: vec![
                 ("(c)".into(), "©".into()),
                 ("(r)".into(), "®".into()),
@@ -35,6 +60,120 @@ impl Default for AutocorrectPrefs {
             ],
         }
     }
+}
+
+impl AutocorrectPrefs {
+    /// The quotation style of the chosen language (else the interface's).
+    pub fn style(&self) -> QuoteStyle {
+        if self.quote_language.is_empty() {
+            QuoteStyle::for_language(&crate::i18n::language())
+        } else {
+            QuoteStyle::for_language(&self.quote_language)
+        }
+    }
+
+    /// (open, close) double quotes: chosen by hand, else `style`'s.
+    pub fn double(&self, style: QuoteStyle) -> (char, char) {
+        self.double_quotes
+            .map(|[a, b]| (a, b))
+            .unwrap_or(style.double())
+    }
+
+    /// (open, close) single quotes: chosen by hand, else `style`'s.
+    pub fn single(&self, style: QuoteStyle) -> (char, char) {
+        self.single_quotes
+            .map(|[a, b]| (a, b))
+            .unwrap_or(style.single())
+    }
+
+    /// Older settings could switch the whole of autocorrect off; now each
+    /// rule has its own switch, so that becomes every rule off.
+    pub fn upgrade(&mut self) {
+        if !self.enabled {
+            self.enabled = true;
+            self.capitalize_sentences = false;
+            self.fix_two_initial_capitals = false;
+            self.capitalize_days = false;
+            self.auto_hyperlinks = false;
+            self.typographic_quotes = false;
+            self.replace_while_typing = false;
+        }
+    }
+}
+
+/// The quotation marks the options offer for opening and closing.
+pub const QUOTE_CHOICES: [char; 16] = [
+    '\'', '‘', '’', '‚', '‹', '›', '"', '“', '”', '„', '«', '»', '「', '」', '『', '』',
+];
+
+/// The English names of the days, capitalised by [`capitalize_day`].
+const DAYS: [&str; 7] = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+];
+
+/// "monday" (and "monday's", "monday,") to "Monday".
+pub fn capitalize_day(word: &str) -> String {
+    let letters: String = word.chars().take_while(|c| c.is_alphabetic()).collect();
+    let rest = &word[letters.len()..];
+    let ends_word = rest.is_empty() || rest.starts_with(['\'', '’', '.', ',', ';', ':', '!', '?']);
+    if ends_word && DAYS.contains(&letters.to_lowercase().as_str()) {
+        let mut cs = letters.chars();
+        if let Some(f) = cs.next() {
+            if f.is_lowercase() {
+                return f.to_uppercase().chain(cs).collect::<String>() + rest;
+            }
+        }
+    }
+    word.to_string()
+}
+
+/// The web address a typed word is (`http://`, `https://` or `www.`
+/// with a dot after it), trailing punctuation and brackets left out;
+/// `www.` addresses get `http://`.
+pub fn web_address(word: &str) -> Option<String> {
+    let w = word
+        .trim_start_matches(['(', '[', '<', '"', '\'', '“', '‘'])
+        .trim_end_matches([
+            '.', ',', ';', ':', '!', '?', ')', ']', '>', '"', '\'', '”', '’',
+        ]);
+    let lower = w.to_ascii_lowercase();
+    let host = lower
+        .strip_prefix("http://")
+        .or_else(|| lower.strip_prefix("https://"))
+        .or_else(|| lower.strip_prefix("www."))?;
+    let name = host.split(['/', '?', '#']).next().unwrap_or("");
+    let parts: Vec<&str> = name.split('.').collect();
+    let named = name.contains('.') || lower.starts_with("www.");
+    if !named || parts.iter().any(|p| p.is_empty()) || w.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(if lower.starts_with("www.") {
+        format!("http://{w}")
+    } else {
+        w.to_string()
+    })
+}
+
+/// The web address of the word just finished by the last typed
+/// character, if any.
+pub fn typed_web_address(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let last = *chars.last()?;
+    if !last.is_whitespace() {
+        return None;
+    }
+    let end = chars.len() - 1;
+    let mut start = end;
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+    web_address(&chars[start..end].iter().collect::<String>())
 }
 
 /// Quotation mark style; chosen from the UI language.
@@ -94,29 +233,36 @@ fn opens_quote(chars: &[char], pos: usize) -> bool {
 }
 
 /// Straight quotes to typographic ones over the whole text.
+#[cfg(test)]
 pub fn typographic_quotes(text: &str, style: QuoteStyle) -> String {
+    quotes_with(text, style.double(), style.single(), false)
+}
+
+/// Straight quotes to `double` and `single` (open, close) over the whole
+/// text; with `after_numbers` a quote right after a digit stays.
+fn quotes_with(
+    text: &str,
+    double: (char, char),
+    single: (char, char),
+    after_numbers: bool,
+) -> String {
     let chars: Vec<char> = text.chars().collect();
-    let (d_open, d_close) = style.double();
-    let (s_open, s_close) = style.single();
     chars
         .iter()
         .enumerate()
-        .map(|(i, c)| match c {
-            '"' => {
-                if opens_quote(&chars, i) {
-                    d_open
-                } else {
-                    d_close
-                }
+        .map(|(i, c)| {
+            let (open, close) = match c {
+                '"' => double,
+                '\'' => single,
+                o => return *o,
+            };
+            if after_numbers && i > 0 && chars[i - 1].is_ascii_digit() {
+                *c
+            } else if opens_quote(&chars, i) {
+                open
+            } else {
+                close
             }
-            '\'' => {
-                if opens_quote(&chars, i) {
-                    s_open
-                } else {
-                    s_close
-                }
-            }
-            o => *o,
         })
         .collect()
 }
@@ -182,8 +328,25 @@ pub fn capitalize_sentences(text: &str) -> String {
     let mut out = String::new();
     let mut at_start = true;
     let mut after_terminator = false;
-    for c in text.chars() {
+    let chars: Vec<char> = text.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
         if at_start && c.is_alphabetic() {
+            // An e-mail or web address keeps its letters (#4326).
+            let word_start = chars[..i]
+                .iter()
+                .rposition(|c| c.is_whitespace())
+                .map_or(0, |p| p + 1);
+            let word_end = chars[i..]
+                .iter()
+                .position(|c| c.is_whitespace())
+                .map_or(chars.len(), |p| p + i);
+            let word: String = chars[word_start..word_end].iter().collect();
+            if address_word(&word, ' ') {
+                out.push(c);
+                at_start = false;
+                after_terminator = false;
+                continue;
+            }
             out.extend(c.to_uppercase());
             at_start = false;
             after_terminator = false;
@@ -236,17 +399,25 @@ fn replace_word(word: &str, table: &[(String, String)]) -> String {
 /// All enabled rules over a whole text (Apply to selection).
 pub fn apply_all(text: &str, prefs: &AutocorrectPrefs, style: QuoteStyle) -> String {
     let mut t = text.to_string();
-    if !prefs.replacements.is_empty() {
+    if prefs.replace_while_typing && !prefs.replacements.is_empty() {
         t = apply_replacements(&t, &prefs.replacements);
     }
     if prefs.fix_two_initial_capitals {
         t = fix_two_initial_capitals(&t);
     }
+    if prefs.capitalize_days {
+        t = map_words(&t, capitalize_day);
+    }
     if prefs.capitalize_sentences {
         t = capitalize_sentences(&t);
     }
     if prefs.typographic_quotes {
-        t = typographic_quotes(&t, style);
+        t = quotes_with(
+            &t,
+            prefs.double(style),
+            prefs.single(style),
+            prefs.straight_after_numbers,
+        );
     }
     t
 }
@@ -262,11 +433,14 @@ pub fn on_typed(text: &str, prefs: &AutocorrectPrefs, style: QuoteStyle) -> Opti
         if !prefs.typographic_quotes {
             return None;
         }
+        if prefs.straight_after_numbers && n > 1 && chars[n - 2].is_ascii_digit() {
+            return None;
+        }
         let opening = opens_quote(&chars, n - 1);
         let (o, c) = if last == '"' {
-            style.double()
+            prefs.double(style)
         } else {
-            style.single()
+            prefs.single(style)
         };
         let mut out: String = chars[..n - 1].iter().collect();
         out.push(if opening { o } else { c });
@@ -288,12 +462,25 @@ pub fn on_typed(text: &str, prefs: &AutocorrectPrefs, style: QuoteStyle) -> Opti
         return None;
     }
     let word: String = chars[start..end].iter().collect();
+    // An e-mail or web address, or the start of one ("www" before its
+    // dot, "http" before its colon), keeps its letters as typed: a
+    // capital at the start of a paragraph turned `hello@example.com`
+    // into `Hello@example.com` (#4326).
+    if address_word(&word, last) {
+        return prefs
+            .capitalize_sentences
+            .then(|| lowercase_address_start(&chars, start, end, &word))
+            .flatten();
+    }
     let mut fixed = word.clone();
-    if !prefs.replacements.is_empty() {
+    if prefs.replace_while_typing && !prefs.replacements.is_empty() {
         fixed = replace_word(&fixed, &prefs.replacements);
     }
     if prefs.fix_two_initial_capitals {
         fixed = fix_two_initial_capitals_word(&fixed);
+    }
+    if prefs.capitalize_days {
+        fixed = capitalize_day(&fixed);
     }
     if prefs.capitalize_sentences {
         let before: String = chars[..start].iter().collect();
@@ -329,12 +516,59 @@ pub fn on_typed(text: &str, prefs: &AutocorrectPrefs, style: QuoteStyle) -> Opti
     Some(out)
 }
 
+/// Whether `word`, finished by `trigger`, is an e-mail or web address or
+/// the beginning of one, which the capitals rules leave alone (#4326).
+fn address_word(word: &str, trigger: char) -> bool {
+    let lower = word.to_lowercase();
+    let w = lower.trim_start_matches(['(', '[', '<', '"', '\'', '“', '‘']);
+    w.contains('@')
+        || w.contains("://")
+        || web_address(w).is_some()
+        || (matches!(trigger, '.' | ':') && matches!(w, "www" | "http" | "https" | "ftp" | "mailto"))
+}
+
+/// An e-mail address recognised once its `@` is typed, whose first letter
+/// the sentence rule had capitalised while the part before a dot was
+/// typed (`john.smith@…` became `John.smith@…`): that capital undone, when
+/// the rest of the address is lowercase. Else nothing changes.
+fn lowercase_address_start(chars: &[char], start: usize, end: usize, word: &str) -> Option<String> {
+    if !word.contains('@') {
+        return None;
+    }
+    let mut letters = word.chars().filter(|c| c.is_alphabetic());
+    let first = letters.next()?;
+    if !first.is_uppercase() || !letters.all(|c| !c.is_uppercase()) {
+        return None;
+    }
+    let at = chars[start..end].iter().position(|c| c.is_alphabetic())? + start;
+    // Only the capital the sentence rule gives: at a sentence start.
+    let before: String = chars[..start].iter().collect();
+    let trimmed = before.trim_end();
+    let at_sentence_start = before.ends_with('\n')
+        || chars[..start]
+            .iter()
+            .rev()
+            .take_while(|c| c.is_whitespace())
+            .any(|c| *c == '\n')
+        || matches!(trimmed.chars().last(), None | Some('.' | '!' | '?'));
+    if !at_sentence_start {
+        return None;
+    }
+    let mut out: Vec<char> = chars.to_vec();
+    let lower: Vec<char> = out[at].to_lowercase().collect();
+    if lower.len() != 1 {
+        return None;
+    }
+    out[at] = lower[0];
+    Some(out.into_iter().collect())
+}
+
 /// Apply every enabled rule to the selected text objects (span by span,
 /// so styling is kept). Returns the number of objects changed.
 pub fn apply_to_selection(app: &mut crate::app::App) -> usize {
     use tracedraw_core::{document::ShapeKind, Command, TextSpan};
     let prefs = app.settings.autocorrect.clone();
-    let style = QuoteStyle::for_language(&crate::i18n::language());
+    let style = prefs.style();
     let mut changed = 0;
     for s in app.text_shapes() {
         let ShapeKind::Text {
@@ -405,6 +639,45 @@ mod tests {
             "He said. \"Yes.\""
         );
         assert_eq!(capitalize_sentences("3.14 is pi"), "3.14 is pi");
+    }
+
+    #[test]
+    fn addresses_keep_their_letters() {
+        let p = AutocorrectPrefs::default();
+        let style = QuoteStyle::Curly;
+        // Typed letter by letter at the start of a paragraph: no capital.
+        let mut text = String::new();
+        for c in "hello@example.com ".chars() {
+            text.push(c);
+            if let Some(t) = on_typed(&text, &p, style) {
+                text = t;
+            }
+        }
+        assert_eq!(text, "hello@example.com ");
+        let mut text = String::from("Call us.\n");
+        for c in "www.example.com and http://example.org ".chars() {
+            text.push(c);
+            if let Some(t) = on_typed(&text, &p, style) {
+                text = t;
+            }
+        }
+        assert_eq!(text, "Call us.\nwww.example.com and http://example.org ");
+        // A dot before the @: the capital given to "john" goes once the
+        // address is recognised.
+        let mut text = String::new();
+        for c in "john.smith@example.com ".chars() {
+            text.push(c);
+            if let Some(t) = on_typed(&text, &p, style) {
+                text = t;
+            }
+        }
+        assert_eq!(text, "john.smith@example.com ");
+        // An ordinary word still gets its capital.
+        assert_eq!(on_typed("hello ", &p, style).as_deref(), Some("Hello "));
+        assert_eq!(
+            capitalize_sentences("hello@example.com\nwww.site.com. done"),
+            "hello@example.com\nwww.site.com. Done"
+        );
     }
 
     #[test]
@@ -507,6 +780,73 @@ mod tests {
         assert_eq!(back, p);
         let partial: AutocorrectPrefs = serde_json::from_str("{\"enabled\":false}").unwrap();
         assert!(!partial.enabled && partial.capitalize_sentences);
+    }
+
+    #[test]
+    fn days_quotes_and_links_follow_the_options() {
+        let mut p = AutocorrectPrefs::default();
+        let st = QuoteStyle::Curly;
+        // Days: off by default, then capitalised, possessives too.
+        assert_eq!(on_typed("see you monday ", &p, st), None);
+        p.capitalize_days = true;
+        assert_eq!(
+            on_typed("see you monday ", &p, st).as_deref(),
+            Some("see you Monday ")
+        );
+        assert_eq!(capitalize_day("friday's"), "Friday's");
+        assert_eq!(capitalize_day("mondays"), "mondays");
+        assert_eq!(capitalize_day("sundae"), "sundae");
+        // Straight quotes after numbers.
+        assert_eq!(on_typed("6'", &p, st).as_deref(), Some("6’"));
+        p.straight_after_numbers = true;
+        assert_eq!(on_typed("6'", &p, st), None);
+        assert_eq!(on_typed("a '", &p, st).as_deref(), Some("a ‘"));
+        assert_eq!(apply_all("he is 6' 2\" tall", &p, st), "He is 6' 2\" tall");
+        // Quotes chosen by hand win over the language's.
+        p.double_quotes = Some(['»', '«']);
+        assert_eq!(on_typed("x \"", &p, st).as_deref(), Some("x »"));
+        // Another language's marks.
+        p.double_quotes = None;
+        p.quote_language = "de".into();
+        assert_eq!(p.double(p.style()), ('„', '“'));
+        // The replacement table only while it is on.
+        p.replace_while_typing = false;
+        assert_eq!(on_typed("(c) ", &p, st), None);
+        p.replace_while_typing = true;
+        assert_eq!(on_typed("(c) ", &p, st).as_deref(), Some("© "));
+        // Web addresses.
+        assert_eq!(
+            web_address("www.example.com,").as_deref(),
+            Some("http://www.example.com")
+        );
+        assert_eq!(
+            web_address("(https://tracedraw.org/help)").as_deref(),
+            Some("https://tracedraw.org/help")
+        );
+        assert_eq!(web_address("http://localhost"), None);
+        assert_eq!(web_address("example.com"), None);
+        assert_eq!(web_address("www."), None);
+        assert_eq!(
+            typed_web_address("go to www.a.org ").as_deref(),
+            Some("http://www.a.org")
+        );
+        assert_eq!(typed_web_address("go to www.a.org"), None);
+    }
+
+    #[test]
+    fn older_settings_with_autocorrect_off_turn_every_rule_off() {
+        let mut p = AutocorrectPrefs {
+            enabled: false,
+            ..Default::default()
+        };
+        p.upgrade();
+        assert!(p.enabled);
+        assert!(!p.capitalize_sentences && !p.fix_two_initial_capitals);
+        assert!(!p.typographic_quotes && !p.replace_while_typing);
+        assert_eq!(on_typed("hello. (c) ", &p, QuoteStyle::Curly), None);
+        let mut on = AutocorrectPrefs::default();
+        on.upgrade();
+        assert_eq!(on, AutocorrectPrefs::default());
     }
 
     #[test]

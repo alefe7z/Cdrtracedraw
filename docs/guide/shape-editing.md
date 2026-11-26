@@ -65,7 +65,7 @@ All of these are on the property bar, and on the menu you get by
 right-clicking a node:
 
 - **Join Nodes**: join two end nodes into one.
-- **Break Curve**: split the curve at the selected node.
+- **Break Curve**: split the curve at the selected node. A closed curve opens there, both new ends sitting on the node.
 - **Extend Curve to Close**: join two selected end nodes with a straight
   segment.
 - **Close Curve** and **Reverse Direction**.
@@ -96,7 +96,8 @@ edits them in their own way:
   to make an arc.
 - **Polygon or star**: drag a point to move all the points in or out;
   drag a node between points in or out to sharpen the star, or round the
-  centre to twist it.
+  centre to twist it; drag a side out or in to curve every side the same
+  way.
 
 To edit them as free curves, use **Convert to Curves** (`Ctrl+Q`).
 **Convert outline to object** (`Ctrl+Shift+Q`) turns an outline into a
@@ -107,7 +108,7 @@ Detail: [the Shape tool notes](../behavior/shape-tool.md).
 ## Shaping: weld, trim, intersect
 
 Shaping combines overlapping objects into new outlines. Select two or
-more objects and use **Object > Shaping**, the buttons at the end of the
+more objects and use **Object > Combine Shapes**, the buttons at the end of the
 property bar, or the **Shaping** panel. The **last object you selected**
 is the target: it gives the result its fill and outline.
 
@@ -121,7 +122,7 @@ is the target: it gives the result its fill and outline.
 | **Back Minus Front** | the back object without the ones in front |
 | **Boundary** | an outline around the selection (works on one object too) |
 
-In the Shaping panel you can choose, for Weld, Trim and Intersect,
+In the Combine Shapes panel you can choose, for Weld, Trim and Intersect,
 whether to leave the original source and target objects. Each operation
 is one undo step. Detail: [the shaping notes](../behavior/shaping.md).
 
@@ -181,14 +182,15 @@ of each object should stay together.
 
 **Segment Delete** removes the stretch of an outline between two places
 where it crosses another outline (or itself). Click a stretch to remove
-it, or drag a rectangle to remove every stretch inside it.
+it, or drag a rectangle to remove every stretch it touches, whole.
 
 ### Eraser (`X`)
 
 Drag over the selected objects (or the object under the pointer) to rub
 out a band. Set the **thickness** (6.35 mm to start with) and a round or
 square nib on the property bar. A click erases a dot; a double-click on
-an object deletes it. Bitmaps, groups and clip frames are not erased.
+an object deletes it. A clip frame is erased through its frame, which
+hides its contents along the band. Bitmaps and groups are not erased.
 
 Detail: [the crop, knife and eraser notes](../behavior/crop-knife-eraser.md).
 

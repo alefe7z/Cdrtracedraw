@@ -5,7 +5,10 @@
 //! each tool's icon, name and shortcut with separators between the kinds
 //! of tools. Once a flyout is open, hovering another flyout button opens
 //! that one instead. The button at the end shows or hides flyouts.
+//! Commands dragged onto it from Options > Customization > Commands
+//! follow the tools, as on the toolbars (#3211).
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::i18n::tr;
 use crate::theme::{self, Tokens};
@@ -13,6 +16,10 @@ use crate::tools::{Tool, GROUPS};
 use crate::ui::icons;
 use crate::ui::tips::RichTip;
 use egui::{Pos2, Rect, Sense, Stroke, Ui, Vec2};
+
+/// Seconds the pointer rests on another flyout button, with a list open,
+/// before that button's list takes its place (#4081).
+const FLYOUT_SWITCH_REST: f64 = 0.35;
 
 /// Tools after which a flyout draws a separator.
 const SEPARATE_AFTER: [Tool; 4] = [
@@ -22,8 +29,11 @@ const SEPARATE_AFTER: [Tool; 4] = [
     Tool::AreaFill,
 ];
 
-/// Toolbox groups followed by a separator line.
-const GROUP_BREAKS: [usize; 7] = [1, 3, 8, 9, 11, 13, 15];
+/// Toolbox groups followed by a separator line: the Shape, Zoom, Polygon,
+/// Text, Connector, Transparency and Fill groups. The Variable Outline
+/// button sits in the drawing block, under the brush tools, with no line
+/// between them.
+const GROUP_BREAKS: [usize; 7] = [1, 3, 9, 10, 12, 14, 16];
 
 /// Whether group `gi` is shown (the Outline flyout is hidden by default).
 pub fn group_visible(app: &App, gi: usize) -> bool {
@@ -39,15 +49,24 @@ pub fn group_visible(app: &App, gi: usize) -> bool {
         .any(|id| id == group.tools[0].id())
 }
 
-/// The tooltip of a tool: its name and shortcut in bold, then what it does.
-pub fn tool_tooltip(ui: &mut Ui, tool: Tool) {
-    let head = if tool.shortcut_label().is_empty() {
+/// The keys that pick `tool` now, joined: the user's from Options >
+/// Customization > Commands, else its built-in one. The toolbox showed
+/// the built-in key alone, so a key given to another tool still showed
+/// on the tool that lost it, and not on the one that took it (#3099).
+pub fn tool_keys(app: &App, tool: Tool) -> String {
+    crate::shortcuts::keys_for(&app.settings.shortcuts, tool.id(), tool.shortcut()).join(", ")
+}
+
+/// The tooltip of a tool: its name and shortcut (`keys`, see
+/// [`tool_keys`]) in bold, then what it does.
+pub fn tool_tooltip(ui: &mut Ui, tool: Tool, keys: &str) {
+    let head = if keys.is_empty() {
         crate::i18n::trf("toolbox.tool_title", &[("t", &tool.name())])
     } else {
         format!(
             "{} ({})",
             crate::i18n::trf("toolbox.tool_title", &[("t", &tool.name())]),
-            tool.shortcut_label()
+            keys
         )
     };
     ui.set_max_width(260.0);
@@ -55,12 +74,196 @@ pub fn tool_tooltip(ui: &mut Ui, tool: Tool) {
     ui.label(egui::RichText::new(tr(&format!("tooldesc.{}", tool.id()))).size(12.0));
 }
 
-/// Buttons per row in a floating toolbox.
+/// Buttons per row a floating toolbox starts with.
 pub const FLOATING_COLUMNS: usize = 2;
 
-/// The width of a floating toolbox's grid of buttons.
+/// The width of a floating toolbox's grid of buttons at first: two
+/// buttons wide.
 pub fn floating_width(app: &App) -> f32 {
-    FLOATING_COLUMNS as f32 * button_width(app) + (FLOATING_COLUMNS - 1) as f32
+    FLOATING_COLUMNS as f32 * button_width(app) + (FLOATING_COLUMNS - 1) as f32 * FLOW_GAP
+}
+
+/// The space between the buttons of a floating toolbox, across and down.
+pub const FLOW_GAP: f32 = 1.0;
+/// The cell a separator takes between two groups in a row: the line and
+/// two pixels of space on each side.
+pub const SEP_CELL: f32 = 5.0;
+/// The line between two rows of a floating toolbox where a group ends.
+pub const LINE_ROW: f32 = 3.0;
+
+/// How the buttons of a floating toolbox flow in the room asked for: the
+/// buttons in each row, and the room the rows take.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Flow {
+    /// Buttons in each row, top to bottom.
+    pub rows: Vec<usize>,
+    /// The widest row and the rows' height together: buttons, the gaps
+    /// between them, the separator cells in the rows and the lines
+    /// between the rows.
+    pub size: Vec2,
+}
+
+impl Flow {
+    /// The index of the first button of each row.
+    pub fn row_starts(&self) -> Vec<usize> {
+        let mut starts = Vec::with_capacity(self.rows.len());
+        let mut at = 0;
+        for n in &self.rows {
+            starts.push(at);
+            at += n;
+        }
+        starts
+    }
+}
+
+/// The buttons in each row of a toolbox `width` wide, left to right then
+/// down: a button goes on the row while it fits, with [`FLOW_GAP`]
+/// before it and a separator cell ([`SEP_CELL`] and a gap) when a group
+/// ends before it; else it starts the next row. `breaks[i]` says a group
+/// ends after button `i`. A row always holds at least one button.
+pub fn flow_rows(width: f32, button_w: f32, breaks: &[bool]) -> Vec<usize> {
+    let mut rows = Vec::new();
+    let mut in_row = 0usize;
+    let mut row_w = 0.0f32;
+    for i in 0..breaks.len() {
+        let sep_before = i > 0 && breaks.get(i - 1).copied().unwrap_or(false);
+        let need = if sep_before {
+            FLOW_GAP + SEP_CELL + FLOW_GAP + button_w
+        } else {
+            FLOW_GAP + button_w
+        };
+        if in_row > 0 && row_w + need > width + 0.5 {
+            rows.push(in_row);
+            in_row = 0;
+        }
+        if in_row == 0 {
+            row_w = button_w;
+        } else {
+            row_w += need;
+        }
+        in_row += 1;
+    }
+    if in_row > 0 {
+        rows.push(in_row);
+    }
+    rows
+}
+
+/// The room `rows` take with buttons `button` large: the widest row
+/// across, and down the rows with a gap between them and a line
+/// ([`LINE_ROW`]) where a group ends at a row's end.
+pub fn flow_size(rows: &[usize], button: Vec2, breaks: &[bool]) -> Vec2 {
+    let mut width = 0.0f32;
+    let mut height = 0.0f32;
+    let mut at = 0usize;
+    for (r, n) in rows.iter().enumerate() {
+        if r > 0 {
+            height += FLOW_GAP;
+            if at > 0 && breaks.get(at - 1).copied().unwrap_or(false) {
+                height += LINE_ROW + FLOW_GAP;
+            }
+        }
+        let seps = (at..at + n.saturating_sub(1))
+            .filter(|i| breaks.get(*i).copied().unwrap_or(false))
+            .count();
+        let w = *n as f32 * button.x
+            + n.saturating_sub(1) as f32 * FLOW_GAP
+            + seps as f32 * (SEP_CELL + FLOW_GAP);
+        width = width.max(w);
+        height += button.y;
+        at += n;
+    }
+    Vec2::new(width, height)
+}
+
+/// The flow of a floating toolbox asked to be `asked` large: the buttons
+/// flow in the width asked for; when the rows then stand taller than the
+/// height asked for (by more than half a button, so a grid kept in cells
+/// holds its columns when its buttons change size), the rows get wider
+/// (a button at a time) until they fit it, or until they are one row. A
+/// tall narrow window so gives two columns (or one), a wider one more
+/// columns and fewer rows, a wide short one a row or two. The flow is
+/// never narrower than one button.
+pub fn flow(asked: Vec2, button: Vec2, breaks: &[bool]) -> Flow {
+    let button = Vec2::new(button.x.max(1.0), button.y.max(1.0));
+    let mut width = if asked.x.is_finite() {
+        asked.x.max(button.x)
+    } else {
+        button.x
+    };
+    let fit_height = if asked.y.is_finite() {
+        asked.y + button.y / 2.0
+    } else {
+        f32::INFINITY
+    };
+    let mut rows = flow_rows(width, button.x, breaks);
+    let mut size = flow_size(&rows, button, breaks);
+    for _ in 0..breaks.len() {
+        if rows.len() <= 1 || size.y <= fit_height + 0.5 {
+            break;
+        }
+        width += button.x + FLOW_GAP;
+        rows = flow_rows(width, button.x, breaks);
+        size = flow_size(&rows, button, breaks);
+    }
+    Flow { rows, size }
+}
+
+/// Where a group ends in the floating toolbox's row of buttons: one entry
+/// per button shown, the "+" button last (no separator after it).
+pub fn floating_breaks(app: &App) -> Vec<bool> {
+    let mut breaks: Vec<bool> = (0..GROUPS.len())
+        .filter(|gi| group_visible(app, *gi))
+        .map(|gi| GROUP_BREAKS.contains(&gi))
+        .collect();
+    // The "+" at the end.
+    breaks.push(false);
+    breaks
+}
+
+/// A cell of the floating toolbox's grid: a button and the gap after it.
+/// The room the grid asks for is kept in cells (`bars.toolbox_size`), so
+/// a toolbox three buttons wide stays three wide when its buttons
+/// change size.
+pub fn floating_cell(app: &App) -> Vec2 {
+    Vec2::new(
+        button_width(app) + FLOW_GAP,
+        Tokens::tool_button() + FLOW_GAP,
+    )
+}
+
+/// The room a floating toolbox's grid asks for (points): the size it
+/// was last resized to (kept in the preferences, in cells), else two
+/// buttons wide and as tall as it needs.
+pub fn floating_asked(app: &App) -> Vec2 {
+    let cell = floating_cell(app);
+    match app.settings.bars.toolbox_size {
+        Some([w, h]) if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 => {
+            Vec2::new(w * cell.x, h * cell.y)
+        }
+        _ => Vec2::new(floating_width(app), f32::INFINITY),
+    }
+}
+
+/// A height (points) no grid reaches: asked for while a side edge of
+/// the floating toolbox is dragged, so the rows take the height they
+/// need. Finite, so the preferences can hold it should the drag be cut
+/// short.
+pub const FREE_HEIGHT: f32 = 1.0e6;
+
+/// `room` (points) as the preferences keep it: in cells of the grid.
+pub fn floating_cells(app: &App, room: Vec2) -> [f32; 2] {
+    let cell = floating_cell(app);
+    [
+        (room.x / cell.x).max(f32::EPSILON),
+        (room.y / cell.y).max(f32::EPSILON),
+    ]
+}
+
+/// The flow of the floating toolbox as it is now set up.
+pub fn floating_flow(app: &App) -> Flow {
+    let button = Vec2::new(button_width(app), Tokens::tool_button());
+    flow(floating_asked(app), button, &floating_breaks(app))
 }
 
 /// The room a caption takes on each side of its text.
@@ -86,6 +289,9 @@ pub fn button_width(app: &App) -> f32 {
 
 /// The width of a docked toolbox column (its buttons and the margins).
 pub fn column_width(app: &App) -> f32 {
+    if app.pixel_edit.is_some() {
+        return crate::ui::pixel_mode::column_width();
+    }
     button_width(app) + 6.0
 }
 
@@ -117,204 +323,534 @@ fn caption_font() -> egui::FontId {
 /// column on a side, or floating as a grid two buttons wide.
 pub fn toolbox(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
     use crate::ui::bars::Dock;
+    // The image editing mode: the image tools.
+    if app.pixel_edit.is_some() {
+        crate::ui::pixel_mode::toolbox(app, ui, dock);
+        return;
+    }
     // Nothing to draw on the Welcome Screen: the tools show pale.
     if !app.drawing_shown() {
         ui.disable();
     }
+    // A right click on the toolbox's empty part opens its menu, as on the
+    // other bars.
+    crate::ui::bars::background(app, ui, crate::ui::bars::Bar::Toolbox);
+    if dock != Dock::Floating {
+        size_by_wheel(app, ui, ui.max_rect());
+    }
     match dock {
         Dock::Top | Dock::Bottom => {
-            crate::ui::overflow::row(ui, "toolbox_row", |ui| tools(app, ui, dock));
+            crate::ui::overflow::row(ui, "toolbox_row", |ui| tools(app, ui, dock, None));
         }
-        Dock::Floating => {
-            ui.set_max_width(floating_width(app));
-            ui.horizontal_wrapped(|ui| tools(app, ui, dock));
-        }
+        Dock::Floating => floating_grid(app, ui),
         Dock::Left | Dock::Right => {
-            crate::ui::overflow::column(ui, "toolbox_column", |ui| tools(app, ui, dock))
+            // Buttons shorter, down to a floor, so the column fits the
+            // window without scrolling (#494).
+            let room = ui.available_rect_before_wrap().height();
+            let side = fitted_side(Tokens::tool_button(), visible_groups(app), room);
+            crate::ui::overflow::column(ui, "toolbox_column", |ui| {
+                tools(app, ui, dock, Some(side))
+            });
         }
     }
 }
 
-fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock) {
-    use crate::ui::bars::{Bar, Dock};
+/// Ctrl+wheel over the toolbox (in `rect`) steps its buttons' size: up
+/// larger, down smaller, from the size it has (its own, or the default
+/// button size it follows), as the bars' menu > Customize > Toolbox
+/// Toolbar > Button Size does. The wheel is taken, so the toolbox does
+/// not slide with it and the drawing does not zoom.
+pub fn size_by_wheel(app: &mut App, ui: &Ui, rect: Rect) {
+    if let Some(steps) =
+        crate::ui::bars::ctrl_wheel_steps(ui, rect, egui::Id::new("toolbox_size_wheel"))
+    {
+        let now = app
+            .settings
+            .toolbox_button_size
+            .unwrap_or(app.settings.button_size);
+        app.settings.toolbox_button_size = Some(now.stepped(steps));
+    }
+}
+
+/// The height a column toolbox's buttons get so `n` of them (with the
+/// grip) fit `room`: their side, less when that does not fit, never under
+/// [`MIN_FITTED_SIDE`] (the overflow arrows take over from there).
+pub fn fitted_side(side: f32, n: usize, room: f32) -> f32 {
+    const GRIP: f32 = 9.0;
+    if n == 0 || !room.is_finite() {
+        return side;
+    }
+    let n = n as f32;
+    let fit = ((room - GRIP - (n - 1.0)) / n).floor();
+    fit.clamp(MIN_FITTED_SIDE.min(side), side)
+}
+
+/// A flyout row's icon box and height at the toolbox's button size:
+/// 18 and 24 px up to Medium, growing with the larger sizes (24 and 30
+/// px at Large, 30 and 36 px at Extra Large) so the list matches the
+/// buttons that open it.
+pub fn flyout_metrics() -> (f32, f32) {
+    flyout_metrics_for(Tokens::tool_icon())
+}
+
+/// [`flyout_metrics`] for toolbox icons of side `tool_icon`.
+pub fn flyout_metrics_for(tool_icon: f32) -> (f32, f32) {
+    let icon = (tool_icon * 0.75).round().max(18.0);
+    (icon, (icon + 6.0).max(24.0))
+}
+
+/// The shortest a column toolbox's buttons get to fit the window.
+pub const MIN_FITTED_SIDE: f32 = 22.0;
+
+/// How many buttons the toolbox shows.
+fn visible_groups(app: &App) -> usize {
+    (0..GROUPS.len())
+        .filter(|gi| group_visible(app, *gi))
+        .count()
+}
+
+fn tools(app: &mut App, ui: &mut Ui, dock: crate::ui::bars::Dock, fitted: Option<f32>) {
+    use crate::ui::bars::Bar;
     let horizontal = dock.horizontal();
-    let floating = dock == Dock::Floating;
-    ui.spacing_mut().item_spacing = if floating {
-        Vec2::new(1.0, 1.0)
-    } else if horizontal {
+    ui.spacing_mut().item_spacing = if horizontal {
         Vec2::new(1.0, 0.0)
     } else {
         Vec2::new(0.0, 1.0)
     };
-    if !floating {
-        crate::ui::bars::grip(app, ui, Bar::Toolbox, horizontal);
-    }
+    crate::ui::bars::grip(app, ui, Bar::Toolbox, horizontal);
     // Captions: the icon, the tool's name, or both on each button; the
     // names measured now size the buttons from the next frame.
     let captions = app.settings.toolbox_captions;
     if captions.caption() {
         app.toolbox_caption_w = widest_caption(app, ui);
     }
-    let side = Tokens::tool_button();
-    let size = Vec2::new(button_width(app), side);
-    for (gi, group) in GROUPS.iter().enumerate() {
+    let side = fitted.unwrap_or_else(Tokens::tool_button);
+    for (gi, _) in GROUPS.iter().enumerate() {
         if !group_visible(app, gi) {
             continue;
         }
-        // The button shows the tool last used in this group, even while a
-        // tool of another group is active.
-        let shown = if group.tools.contains(&app.tool) {
-            app.tool
-        } else {
-            app.toolbox_last
-                .get(gi)
-                .copied()
-                .filter(|t| group.tools.contains(t))
-                .unwrap_or(group.tools[0])
-        };
-        let active = group.tools.contains(&app.tool);
+        tool_button(app, ui, gi, side, captions, dock);
+        if GROUP_BREAKS.contains(&gi) {
+            ui.add_space(2.0);
+            if horizontal {
+                let (r, _) = ui.allocate_exact_size(Vec2::new(1.0, side), Sense::hover());
+                ui.painter().vline(
+                    r.center().x,
+                    r.y_range().shrink(4.0),
+                    Stroke::new(1.0, Tokens::border()),
+                );
+            } else {
+                let (r, _) =
+                    ui.allocate_exact_size(Vec2::new(button_width(app), 1.0), Sense::hover());
+                ui.painter().hline(
+                    r.x_range().shrink(4.0),
+                    r.center().y,
+                    Stroke::new(1.0, Tokens::border()),
+                );
+            }
+            ui.add_space(2.0);
+        }
+    }
+    commands(
+        app,
+        ui,
+        crate::ui::bar_items::ItemBar::Toolbox,
+        side,
+        horizontal,
+    );
+    quick_customize(app, ui, horizontal);
+}
+
+/// The commands put on the toolbox (#3211), after its tools: each a
+/// button of the toolbox's size with the command's menu picture (a tool's
+/// icon for a tool, the start of its name when it has no picture); a
+/// click runs it as its menu item would. In customize mode a button
+/// moves or leaves as on the toolbars, and the whole toolbox takes a
+/// command dragged from the Commands page. A toolbar the user made
+/// docked at a side draws its buttons the same way, as `bar` (#3723).
+pub(crate) fn commands(
+    app: &mut App,
+    ui: &mut Ui,
+    bar: crate::ui::bar_items::ItemBar,
+    side: f32,
+    horizontal: bool,
+) {
+    use crate::ui::bar_items;
+    let list = bar_items::items(app, bar);
+    let custom = bar_items::customizing(app, ui.ctx());
+    let size = Vec2::new(button_width(app), side);
+    let icon = Tokens::tool_icon().min(side - 4.0).max(12.0);
+    let mut rects = Vec::with_capacity(list.len());
+    for (i, id) in list.iter().enumerate() {
+        if id == bar_items::SEP {
+            let (r, _) = if horizontal {
+                ui.allocate_exact_size(Vec2::new(5.0, side), Sense::hover())
+            } else {
+                ui.allocate_exact_size(Vec2::new(size.x, 5.0), Sense::hover())
+            };
+            if horizontal {
+                ui.painter().vline(
+                    r.center().x,
+                    r.y_range().shrink(4.0),
+                    Stroke::new(1.0, Tokens::border()),
+                );
+            } else {
+                ui.painter().hline(
+                    r.x_range().shrink(4.0),
+                    r.center().y,
+                    Stroke::new(1.0, Tokens::border()),
+                );
+            }
+            rects.push(r);
+            continue;
+        }
+        let tool = bar_items::tool_of(id);
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
-        let has_flyout = group.tools.len() > 1;
-        let arrow_zone = Rect::from_min_max(rect.right_bottom() - Vec2::splat(10.0), rect.max);
-        // As the reference: the active tool on a blue rounded square
-        // 24/30 of the button, the one under the pointer on a grey one.
-        let tile = Rect::from_center_size(
-            egui::pos2(rect.left() + side / 2.0, rect.center().y),
-            Vec2::splat((side * 0.8).round()),
-        );
-        let tile = if captions.caption() {
-            Rect::from_min_max(tile.min, egui::pos2(rect.right() - 3.0, tile.max.y))
-        } else {
-            tile
+        let name = match tool {
+            Some(t) => t.name(),
+            None => tr(id),
         };
-        if active {
-            ui.painter()
-                .rect_filled(tile, 3.0, crate::ui::prop_icons::LIT_BLUE);
-        } else if resp.hovered() {
-            ui.painter().rect_filled(tile, 3.0, Tokens::tool_hover());
-        }
-        let icon_side = (side * 17.0 / 30.0).round();
-        if captions.image() {
-            let icon_rect = Rect::from_center_size(
-                egui::pos2(rect.left() + side / 2.0, rect.center().y),
-                Vec2::splat(icon_side),
-            );
-            // On the lit blue a monochrome icon is light in both themes.
-            let base = if active {
-                crate::ui::prop_icons::LIT_ICON
-            } else {
-                Tokens::icon()
-            };
-            icons::draw(
-                ui.painter(),
-                icon_rect,
-                shown,
-                if matches!(shown, Tool::Pick | Tool::FreeformPick) {
-                    base
-                } else {
-                    icons::tool_color(shown, base)
-                },
-            );
-        }
-        if captions.caption() {
-            let left = if captions.image() {
-                rect.left() + side + CAPTION_PAD
-            } else {
-                rect.left() + CAPTION_PAD
-            };
+        // A toggle command (Snap To Objects, Page Border) shows pushed in
+        // while it is on, picture or not (#4208).
+        let on = match tool {
+            Some(t) => app.tool == t,
+            None => crate::ui::menus::command_on(app, ui.ctx(), id).unwrap_or(false),
+        };
+        crate::theme::paint_icon_button(ui.painter(), rect, resp.hovered(), on);
+        let pic = Rect::from_center_size(rect.center(), Vec2::splat(icon));
+        if tool.is_some() || crate::ui::menus::has_menu_picture(id) {
+            bar_items::picture(ui.painter(), pic, id, Tokens::icon());
+        } else {
+            // No picture: as much of its name as fits the button.
+            let font = egui::FontId::proportional(9.0);
+            let room = rect.width() - 4.0;
+            let mut shown: String = name.clone();
+            while !shown.is_empty()
+                && ui
+                    .painter()
+                    .layout_no_wrap(shown.clone(), font.clone(), Tokens::text())
+                    .size()
+                    .x
+                    > room
+            {
+                shown.pop();
+            }
             ui.painter().text(
-                egui::pos2(left, rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                shown.name(),
-                caption_font(),
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                shown,
+                font,
                 Tokens::text(),
             );
         }
-        if has_flyout {
-            // The flyout arrow: a small triangle in the square's
-            // bottom-right corner.
-            let corner = Rect::from_center_size(tile.center(), Vec2::splat(tile.height()));
-            let p = corner.right_bottom() - Vec2::new(1.5, 1.5);
-            ui.painter().add(egui::epaint::PathShape::convex_polygon(
-                vec![p, p - Vec2::new(4.0, 0.0), p - Vec2::new(0.0, 4.0)],
-                Tokens::icon(),
-                Stroke::NONE,
-            ));
+        let resp = resp.on_hover_ui(|ui| crate::ui::toolbar::rich_tip(ui, &name));
+        // A right click: the toolbox's menu under the command's
+        // Properties, as on a tool's button (#4206).
+        if !custom {
+            crate::ui::bars::bar_menu_of(app, &resp, crate::ui::bars::Bar::Toolbox, Some(id));
         }
-        // No tooltip while a flyout is open: it would cover the list.
-        let resp = if app.flyout_open.is_none() {
-            resp.on_hover_ui(|ui| tool_tooltip(ui, shown))
-        } else {
-            resp
-        };
-        let on_arrow = resp
-            .interact_pointer_pos()
-            .is_some_and(|p| arrow_zone.contains(p));
-
-        // Opening the flyout: the arrow, a right click, a drag, or a press
-        // held for 0.4 s; with a flyout already open, hovering opens this
-        // one instead.
-        if has_flyout {
-            let held = resp.is_pointer_button_down_on()
-                && ui.input(|i| {
-                    let started = i.pointer.press_start_time().unwrap_or(i.time);
-                    i.time - started >= 0.4
+        if custom {
+            if resp.hovered() {
+                ui.painter().rect_stroke(
+                    rect.shrink(0.5),
+                    0.0,
+                    Stroke::new(1.0, Tokens::ACCENT),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if resp.drag_started() && !crate::ui::overflow::finger_sliding(ui.ctx()) {
+                app.bar_item_drag = Some(bar_items::ItemDrag {
+                    item: id.clone(),
+                    from: Some((bar, i)),
                 });
-            if resp.is_pointer_button_down_on() && !held {
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(100));
             }
-            let switch = resp.hovered() && app.flyout_open.is_some_and(|o| o != gi);
-            if (resp.clicked() && on_arrow)
-                || resp.secondary_clicked()
-                || resp.drag_started()
-                || resp.long_touched()
-                || held
-                || switch
-            {
-                app.flyout_open = Some(gi);
+            if resp.clicked() && bar_items::customization_open(app) {
+                crate::ui::options::pick_bar_item(app, id);
             }
-        }
-        // A plain click picks the shown tool (not when it opened the flyout).
-        if resp.clicked() && !(has_flyout && on_arrow) && app.flyout_open != Some(gi) {
-            app.set_tool(shown);
-        }
-        // Double-clicking a tool button: Pick selects every object, Shape
-        // every node, Zoom fits the drawing, Rectangle adds a frame around
-        // the page (with Shift, around the selection).
-        if resp.double_clicked() {
-            match shown {
-                Tool::Pick => app.select_all(),
-                Tool::Zoom => app.zoom_to_fit(),
-                Tool::Rectangle if ui.input(|i| i.modifiers.shift) => app.add_selection_frame(),
-                Tool::Rectangle => app.add_page_frame(),
-                // The Shape tool selects every node of the selected curves.
-                Tool::Shape => app.select_all_nodes(),
-                _ => {}
+        } else if resp.clicked() {
+            match tool {
+                Some(t) => app.choose_tool(t),
+                None => {
+                    if !crate::ui::menus::run_command(app, ui.ctx(), id) {
+                        app.status =
+                            crate::i18n::trf("status.command_unavailable", &[("name", &name)]);
+                    }
+                }
             }
         }
-        if app.flyout_open == Some(gi) {
-            flyout(app, ui, gi, rect, dock);
+        rects.push(rect);
+    }
+    // The whole toolbox takes a dropped command (after the tools when it
+    // has none yet).
+    app.bar_slots.push(bar_items::Slot {
+        bar,
+        rect: ui.min_rect(),
+        items: rects,
+        vertical: !horizontal,
+    });
+}
+
+/// The floating toolbox's grid: its buttons in the rows [`flow`] gives
+/// for the room asked (see [`floating_asked`]), a separator between two
+/// groups in a row and a line between two rows where a group ends, the
+/// "+" button last; the window hugs the grid, and what the grid took
+/// is kept as the room asked, so the layout holds from frame to frame.
+fn floating_grid(app: &mut App, ui: &mut Ui) {
+    use crate::ui::bars::Dock;
+    let captions = app.settings.toolbox_captions;
+    if captions.caption() {
+        app.toolbox_caption_w = widest_caption(app, ui);
+    }
+    let side = Tokens::tool_button();
+    let bw = button_width(app);
+    let breaks = floating_breaks(app);
+    let flow = floating_flow(app);
+    let starts = flow.row_starts();
+    let visible: Vec<usize> = (0..GROUPS.len())
+        .filter(|gi| group_visible(app, *gi))
+        .collect();
+    let top_left = ui.cursor().min;
+    ui.spacing_mut().item_spacing = Vec2::new(FLOW_GAP, FLOW_GAP);
+    ui.vertical(|ui| {
+        for (r, start) in starts.iter().enumerate() {
+            let n = flow.rows.get(r).copied().unwrap_or(0);
+            if r > 0 && *start > 0 && breaks.get(start - 1).copied().unwrap_or(false) {
+                // A line across the grid where a group ends at a row's end.
+                let (lr, _) =
+                    ui.allocate_exact_size(Vec2::new(flow.size.x, LINE_ROW), Sense::hover());
+                ui.painter().hline(
+                    lr.x_range().shrink(4.0),
+                    lr.center().y,
+                    Stroke::new(1.0, Tokens::border()),
+                );
+            }
+            ui.horizontal(|ui| {
+                for i in *start..start + n {
+                    match visible.get(i) {
+                        Some(gi) => tool_button(app, ui, *gi, side, captions, Dock::Floating),
+                        // The "+" after the last group, a cell of its own.
+                        None => {
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(bw, side),
+                                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                                |ui| quick_customize_button(app, ui),
+                            );
+                        }
+                    }
+                    let last_in_row = i + 1 >= start + n;
+                    if !last_in_row && breaks.get(i).copied().unwrap_or(false) {
+                        // A separator between two groups in the row.
+                        let (sr, _) =
+                            ui.allocate_exact_size(Vec2::new(SEP_CELL, side), Sense::hover());
+                        ui.painter().vline(
+                            sr.center().x,
+                            sr.y_range().shrink(4.0),
+                            Stroke::new(1.0, Tokens::border()),
+                        );
+                    }
+                }
+            });
         }
-        // The reference draws no lines between the docked toolbox's
-        // groups; the floating grid keeps its rows apart with one.
-        if GROUP_BREAKS.contains(&gi) && floating {
-            // A line across the grid, on a row of its own.
-            ui.end_row();
-            let (r, _) =
-                ui.allocate_exact_size(Vec2::new(floating_width(app), 3.0), Sense::hover());
-            ui.painter().hline(
-                r.x_range().shrink(4.0),
-                r.center().y,
-                Stroke::new(1.0, Tokens::border()),
-            );
-            ui.end_row();
+    });
+    let grid = Rect::from_min_size(top_left, flow.size);
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(floating_grid_id(), grid));
+    // The grid's own size is what the window asks for from now on, so a
+    // size dragged past what the buttons need settles on the grid.
+    if !crate::ui::bars::toolbox_resizing(ui.ctx()) {
+        let hug = floating_cells(app, flow.size);
+        if app.settings.bars.toolbox_size != Some(hug) {
+            app.settings.bars.toolbox_size = Some(hug);
         }
     }
-    if floating {
-        ui.end_row();
+}
+
+/// Where the floating toolbox's grid of buttons was drawn this frame.
+pub fn floating_grid_id() -> egui::Id {
+    egui::Id::new("floating_toolbox_grid")
+}
+
+/// One toolbox button, for group `gi`: `side` high and as wide as
+/// [`button_width`], showing the tool last used from the group (its icon,
+/// its name or both by `captions`), with the flyout arrow and the
+/// flyout itself when open.
+fn tool_button(
+    app: &mut App,
+    ui: &mut Ui,
+    gi: usize,
+    side: f32,
+    captions: crate::settings::Captions,
+    dock: crate::ui::bars::Dock,
+) {
+    let Some(group) = GROUPS.get(gi) else {
+        return;
+    };
+    let size = Vec2::new(button_width(app), side);
+    // The button shows the tool last used in this group, even while a
+    // tool of another group is active.
+    let shown = if group.tools.contains(&app.tool) {
+        app.tool
+    } else {
+        app.toolbox_last
+            .get(gi)
+            .copied()
+            .filter(|t| group.tools.contains(t))
+            .unwrap_or(group.tools[0])
+    };
+    let active = group.tools.contains(&app.tool);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    let has_flyout = group.tools.len() > 1;
+    let arrow_zone = Rect::from_min_max(rect.right_bottom() - Vec2::splat(10.0), rect.max);
+    // The active tool's button stands out with an accent frame;
+    // hovering tints a button blue.
+    crate::theme::paint_icon_button(ui.painter(), rect, resp.hovered(), active);
+    // The icon's box grows with the button size (16 to 40 px), shrunk
+    // with a button squeezed to fit a short column.
+    let icon_side = crate::theme::icon_in(side, Tokens::tool_button(), Tokens::tool_icon());
+    if captions.image() {
+        let icon_rect = Rect::from_center_size(
+            egui::pos2(rect.left() + side / 2.0, rect.center().y),
+            Vec2::splat(icon_side),
+        );
+        icons::draw(
+            ui.painter(),
+            icon_rect,
+            shown,
+            icons::tool_color(shown, Tokens::icon()),
+        );
     }
-    quick_customize(app, ui, horizontal);
+    if captions.caption() {
+        let left = if captions.image() {
+            rect.left() + side + CAPTION_PAD
+        } else {
+            rect.left() + CAPTION_PAD
+        };
+        ui.painter().text(
+            egui::pos2(left, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            shown.name(),
+            caption_font(),
+            Tokens::text(),
+        );
+    }
+    if has_flyout {
+        // The flyout arrow: a small triangle at the bottom-right.
+        let p = rect.right_bottom() - Vec2::new(2.0, 2.0);
+        ui.painter().add(egui::epaint::PathShape::convex_polygon(
+            vec![p, p - Vec2::new(5.0, 0.0), p - Vec2::new(0.0, 5.0)],
+            Tokens::icon(),
+            Stroke::NONE,
+        ));
+    }
+    // No tooltip while a flyout is open: it would cover the list.
+    let resp = if app.flyout_open.is_none() {
+        let keys = tool_keys(app, shown);
+        resp.on_hover_ui(|ui| tool_tooltip(ui, shown, &keys))
+    } else {
+        resp
+    };
+    let on_arrow = resp
+        .interact_pointer_pos()
+        .is_some_and(|p| arrow_zone.contains(p));
+    let flyout_press_id = resp.id.with("flyout_press");
+    let (primary_pressed, primary_released) =
+        ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released()));
+    if primary_pressed {
+        ui.ctx().data_mut(|d| d.remove::<bool>(flyout_press_id));
+    }
+
+    // Opening the flyout: the arrow, a drag, or a press
+    // held for 0.4 s; with a flyout already open, hovering opens this
+    // one instead. Not by a finger sliding the toolbox along its length
+    // (#1997): the button under it is only passing by.
+    if has_flyout {
+        let held = resp.is_pointer_button_down_on()
+            && ui.input(|i| {
+                let started = i.pointer.press_start_time().unwrap_or(i.time);
+                i.time - started >= 0.4
+            });
+        if resp.is_pointer_button_down_on() && !held {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // Another list opens only once the pointer rests on this button a
+        // moment: on its way to a tool of the open list the pointer
+        // crosses other buttons, which swapped the list each time, so its
+        // tools were hard to reach (#4081).
+        let rest_id = resp.id.with("flyout_rest");
+        let passing = resp.hovered() && app.flyout_open.is_some_and(|o| o != gi);
+        let switch = if passing {
+            let now = ui.input(|i| i.time);
+            // Heading for the open list (the pointer inside the wedge from
+            // where it left that list's button to the list), the rest only
+            // counts once the pointer stops: a slow, steady move across
+            // the buttons on the way never swaps the list (#4081).
+            let moving = ui.input(|i| i.pointer.delta() != Vec2::ZERO);
+            let aiming = app
+                .flyout_open
+                .is_some_and(|o| heading_for_flyout(ui.ctx(), o, ui.input(|i| i.pointer.latest_pos())));
+            if aiming && moving {
+                ui.ctx().data_mut(|d| d.insert_temp(rest_id, now));
+            }
+            let since = ui.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(rest_id, || now));
+            if now - since >= FLYOUT_SWITCH_REST {
+                true
+            } else {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+                false
+            }
+        } else {
+            ui.ctx().data_mut(|d| d.remove::<f64>(rest_id));
+            false
+        };
+        let pressed = (resp.drag_started() || resp.long_touched() || held)
+            && !crate::ui::overflow::finger_sliding(ui.ctx());
+        if pressed {
+            ui.ctx().data_mut(|d| d.insert_temp(flyout_press_id, true));
+        }
+        if (resp.clicked() && on_arrow) || pressed || switch {
+            app.flyout_open = Some(gi);
+        }
+    }
+    // A right click on a tool button opens the toolbox's menu
+    // (customize, button size, the bars), as on the other bars, under
+    // the tool's Properties (#3326).
+    crate::ui::bars::bar_menu_of(app, &resp, crate::ui::bars::Bar::Toolbox, Some(shown.id()));
+    // A hover-opened list still allows a plain click to choose its tool.
+    // A hold can also produce a click on release, so keep its list open.
+    let opened_by_press = resp.clicked()
+        && primary_released
+        && ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(flyout_press_id).unwrap_or(false));
+    if resp.clicked() && !(has_flyout && on_arrow) && !opened_by_press {
+        app.flyout_open = None;
+        if crate::ui::bar_items::customization_open(app) {
+            crate::ui::options::pick_bar_item(app, shown.id());
+        } else {
+            app.choose_tool(shown);
+        }
+    }
+    // Double-clicking a tool button: Pick selects every object, Shape
+    // every node, Zoom fits the drawing, Rectangle adds a frame around
+    // the page (with Shift, around the selection).
+    if resp.double_clicked() {
+        match shown {
+            Tool::Pick => app.select_all(),
+            Tool::Zoom => app.zoom_to_fit(),
+            Tool::Rectangle if ui.input(|i| i.modifiers.shift) => app.add_selection_frame(),
+            Tool::Rectangle => app.add_page_frame(),
+            // The Shape tool selects every node of the selected curves.
+            Tool::Shape => app.select_all_nodes(),
+            _ => {}
+        }
+    }
+    if app.flyout_open == Some(gi) {
+        flyout(app, ui, gi, rect, dock);
+    }
+    if primary_released {
+        ui.ctx().data_mut(|d| d.remove::<bool>(flyout_press_id));
+    }
 }
 
 fn tools_for_flyout(group: &crate::tools::ToolGroup) -> &[Tool] {
@@ -333,12 +869,24 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
     let Some(group) = GROUPS.get(gi) else {
         return;
     };
+    // The floating grid: beside the button while the grid is taller
+    // than wide, under it while it is wider (a row or two).
+    let grid: Option<Rect> = if dock == Dock::Floating {
+        ui.ctx().data(|d| d.get_temp(floating_grid_id()))
+    } else {
+        None
+    };
+    let wide = grid.is_some_and(|g| g.width() > g.height());
     let (pos, pivot) = match dock {
         Dock::Right => (
             button.left_top() - Vec2::new(2.0, 0.0),
             egui::Align2::RIGHT_TOP,
         ),
         Dock::Top => (
+            button.left_bottom() + Vec2::new(0.0, 2.0),
+            egui::Align2::LEFT_TOP,
+        ),
+        Dock::Floating if wide => (
             button.left_bottom() + Vec2::new(0.0, 2.0),
             egui::Align2::LEFT_TOP,
         ),
@@ -360,6 +908,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
     let compact = true;
     let flyout_tools = tools_for_flyout(group);
     let shown = app.toolbox_last.get(gi).copied().unwrap_or(group.tools[0]);
+    let (fly_icon, fly_row) = flyout_metrics();
     let mut close = false;
     let area = egui::Area::new(egui::Id::new(("flyout", gi)))
         .pivot(pivot)
@@ -382,13 +931,11 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             name.size().x
                         })
                         .fold(0.0_f32, f32::max)
-                        + if compact { 90.0 } else { 116.0 };
-                    let row_w = if compact { row_w.max(200.0) } else { row_w };
-                    for t in flyout_tools {
-                        let (r, rr) = ui.allocate_exact_size(
-                            Vec2::new(row_w, if compact { 22.0 } else { 24.0 }),
-                            Sense::click(),
-                        );
+                        + 98.0
+                        + fly_icon;
+                    for t in group.tools {
+                        let (r, rr) =
+                            ui.allocate_exact_size(Vec2::new(row_w, fly_row), Sense::click());
                         let current =
                             *t == app.tool || (*t == shown && !group.tools.contains(&app.tool));
                         if rr.hovered() {
@@ -418,8 +965,8 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             );
                         }
                         let icon = Rect::from_center_size(
-                            Pos2::new(r.min.x + if compact { 11.0 } else { 30.0 }, r.center().y),
-                            Vec2::splat(18.0),
+                            Pos2::new(r.min.x + 21.0 + fly_icon / 2.0, r.center().y),
+                            Vec2::splat(fly_icon),
                         );
                         icons::draw(
                             ui.painter(),
@@ -432,23 +979,28 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
                             },
                         );
                         ui.painter().text(
-                            Pos2::new(r.min.x + if compact { 28.0 } else { 46.0 }, r.center().y),
+                            Pos2::new(r.min.x + 28.0 + fly_icon, r.center().y),
                             egui::Align2::LEFT_CENTER,
                             t.name(),
                             egui::FontId::proportional(12.0),
                             Tokens::text(),
                         );
-                        if !t.shortcut_label().is_empty() {
+                        let keys = tool_keys(app, *t);
+                        if !keys.is_empty() {
                             ui.painter().text(
                                 Pos2::new(r.max.x - 8.0, r.center().y),
                                 egui::Align2::RIGHT_CENTER,
-                                t.shortcut_label(),
+                                &keys,
                                 egui::FontId::proportional(12.0),
                                 Tokens::text(),
                             );
                         }
-                        if rr.on_hover_ui(|ui| tool_tooltip(ui, *t)).clicked() {
-                            app.set_tool(*t);
+                        if rr.on_hover_ui(|ui| tool_tooltip(ui, *t, &keys)).clicked() {
+                            if crate::ui::bar_items::customization_open(app) {
+                                crate::ui::options::pick_bar_item(app, t.id());
+                            } else {
+                                app.choose_tool(*t);
+                            }
                             close = true;
                         }
                         if !compact && SEPARATE_AFTER.contains(t) {
@@ -477,8 +1029,7 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
     let over_toolbox = ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| {
         if dock == Dock::Floating {
             // The grid: any button of the floating toolbox.
-            let reach = button_width(app) + 4.0;
-            p.x <= button.max.x + reach && p.x >= button.min.x - reach
+            grid.is_some_and(|g| g.expand(4.0).contains(p))
         } else if dock.horizontal() {
             p.y <= button.max.y + 2.0 && p.y >= button.min.y - 4.0
         } else {
@@ -489,6 +1040,71 @@ fn flyout(app: &mut App, ui: &mut Ui, gi: usize, button: Rect, dock: crate::ui::
     if close || escape || clicked_elsewhere || (away && !over_toolbox) {
         app.flyout_open = None;
     }
+    // Where the pointer last was on this list's button, and where the list
+    // lies: the wedge between them is the way to the list (#4081).
+    let pointer = ui.input(|i| i.pointer.latest_pos());
+    let aim_id = flyout_aim_id();
+    let last: Option<FlyoutAim> = ui.ctx().data(|d| d.get_temp(aim_id));
+    let anchor = match pointer {
+        Some(p) if button.expand(1.0).contains(p) => p,
+        _ => last
+            .filter(|a| a.group == gi)
+            .map_or(button.center(), |a| a.anchor),
+    };
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            aim_id,
+            FlyoutAim {
+                group: gi,
+                list: area.response.rect,
+                anchor,
+            },
+        )
+    });
+}
+
+/// The open flyout's list and the point the pointer left its button
+/// from, kept from frame to frame (#4081).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FlyoutAim {
+    group: usize,
+    list: Rect,
+    anchor: Pos2,
+}
+
+fn flyout_aim_id() -> egui::Id {
+    egui::Id::new("toolbox_flyout_aim")
+}
+
+/// Whether `pointer` lies on the way from where it left group `open`'s
+/// button to that group's open list: inside the shape spanned by that
+/// point and the list (a little wider, for an unsteady hand).
+fn heading_for_flyout(ctx: &egui::Context, open: usize, pointer: Option<Pos2>) -> bool {
+    let Some(p) = pointer else {
+        return false;
+    };
+    let Some(aim) = ctx.data(|d| d.get_temp::<FlyoutAim>(flyout_aim_id())) else {
+        return false;
+    };
+    aim.group == open && in_wedge(aim.anchor, aim.list.expand(6.0), p)
+}
+
+/// Whether `p` lies inside the hull of point `a` and rectangle `r`.
+fn in_wedge(a: Pos2, r: Rect, p: Pos2) -> bool {
+    if r.contains(p) {
+        return true;
+    }
+    let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+    let cross = |o: Pos2, u: Pos2, v: Pos2| (u - o).x * (v - o).y - (u - o).y * (v - o).x;
+    (0..4).any(|i| {
+        let (b, c) = (corners[i], corners[(i + 1) % 4]);
+        let d1 = cross(a, b, p);
+        let d2 = cross(b, c, p);
+        let d3 = cross(c, a, p);
+        let neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+        let pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+        !(neg && pos)
+    })
 }
 
 /// The "+" at the end of the toolbox: tick the flyouts to show.
@@ -515,37 +1131,53 @@ fn quick_customize(app: &mut App, ui: &mut Ui, horizontal: bool) {
     } else {
         egui::Layout::top_down(egui::Align::Center)
     };
-    ui.with_layout(layout, |ui| {
-        ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-        ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
-        ui.menu_button(
-            egui::RichText::new("+")
-                .size(18.0)
-                .color(Tokens::text_dim()),
-            |ui| {
-                for (gi, group) in GROUPS.iter().enumerate() {
-                    let mut on = group_visible(app, gi);
-                    let label = group
-                        .tools
-                        .iter()
-                        .map(|t| t.name())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    if ui.checkbox(&mut on, label).changed() {
-                        set_group_visible(app, gi, on);
-                    }
+    ui.with_layout(layout, |ui| quick_customize_button(app, ui));
+}
+
+/// The "+" button itself and its menu.
+fn quick_customize_button(app: &mut App, ui: &mut Ui) {
+    ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+    ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
+    ui.menu_button(
+        egui::RichText::new("+")
+            .size(flyout_metrics().0)
+            .color(Tokens::text_dim()),
+        |ui| {
+            for (gi, group) in GROUPS.iter().enumerate() {
+                let mut on = group_visible(app, gi);
+                let label = group
+                    .tools
+                    .iter()
+                    .map(|t| t.name())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if ui.checkbox(&mut on, label).changed() {
+                    set_group_visible(app, gi, on);
                 }
-                ui.separator();
-                if ui.button(tr("toolbox.reset")).clicked() {
-                    app.settings.toolbox_hidden.clear();
-                    app.settings.show_outline_flyout = false;
-                    ui.close();
-                }
-            },
-        )
-        .response
-        .rich_tip(tr("toolbox.quick_customize"));
-    });
+            }
+            ui.separator();
+            if ui.ibutton("toolbox.reset").clicked() {
+                app.settings.toolbox_hidden.clear();
+                app.settings.show_outline_flyout = false;
+                ui.close();
+            }
+            // Commands to drag onto the toolbox, or onto a toolbar of
+            // one's own docked beside it (#3723).
+            if ui.ibutton("bars.customize_options").clicked() {
+                open_commands_page(app);
+                ui.close();
+            }
+        },
+    )
+    .response
+    .rich_tip(tr("toolbox.quick_customize"));
+}
+
+/// The "+" menu > Customize...: Options > Customization > Commands on
+/// its General tab, the list whose commands drag onto the bars.
+pub(crate) fn open_commands_page(app: &mut App) {
+    app.shortcut_editor.keys_tab = false;
+    app.open_options_page(crate::ui::dialogs::OptionsPage::Commands);
 }
 
 fn set_group_visible(app: &mut App, gi: usize, on: bool) {
@@ -578,6 +1210,230 @@ pub fn reset_toolbox(app: &mut App) {
 mod tests {
     use super::*;
 
+    /// #3099: the toolbox names the keys a tool has now. A key given to
+    /// another tool in Options leaves the tool that lost it without one,
+    /// and the tool that took it shows it beside its own.
+    #[test]
+    fn the_toolbox_shows_the_keys_set_in_options() {
+        let mut app = App::headless();
+        assert_eq!(tool_keys(&app, Tool::Zoom), "Z");
+        assert_eq!(tool_keys(&app, Tool::Rectangle), "F6");
+        // What Options > Customization > Commands keeps when Zoom's Z is
+        // given to the Rectangle tool.
+        app.settings.shortcuts = vec![
+            ("zoom".into(), String::new()),
+            ("rectangle".into(), "F6".into()),
+            ("rectangle".into(), "Z".into()),
+        ];
+        assert_eq!(tool_keys(&app, Tool::Zoom), "");
+        assert_eq!(tool_keys(&app, Tool::Rectangle), "F6, Z");
+    }
+
+    fn flyout_pointer_frame(
+        ctx: &egui::Context,
+        app: &mut App,
+        events: Vec<egui::Event>,
+        elapsed: f64,
+    ) -> [Rect; 3] {
+        let mut buttons = [Rect::NOTHING; 3];
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
+            time: Some(ctx.input(|i| i.time) + elapsed),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(0.0, 1.0);
+            for (index, tool) in [Tool::Shape, Tool::Zoom, Tool::Rectangle]
+                .into_iter()
+                .enumerate()
+            {
+                let side = Tokens::tool_button();
+                buttons[index] =
+                    Rect::from_min_size(ui.cursor().min, Vec2::new(button_width(app), side));
+                tool_button(
+                    app,
+                    ui,
+                    group_of(tool),
+                    side,
+                    crate::settings::Captions::ImageOnly,
+                    crate::ui::bars::Dock::Left,
+                );
+            }
+        });
+        out.textures_delta.clear();
+        buttons
+    }
+
+    fn flyout_press(pos: Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn click_flyout_button(ctx: &egui::Context, app: &mut App, pos: Pos2) {
+        flyout_pointer_frame(ctx, app, vec![egui::Event::PointerMoved(pos)], 0.5);
+        flyout_pointer_frame(ctx, app, vec![flyout_press(pos, true)], 0.02);
+        flyout_pointer_frame(ctx, app, vec![flyout_press(pos, false)], 0.02);
+    }
+
+    /// Hovering switches the list; a click on its button chooses the
+    /// displayed tool immediately, including a group's remembered tool.
+    #[test]
+    fn a_click_on_an_open_flyout_button_picks_its_shown_tool() {
+        for (source, target, shown) in [
+            (0, 1, Tool::Zoom),
+            (0, 1, Tool::Pan),
+            (2, 0, Tool::Shape),
+            (1, 1, Tool::Pan),
+        ] {
+            let ctx = crate::theme::ui_context();
+            let mut app = App::headless();
+            let tools = [Tool::Shape, Tool::Zoom, Tool::Rectangle];
+            let target_group = group_of(tools[target]);
+            app.toolbox_last[target_group] = shown;
+            if source == target {
+                app.choose_tool(shown);
+            }
+            flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.02);
+            let buttons = flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.02);
+            let before = app.tool;
+            let arrow = buttons[source].right_bottom() - Vec2::splat(3.0);
+            click_flyout_button(&ctx, &mut app, arrow);
+            assert_eq!(app.flyout_open, Some(group_of(tools[source])));
+            assert_eq!(app.tool, before, "the arrow only opens the list");
+
+            let center = buttons[target].center();
+            flyout_pointer_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerMoved(center)],
+                0.02,
+            );
+            // Passing over another button keeps the open list (#4081);
+            // resting there a moment switches it.
+            if source != target {
+                assert_eq!(
+                    app.flyout_open,
+                    Some(group_of(tools[source])),
+                    "passing by keeps the list"
+                );
+            }
+            flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.4);
+            assert_eq!(
+                app.flyout_open,
+                Some(target_group),
+                "resting switches the list"
+            );
+            let chosen = app.tool_chosen;
+            click_flyout_button(&ctx, &mut app, center);
+            assert_eq!(app.tool, shown, "source {source}, target {target}");
+            assert_eq!(app.flyout_open, None, "the click closes the list");
+            assert_eq!(
+                app.tool_chosen,
+                chosen + 1,
+                "the click chooses the tool once"
+            );
+        }
+    }
+
+    /// On the way from a button to its open list the pointer crosses
+    /// other buttons; however slowly it moves, the list stays while it
+    /// heads for it, and resting on a button still switches (#4081).
+    #[test]
+    fn heading_for_the_open_list_never_swaps_it() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.02);
+        let buttons = flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.02);
+        let arrow = buttons[0].right_bottom() - Vec2::splat(3.0);
+        click_flyout_button(&ctx, &mut app, arrow);
+        let first = group_of(Tool::Shape);
+        assert_eq!(app.flyout_open, Some(first));
+        flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.02);
+        let aim: FlyoutAim = ctx
+            .data(|d| d.get_temp(flyout_aim_id()))
+            .expect("the open list is kept");
+        assert_eq!(aim.group, first);
+        // From the arrow to the list's lowest tool: the steps on the next
+        // button down.
+        let target = aim.list.left_bottom() + Vec2::new(12.0, -6.0);
+        let path: Vec<Pos2> = (0..=200)
+            .map(|i| arrow + (target - arrow) * (i as f32 / 200.0))
+            .filter(|p| buttons[1].contains(*p) && !buttons[0].expand(1.0).contains(*p))
+            .collect();
+        assert!(path.len() >= 2, "the way crosses the next button: {path:?}");
+        // Slowly: a tenth of a second a step, back and forth, well over
+        // the rest that switches lists.
+        for k in 0..8 {
+            let p = path[k % path.len()];
+            flyout_pointer_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(p)], 0.1);
+            assert_eq!(app.flyout_open, Some(first), "step {k} at {p:?}");
+        }
+        // Off the way, straight down the toolbox, the rest switches.
+        assert!(!in_wedge(aim.anchor, aim.list.expand(6.0), buttons[1].left_center() + Vec2::new(2.0, 0.0)));
+        // Stopped on the button, the rest switches.
+        let last = *path.last().unwrap();
+        flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.4);
+        flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.02);
+        assert!(buttons[1].contains(last));
+        assert_eq!(app.flyout_open, Some(group_of(Tool::Zoom)), "resting switches");
+    }
+
+    /// The wedge: the list itself, and the way from the point to it.
+    #[test]
+    fn the_wedge_spans_the_point_and_the_list() {
+        let list = Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(200.0, 200.0));
+        let a = Pos2::new(50.0, 10.0);
+        assert!(in_wedge(a, list, Pos2::new(150.0, 100.0)));
+        assert!(in_wedge(a, list, Pos2::new(90.0, 60.0)));
+        assert!(in_wedge(a, list, Pos2::new(60.0, 10.0)));
+        assert!(!in_wedge(a, list, Pos2::new(50.0, 60.0)));
+        assert!(!in_wedge(a, list, Pos2::new(40.0, 10.0)));
+        assert!(!in_wedge(a, list, Pos2::new(90.0, -20.0)));
+    }
+
+    /// Letting go after a hold or a sideways drag keeps the list open.
+    #[test]
+    fn a_flyout_opened_by_holding_or_dragging_stays_open_on_release() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.02);
+        let buttons = flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.02);
+        let original = app.tool;
+        let center = buttons[1].center();
+        flyout_pointer_frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerMoved(center)],
+            0.02,
+        );
+        flyout_pointer_frame(&ctx, &mut app, vec![flyout_press(center, true)], 0.02);
+        flyout_pointer_frame(&ctx, &mut app, Vec::new(), 0.5);
+        assert_eq!(app.flyout_open, Some(group_of(Tool::Zoom)));
+        flyout_pointer_frame(&ctx, &mut app, vec![flyout_press(center, false)], 0.02);
+        assert_eq!(app.flyout_open, Some(group_of(Tool::Zoom)));
+        assert_eq!(app.tool, original);
+
+        click_flyout_button(&ctx, &mut app, center);
+        assert_eq!(app.tool, Tool::Zoom, "the next click chooses the tool");
+        assert_eq!(app.flyout_open, None, "the press marker was cleared");
+
+        app.choose_tool(original);
+        let from = buttons[0].center();
+        let to = from + Vec2::new(20.0, 0.0);
+        flyout_pointer_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(from)], 0.5);
+        flyout_pointer_frame(&ctx, &mut app, vec![flyout_press(from, true)], 0.02);
+        flyout_pointer_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(to)], 0.02);
+        assert_eq!(app.flyout_open, Some(group_of(Tool::Shape)));
+        flyout_pointer_frame(&ctx, &mut app, vec![flyout_press(to, false)], 0.02);
+        assert_eq!(app.flyout_open, Some(group_of(Tool::Shape)));
+        assert_eq!(app.tool, original);
+    }
+
     #[test]
     fn selection_flyout_has_only_the_two_reference_tools() {
         assert_eq!(
@@ -594,19 +1450,20 @@ mod tests {
     /// own; captions widen them by the widest tool name.
     #[test]
     fn buttons_follow_the_sizes_and_the_captions() {
+        let _sizes = crate::theme::button_sizes_lock();
         use crate::settings::{ButtonSize, Captions};
         let mut app = App::headless();
         crate::theme::set_button_sizes(ButtonSize::Medium, None);
         assert_eq!(button_width(&app), 32.0);
         crate::theme::set_button_sizes(ButtonSize::Large, None);
-        assert_eq!(button_width(&app), 40.0);
+        assert_eq!(button_width(&app), 42.0);
         crate::theme::set_button_sizes(ButtonSize::Large, Some(ButtonSize::Small));
-        assert_eq!(button_width(&app), 24.0);
-        assert_eq!(crate::theme::Tokens::bar_button(), 40.0);
-        assert_eq!(crate::theme::Tokens::prop_button(), 35.0);
+        assert_eq!(button_width(&app), 26.0);
+        assert_eq!(crate::theme::Tokens::bar_button(), 42.0);
+        assert_eq!(crate::theme::Tokens::prop_button(), 38.0);
         app.toolbox_caption_w = 50.0;
         app.settings.toolbox_captions = Captions::CaptionRight;
-        assert_eq!(button_width(&app), 24.0 + 50.0 + 2.0 * CAPTION_PAD);
+        assert_eq!(button_width(&app), 26.0 + 50.0 + 2.0 * CAPTION_PAD);
         app.settings.toolbox_captions = Captions::CaptionOnly;
         assert_eq!(button_width(&app), 50.0 + 2.0 * CAPTION_PAD);
         assert_eq!(floating_width(&app), 2.0 * (50.0 + 2.0 * CAPTION_PAD) + 1.0);
@@ -618,6 +1475,46 @@ mod tests {
         assert_eq!(app.settings.toolbox_button_size, None);
         assert!(group_visible(&app, 2));
         crate::theme::set_button_sizes(ButtonSize::Medium, None);
+    }
+
+    /// The icons grow with the buttons at every size step, in the
+    /// toolbox, on the standard and property bars and in the flyouts;
+    /// a column squeezed to fit keeps the icon in proportion. (From the
+    /// size table, not the sizes in force: other tests running at the
+    /// same time read those.)
+    #[test]
+    fn icons_grow_with_every_button_size() {
+        use crate::settings::ButtonSize;
+        let mut last: Option<[f32; 7]> = None;
+        for size in ButtonSize::ALL {
+            let m = size.metrics();
+            let (fly_icon, fly_row) = flyout_metrics_for(m.icon);
+            let now = [
+                m.button,
+                crate::theme::icon_in(m.button, m.button, m.icon),
+                m.prop_button,
+                m.prop_icon,
+                fly_icon,
+                fly_row,
+                m.bar_icon,
+            ];
+            assert_eq!(now[1], m.icon);
+            if let Some(last) = last {
+                assert!(now[6] > last[6], "{size:?} bar icon: {now:?} vs {last:?}");
+                for i in 0..4 {
+                    assert!(now[i] > last[i], "{size:?} {i}: {now:?} vs {last:?}");
+                }
+                assert!(now[4] >= last[4] && now[5] >= last[5]);
+            }
+            last = Some(now);
+        }
+        // The flyouts grow at the larger sizes and keep 18 px icons in
+        // 24 px rows up to Medium.
+        assert_eq!(flyout_metrics_for(24.0), (18.0, 24.0));
+        assert_eq!(flyout_metrics_for(40.0), (30.0, 36.0));
+        // Squeezed: 32 px icons in 42 px buttons draw 16 px in 21 px.
+        assert_eq!(crate::theme::icon_in(21.0, 42.0, 32.0), 16.0);
+        assert_eq!(crate::theme::icon_in(50.0, 42.0, 32.0), 32.0);
     }
 
     #[test]
@@ -634,6 +1531,46 @@ mod tests {
         assert!(group_visible(&app, 2));
     }
 
+    /// The group that holds `tool`.
+    fn group_of(tool: Tool) -> usize {
+        GROUPS
+            .iter()
+            .position(|g| g.tools.contains(&tool))
+            .expect("in a group")
+    }
+
+    /// The Variable Outline tool has a button of its own, right under the
+    /// brush tools' flyout, inside the drawing block: no separator line
+    /// between the two, and the Rectangle flyout follows it.
+    #[test]
+    fn the_variable_outline_button_sits_under_the_brush_tools() {
+        let brushes = group_of(Tool::BrushStrokes);
+        let vo = group_of(Tool::VariableOutline);
+        assert_eq!(vo, brushes + 1);
+        assert_eq!(GROUPS[vo].tools, &[Tool::VariableOutline]);
+        assert!(!GROUPS[vo].hidden);
+        assert_eq!(group_of(Tool::Rectangle), vo + 1);
+        assert!(!GROUP_BREAKS.contains(&brushes));
+        assert!(!GROUP_BREAKS.contains(&vo));
+    }
+
+    /// The separator lines follow the Shape, Zoom, Polygon, Text,
+    /// Connector, Transparency and Fill groups, whatever their indices.
+    #[test]
+    fn separator_lines_follow_the_same_groups() {
+        let after = [
+            Tool::Shape,
+            Tool::Zoom,
+            Tool::Polygon,
+            Tool::Text,
+            Tool::Connector,
+            Tool::Transparency,
+            Tool::InteractiveFill,
+        ]
+        .map(group_of);
+        assert_eq!(GROUP_BREAKS, after);
+    }
+
     #[test]
     fn separators_split_the_toolbox_subgroups() {
         // Each separator tool sits inside a flyout and is not its last tool.
@@ -644,5 +1581,206 @@ mod tests {
                 .expect("in a group");
             assert_ne!(g.tools.last(), Some(&t), "{t:?}");
         }
+    }
+
+    /// The floating toolbox's buttons flow in the width asked for: two
+    /// to a row in a window two buttons wide, more in a wider one, with
+    /// a separator cell between two groups in a row and a line between
+    /// two rows where a group ends; the rows widen (a button at a time)
+    /// until they fit the height asked for.
+    #[test]
+    fn a_floating_toolbox_flows_to_the_room_asked_for() {
+        // Six buttons; the groups end after the second and the fifth.
+        let breaks = [false, true, false, false, true, false];
+        let b = Vec2::splat(32.0);
+        // Two buttons wide (65 px): two to a row until a separator cell
+        // would not fit beside a button.
+        let two = flow(Vec2::new(65.0, f32::INFINITY), b, &breaks);
+        assert_eq!(two.rows, vec![2, 2, 1, 1]);
+        assert_eq!(two.row_starts(), vec![0, 2, 4, 5]);
+        // The widest row, and the rows with a gap between them and a
+        // line (and its gaps) after the second and the fifth button.
+        assert_eq!(two.size, Vec2::new(65.0, 32.0 + 37.0 + 33.0 + 37.0));
+        // Wider: five in the first row (a separator cell among them),
+        // the sixth on its own, under a line.
+        let wide = flow(Vec2::new(200.0, f32::INFINITY), b, &breaks);
+        assert_eq!(wide.rows, vec![5, 1]);
+        assert_eq!(
+            wide.size,
+            Vec2::new(5.0 * 32.0 + 4.0 + 6.0, 32.0 + 1.0 + 4.0 + 32.0)
+        );
+        // Wide enough for one row: no lines at all.
+        let row = flow(Vec2::new(250.0, f32::INFINITY), b, &breaks);
+        assert_eq!(row.rows, vec![6]);
+        assert_eq!(row.size, Vec2::new(6.0 * 32.0 + 5.0 + 12.0, 32.0));
+        // A short window: the rows widen until they fit its height (with
+        // half a button of slack).
+        assert_eq!(
+            flow(Vec2::new(65.0, 125.0), b, &breaks).rows,
+            vec![2, 2, 1, 1]
+        );
+        let short = flow(Vec2::new(65.0, 100.0), b, &breaks);
+        assert_eq!(short.rows, vec![2, 3, 1]);
+        assert_eq!(
+            short.size,
+            Vec2::new(3.0 * 32.0 + 2.0, 32.0 + 5.0 + 32.0 + 5.0 + 32.0)
+        );
+        assert_eq!(flow(Vec2::new(65.0, 60.0), b, &breaks).rows, vec![3, 3]);
+        // Shorter than any two rows: one row.
+        assert_eq!(flow(Vec2::new(65.0, 10.0), b, &breaks).rows, vec![6]);
+        // Narrower than a button: one to a row.
+        let one = flow(Vec2::new(10.0, f32::INFINITY), b, &breaks);
+        assert_eq!(one.rows, vec![1; 6]);
+        assert_eq!(one.size, Vec2::new(32.0, 6.0 * 32.0 + 5.0 + 8.0));
+        // Nothing to lay out takes no room.
+        assert_eq!(flow(Vec2::new(65.0, 100.0), b, &[]).size, Vec2::ZERO);
+    }
+
+    /// The toolbox floats two buttons wide at first; the size it was
+    /// resized to (kept in the preferences) gives it more to a row, and
+    /// an unusable size is as none.
+    #[test]
+    fn the_floating_toolbox_starts_two_buttons_wide_and_keeps_its_size() {
+        let mut app = App::headless();
+        // The button sizes are shared by the process (a frame sets them
+        // from the settings): this test draws no frame, so it sets them.
+        crate::theme::set_button_sizes(app.settings.button_size, app.settings.toolbox_button_size);
+        let shown = visible_groups(&app) + 1;
+        assert_eq!(floating_breaks(&app).len(), shown);
+        assert_eq!(floating_asked(&app).x, floating_width(&app));
+        // The room is kept in cells: a button and its gap each.
+        let cell = floating_cell(&app);
+        assert_eq!(
+            cell,
+            Vec2::new(button_width(&app) + 1.0, Tokens::tool_button() + 1.0)
+        );
+        assert_eq!(floating_cells(&app, cell * 3.0), [3.0, 3.0]);
+        app.settings.bars.toolbox_size = Some([3.0, 2.0]);
+        assert_eq!(floating_asked(&app), cell * Vec2::new(3.0, 2.0));
+        app.settings.bars.toolbox_size = None;
+        let first = floating_flow(&app);
+        assert!(first.rows.iter().all(|n| *n <= 2), "{:?}", first.rows);
+        assert_eq!(first.rows.iter().sum::<usize>(), shown);
+        app.settings.bars.toolbox_size = Some([10_000.0, 10_000.0]);
+        assert_eq!(floating_flow(&app).rows, vec![shown]);
+        app.settings.bars.toolbox_size = Some([f32::NAN, 5.0]);
+        assert_eq!(floating_flow(&app), first);
+        app.settings.bars.toolbox_size = Some([0.0, 5.0]);
+        assert_eq!(floating_flow(&app), first);
+        // The window: the grid, its margins and the title, never
+        // narrower than the title's least width.
+        app.settings.bars.toolbox_size = None;
+        let window = crate::ui::bars::toolbox_window_size(&app);
+        assert!(window.x >= crate::ui::bars::FLOATING_MIN_W);
+        assert_eq!(
+            window.y,
+            first.size.y + crate::ui::bars::TOOLBOX_MARGIN.y + crate::ui::bars::TITLE_H
+        );
+    }
+
+    /// A column toolbox fits the window: its buttons get shorter as the
+    /// room shrinks, down to a floor, and keep their size when they fit
+    /// (#494).
+    #[test]
+    fn a_column_toolbox_fits_the_window() {
+        // 20 buttons of 32 px with the grip need 9 + 640 + 19 = 668.
+        assert_eq!(fitted_side(32.0, 20, 900.0), 32.0);
+        assert_eq!(fitted_side(32.0, 20, 668.0), 32.0);
+        assert_eq!(fitted_side(32.0, 20, 600.0), 28.0);
+        assert_eq!(fitted_side(32.0, 20, 300.0), MIN_FITTED_SIDE);
+        // A small toolbox never grows, and nothing to fit changes nothing.
+        assert_eq!(fitted_side(20.0, 20, 300.0), 20.0);
+        assert_eq!(fitted_side(32.0, 0, 10.0), 32.0);
+    }
+
+    /// The toolbox on a side, taller than the window: a finger dragged up
+    /// its column slides the column with the finger, so a tap at one spot
+    /// picks another tool after the slide than before; the slide opens no
+    /// flyout and picks nothing itself (#1997).
+    #[test]
+    fn a_finger_dragged_along_the_toolbox_column_slides_it() {
+        let ctx = crate::theme::ui_context();
+        let mut app = App::headless();
+        app.show_welcome = false;
+        let clock = std::cell::Cell::new(0.0);
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            clock.set(clock.get() + 0.02);
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(40.0, 200.0))),
+                events,
+                time: Some(clock.get()),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| toolbox(app, ui, crate::ui::bars::Dock::Left));
+            out.textures_delta.clear();
+        };
+
+        let touch = |phase, pos| egui::Event::Touch {
+            device_id: egui::TouchDeviceId(1),
+            id: egui::TouchId(2),
+            phase,
+            pos,
+            force: None,
+        };
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // A finger (or, without `finger`, the mouse) down at `from`, moved
+        // to `to` in `steps`; `lift` lets go there, else it stays down.
+        let drag = |app: &mut App,
+                    from: egui::Pos2,
+                    to: egui::Pos2,
+                    steps: usize,
+                    finger: bool,
+                    lift: bool| {
+            let mut events = vec![egui::Event::PointerMoved(from), press(from, true)];
+            if finger {
+                events.insert(0, touch(egui::TouchPhase::Start, from));
+            }
+            frame(app, events);
+            for k in 1..=steps {
+                let p = from + (to - from) * (k as f32 / steps as f32);
+                let mut events = vec![egui::Event::PointerMoved(p)];
+                if finger {
+                    events.insert(0, touch(egui::TouchPhase::Move, p));
+                }
+                frame(app, events);
+            }
+            if lift {
+                let mut events = vec![press(to, false), egui::Event::PointerGone];
+                if finger {
+                    events.insert(0, touch(egui::TouchPhase::End, to));
+                }
+                frame(app, events);
+                frame(app, Vec::new());
+            }
+        };
+
+        for _ in 0..3 {
+            frame(&mut app, Vec::new());
+        }
+        assert!(
+            visible_groups(&app) as f32 * MIN_FITTED_SIDE > 200.0,
+            "the column is taller than the window"
+        );
+        let spot = egui::pos2(20.0, 60.0);
+        drag(&mut app, spot, spot, 1, true, true);
+        let before = app.tool;
+        // Up by 110 px: the first 10 decide the slide, 100 move the column.
+        drag(
+            &mut app,
+            egui::pos2(20.0, 150.0),
+            egui::pos2(20.0, 40.0),
+            11,
+            true,
+            true,
+        );
+        assert_eq!(app.tool, before, "the slide picked nothing");
+        assert_eq!(app.flyout_open, None, "the slide opened no flyout");
+        drag(&mut app, spot, spot, 1, true, true);
+        assert_ne!(app.tool, before, "another tool is under the spot now");
     }
 }

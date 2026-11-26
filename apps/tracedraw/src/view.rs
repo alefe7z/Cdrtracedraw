@@ -75,7 +75,6 @@ impl View {
     }
 
     /// Screen position of the page origin.
-    #[cfg(test)]
     pub fn origin(&self) -> Pos2 {
         Pos2::new(self.ox as f32, self.oy as f32)
     }
@@ -90,7 +89,6 @@ impl View {
         self.oy = oy;
     }
 
-    #[cfg(test)]
     pub fn set_origin(&mut self, origin: Pos2) {
         self.ox = origin.x as f64;
         self.oy = origin.y as f64;

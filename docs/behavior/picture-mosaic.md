@@ -21,6 +21,12 @@ white). Reading happens on worker threads while the panel shows a
 progress bar; files that cannot be read are skipped. The panel shows
 the folder's name (the full path as a tooltip) and how many pictures it
 holds.
+holds. In the browser and the Android app, where no folder can be
+read, Browse picks several pictures at once and they become the library
+(kept in memory in the browser, copied into the app's temporary folder
+on Android); the panel shows how many were picked instead of a folder
+name, and Browse's tip says why (#1399). The browser reads them at once,
+without worker threads.
 
 ## Settings
 

@@ -7,6 +7,7 @@
 //! bevel. They show the selected extrusion and edit the selected
 //! extrusions live.
 
+use crate::ui::btn_icons::IconUi;
 use crate::app::App;
 use crate::extrude_tool::{kind_key, ExtrudeColor};
 use crate::i18n::tr;
@@ -32,7 +33,7 @@ fn length(ui: &mut Ui, app: &App, mm: &mut f64, tip: &str) -> bool {
     let r = ui
         .add(
             NumField::new(&mut v)
-                .fixed_decimals(app.settings.precision.min(10) as usize)
+                .length_decimals(app.settings.precision.min(10) as usize)
                 .unit_mm(app.units.world_to_mm(1.0))
                 .suffix(format!(" {}", app.units.short()))
                 .width(76.0),
@@ -53,7 +54,7 @@ pub fn extrude_controls(app: &mut App, ui: &mut Ui) {
     let mut s = app.extrude;
     let mut changed = false;
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("extrude_kind")
+        crate::ui::keynav::ComboBox::from_id_salt("extrude_kind")
             .selected_text(tr(kind_key(s.kind)))
             .width(110.0)
             .show_ui(ui, |ui| {
@@ -70,8 +71,12 @@ pub fn extrude_controls(app: &mut App, ui: &mut Ui) {
     ui.horizontal(|ui| {
         if s.kind.parallel() {
             dim(ui, tr("extrude.vector"));
-            changed |= length(ui, app, &mut s.vector.x, "x");
-            changed |= length(ui, app, &mut s.vector.y, "y");
+            let (tx, ty) = (
+                crate::ui::tips::pair("extrude.vector", "extrude.vector_x_desc"),
+                crate::ui::tips::pair("extrude.vector", "extrude.vector_y_desc"),
+            );
+            changed |= length(ui, app, &mut s.vector.x, &tx);
+            changed |= length(ui, app, &mut s.vector.y, &ty);
         } else {
             dim(ui, tr("docker.depth"));
             changed |= ui
@@ -81,12 +86,16 @@ pub fn extrude_controls(app: &mut App, ui: &mut Ui) {
                         .max_decimals(0)
                         .width(44.0),
                 )
-                .rich_tip(tr("extrude.depth_tip"))
+                .rich_tip(crate::ui::tips::pair("docker.depth", "extrude.depth_tip"))
                 .changed();
             dim(ui, tr("docker.vanishing_point"));
-            changed |= length(ui, app, &mut s.vanishing.x, "x");
-            changed |= length(ui, app, &mut s.vanishing.y, "y");
-            egui::ComboBox::from_id_salt("extrude_locked")
+            let (tx, ty) = (
+                crate::ui::tips::pair("docker.vanishing_point", "extrude.vanishing_x_desc"),
+                crate::ui::tips::pair("docker.vanishing_point", "extrude.vanishing_y_desc"),
+            );
+            changed |= length(ui, app, &mut s.vanishing.x, &tx);
+            changed |= length(ui, app, &mut s.vanishing.y, &ty);
+            crate::ui::keynav::ComboBox::from_id_salt("extrude_locked")
                 .selected_text(tr(if s.on_object {
                     "extrude.locked_object"
                 } else {
@@ -105,12 +114,17 @@ pub fn extrude_controls(app: &mut App, ui: &mut Ui) {
                             changed = true;
                         }
                     }
-                });
+                })
+                .response
+                .rich_tip(crate::ui::tips::pair(
+                    "extrude.locked_tip",
+                    "extrude.locked_desc",
+                ));
         }
     });
     ui.horizontal(|ui| {
         dim(ui, tr("extrude.color"));
-        egui::ComboBox::from_id_salt("extrude_color")
+        crate::ui::keynav::ComboBox::from_id_salt("extrude_color")
             .selected_text(tr(s.color.key()))
             .width(96.0)
             .show_ui(ui, |ui| {
@@ -120,7 +134,9 @@ pub fn extrude_controls(app: &mut App, ui: &mut Ui) {
                         changed = true;
                     }
                 }
-            });
+            })
+            .response
+            .rich_tip(crate::ui::tips::keyed("extrude.color"));
         match s.color {
             ExtrudeColor::Object => {}
             ExtrudeColor::Solid => {
@@ -163,6 +179,10 @@ pub fn extrude_controls(app: &mut App, ui: &mut Ui) {
                     .suffix("\u{b0}")
                     .width(52.0),
             )
+            .rich_tip(crate::ui::tips::pair(
+                "docker.light_angle",
+                "extrude.light_angle_desc",
+            ))
             .changed();
         dim(ui, tr("docker.light_intensity"));
         changed |= ui
@@ -172,6 +192,10 @@ pub fn extrude_controls(app: &mut App, ui: &mut Ui) {
                     .max_decimals(0)
                     .width(40.0),
             )
+            .rich_tip(crate::ui::tips::pair(
+                "docker.light_intensity",
+                "extrude.light_intensity_desc",
+            ))
             .changed();
     });
     if changed {
@@ -208,7 +232,7 @@ pub fn extrude_space(app: &mut App, ui: &mut Ui) {
         if ui
             .add_enabled(
                 s.rotation != [0.0; 3],
-                egui::Button::new(tr("docker.reset")),
+                crate::ui::btn_icons::Ib::new("docker.reset"),
             )
             .clicked()
         {
@@ -226,7 +250,12 @@ pub fn extrude_space(app: &mut App, ui: &mut Ui) {
                 )
                 .changed();
             ui.add_enabled_ui(*on, |ui| {
-                changed |= degrees(ui, &mut light.angle, 0.0..=360.0, &tr("docker.light_angle"));
+                changed |= degrees(
+                    ui,
+                    &mut light.angle,
+                    0.0..=360.0,
+                    &crate::ui::tips::pair("docker.light_angle", "extrude.light_angle_desc"),
+                );
                 changed |= degrees(
                     ui,
                     &mut light.elevation,
@@ -240,14 +269,22 @@ pub fn extrude_space(app: &mut App, ui: &mut Ui) {
                             .max_decimals(0)
                             .width(40.0),
                     )
-                    .rich_tip(tr("docker.light_intensity"))
+                    .rich_tip(crate::ui::tips::pair(
+                        "docker.light_intensity",
+                        "extrude.light_intensity_desc",
+                    ))
                     .changed();
             });
         });
     }
     ui.horizontal(|ui| {
         dim(ui, tr("docker.bevel"));
-        changed |= length(ui, app, &mut s.bevel, &tr("extrude.bevel_tip"));
+        changed |= length(
+            ui,
+            app,
+            &mut s.bevel,
+            &crate::ui::tips::pair("docker.bevel", "extrude.bevel_tip"),
+        );
     });
     if changed {
         app.extrude = s;
@@ -282,20 +319,30 @@ pub fn extrude_actions(app: &mut App, ui: &mut Ui) {
             )
     });
     ui.horizontal(|ui| {
-        if bare && ui.button(tr("docker.apply")).clicked() {
+        if bare
+            && ui
+                .ibutton("docker.apply")
+                .rich_tip(crate::ui::tips::pair("docker.apply", "extrude.apply_desc"))
+                .clicked()
+        {
             app.add_extrusion();
         }
         if ui
-            .add_enabled(extruded, egui::Button::new(tr("extrude.clear")))
+            .add_enabled(extruded, crate::ui::btn_icons::Ib::new("extrude.clear"))
+            .rich_tip(crate::ui::tips::keyed("extrude.clear"))
             .clicked()
         {
             app.clear_extrusion();
         }
         if ui
-            .add_enabled(extruded, egui::Button::new(tr("docker.break_apart")))
+            .add_enabled(extruded, crate::ui::btn_icons::Ib::new("docker.break_apart"))
+            .rich_tip(crate::ui::tips::pair(
+                "docker.break_apart",
+                "toolbar.effect_break_apart_desc",
+            ))
             .clicked()
         {
-            app.flatten_effects();
+            app.break_effect_groups();
         }
     });
 }
@@ -303,7 +350,7 @@ pub fn extrude_actions(app: &mut App, ui: &mut Ui) {
 /// The bar.
 pub fn extrude_bar(app: &mut App, ui: &mut Ui) {
     extrude_controls(app, ui);
-    ui.menu_button(tr("extrude.space_menu"), |ui| {
+    ui.imenu_button("extrude.space_menu", |ui| {
         ui.vertical(|ui| extrude_space(app, ui));
     })
     .response
@@ -349,6 +396,46 @@ pub fn draw_handles(app: &App, painter: &Painter) {
             [h + egui::vec2(-r, r), h + egui::vec2(r, -r)],
             Stroke::new(1.0, blue),
         );
+    }
+    // The depth slider: a bar across the line where the far face is
+    // (#1280), filled while it is dragged.
+    let held = app.extrude_drag.filter(|d| d.depth).map(|d| d.id);
+    for d in app.extrusion_depth_sliders() {
+        let (a, z) = (app.view.to_screen(d.mid), app.view.to_screen(d.vanishing));
+        let at = app.view.to_screen(d.at);
+        if d.away {
+            // Beyond the middle: the line runs on to the slider.
+            painter.add(egui::Shape::dashed_line(
+                &[a, at],
+                Stroke::new(1.0, blue),
+                4.0,
+                3.0,
+            ));
+        }
+        let along = (z - a).normalized();
+        let along = if along.x.is_finite() {
+            along
+        } else {
+            egui::vec2(1.0, 0.0)
+        };
+        let across = egui::vec2(-along.y, along.x);
+        let (half_w, half_l) = (2.5, 7.0);
+        let corners = [
+            at + across * half_l + along * half_w,
+            at + across * half_l - along * half_w,
+            at - across * half_l - along * half_w,
+            at - across * half_l + along * half_w,
+        ];
+        let fill = if held == Some(d.id) {
+            blue
+        } else {
+            Color32::WHITE
+        };
+        painter.add(egui::Shape::convex_polygon(
+            corners.to_vec(),
+            fill,
+            Stroke::new(1.0, blue),
+        ));
     }
 }
 
@@ -511,7 +598,7 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
         0 => {
             ui.label(tr("extrude.type"));
             type_picture(ui, s.kind);
-            egui::ComboBox::from_id_salt("extrude_docker_kind")
+            crate::ui::keynav::ComboBox::from_id_salt("extrude_docker_kind")
                 .selected_text(tr(kind_key(s.kind)))
                 .width(ui.available_width() - 8.0)
                 .show_ui(ui, |ui| {
@@ -523,11 +610,13 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
                             changed = true;
                         }
                     }
-                });
+                })
+                .response
+                .rich_tip(crate::ui::tips::pair("extrude.kind", "extrude.kind_desc"));
             let vp = !s.kind.parallel();
             ui.label(tr("docker.vanishing_point"));
             ui.add_enabled_ui(vp, |ui| {
-                egui::ComboBox::from_id_salt("extrude_docker_locked")
+                crate::ui::keynav::ComboBox::from_id_salt("extrude_docker_locked")
                     .selected_text(tr(if s.on_object {
                         "extrude.locked_object"
                     } else {
@@ -546,7 +635,16 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
                                 changed = true;
                             }
                         }
-                    });
+                    })
+                    .response
+                    .rich_tip(crate::ui::tips::pair(
+                        "extrude.locked_tip",
+                        "extrude.locked_desc",
+                    ))
+                    .rich_disabled_tip(crate::ui::tips::pair(
+                        "extrude.locked_tip",
+                        "extrude.locked_desc",
+                    ));
             });
             ui.label(tr("docker.depth"));
             ui.add_enabled_ui(vp, |ui| {
@@ -557,7 +655,7 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
                             .max_decimals(0)
                             .width(80.0),
                     )
-                    .rich_tip(tr("extrude.depth_tip"))
+                    .rich_tip(crate::ui::tips::pair("docker.depth", "extrude.depth_tip"))
                     .changed();
             });
             // X and Y: the vanishing point, from the page origin or the
@@ -592,12 +690,14 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
                     &mut app.extrude_measure_object,
                     false,
                     tr("extrude.measure_page"),
-                );
+                )
+                .rich_tip(crate::ui::tips::keyed("extrude.measure_page"));
                 ui.radio_value(
                     &mut app.extrude_measure_object,
                     true,
                     tr("extrude.measure_object"),
-                );
+                )
+                .rich_tip(crate::ui::tips::keyed("extrude.measure_object"));
             });
         }
         1 => {
@@ -615,7 +715,7 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
             if ui
                 .add_enabled(
                     s.rotation != [0.0; 3],
-                    egui::Button::new(tr("docker.reset")),
+                    crate::ui::btn_icons::Ib::new("docker.reset"),
                 )
                 .clicked()
             {
@@ -630,7 +730,7 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
                     ui,
                     &mut s.light_angle,
                     0.0..=360.0,
-                    &tr("docker.light_angle"),
+                    &crate::ui::tips::pair("docker.light_angle", "extrude.light_angle_desc"),
                 );
             });
             ui.horizontal(|ui| {
@@ -663,8 +763,15 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
                     .changed();
                 ui.add_enabled_ui(*on, |ui| {
                     ui.horizontal(|ui| {
-                        changed |=
-                            degrees(ui, &mut light.angle, 0.0..=360.0, &tr("docker.light_angle"));
+                        changed |= degrees(
+                            ui,
+                            &mut light.angle,
+                            0.0..=360.0,
+                            &crate::ui::tips::pair(
+                                "docker.light_angle",
+                                "extrude.light_angle_desc",
+                            ),
+                        );
                         changed |= degrees(
                             ui,
                             &mut light.elevation,
@@ -678,7 +785,10 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
                                     .max_decimals(0)
                                     .width(40.0),
                             )
-                            .rich_tip(tr("docker.light_intensity"))
+                            .rich_tip(crate::ui::tips::pair(
+                                "docker.light_intensity",
+                                "extrude.light_intensity_desc",
+                            ))
                             .changed();
                     });
                 });
@@ -729,7 +839,12 @@ pub fn extrude_docker(app: &mut App, ui: &mut Ui) {
         _ => {
             ui.horizontal(|ui| {
                 ui.label(tr("docker.bevel"));
-                changed |= length(ui, app, &mut s.bevel, &tr("extrude.bevel_tip"));
+                changed |= length(
+                    ui,
+                    app,
+                    &mut s.bevel,
+                    &crate::ui::tips::pair("docker.bevel", "extrude.bevel_tip"),
+                );
             });
         }
     }

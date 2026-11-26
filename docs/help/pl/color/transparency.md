@@ -9,7 +9,7 @@ jak gradient lub odpowiadać wzorowi albo teksturze.
 - Narzędziem [[tool.transparency]]: kliknij obiekt, a następnie wybierz rodzaj
   przezroczystości na pasku właściwości lub przeciągnij przez obiekt, aby
   uzyskać przezroczystość gradientową od nieprzezroczystej (w miejscu
-  naciśnięcia) do przezroczystej (w miejscu zwolnienia).
+  naciśnięcia) do przezroczystej (w miejscu zwolnienia). Węzły gradientu pojawiają się wtedy na obiekcie, jak w narzędziu [[tool.interactive_fill]]: przeciągnij początek, koniec lub okrągły węzeł pochylenia; przeciągnij pasek między dwoma węzłami (punkt środkowy), aby przesunąć miejsce, w którym przejście jest w połowie; dwukrotne kliknięcie linii dodaje węzeł, a węzła go usuwa.
 - W sekcji [[docker.transparency]] panelu [[docker.properties]].
 
 ## Ustawienia {#settings}
@@ -29,6 +29,8 @@ jak gradient lub odpowiadać wzorowi albo teksturze.
   czy [[transparency.target_all]].
 - **Zamroź**: zachowuje to, co prześwituje, w obecnym stanie, nawet jeśli
   obiekty pod spodem się przesuną.
+
+Aby ją usunąć, kliknij [[toolbar.clear_transparency]] na końcu paska właściwości (albo wybierz [[transparency.none]] jako rodzaj).
 
 Aby skopiować przezroczystość innego obiektu, użyj
 [[menu.object > menu.object.copy_effect > menu.object.copy_transparency_from]].

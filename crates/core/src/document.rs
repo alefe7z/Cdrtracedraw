@@ -4,7 +4,7 @@
 use crate::geometry::{self, Affine, BezPath, Point, Rect, Shape as _, Vec2};
 use crate::id::{IdSource, LayerId, PageId, ShapeId};
 use crate::style::{Fill, Stroke};
-use crate::{Error, Result};
+use crate::{Error, PageRanges, Result};
 use serde::{Deserialize, Serialize};
 
 /// Hook for the text engine. The core cannot depend on fonts, so the app
@@ -36,6 +36,22 @@ pub mod text_outline {
         OUTLINER.get().map(|f| f(req))
     }
 
+    type Bounder = fn(&TextRequest) -> Option<crate::geometry::Rect>;
+    static BOUNDER: OnceLock<Bounder> = OnceLock::new();
+
+    /// Register the text engine's box of an outline, kept with the
+    /// outline it caches, so the box of a text object costs no copy of
+    /// its outline (#802).
+    pub fn set_bounds(f: Bounder) {
+        let _ = BOUNDER.set(f);
+    }
+
+    /// The box of [`outline`]'s result, `None` without a text engine or
+    /// for an empty outline.
+    pub fn bounds(req: &TextRequest) -> Option<crate::geometry::Rect> {
+        BOUNDER.get().and_then(|f| f(req))
+    }
+
     /// One laid-out line: the characters it holds (indexes in the
     /// concatenated span text, the newline ending a paragraph left out)
     /// and where it starts (x and baseline, mm, frame top at y = 0, y up).
@@ -51,6 +67,48 @@ pub mod text_outline {
         /// Pen x before each character from `start_char` to `end_char`,
         /// then after the last one.
         pub edges: Vec<f64>,
+        /// The left and right x of each character's own glyph,
+        /// `end_char - start_char` entries each (right-to-left text runs
+        /// its edges the other way, #629).
+        pub starts: Vec<f64>,
+        pub ends: Vec<f64>,
+    }
+
+    impl Line {
+        /// The stretches the characters `a..b` (text indexes) of this line
+        /// cover, from left to right, those touching merged: one for text
+        /// in one direction, more where directions mix. `out` is cleared
+        /// first.
+        pub fn stretches(&self, a: usize, b: usize, out: &mut Vec<(f64, f64)>) {
+            out.clear();
+            let from = a.max(self.start_char) - self.start_char;
+            let to = b.min(self.end_char).saturating_sub(self.start_char);
+            for i in from..to {
+                if let (Some(&x0), Some(&x1)) = (self.starts.get(i), self.ends.get(i)) {
+                    merge_stretch(out, x0.min(x1), x0.max(x1));
+                }
+            }
+        }
+    }
+
+    /// Add the stretch `x0..x1` to `out`, merged with those it touches,
+    /// `out` kept in order of x.
+    pub fn merge_stretch(out: &mut Vec<(f64, f64)>, x0: f64, x1: f64) {
+        let eps = 1e-6;
+        let (mut x0, mut x1) = (x0, x1);
+        let mut i = 0;
+        while i < out.len() {
+            let (a, b) = out[i];
+            if a <= x1 + eps && x0 <= b + eps {
+                x0 = x0.min(a);
+                x1 = x1.max(b);
+                out.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        let at = out.partition_point(|s| s.0 < x0);
+        out.insert(at, (x0, x1));
     }
 
     type Liner = fn(&TextRequest) -> Vec<Line>;
@@ -102,6 +160,10 @@ pub mod text_outline {
         pub text: String,
         /// The span it belongs to.
         pub span: usize,
+        /// The number of the first character it stands for among the
+        /// characters of the whole text (in the order they are typed;
+        /// glyphs come in the order they are drawn, left to right).
+        pub char_idx: usize,
         /// Its outline as drawn, layout space (mm).
         pub path: BezPath,
         /// False when the drawn outline is not the font's own glyph
@@ -130,6 +192,65 @@ pub mod text_outline {
     pub fn glyphs(req: &TextRequest) -> Option<GlyphLayout> {
         GLYPHER.get().map(|f| f(req))
     }
+
+    /// Result of resolving a run of raw glyph indices (`ETO_GLYPH_INDEX` in
+    /// Windows metafiles) against the font face they were shaped for:
+    /// decoded Unicode text when every glyph maps back through `cmap`, else
+    /// the placed glyph outlines in local millimetres (baseline at y = 0,
+    /// y up).
+    #[derive(Clone, Debug)]
+    pub enum ResolvedGlyphRun {
+        Text(String),
+        Path(BezPath),
+    }
+
+    /// Request to resolve a run of raw glyph indices (`ETO_GLYPH_INDEX`).
+    #[derive(Clone, Copy, Debug)]
+    pub struct GlyphRunRequest<'a> {
+        pub family: &'a str,
+        pub bold: bool,
+        pub italic: bool,
+        pub em_mm: f64,
+        pub gids: &'a [u16],
+        pub advances_mm: &'a [f64],
+    }
+
+    type GlyphRunResolver = fn(&GlyphRunRequest<'_>) -> Option<ResolvedGlyphRun>;
+    static GLYPH_RUN_RESOLVER: OnceLock<GlyphRunResolver> = OnceLock::new();
+
+    /// Register the font database's glyph-index resolver.
+    pub fn set_glyph_indices(f: GlyphRunResolver) {
+        let _ = GLYPH_RUN_RESOLVER.set(f);
+    }
+
+    /// Resolve `req.gids` against `(req.family, req.bold, req.italic)`.
+    pub fn resolve_glyph_indices(req: &GlyphRunRequest<'_>) -> Option<ResolvedGlyphRun> {
+        GLYPH_RUN_RESOLVER.get().and_then(|f| f(req))
+    }
+}
+
+/// Hook for a metafile player. Readers of other formats meet Windows
+/// metafiles (WMF or EMF) as the pictures of embedded objects; the player
+/// lives in the import crate, so the app registers it here.
+pub mod metafile {
+    use super::Shape;
+    use crate::geometry::Size;
+    use crate::id::IdSource;
+    use std::sync::OnceLock;
+
+    /// A metafile's objects (mm, y up, origin at the bottom left of its
+    /// frame) and the size of that frame, `None` when it cannot be read.
+    pub type Player = fn(&[u8], &mut IdSource) -> Option<(Vec<Shape>, Size)>;
+    static PLAYER: OnceLock<Player> = OnceLock::new();
+
+    pub fn set(f: Player) {
+        let _ = PLAYER.set(f);
+    }
+
+    /// The objects a metafile draws, when a player is registered.
+    pub fn play(bytes: &[u8], ids: &mut IdSource) -> Option<(Vec<Shape>, Size)> {
+        PLAYER.get().and_then(|f| f(bytes, ids))
+    }
 }
 
 /// The glyphs of a text object in its local space (apply its transform),
@@ -154,7 +275,12 @@ pub fn text_glyph_layout(kind: &ShapeKind) -> Option<text_outline::GlyphLayout> 
         para,
         on_path: on_path.as_ref(),
     })?;
-    let shift = text_layout_shift(*origin, *frame, on_path.is_some(), para.vertical);
+    let shift = text_layout_shift(
+        *origin,
+        *frame,
+        on_path.is_some(),
+        para.columns_from_right(),
+    );
     for g in &mut layout.glyphs {
         g.transform = shift * g.transform;
         g.path.apply_affine(shift);
@@ -164,19 +290,20 @@ pub fn text_glyph_layout(kind: &ShapeKind) -> Option<text_outline::GlyphLayout> 
 }
 
 /// From the text engine's layout space to a text's local space: paragraph
-/// text hangs from the top left of its frame (vertical text from the top
-/// right), artistic text sits on its first baseline at its origin
-/// (vertical text starts at the top of its first column there); text on
-/// a path is placed at the origin.
+/// text hangs from the top left of its frame (vertical text whose columns
+/// go right to left, `from_right`, from the top right), artistic text
+/// sits on its first baseline at its origin (vertical text starts at the
+/// top of its first column there); text on a path is placed at the
+/// origin. Callers pass [`ParagraphStyle::columns_from_right`].
 pub fn text_layout_shift(
     origin: Point,
     frame: Option<geometry::Size>,
     on_path: bool,
-    vertical: bool,
+    from_right: bool,
 ) -> Affine {
     match frame {
         Some(f) if !on_path => {
-            let dx = if vertical { f.width } else { 0.0 };
+            let dx = if from_right { f.width } else { 0.0 };
             Affine::translate((origin.x + dx, origin.y + f.height))
         }
         _ => Affine::translate(origin.to_vec2()),
@@ -228,13 +355,14 @@ pub fn text_backgrounds(kind: &ShapeKind) -> Vec<(Rect, Fill)> {
     };
     // The written lines to local space, as the outline is placed (the
     // columns of vertical text are the lines turned).
-    let to_local = text_layout_shift(*origin, *frame, false, para.vertical)
+    let to_local = text_layout_shift(*origin, *frame, false, para.columns_from_right())
         * if para.vertical {
             vertical_line_frame()
         } else {
             Affine::IDENTITY
         };
     let mut out: Vec<(Rect, Fill)> = frame_bg.into_iter().collect();
+    let mut stretches = Vec::new();
     let mut span_start = 0usize;
     for sp in spans {
         let n = sp.char_count();
@@ -249,18 +377,18 @@ pub fn text_backgrounds(kind: &ShapeKind) -> Vec<(Rect, Fill)> {
             if b <= a {
                 continue;
             }
-            let x0 = line.edges.get(a - line.start_char).copied();
-            let x1 = line.edges.get(b - line.start_char).copied();
-            let (Some(x0), Some(x1)) = (x0, x1) else {
-                continue;
-            };
-            let r = Rect::new(
-                x0.min(x1),
-                line.baseline - line.descent,
-                x0.max(x1),
-                line.baseline + line.ascent,
-            );
-            out.push(((to_local * r.to_path(0.01)).bounding_box(), fill.clone()));
+            // The stretches its characters cover: right-to-left text and
+            // mixed directions too (#629).
+            line.stretches(a, b, &mut stretches);
+            for &(x0, x1) in &stretches {
+                let r = Rect::new(
+                    x0,
+                    line.baseline - line.descent,
+                    x1,
+                    line.baseline + line.ascent,
+                );
+                out.push(((to_local * r.to_path(0.01)).bounding_box(), fill.clone()));
+            }
         }
     }
     out
@@ -268,8 +396,11 @@ pub fn text_backgrounds(kind: &ShapeKind) -> Vec<(Rect, Fill)> {
 
 /// Paragraph text as one artistic text a laid-out line, each placed where
 /// its frame put it (alignment and justification spacing aside), the lines
-/// that overflow the frame left out. `None` for other shapes or without a
-/// text engine. Formats that hold no frames use it to keep the look.
+/// that overflow the frame left out. A line with tabs is cut at them, each
+/// part an artistic text of its own placed where the tab stops put it,
+/// so a reader with other tab stops (or none) shows the same (#1852).
+/// `None` for other shapes or without a text engine. Formats that hold no
+/// frames use it to keep the look.
 pub fn paragraph_lines(kind: &ShapeKind) -> Option<Vec<ShapeKind>> {
     let ShapeKind::Text {
         spans,
@@ -291,7 +422,7 @@ pub fn paragraph_lines(kind: &ShapeKind) -> Option<Vec<ShapeKind>> {
     })?;
     // The written lines to local space (vertical text: the columns run
     // down the frame's height, so the lines go across its width).
-    let to_local = text_layout_shift(*origin, Some(*frame), false, para.vertical)
+    let to_local = text_layout_shift(*origin, Some(*frame), false, para.columns_from_right())
         * if para.vertical {
             vertical_line_frame()
         } else {
@@ -303,10 +434,18 @@ pub fn paragraph_lines(kind: &ShapeKind) -> Option<Vec<ShapeKind>> {
         frame.height
     };
     let mut out = Vec::new();
+    // Each line's parts between tabs, with where each starts (#1852).
+    let mut pieces = Vec::new();
     for line in &lines {
         // Below the frame: overflow, shown in the next linked frame or not
-        // at all.
-        if line.baseline < -depth - 1e-6 {
+        // at all. The columns of left to right vertical text are placed
+        // mirrored, their baselines going up from the frame's left edge.
+        let past = if para.columns_left_to_right() {
+            line.baseline + line.ascent - line.descent > depth + 1e-6
+        } else {
+            line.baseline < -depth - 1e-6
+        };
+        if past {
             break;
         }
         let (_, tail) = split_spans_at(spans, line.start_char);
@@ -317,12 +456,36 @@ pub fn paragraph_lines(kind: &ShapeKind) -> Option<Vec<ShapeKind>> {
             sp.paragraph = None;
         }
         piece.retain(|sp| !sp.text.is_empty());
+        // The parts between tabs, with where each starts.
+        let line_chars: Vec<char> = piece.iter().flat_map(|sp| sp.text.chars()).collect();
+        let mut parts = Vec::new();
+        let mut from = 0usize;
+        for (i, c) in line_chars.iter().enumerate() {
+            if *c == '\t' {
+                parts.push((from, i));
+                from = i + 1;
+            }
+        }
+        parts.push((from, line_chars.len()));
+        for (a, b) in parts {
+            let (_, tail) = split_spans_at(&piece, a);
+            let (mut part, _) = split_spans_at(&tail, b - a);
+            part.retain(|sp| !sp.text.is_empty());
+            let x = if a == 0 {
+                line.x
+            } else {
+                line.edges.get(a).copied().unwrap_or(line.x)
+            };
+            pieces.push((part, x, line.baseline));
+        }
+    }
+    for (piece, x, baseline) in pieces {
         if piece.iter().all(|sp| sp.text.trim().is_empty()) {
             continue;
         }
         out.push(ShapeKind::Text {
             spans: piece,
-            origin: to_local * Point::new(line.x, line.baseline),
+            origin: to_local * Point::new(x, baseline),
             frame: None,
             align: TextAlign::Left,
             para: ParagraphStyle {
@@ -375,6 +538,101 @@ pub struct Corners {
     /// space and scale, or stretch, with it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fixed: bool,
+    /// How far each edge bows outward (#2188): top, right, bottom, left
+    /// (top is +y in the local space), 0 a straight edge and 1 an edge
+    /// bent into a quarter circle through its two corner points, so a
+    /// square bulged all round is a circle. The bow is a share of the
+    /// edge's length, so it keeps its look when the rectangle is
+    /// stretched; the corners round, scallop or cut along the bowed
+    /// edges.
+    #[serde(default, skip_serializing_if = "no_bulge")]
+    pub bulge: [f64; 4],
+}
+
+fn no_bulge(b: &[f64; 4]) -> bool {
+    b.iter().all(|v| *v == 0.0)
+}
+
+/// The tangent half-length of a cubic that draws a circular arc of
+/// `sweep` radians, as a share of the radius.
+fn arc_handle(sweep: f64) -> f64 {
+    4.0 / 3.0 * (sweep / 4.0).tan()
+}
+
+/// One bowed edge of a rectangle (see [`Corners::bulge`]): the circle
+/// it follows from its start corner to its end corner, counter-clockwise.
+#[derive(Debug, Clone, Copy)]
+struct EdgeArc {
+    centre: Point,
+    radius: f64,
+    /// Angle of the start corner, radians.
+    start: f64,
+    /// Radians from the start corner to the end corner (positive).
+    sweep: f64,
+}
+
+impl EdgeArc {
+    /// The arc from `a` to `b` (counter-clockwise round the rectangle)
+    /// bowed out by `bulge`; `None` for a straight edge.
+    fn new(a: Point, b: Point, bulge: f64) -> Option<EdgeArc> {
+        let d = b - a;
+        let len = d.hypot();
+        if bulge.is_nan() || bulge <= 1e-9 || len < 1e-12 {
+            return None;
+        }
+        let half = len / 2.0;
+        let sag = bulge.min(1.0) * (std::f64::consts::SQRT_2 - 1.0) * half;
+        // Outward: to the right of the way round.
+        let n = Vec2::new(d.y, -d.x) / len;
+        let radius = (half * half + sag * sag) / (2.0 * sag);
+        let centre = a.midpoint(b) - n * (radius - sag);
+        let start = (a - centre).atan2();
+        let sweep = 2.0 * (half / radius).clamp(-1.0, 1.0).asin();
+        Some(EdgeArc {
+            centre,
+            radius,
+            start,
+            sweep,
+        })
+    }
+
+    fn at_angle(&self, a: f64) -> Point {
+        self.centre + Vec2::new(a.cos(), a.sin()) * self.radius
+    }
+
+    /// The point `len` along the arc from its start and the unit tangent
+    /// there, the way round.
+    fn along(&self, len: f64) -> (Point, Vec2) {
+        let a = self.start + (len / self.radius).clamp(0.0, self.sweep);
+        (self.at_angle(a), Vec2::new(-a.sin(), a.cos()))
+    }
+
+    /// Append the arc between the lengths `from` and `to` from its start
+    /// to `path`, in pieces of at most a quarter turn.
+    fn append(&self, path: &mut BezPath, from: f64, to: f64) {
+        let (a0, a1) = (
+            self.start + from / self.radius,
+            self.start + to / self.radius,
+        );
+        let total = a1 - a0;
+        if total <= 1e-12 {
+            return;
+        }
+        let pieces = (total / std::f64::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+        let step = total / pieces as f64;
+        let k = arc_handle(step) * self.radius;
+        for i in 0..pieces {
+            let (s, e) = (a0 + step * i as f64, a0 + step * (i + 1) as f64);
+            let (p0, p1) = (self.at_angle(s), self.at_angle(e));
+            let t0 = Vec2::new(-s.sin(), s.cos());
+            let t1 = Vec2::new(-e.sin(), e.cos());
+            path.curve_to(p0 + t0 * k, p1 - t1 * k, p1);
+        }
+    }
+
+    fn length(&self) -> f64 {
+        self.radius * self.sweep
+    }
 }
 
 impl Corners {
@@ -382,12 +640,98 @@ impl Corners {
     pub const TOP_RIGHT: usize = 1;
     pub const BOTTOM_LEFT: usize = 2;
     pub const BOTTOM_RIGHT: usize = 3;
+    /// The edges in [`Corners::bulge`].
+    pub const EDGE_TOP: usize = 0;
+    pub const EDGE_RIGHT: usize = 1;
+    pub const EDGE_BOTTOM: usize = 2;
+    pub const EDGE_LEFT: usize = 3;
+
+    /// Edge `i`'s bow, from 0 (straight) to 1 (a quarter circle); a
+    /// non-finite one counts as straight.
+    pub fn edge_bulge(&self, i: usize) -> f64 {
+        match self.bulge.get(i) {
+            Some(b) if b.is_finite() => b.clamp(0.0, 1.0),
+            _ => 0.0,
+        }
+    }
+
+    /// Some edge bows outward.
+    pub fn has_bulge(&self) -> bool {
+        (0..4).any(|i| self.edge_bulge(i) > 1e-9)
+    }
+
+    /// The edge that runs into each corner of `layout`'s order (bottom
+    /// right, top right, top left, bottom left): bottom, right, top, left.
+    const EDGE_INTO: [usize; 4] = [
+        Self::EDGE_BOTTOM,
+        Self::EDGE_RIGHT,
+        Self::EDGE_TOP,
+        Self::EDGE_LEFT,
+    ];
+
+    /// The arcs of the bowed edges, by `layout` order (the edge running
+    /// into each corner), from the corner points of `rect`.
+    fn edge_arcs(&self, order: &[CornerAt; 4]) -> [Option<EdgeArc>; 4] {
+        [0, 1, 2, 3].map(|i| {
+            let from = order[(i + 3) % 4].p;
+            EdgeArc::new(from, order[i].p, self.edge_bulge(Self::EDGE_INTO[i]))
+        })
+    }
+
+    /// The middle of edge `edge` (see [`Corners::bulge`]) as it is drawn
+    /// in `rect`, bowed or straight, in the rectangle's own space, and
+    /// its outward direction.
+    pub fn edge_middle(&self, edge: usize, rect: Rect) -> (Point, Vec2) {
+        let r = rect.abs();
+        let (a, b, n) = match edge {
+            Self::EDGE_TOP => (
+                Point::new(r.x1, r.y1),
+                Point::new(r.x0, r.y1),
+                Vec2::new(0.0, 1.0),
+            ),
+            Self::EDGE_RIGHT => (
+                Point::new(r.x1, r.y0),
+                Point::new(r.x1, r.y1),
+                Vec2::new(1.0, 0.0),
+            ),
+            Self::EDGE_BOTTOM => (
+                Point::new(r.x0, r.y0),
+                Point::new(r.x1, r.y0),
+                Vec2::new(0.0, -1.0),
+            ),
+            _ => (
+                Point::new(r.x0, r.y1),
+                Point::new(r.x0, r.y0),
+                Vec2::new(-1.0, 0.0),
+            ),
+        };
+        let len = (b - a).hypot();
+        let sag = self.edge_bulge(edge) * (std::f64::consts::SQRT_2 - 1.0) * len / 2.0;
+        (a.midpoint(b) + n * sag, n)
+    }
+
+    /// The bow that puts the middle of edge `edge` of `rect` `out` units
+    /// past the straight edge (see [`Corners::bulge`]), from 0 to 1.
+    pub fn bulge_for(edge: usize, rect: Rect, out: f64) -> f64 {
+        let r = rect.abs();
+        let len = if edge == Self::EDGE_TOP || edge == Self::EDGE_BOTTOM {
+            r.width()
+        } else {
+            r.height()
+        };
+        let full = (std::f64::consts::SQRT_2 - 1.0) * len / 2.0;
+        if full.is_nan() || full <= 1e-12 || !out.is_finite() {
+            return 0.0;
+        }
+        (out / full).clamp(0.0, 1.0)
+    }
 
     pub fn uniform(radius: f64, kind: CornerKind) -> Corners {
         Corners {
             radii: [radius; 4],
             kind,
             fixed: false,
+            bulge: [0.0; 4],
         }
     }
 
@@ -410,7 +754,7 @@ impl Corners {
     /// Same size on every corner, round and scaling with the object: a
     /// plain radius says as much.
     pub fn is_plain(&self) -> bool {
-        self.kind == CornerKind::Round && !self.fixed && self.is_uniform()
+        self.kind == CornerKind::Round && !self.fixed && self.is_uniform() && !self.has_bulge()
     }
 
     /// The largest corner.
@@ -423,6 +767,144 @@ impl Corners {
         self.max() <= 1e-9
     }
 
+    /// Which corner lies where once the rectangle is drawn through `t`:
+    /// the local corner seen at the top left, top right, bottom left and
+    /// bottom right of the page (the radii's order). The local x axis
+    /// counts as horizontal when it leans that way more than it rises,
+    /// else as vertical, and the y axis as the other one; the sign of
+    /// each says which way it runs. So a rectangle turned by 180 degrees
+    /// or flipped shows its corners swapped, one turned by less than 45
+    /// degrees shows them where they were, and a skewed or stretched one
+    /// still has one corner at each position (#1670).
+    pub fn seen_through(t: Affine) -> [usize; 4] {
+        let [a, b, c, d, _, _] = t.as_coeffs();
+        let sign = |v: f64| if v < 0.0 { -1 } else { 1 };
+        let mut out = [0; 4];
+        for local in 0..4 {
+            // The corner's side along the local x (right: +) and y (top: +).
+            let (lx, ly) = match local {
+                Self::TOP_LEFT => (-1, 1),
+                Self::TOP_RIGHT => (1, 1),
+                Self::BOTTOM_LEFT => (-1, -1),
+                _ => (1, -1),
+            };
+            let (px, py) = if a.abs() >= b.abs() {
+                (lx * sign(a), ly * sign(d))
+            } else {
+                (ly * sign(c), lx * sign(b))
+            };
+            let seen = match (px, py) {
+                (-1, 1) => Self::TOP_LEFT,
+                (1, 1) => Self::TOP_RIGHT,
+                (-1, -1) => Self::BOTTOM_LEFT,
+                _ => Self::BOTTOM_RIGHT,
+            };
+            out[seen] = local;
+        }
+        out
+    }
+
+    /// These corners with the radii in the order they are seen through
+    /// `t` (see `seen_through`): the size at each position on the page.
+    pub fn as_seen(&self, t: Affine) -> Corners {
+        let order = Self::seen_through(t);
+        Corners {
+            radii: order.map(|local| self.radii[local]),
+            ..*self
+        }
+    }
+
+    /// The corners `seen` in page positions (as `as_seen` gives them) back
+    /// in the rectangle's own order.
+    pub fn from_seen(seen: Corners, t: Affine) -> Corners {
+        let order = Self::seen_through(t);
+        let mut radii = seen.radii;
+        for (position, local) in order.into_iter().enumerate() {
+            radii[local] = seen.radii[position];
+        }
+        Corners { radii, ..seen }
+    }
+
+    /// Corner `i`'s size, a negative or non-finite one counting as 0.
+    fn radius(&self, i: usize) -> f64 {
+        match self.radii.get(i) {
+            Some(r) if r.is_finite() => r.max(0.0),
+            _ => 0.0,
+        }
+    }
+
+    /// The radii with negative and non-finite sizes made 0 (square).
+    pub fn sanitized(&self) -> Corners {
+        Corners {
+            radii: [0, 1, 2, 3].map(|i| self.radius(i)),
+            ..*self
+        }
+    }
+
+    /// Page length of one unit of the rectangle along x and y as the
+    /// radii count it: `scale` for fixed corners, 1 for scaling ones.
+    fn units(&self, scale: (f64, f64)) -> (f64, f64) {
+        if self.fixed {
+            (scale.0.abs().max(1e-9), scale.1.abs().max(1e-9))
+        } else {
+            (1.0, 1.0)
+        }
+    }
+
+    /// The factor every corner is drawn at in `rect` (see `layout` for
+    /// `scale`): 1 while the two corners on each side together are at
+    /// most as long as the side, else the side's length over their sum
+    /// for the tightest side. So one corner can take a whole side when
+    /// its neighbours leave it room, and only corners too big together
+    /// are shrunk (#1757).
+    pub fn fit_factor(&self, rect: Rect, scale: (f64, f64)) -> f64 {
+        let rect = rect.abs();
+        let (sx, sy) = self.units(scale);
+        // Sizes in the units the radii are in.
+        let (w, h) = (rect.width() * sx, rect.height() * sy);
+        let fit = |side: f64, a: usize, b: usize| {
+            let side = if side.is_finite() { side.max(0.0) } else { 0.0 };
+            let sum = self.radius(a) + self.radius(b);
+            if sum > side && sum > 0.0 {
+                side / sum
+            } else {
+                1.0
+            }
+        };
+        fit(w, Self::TOP_LEFT, Self::TOP_RIGHT)
+            .min(fit(w, Self::BOTTOM_LEFT, Self::BOTTOM_RIGHT))
+            .min(fit(h, Self::TOP_LEFT, Self::BOTTOM_LEFT))
+            .min(fit(h, Self::TOP_RIGHT, Self::BOTTOM_RIGHT))
+    }
+
+    /// The largest size corner `i` can have in `rect` (see `layout` for
+    /// `scale`) with the other corners as they are and nothing shrunk:
+    /// what its neighbour leaves of each of the two sides it is on, in
+    /// the units the radii are in. The horizontal neighbour of a corner
+    /// is `i ^ 1`, the vertical one `i ^ 2`.
+    pub fn room(&self, i: usize, rect: Rect, scale: (f64, f64)) -> f64 {
+        let rect = rect.abs();
+        let (sx, sy) = self.units(scale);
+        let (w, h) = (rect.width() * sx, rect.height() * sy);
+        let room = (w - self.radius(i ^ 1)).min(h - self.radius(i ^ 2));
+        if room.is_finite() {
+            room.max(0.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// These corners at the size they are drawn in `rect` (see
+    /// `fit_factor`), in the units the radii are in.
+    pub fn fitted(&self, rect: Rect, scale: (f64, f64)) -> Corners {
+        let k = self.fit_factor(rect, scale);
+        let c = self.sanitized();
+        Corners {
+            radii: c.radii.map(|r| r * k),
+            ..c
+        }
+    }
+
     /// Each corner in drawing order (counter-clockwise from the bottom
     /// right): its index, the corner point, the edge directions into and
     /// out of it, and how far the cut runs along each edge, all in the
@@ -430,42 +912,16 @@ impl Corners {
     /// the rectangle's x and y axes; fixed corners are divided by it so
     /// that they keep their size on the page. The two corners on a side
     /// together are at most as long as the side: when they would be
-    /// longer, every corner shrinks by the same factor, so equal corners
-    /// are at most half the shorter side and a single corner can take a
-    /// whole side.
+    /// longer, every corner shrinks by the same factor (`fit_factor`), so
+    /// equal corners are at most half the shorter side and a single
+    /// corner can take a whole side.
     fn layout(&self, rect: Rect, scale: (f64, f64)) -> [CornerAt; 4] {
         let rect = rect.abs();
-        let (sx, sy) = if self.fixed {
-            (scale.0.abs().max(1e-9), scale.1.abs().max(1e-9))
-        } else {
-            (1.0, 1.0)
-        };
-        // Sizes in the units the radii are in, then each corner as an
-        // ellipse in local space.
-        let (w, h) = (rect.width() * sx, rect.height() * sy);
-        let radius = |i: usize| {
-            let r = self.radii[i];
-            if r.is_finite() {
-                r.max(0.0)
-            } else {
-                0.0
-            }
-        };
-        let fit = |side: f64, a: usize, b: usize| {
-            let sum = radius(a) + radius(b);
-            if sum > side.max(0.0) && sum > 0.0 {
-                side.max(0.0) / sum
-            } else {
-                1.0
-            }
-        };
-        let shrink = fit(w, Self::TOP_LEFT, Self::TOP_RIGHT)
-            .min(fit(w, Self::BOTTOM_LEFT, Self::BOTTOM_RIGHT))
-            .min(fit(h, Self::TOP_LEFT, Self::BOTTOM_LEFT))
-            .min(fit(h, Self::TOP_RIGHT, Self::BOTTOM_RIGHT));
+        let (sx, sy) = self.units(scale);
+        let shrink = self.fit_factor(rect, scale);
         let (x0, y0, x1, y1) = (rect.x0, rect.y0, rect.x1, rect.y1);
         let at = |index: usize, p: Point, d_in: Vec2, d_out: Vec2| {
-            let r = radius(index) * shrink;
+            let r = self.radius(index) * shrink;
             // The part of the corner's size along a direction.
             let along = |d: Vec2| if d.x != 0.0 { r / sx } else { r / sy };
             CornerAt {
@@ -511,9 +967,11 @@ impl Corners {
     /// the horizontal edge. A square corner has both ends on its point.
     pub fn ends(&self, rect: Rect, scale: (f64, f64)) -> [(Point, Point, Point); 4] {
         let mut out = [(Point::ZERO, Point::ZERO, Point::ZERO); 4];
-        for c in self.layout(rect, scale) {
-            let a = c.p - c.d_in * c.a_in;
-            let b = c.p + c.d_out * c.a_out;
+        let order = self.layout(rect, scale);
+        let arcs = self.edge_arcs(&order);
+        for (i, c) in order.iter().enumerate() {
+            let (a, _) = Self::cut_in(c, &arcs[i]);
+            let (b, _) = Self::cut_out(c, &arcs[(i + 1) % 4]);
             out[c.index] = if c.d_in.x == 0.0 {
                 (c.p, a, b)
             } else {
@@ -523,11 +981,88 @@ impl Corners {
         out
     }
 
+    /// Where corner `c`'s cut starts on the edge running into it (bowed
+    /// along `arc`, else straight) and the way the edge runs there.
+    fn cut_in(c: &CornerAt, arc: &Option<EdgeArc>) -> (Point, Vec2) {
+        match arc {
+            Some(a) => a.along(a.length() - c.a_in.min(a.length())),
+            None => (c.p - c.d_in * c.a_in, c.d_in),
+        }
+    }
+
+    /// Where corner `c`'s cut ends on the edge leaving it (bowed along
+    /// `arc`, else straight) and the way the edge runs there.
+    fn cut_out(c: &CornerAt, arc: &Option<EdgeArc>) -> (Point, Vec2) {
+        match arc {
+            Some(a) => a.along(c.a_out.min(a.length())),
+            None => (c.p + c.d_out * c.a_out, c.d_out),
+        }
+    }
+
+    /// The outline when some edge bows (see [`Corners::bulge`]): each
+    /// edge an arc through its corner points (or straight), each cut
+    /// corner a curve between the two edges, tangent to them when round.
+    fn bulged_path(&self, order: &[CornerAt; 4]) -> BezPath {
+        let arcs = self.edge_arcs(order);
+        let mut path = BezPath::new();
+        // Start where the last corner's cut ends on the first edge.
+        let (start, _) = Self::cut_out(&order[3], &arcs[0]);
+        path.move_to(start);
+        let mut at = start;
+        for (i, c) in order.iter().enumerate() {
+            let arc_in = &arcs[i];
+            let (a, t_in) = Self::cut_in(c, arc_in);
+            // The edge up to the corner's cut.
+            match arc_in {
+                Some(arc) => {
+                    let from = order[(i + 3) % 4].a_out.min(arc.length());
+                    let to = arc.length() - c.a_in.min(arc.length());
+                    arc.append(&mut path, from, to);
+                }
+                None => {
+                    if (a - at).hypot() > 1e-12 {
+                        path.line_to(a);
+                    }
+                }
+            }
+            let (b, t_out) = Self::cut_out(c, &arcs[(i + 1) % 4]);
+            if c.a_in > 1e-12 && c.a_out > 1e-12 {
+                // How far the way round turns at the corner.
+                let turn = t_in.cross(t_out).atan2(t_in.dot(t_out)).abs();
+                match self.kind {
+                    CornerKind::Round => {
+                        // An arc tangent to both edges, its handles as
+                        // long as the turn asks.
+                        let k = if turn > 1e-6 {
+                            arc_handle(turn) / (turn / 2.0).tan()
+                        } else {
+                            2.0 / 3.0
+                        };
+                        path.curve_to(a + t_in * (k * c.a_in), b - t_out * (k * c.a_out), b);
+                    }
+                    CornerKind::Scallop => {
+                        const K: f64 = 0.552_284_749_830_793_4;
+                        path.curve_to(a + t_out * (K * c.a_out), b - t_in * (K * c.a_in), b);
+                    }
+                    CornerKind::Chamfer => path.line_to(b),
+                }
+            } else if (b - a).hypot() > 1e-12 {
+                path.line_to(b);
+            }
+            at = b;
+        }
+        path.close_path();
+        path
+    }
+
     /// Outline of `rect` with these corners; see `layout` for `scale`.
     pub fn path(&self, rect: Rect, scale: (f64, f64)) -> BezPath {
         // Quarter-ellipse handle length.
         const K: f64 = 0.552_284_749_830_793_4;
         let order = self.layout(rect, scale);
+        if self.has_bulge() {
+            return self.bulged_path(&order);
+        }
         let mut path = BezPath::new();
         let last = &order[3];
         let start = last.p + last.d_out * last.a_out;
@@ -577,6 +1112,14 @@ pub fn axis_scale(t: Affine) -> (f64, f64) {
     (a.hypot(b), c.hypot(d))
 }
 
+/// True when `t` has no turn or skew (moves, scales and mirrors only):
+/// it maps an axis-aligned box onto the exact axis-aligned box of what
+/// it transforms, so the box can be mapped instead of the outline.
+fn axis_aligned(t: Affine) -> bool {
+    let [_, b, c, _, _, _] = t.as_coeffs();
+    b == 0.0 && c == 0.0
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ShapeKind {
@@ -598,7 +1141,13 @@ pub enum ShapeKind {
     /// star: each vertex joined to the one `complex + 1` further on, so the
     /// sides cross (`sharpness` and `twist` are then unused). `twist`
     /// turns the points between the vertices about the centre (radians,
-    /// counter-clockwise): a twisted star.
+    /// counter-clockwise): a twisted star. `sharpness` 0 is a polygon,
+    /// 0 to 1 a star whose inner points come in toward the centre, 0 to
+    /// -1 an inverted star whose inner points lie past it
+    /// (`geometry::star_inner_ratio`). `bend` curves every side the same
+    /// way, so the shape keeps its symmetry: each side bows out to its
+    /// left (outward on a polygon) by `bend` times its length, inward
+    /// when negative (`geometry::bent_polygon_path`, #2451).
     Polygon {
         rect: Rect,
         points: u32,
@@ -607,6 +1156,8 @@ pub enum ShapeKind {
         complex: Option<u32>,
         #[serde(default, skip_serializing_if = "is_zero")]
         twist: f64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        bend: f64,
     },
     /// Free path (lines and cubic Beziers) in local space.
     Path { path: BezPath, closed: bool },
@@ -643,8 +1194,7 @@ pub enum ShapeKind {
         rect: Rect,
         width_px: u32,
         height_px: u32,
-        #[serde(with = "png_bytes")]
-        png: Vec<u8>,
+        png: crate::SharedBytes,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fx: Option<Box<BitmapFxStack>>,
     },
@@ -674,12 +1224,44 @@ pub struct BitmapFxStack {
     pub rect: Rect,
     pub width_px: u32,
     pub height_px: u32,
-    #[serde(with = "png_bytes")]
-    pub png: Vec<u8>,
+    pub png: crate::SharedBytes,
     pub effects: Vec<BitmapEffect>,
 }
 
 impl ShapeKind {
+    /// An open curve: a curve left open, or an ellipse made an arc (not a
+    /// pie). Its fill shows only while the document fills open curves
+    /// (`Metadata::fill_open_curves`), on screen, in exports and
+    /// for picking alike.
+    pub fn is_open_curve(&self) -> bool {
+        match self {
+            ShapeKind::Path { closed, .. } => !closed,
+            ShapeKind::Ellipse { arc: Some(a), .. } => !a.pie,
+            _ => false,
+        }
+    }
+
+    /// The box this kind knows without an outline: a rectangle whose
+    /// edges are not bowed (its corners stay inside the rect, a bulged
+    /// edge reaches past it, #2188), a whole ellipse (an arc or pie
+    /// covers part of it), a bitmap, a table and a symbol instance's
+    /// placeholder box (what `local_path` draws for one). `None` for
+    /// the kinds whose box the outline gives.
+    fn known_box(&self) -> Option<Rect> {
+        match self {
+            ShapeKind::Rect { rect, corners, .. }
+                if corners.as_ref().is_none_or(|c| !c.has_bulge()) =>
+            {
+                Some(*rect)
+            }
+            ShapeKind::Ellipse { rect, arc: None } => Some(*rect),
+            ShapeKind::Bitmap { rect, .. } => Some(*rect),
+            ShapeKind::Table(t) => Some(t.rect),
+            ShapeKind::SymbolInstance { .. } => Some(Rect::new(0.0, 0.0, 10.0, 10.0)),
+            _ => None,
+        }
+    }
+
     /// A rectangle with these corners. Plain ones (one round radius that
     /// scales with the object) keep the short form; otherwise `radius`
     /// holds the largest corner for readers that know only one.
@@ -739,6 +1321,10 @@ pub struct EllipseArc {
     pub end_deg: f64,
     /// Pie (wedge closed through the centre) or open arc.
     pub pie: bool,
+    /// A pie's thickness as a ring: the inner edge at this share of the
+    /// radii, 0 to 0.99 (0 a plain pie, through the centre).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub inner: f64,
 }
 
 /// Drop shadow attached to an object (the Drop Shadow tool).
@@ -822,6 +1408,206 @@ impl TextAlign {
     }
 }
 
+/// A value set for one axis of a variable font (#870): the axis's
+/// OpenType tag ("wght", "wdth", "slnt", "opsz" or a font's own) and a
+/// value in the axis's units, drawn clamped to the font's range.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FontVariation {
+    pub tag: String,
+    pub value: f64,
+}
+
+/// Where characters sit on the line (#1201): on the baseline, raised as
+/// superscript or lowered as subscript. A font with the `sups` or `subs`
+/// feature draws its own forms; otherwise the characters are drawn at
+/// [`TextPosition::SYNTHETIC_SCALE`] of their size, shifted by
+/// [`TextPosition::synthetic_shift`] of the size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextPosition {
+    #[default]
+    Normal,
+    Superscript,
+    Subscript,
+}
+
+impl TextPosition {
+    /// The size of synthetic superscripts and subscripts, as a fraction
+    /// of the characters' size.
+    pub const SYNTHETIC_SCALE: f64 = 0.58;
+
+    /// Serde: a normal position is left out of the file.
+    pub fn is_normal(&self) -> bool {
+        *self == TextPosition::Normal
+    }
+
+    /// The OpenType feature that draws this position, if any.
+    pub fn feature(self) -> Option<&'static str> {
+        match self {
+            TextPosition::Normal => None,
+            TextPosition::Superscript => Some("sups"),
+            TextPosition::Subscript => Some("subs"),
+        }
+    }
+
+    /// The baseline shift of the synthetic form as a fraction of the
+    /// characters' size, positive up: superscripts rise by a third of
+    /// the size, subscripts drop by 15 % of it.
+    pub fn synthetic_shift(self) -> f64 {
+        match self {
+            TextPosition::Normal => 0.0,
+            TextPosition::Superscript => 0.33,
+            TextPosition::Subscript => -0.15,
+        }
+    }
+}
+
+/// The look of an underline or a strike line (#1209). A thin line is a
+/// fourteenth of the font size thick, a thick one a seventh; a double
+/// line is two thin lines a thin line apart; a word-only line skips the
+/// spaces between the words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineStyle {
+    #[default]
+    None,
+    SingleThin,
+    SingleThick,
+    DoubleThin,
+    SingleThinWord,
+    SingleThickWord,
+    DoubleThinWord,
+}
+
+impl LineStyle {
+    /// Every style, in the order the lists show them.
+    pub const ALL: [LineStyle; 7] = [
+        LineStyle::None,
+        LineStyle::SingleThin,
+        LineStyle::SingleThick,
+        LineStyle::DoubleThin,
+        LineStyle::SingleThinWord,
+        LineStyle::SingleThickWord,
+        LineStyle::DoubleThinWord,
+    ];
+
+    /// A line is drawn.
+    pub fn is_on(self) -> bool {
+        self != LineStyle::None
+    }
+
+    /// No line (serde and the lists).
+    pub fn is_none(&self) -> bool {
+        *self == LineStyle::None
+    }
+
+    /// The spaces between words are left out.
+    pub fn word_only(self) -> bool {
+        matches!(
+            self,
+            LineStyle::SingleThinWord | LineStyle::SingleThickWord | LineStyle::DoubleThinWord
+        )
+    }
+
+    /// Two thin lines, a thin line apart.
+    pub fn double(self) -> bool {
+        matches!(self, LineStyle::DoubleThin | LineStyle::DoubleThinWord)
+    }
+
+    /// The thickness of each line drawn, as a share of the font size: a
+    /// fourteenth for a thin line, a seventh for a thick one, nothing for
+    /// no line.
+    pub fn thickness_share(self) -> f64 {
+        match self {
+            LineStyle::None => 0.0,
+            LineStyle::SingleThick | LineStyle::SingleThickWord => 1.0 / 7.0,
+            _ => 1.0 / 14.0,
+        }
+    }
+
+    /// The style with the same line, drawn over the spaces too or only
+    /// under the words.
+    pub fn with_word_only(self, word_only: bool) -> LineStyle {
+        match (self, word_only) {
+            (LineStyle::SingleThin, true) => LineStyle::SingleThinWord,
+            (LineStyle::SingleThick, true) => LineStyle::SingleThickWord,
+            (LineStyle::DoubleThin, true) => LineStyle::DoubleThinWord,
+            (LineStyle::SingleThinWord, false) => LineStyle::SingleThin,
+            (LineStyle::SingleThickWord, false) => LineStyle::SingleThick,
+            (LineStyle::DoubleThinWord, false) => LineStyle::DoubleThin,
+            (s, _) => s,
+        }
+    }
+}
+
+/// The OpenType features a shaper applies without being asked, so a
+/// span that lists none of them still gets them: a span switches one off
+/// with a `-` before its tag ("-liga", see [`TextSpan::set_feature`]).
+pub const DEFAULT_ON_FEATURES: [&str; 10] = [
+    "liga", "clig", "calt", "kern", "rlig", "ccmp", "locl", "mark", "mkmk", "curs",
+];
+
+/// A feature entry of [`TextSpan::features`] as its tag and whether it
+/// is on: "liga", "+liga" and "liga=1" turn it on, "-liga" and "liga=0"
+/// off. `None` for an entry that is not a feature.
+pub fn parse_feature(entry: &str) -> Option<(&str, bool)> {
+    let entry = entry.trim();
+    let (body, on) = if let Some(rest) = entry.strip_prefix('-') {
+        (rest, false)
+    } else if let Some(rest) = entry.strip_prefix('+') {
+        (rest, true)
+    } else {
+        (entry, true)
+    };
+    let (tag, on) = match body.split_once('=') {
+        Some((tag, value)) => (tag.trim(), value.trim() != "0"),
+        None => (body, on),
+    };
+    (!tag.is_empty() && tag.len() <= 4).then_some((tag, on))
+}
+
+/// The underline button and older files: on is a single thin line.
+impl From<bool> for LineStyle {
+    fn from(on: bool) -> Self {
+        if on {
+            LineStyle::SingleThin
+        } else {
+            LineStyle::None
+        }
+    }
+}
+
+/// Serde for [`LineStyle`] fields: files written before the styles hold
+/// `true` or `false`, which read as a single thin line and no line, and
+/// those two are still written that way, so a file with only them stays
+/// as it was; the other styles are written by name.
+pub mod line_style_serde {
+    use super::LineStyle;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Flag(bool),
+        Style(LineStyle),
+    }
+
+    pub fn serialize<S: Serializer>(v: &LineStyle, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            LineStyle::None => false.serialize(s),
+            LineStyle::SingleThin => true.serialize(s),
+            other => other.serialize(s),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<LineStyle, D::Error> {
+        Ok(match Repr::deserialize(d)? {
+            Repr::Flag(on) => LineStyle::from(on),
+            Repr::Style(s) => s,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextSpan {
     pub text: String,
@@ -841,14 +1627,41 @@ pub struct TextSpan {
     /// positive = right; the characters after it keep their place.
     #[serde(default)]
     pub offset_x_pct: f64,
+    /// Character width (#2190): the letters' width as a percentage of
+    /// their own, 100 = as the font draws them; their advances follow,
+    /// their height stays with the size. Not in older files.
+    #[serde(default = "full_width", skip_serializing_if = "is_full_width")]
+    pub width_pct: f64,
     /// Character angle in degrees, counter-clockwise, about the
     /// character's origin on its (shifted) baseline.
     #[serde(default)]
     pub angle_deg: f64,
-    #[serde(default)]
-    pub underline: bool,
-    #[serde(default)]
-    pub strikethrough: bool,
+    /// The underline (#1209): drawn by the text layout from the face's
+    /// underline position down.
+    #[serde(default, with = "line_style_serde")]
+    pub underline: LineStyle,
+    /// The strike line (#1209), centred on the face's strikeout position.
+    #[serde(default, with = "line_style_serde")]
+    pub strikethrough: LineStyle,
+    /// Drawn as capitals (#1209): the shaper gets the Unicode uppercase
+    /// of each letter; the text keeps the case typed. A letter whose
+    /// capital is more than one letter stays as typed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub all_caps: bool,
+    /// Enclosed characters (#1209): the font's `nalt` forms when the face
+    /// has them, else a circle drawn round each glyph (a stroke of a
+    /// fourteenth of the size, radius 0.6 of the size, centred on the
+    /// glyph's advance).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enclosed: bool,
+    /// These characters' fill overprints what lies beneath (#1209);
+    /// `None` = as the object's `overprint_fill`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overprint_fill: Option<bool>,
+    /// These characters' outline overprints (#1209); `None` = as the
+    /// object's `overprint_outline`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overprint_outline: Option<bool>,
     /// Per-span fill override (character colour); `None` = object fill.
     #[serde(default)]
     pub fill: Option<Fill>,
@@ -866,9 +1679,20 @@ pub struct TextSpan {
     /// saved.
     #[serde(skip)]
     pub layout_only: bool,
-    /// OpenType features to enable, e.g. "liga", "smcp", "frac".
+    /// OpenType features set on these characters: a tag turns the
+    /// feature on ("smcp", "frac"), a tag after a `-` turns one the
+    /// shaper applies by default off ("-liga"); see
+    /// [`TextSpan::feature_on`] and [`TextSpan::set_feature`].
     #[serde(default)]
     pub features: Vec<String>,
+    /// Superscript or subscript (#1201).
+    #[serde(default, skip_serializing_if = "TextPosition::is_normal")]
+    pub position: TextPosition,
+    /// Axis values of a variable font set for these characters (#870);
+    /// an axis not listed takes the value the text's weight and slant
+    /// give, else the font's default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variations: Vec<FontVariation>,
     /// The formatting of the paragraph these characters are in, when it
     /// has its own (see [`crate::paragraphs`]); `None` = the text
     /// object's alignment and paragraph style.
@@ -876,9 +1700,34 @@ pub struct TextSpan {
     pub paragraph: Option<Box<crate::paragraphs::ParagraphFormat>>,
 }
 
+/// Serde: the character width of a span written before it was kept.
+fn full_width() -> f64 {
+    100.0
+}
+
+/// Serde: leave the full character width out of the file.
+fn is_full_width(v: &f64) -> bool {
+    *v == 100.0
+}
+
 /// Serde: leave a zero out of the file.
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
+}
+
+/// Serde: leave a flag that is off out of the file.
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+/// One look of a text's characters (see [`Shape::text_parts`]): the fill,
+/// outline and overprints they are drawn with.
+#[derive(Clone, PartialEq)]
+struct TextLook {
+    fill: Fill,
+    stroke: Option<Stroke>,
+    overprint_fill: bool,
+    overprint_outline: bool,
 }
 
 impl TextSpan {
@@ -892,15 +1741,82 @@ impl TextSpan {
             tracking_pct: 0.0,
             baseline_shift_pt: 0.0,
             offset_x_pct: 0.0,
+            width_pct: 100.0,
             angle_deg: 0.0,
-            underline: false,
-            strikethrough: false,
+            underline: LineStyle::None,
+            strikethrough: LineStyle::None,
+            all_caps: false,
+            enclosed: false,
+            overprint_fill: None,
+            overprint_outline: None,
             fill: None,
             background: None,
             outline: None,
             layout_only: false,
             features: Vec::new(),
+            position: TextPosition::Normal,
+            variations: Vec::new(),
             paragraph: None,
+        }
+    }
+
+    /// What these characters say about feature `tag`: `Some(true)` when
+    /// they turn it on, `Some(false)` when they turn it off, `None` when
+    /// they leave it to the shaper. The last entry for the tag wins.
+    pub fn feature_setting(&self, tag: &str) -> Option<bool> {
+        self.features
+            .iter()
+            .rev()
+            .filter_map(|f| parse_feature(f))
+            .find(|(t, _)| *t == tag)
+            .map(|(_, on)| on)
+    }
+
+    /// Feature `tag` is applied to these characters: as they say, else
+    /// when the shaper applies it by default ([`DEFAULT_ON_FEATURES`]).
+    /// Whether the font has the feature is another matter.
+    pub fn feature_on(&self, tag: &str) -> bool {
+        self.feature_setting(tag)
+            .unwrap_or_else(|| DEFAULT_ON_FEATURES.contains(&tag))
+    }
+
+    /// Set feature `tag` on (`Some(true)`), off (`Some(false)`) or leave
+    /// it to the shaper (`None`); the earlier entries for the tag go.
+    /// A setting that is what the shaper does anyway is not stored.
+    pub fn set_feature(&mut self, tag: &str, on: Option<bool>) {
+        self.features
+            .retain(|f| parse_feature(f).is_none_or(|(t, _)| t != tag));
+        match on {
+            Some(true) if !DEFAULT_ON_FEATURES.contains(&tag) => {
+                self.features.push(tag.to_string());
+            }
+            Some(false) if DEFAULT_ON_FEATURES.contains(&tag) => {
+                self.features.push(format!("-{tag}"));
+            }
+            _ => {}
+        }
+    }
+
+    /// The value set for variable font axis `tag`, if any.
+    pub fn variation(&self, tag: &str) -> Option<f64> {
+        self.variations
+            .iter()
+            .find(|v| v.tag == tag)
+            .map(|v| v.value)
+    }
+
+    /// Set axis `tag` to `value`, or take it off (`None`); a value that
+    /// is not finite takes it off too.
+    pub fn set_variation(&mut self, tag: &str, value: Option<f64>) {
+        match value.filter(|v| v.is_finite()) {
+            Some(value) => match self.variations.iter_mut().find(|v| v.tag == tag) {
+                Some(v) => v.value = value,
+                None => self.variations.push(FontVariation {
+                    tag: tag.to_string(),
+                    value,
+                }),
+            },
+            None => self.variations.retain(|v| v.tag != tag),
         }
     }
 
@@ -1107,21 +2023,58 @@ pub struct ParagraphStyle {
     /// Space before and after each paragraph, mm.
     pub space_before: f64,
     pub space_after: f64,
+    /// The space before and after each paragraph in percent of the
+    /// character height (the font's line height), as the reference
+    /// program gives them with "% of Char. height": before 100 % is no
+    /// room beyond the line spacing, after 0 % none. Set, they take the
+    /// place of `space_before` and `space_after` and follow the text's
+    /// size (#2613). Not in older files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_before_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_after_pct: Option<f64>,
     pub first_line_indent: f64,
     pub left_indent: f64,
     pub right_indent: f64,
     pub columns: u32,
     pub gutter: f64,
+    /// Columns of different widths (Text > Columns, Equal column width
+    /// off, #2192): each column's width, then each gap after a column but
+    /// the last, in mm as typed. They share the frame's width in these
+    /// proportions, so a frame resized keeps them. Empty, or not one
+    /// width a column, = equal columns `gutter` apart.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub column_widths: Vec<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub column_gutters: Vec<f64>,
+    /// The text flows from the right-hand column to the left (horizontal
+    /// text; vertical text has [`Self::vertical_columns`]). Not in older
+    /// files.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub columns_right_to_left: bool,
     pub bullets: bool,
     pub bullet_char: String,
     pub bullet_indent: f64,
+    /// Numbers in place of the symbol, the bullet's font, size and
+    /// baseline shift, its distance from the frame and the hanging indent
+    /// (Text > Bullets, #1443). Not in older files.
+    #[serde(skip_serializing_if = "BulletStyle::is_plain")]
+    pub bullet: BulletStyle,
     /// Drop cap height in lines; 0 = none.
     pub drop_cap_lines: u32,
-    /// Tab stops in mm from the left edge; empty = default every 12.7 mm.
-    pub tabs: Vec<f64>,
+    /// Tab stops, in order from the frame's left edge; empty = a left
+    /// stop every [`default_tab_step`] mm (12.7 unless set otherwise).
+    pub tabs: Vec<TabStop>,
     pub hyphenate: bool,
     /// Fit text to frame: scale the font so the text fills the frame height.
     pub fit_to_frame: bool,
+    /// Type block (paragraph text): the words are shared out between the
+    /// lines and each line takes a size of its own so that it fills the
+    /// frame's width exactly, the lines together filling its height as
+    /// nearly as they can; laid out anew whenever the frame changes. Each
+    /// word keeps its own font.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub type_block: bool,
     /// Align baselines to a grid of this pitch in mm (Text > Align to
     /// Baseline Grid); 0 = off. Only paragraph text snaps. The grid is the
     /// page's (from its top and the grid's start offset) for a frame that
@@ -1137,6 +2090,25 @@ pub struct ParagraphStyle {
     /// a path ignores it. See docs/behavior/text.md, Vertical text.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub vertical: bool,
+    /// The order of vertical text's columns across the frame: right to
+    /// left (the default, from the top right) or left to right (from the
+    /// top left, #1986). Files from before it read as right to left.
+    #[serde(skip_serializing_if = "VerticalColumns::is_right_to_left")]
+    pub vertical_columns: VerticalColumns,
+    /// The direction the paragraph's text runs in (the Text docker's
+    /// Paragraph section): left to right, or right to left for Arabic,
+    /// Hebrew and the other right-to-left scripts. Right to left starts
+    /// each line at the right (letters and numbers keep their own order
+    /// inside a word), puts the neutral characters such as the full stop
+    /// on the right-to-left side, and swaps the left and right indents,
+    /// the first line's indent going to the right. Not in older files.
+    #[serde(default, skip_serializing_if = "TextDirection::is_left_to_right")]
+    pub direction: TextDirection,
+    /// How much of a justified line's room Arabic-script words take by
+    /// stretching their joins (kashida, #3827) instead of the spaces
+    /// between them. Off by default; not in older files.
+    #[serde(default, skip_serializing_if = "Kashida::is_off")]
+    pub kashida: Kashida,
     /// The paragraph frame's background; `None` = transparent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_fill: Option<Fill>,
@@ -1145,6 +2117,176 @@ pub struct ParagraphStyle {
     /// [`crate::text_flow`]); not saved.
     #[serde(skip)]
     pub flow: crate::text_flow::FrameFlow,
+    /// The closed shape this frame's text was put into (Text > Text
+    /// Frame > Put Text Inside Shape): its lines stay inside that
+    /// shape's outline, wherever the two stand. `None`, or a shape that
+    /// is gone: the plain rectangular frame. Not in older files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside: Option<ShapeId>,
+    /// Which bullets this text draws when it is one part of a text drawn
+    /// in parts ([`Shape::text_parts`], #3682); `None` (a whole text):
+    /// every bullet, in its paragraph's first letter's look. Set only on
+    /// the parts, never in a drawing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bullet_part: Option<BulletPart>,
+}
+
+/// The bullets a part of a text drawn in parts draws (#3682).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum BulletPart {
+    /// The characters' part: bullets without a colour of their own, with
+    /// the paragraph's first letter.
+    Text,
+    /// Only the bullets of this colour of their own, no characters.
+    Color(crate::Color),
+}
+
+impl BulletPart {
+    /// Whether a bullet of `own` colour (`None`: none of its own) whose
+    /// paragraph's first letter is drawn (`letter_drawn`) is drawn in
+    /// this part (`None`: a whole text).
+    pub fn draws(part: Option<BulletPart>, own: Option<crate::Color>, letter_drawn: bool) -> bool {
+        match (part, own) {
+            (None, _) | (Some(BulletPart::Text), None) => letter_drawn,
+            (Some(BulletPart::Text), Some(_)) => false,
+            (Some(BulletPart::Color(c)), Some(o)) => c == o,
+            (Some(BulletPart::Color(_)), None) => false,
+        }
+    }
+}
+
+/// The distance between the default tab stops of a paragraph with no
+/// stops of its own, mm, unless Options > Text > Paragraph Text sets
+/// another ([`set_default_tab_step`]): half an inch, as the other
+/// program and `.cdr` files without stops have it.
+pub const DEFAULT_TAB_STEP: f64 = 12.7;
+
+/// The default tab spacing in use, as `f64` bits; 0 = [`DEFAULT_TAB_STEP`].
+static TAB_STEP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The distance between the default tab stops in use, mm (the setting
+/// "Default tab spacing", [`DEFAULT_TAB_STEP`] until it is set).
+pub fn default_tab_step() -> f64 {
+    let bits = TAB_STEP.load(std::sync::atomic::Ordering::Relaxed);
+    if bits == 0 {
+        DEFAULT_TAB_STEP
+    } else {
+        f64::from_bits(bits)
+    }
+}
+
+/// Use `mm` between the default tab stops from now on, kept within 1 to
+/// 100 mm; a value that is not a number restores [`DEFAULT_TAB_STEP`].
+/// Text laid out before keeps its layout until it is laid out again
+/// (the text engine's caches count the step in their keys).
+pub fn set_default_tab_step(mm: f64) {
+    let v = if mm.is_finite() {
+        mm.clamp(1.0, 100.0)
+    } else {
+        DEFAULT_TAB_STEP
+    };
+    TAB_STEP.store(v.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How the text after a tab sits against its stop (Text > Tabs and the
+/// tab ruler).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabKind {
+    /// The text starts at the stop.
+    #[default]
+    Left,
+    /// The text is centred on the stop.
+    Center,
+    /// The text ends at the stop.
+    Right,
+    /// The text's decimal separator (its first `.` or `,`) sits on the
+    /// stop; text without one ends at the stop.
+    Decimal,
+}
+
+impl TabKind {
+    pub const ALL: [TabKind; 4] = [
+        TabKind::Left,
+        TabKind::Center,
+        TabKind::Right,
+        TabKind::Decimal,
+    ];
+}
+
+/// One tab stop of a paragraph.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct TabStop {
+    /// Distance from the frame's left edge, mm.
+    pub pos: f64,
+    pub kind: TabKind,
+    /// The character repeated over the gap the tab leaves (a dot leader
+    /// in a menu or a table of contents); `None` = blank.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leader: Option<char>,
+}
+
+impl TabStop {
+    /// A left stop at `pos` mm with no leader.
+    pub fn left(pos: f64) -> Self {
+        TabStop {
+            pos,
+            kind: TabKind::Left,
+            leader: None,
+        }
+    }
+
+    pub fn new(pos: f64, kind: TabKind) -> Self {
+        TabStop {
+            pos,
+            kind,
+            leader: None,
+        }
+    }
+}
+
+/// Files from before tab kinds hold each stop as a bare number (a left
+/// stop at that many mm).
+impl<'de> Deserialize<'de> for TabStop {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Full {
+            #[serde(default)]
+            pos: f64,
+            #[serde(default)]
+            kind: TabKind,
+            #[serde(default)]
+            leader: Option<char>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            Pos(f64),
+            Full(Full),
+        }
+        Ok(match Either::deserialize(d)? {
+            Either::Pos(pos) => TabStop::left(pos),
+            Either::Full(f) => TabStop {
+                pos: f.pos,
+                kind: f.kind,
+                leader: f.leader,
+            },
+        })
+    }
+}
+
+/// The stops of `tabs` in order of position, with stops closer than
+/// 0.01 mm to one before them dropped and positions that are not finite
+/// left out (what an edit hands the paragraph).
+pub fn normalized_tabs(tabs: &[TabStop]) -> Vec<TabStop> {
+    let mut out: Vec<TabStop> = tabs
+        .iter()
+        .copied()
+        .filter(|t| t.pos.is_finite() && t.pos >= 0.0)
+        .collect();
+    out.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+    out.dedup_by(|b, a| (b.pos - a.pos).abs() < 0.01);
+    out
 }
 
 /// The unit of a paragraph's line spacing (the Text docker's list next to
@@ -1170,6 +2312,14 @@ impl LeadingUnit {
 }
 
 impl ParagraphStyle {
+    /// The room kept between the outline of the shape the text was put
+    /// into ([`ParagraphStyle::inside`]) and its lines, mm.
+    pub fn inside_inset(&self) -> f64 {
+        1.0
+    }
+}
+
+impl ParagraphStyle {
     /// The distance from one baseline to the next, mm, for a line whose
     /// font has `line_height_mm` from ascent to descent plus gap at a size
     /// of `size_mm`.
@@ -1178,6 +2328,104 @@ impl ParagraphStyle {
             LeadingUnit::PercentCharHeight => line_height_mm * self.leading_pct / 100.0,
             LeadingUnit::Points => self.leading_pct * 25.4 / 72.0,
             LeadingUnit::PercentPointSize => size_mm * self.leading_pct / 100.0,
+        }
+    }
+
+    /// The room before a paragraph beyond the line spacing, mm, for a
+    /// first line whose font has `line_height_mm` (see `line_step`).
+    pub fn space_before_mm(&self, line_height_mm: f64) -> f64 {
+        space_mm(
+            self.space_before,
+            self.space_before_pct,
+            100.0,
+            line_height_mm,
+        )
+    }
+
+    /// The room after a paragraph, mm (see `space_before_mm`).
+    pub fn space_after_mm(&self, line_height_mm: f64) -> f64 {
+        space_mm(self.space_after, self.space_after_pct, 0.0, line_height_mm)
+    }
+}
+
+/// A paragraph's space in mm: `mm`, or, given in percent of the
+/// character height (`pct`, `none` percent meaning no room), that share
+/// of `line_height_mm` (#2613).
+pub fn space_mm(mm: f64, pct: Option<f64>, none: f64, line_height_mm: f64) -> f64 {
+    match pct.filter(|p| p.is_finite()) {
+        Some(p) => ((p - none) / 100.0 * line_height_mm).max(0.0),
+        None => mm,
+    }
+}
+
+/// Which way the columns of vertical text follow one another across the
+/// frame (Text > Vertical Text, the Text docker's Frame section): right to
+/// left, as CJK typesetting has them, or left to right (#1986).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerticalColumns {
+    #[default]
+    RightToLeft,
+    LeftToRight,
+}
+
+impl VerticalColumns {
+    pub fn is_right_to_left(&self) -> bool {
+        *self == VerticalColumns::RightToLeft
+    }
+}
+
+/// Which way a paragraph's text runs (see [`ParagraphStyle::direction`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextDirection {
+    #[default]
+    LeftToRight,
+    RightToLeft,
+}
+
+impl TextDirection {
+    pub fn is_left_to_right(&self) -> bool {
+        *self == TextDirection::LeftToRight
+    }
+
+    pub fn is_right_to_left(&self) -> bool {
+        *self == TextDirection::RightToLeft
+    }
+}
+
+/// How a justified paragraph in Arabic script fills its lines (see
+/// [`ParagraphStyle::kashida`], #3827): only by widening the spaces
+/// between words (`Off`), or also by stretching the joins between
+/// connected letters (kashida), a little (`Low`), more (`Medium`) or as
+/// far as the line needs (`High`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kashida {
+    #[default]
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl Kashida {
+    /// Every setting, in the order a list shows them.
+    pub const ALL: [Kashida; 4] = [Kashida::Off, Kashida::Low, Kashida::Medium, Kashida::High];
+
+    pub fn is_off(&self) -> bool {
+        *self == Kashida::Off
+    }
+
+    /// The share of a line's room the stretched joins take (the rest
+    /// widens the spaces), and the most one join is stretched by, in ems
+    /// of the font size.
+    pub fn share_and_cap(self) -> (f64, f64) {
+        match self {
+            Kashida::Off => (0.0, 0.0),
+            Kashida::Low => (0.35, 0.5),
+            Kashida::Medium => (0.7, 1.0),
+            Kashida::High => (1.0, 2.5),
         }
     }
 }
@@ -1203,25 +2451,373 @@ impl Default for ParagraphStyle {
             word_spacing_pct: 100.0,
             space_before: 0.0,
             space_after: 0.0,
+            space_before_pct: None,
+            space_after_pct: None,
             first_line_indent: 0.0,
             left_indent: 0.0,
             right_indent: 0.0,
             columns: 1,
             gutter: 5.0,
+            column_widths: Vec::new(),
+            column_gutters: Vec::new(),
+            columns_right_to_left: false,
             bullets: false,
             bullet_char: "\u{2022}".into(),
             bullet_indent: 5.0,
+            bullet: BulletStyle::default(),
             drop_cap_lines: 0,
             tabs: Vec::new(),
             hyphenate: false,
             fit_to_frame: false,
+            type_block: false,
             baseline_grid_mm: 0.0,
             vertical_align: VerticalAlign::Top,
             vertical: false,
+            vertical_columns: VerticalColumns::RightToLeft,
+            direction: TextDirection::LeftToRight,
+            kashida: Kashida::Off,
             frame_fill: None,
+            bullet_part: None,
             flow: crate::text_flow::FrameFlow::default(),
+            inside: None,
         }
     }
+}
+
+impl ParagraphStyle {
+    /// Vertical text whose columns go left to right: its lines are
+    /// placed mirrored across the frame (see [`text_layout_shift`]).
+    pub fn columns_left_to_right(&self) -> bool {
+        self.vertical && self.vertical_columns == VerticalColumns::LeftToRight
+    }
+
+    /// Vertical text whose columns start at the frame's right edge.
+    pub fn columns_from_right(&self) -> bool {
+        self.vertical && self.vertical_columns == VerticalColumns::RightToLeft
+    }
+
+    /// Whether the columns have widths of their own (#2192).
+    pub fn uneven_columns(&self) -> bool {
+        let n = self.columns.max(1) as usize;
+        n > 1 && self.column_widths.len() == n
+    }
+
+    /// Each column of a frame `width` wide: (left edge from the frame's
+    /// left, width), in the order the text flows. Equal columns `gutter`
+    /// apart, or the widths and gaps of uneven columns, scaled to share
+    /// the frame's width. Right to left, the first column is at the
+    /// right (#2192).
+    pub fn column_boxes(&self, width: f64) -> Vec<(f64, f64)> {
+        let n = self.columns.max(1) as usize;
+        let mut boxes = Vec::with_capacity(n);
+        if self.uneven_columns() {
+            let w: Vec<f64> = self.column_widths.iter().map(|v| v.max(0.0)).collect();
+            let g: Vec<f64> = (0..n - 1)
+                .map(|i| {
+                    self.column_gutters
+                        .get(i)
+                        .copied()
+                        .unwrap_or(self.gutter)
+                        .max(0.0)
+                })
+                .collect();
+            let total: f64 = w.iter().sum::<f64>() + g.iter().sum::<f64>();
+            let k = if total > 1e-9 { width / total } else { 0.0 };
+            let mut x = 0.0;
+            for (i, wi) in w.iter().enumerate() {
+                boxes.push((x, (wi * k).max(1.0)));
+                x += wi * k + g.get(i).copied().unwrap_or(0.0) * k;
+            }
+        } else {
+            let gutter = self.gutter;
+            let cw = ((width - gutter * (n as f64 - 1.0)) / n as f64).max(1.0);
+            for i in 0..n {
+                boxes.push((i as f64 * (cw + gutter), cw));
+            }
+        }
+        if self.columns_right_to_left && !self.vertical {
+            for b in &mut boxes {
+                b.0 = width - b.0 - b.1;
+            }
+        }
+        boxes
+    }
+}
+
+/// How a paragraph's bullet is numbered (Text > Bullets, #1443).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Numbering {
+    /// The bullet symbol ([`ParagraphStyle::bullet_char`]).
+    #[default]
+    Symbol,
+    /// 1, 2, 3
+    Arabic,
+    /// a, b, c
+    LowerAlpha,
+    /// A, B, C
+    UpperAlpha,
+    /// i, ii, iii
+    LowerRoman,
+    /// I, II, III
+    UpperRoman,
+}
+
+impl Numbering {
+    pub const ALL: [Numbering; 6] = [
+        Numbering::Symbol,
+        Numbering::Arabic,
+        Numbering::LowerAlpha,
+        Numbering::UpperAlpha,
+        Numbering::LowerRoman,
+        Numbering::UpperRoman,
+    ];
+
+    /// The number `n` (from 1) written this way; empty for the symbol.
+    pub fn format(self, n: u32) -> String {
+        let n = n.max(1);
+        let alpha = |upper: bool| {
+            // a..z, then aa, ab ... as spreadsheets count.
+            let mut v = n;
+            let mut out = Vec::new();
+            while v > 0 {
+                v -= 1;
+                let c = b'a' + (v % 26) as u8;
+                out.push(if upper { c.to_ascii_uppercase() } else { c } as char);
+                v /= 26;
+            }
+            out.iter().rev().collect::<String>()
+        };
+        let roman = |upper: bool| {
+            const R: [(u32, &str); 13] = [
+                (1000, "m"),
+                (900, "cm"),
+                (500, "d"),
+                (400, "cd"),
+                (100, "c"),
+                (90, "xc"),
+                (50, "l"),
+                (40, "xl"),
+                (10, "x"),
+                (9, "ix"),
+                (5, "v"),
+                (4, "iv"),
+                (1, "i"),
+            ];
+            let mut v = n.min(3999);
+            let mut out = String::new();
+            for (k, s) in R {
+                while v >= k {
+                    out.push_str(s);
+                    v -= k;
+                }
+            }
+            if upper {
+                out.to_uppercase()
+            } else {
+                out
+            }
+        };
+        match self {
+            Numbering::Symbol => String::new(),
+            Numbering::Arabic => n.to_string(),
+            Numbering::LowerAlpha => alpha(false),
+            Numbering::UpperAlpha => alpha(true),
+            Numbering::LowerRoman => roman(false),
+            Numbering::UpperRoman => roman(true),
+        }
+    }
+}
+
+/// A paragraph's bullet beyond its symbol and indent (Text > Bullets,
+/// #1443): numbers in its place, its own font, size and baseline shift,
+/// how far it sits from the frame and whether the lines after the first
+/// hang under the text or go back under the bullet.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BulletStyle {
+    pub numbering: Numbering,
+    /// Written before and after the number ("(" and ")", or "" and ".").
+    pub prefix: String,
+    pub suffix: String,
+    /// The first paragraph's number; the next numbered paragraphs count
+    /// on from it until a paragraph without bullets.
+    pub start: u32,
+    /// The bullet's font family; `None` = the paragraph's first letter's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    /// The bullet's size in percent of the first letter's.
+    pub size_pct: f64,
+    /// How far the bullet is raised (negative: lowered), mm.
+    pub baseline_shift: f64,
+    /// The bullet's distance from the frame's edge (past the left
+    /// indent), mm; the text starts `bullet_indent` past the bullet.
+    pub offset: f64,
+    /// Off (the default): the lines after the first hang under the text,
+    /// the bullet standing out on its own. On: they go back to the left
+    /// indent, under the bullet.
+    pub no_hanging: bool,
+    /// The bullet's or number's own colour; `None` = the colour of the
+    /// paragraph's first letter (#3682).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<crate::Color>,
+    /// The bullet's or number's own bold and italic; `None` = as the
+    /// paragraph's first letter (#3682).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    /// The list level, 0 for the top: each level is set in by
+    /// `level_indent` and numbers on its own, starting again under each
+    /// paragraph of the level above (#3685).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub level: u32,
+    /// How far each list level is set in, mm (#3685).
+    pub level_indent: f64,
+    /// This paragraph's number starts again at `start`, though the
+    /// paragraph before it is numbered on the same level (#3685).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
+    /// After paragraphs without bullets, this paragraph's number goes on
+    /// from the last number given on its level instead of starting again
+    /// (#3685).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub continue_list: bool,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+/// The deepest list level a bullet can have (#3685).
+pub const MAX_LIST_LEVEL: u32 = 20;
+
+impl Default for BulletStyle {
+    fn default() -> Self {
+        BulletStyle {
+            numbering: Numbering::Symbol,
+            prefix: String::new(),
+            suffix: ".".into(),
+            start: 1,
+            font: None,
+            size_pct: 100.0,
+            baseline_shift: 0.0,
+            offset: 0.0,
+            no_hanging: false,
+            color: None,
+            bold: None,
+            italic: None,
+            level: 0,
+            level_indent: 6.35,
+            restart: false,
+            continue_list: false,
+        }
+    }
+}
+
+impl BulletStyle {
+    /// Nothing beyond the plain symbol bullet: not written to files.
+    pub fn is_plain(&self) -> bool {
+        *self == BulletStyle::default()
+    }
+
+    /// How far the bullet sits past the left indent: its distance from
+    /// the frame plus its list level's indent (#3685), mm.
+    pub fn lead(&self) -> f64 {
+        let step = if self.level_indent.is_finite() {
+            self.level_indent.max(0.0)
+        } else {
+            0.0
+        };
+        self.offset.max(0.0) + self.level.min(MAX_LIST_LEVEL) as f64 * step
+    }
+
+    /// One list level deeper (`deeper`) or higher (#3685). A number takes
+    /// the next numbering of 1, a, i and a symbol the next of the plain
+    /// bullets, so each level shows apart; `symbol` is the paragraph's
+    /// bullet character. False when the level does not change.
+    pub fn change_level(&mut self, symbol: &mut String, deeper: bool) -> bool {
+        let level = if deeper {
+            (self.level + 1).min(MAX_LIST_LEVEL)
+        } else {
+            self.level.saturating_sub(1)
+        };
+        if level == self.level {
+            return false;
+        }
+        self.level = level;
+        const NUMBERS: [Numbering; 3] = [
+            Numbering::Arabic,
+            Numbering::LowerAlpha,
+            Numbering::LowerRoman,
+        ];
+        const SYMBOLS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
+        let step = |at: usize, n: usize| {
+            if deeper {
+                (at + 1) % n
+            } else {
+                (at + n - 1) % n
+            }
+        };
+        if let Some(at) = NUMBERS.iter().position(|k| *k == self.numbering) {
+            self.numbering = NUMBERS[step(at, NUMBERS.len())];
+        } else if let Some(at) = SYMBOLS.iter().position(|c| c == symbol) {
+            *symbol = SYMBOLS[step(at, SYMBOLS.len())].to_string();
+        }
+        true
+    }
+
+    /// What the bullet of a paragraph numbered `n` shows: `symbol` or
+    /// the number with its prefix and suffix.
+    pub fn label(&self, symbol: &str, n: u32) -> String {
+        match self.numbering {
+            Numbering::Symbol => symbol.to_string(),
+            k => format!("{}{}{}", self.prefix, k.format(n), self.suffix),
+        }
+    }
+}
+
+/// The number of each paragraph's bullet, given whether each has bullets
+/// and how it is set: the first of a run of numbered paragraphs takes its
+/// start, the next ones count on; a paragraph without bullets, or with a
+/// symbol, ends the run (#1443). Each list level counts on its own: a
+/// paragraph ends the runs of the levels below it, so a sub-list starts
+/// again under each paragraph above it. `restart` starts a paragraph at
+/// its start within a run, and `continue_list` goes on from the last
+/// number of its level after paragraphs without bullets (#3685).
+pub fn bullet_numbers<'a>(paras: impl IntoIterator<Item = (bool, &'a BulletStyle)>) -> Vec<u32> {
+    let mut out = Vec::new();
+    // The number last given on each level in the current run, and the
+    // last ever given on each level.
+    let mut run: Vec<Option<u32>> = Vec::new();
+    let mut last: Vec<Option<u32>> = Vec::new();
+    for (on, b) in paras {
+        if !on {
+            run.clear();
+            out.push(0);
+            continue;
+        }
+        let level = b.level.min(MAX_LIST_LEVEL) as usize;
+        run.resize(level + 1, None);
+        if last.len() <= level {
+            last.resize(level + 1, None);
+        }
+        if b.numbering == Numbering::Symbol {
+            run[level] = None;
+            out.push(0);
+            continue;
+        }
+        let start = b.start.max(1);
+        let n = match run[level] {
+            _ if b.restart => start,
+            Some(n) => n + 1,
+            None if b.continue_list => last[level].map_or(start, |n| n + 1),
+            None => start,
+        };
+        run[level] = Some(n);
+        last[level] = Some(n);
+        out.push(n);
+    }
+    out
 }
 
 /// Table object (Table tool). Cell text is laid out as paragraph text
@@ -1246,6 +2842,11 @@ pub struct Table {
     /// boxes, mm; `None` = cells share their borders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spacing: Option<[f64; 2]>,
+    /// The spreadsheet workbook (`.xlsx` bytes) the table was imported
+    /// from, or last edited in with the spreadsheet app (#4143): saved
+    /// with the drawing so the sheet can be opened again as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_xlsx: Option<crate::SharedBytes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1265,6 +2866,9 @@ pub struct TableCell {
     /// Border of each side; the table's border where unset.
     #[serde(default, skip_serializing_if = "crate::table::CellBorders::is_default")]
     pub borders: crate::table::CellBorders,
+    /// Where the text sits in the cell from top to bottom (#3859).
+    #[serde(default, skip_serializing_if = "crate::table::is_top")]
+    pub valign: VerticalAlign,
 }
 
 fn one_u32() -> u32 {
@@ -1292,6 +2896,7 @@ impl Table {
             padding: 1.0,
             margins: None,
             spacing: None,
+            source_xlsx: None,
         }
     }
 
@@ -1366,6 +2971,9 @@ pub enum PathTextOrientation {
     HorizontalSkew,
     /// Letters stay upright, only moved along the path.
     Upright,
+    /// Each letter turned so its upright lies on a line through the
+    /// middle of the path's box, like the numbers round a dial.
+    Radial,
 }
 
 /// Which line of the letters sits on the path.
@@ -1383,6 +2991,9 @@ pub enum PathTextVertical {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct TextOnPath {
     pub path: BezPath,
+    /// The editable outline, if the text was attached by dropping onto it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::text_path::PathSource>,
     /// Start offset along the baseline, mm (with centred or right-aligned
     /// text, added to the alignment's own start).
     #[serde(default)]
@@ -1407,6 +3018,34 @@ pub struct TextOnPath {
     pub orientation: PathTextOrientation,
     #[serde(default)]
     pub vertical: PathTextVertical,
+    /// The text was curved by Curve Text (no path object): which curve
+    /// it took, so the bar shows it and a circle fits round a round
+    /// object it is dropped on. `None`: a path of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<CurvePreset>,
+}
+
+/// The curves of Curve Text (see [`TextOnPath::preset`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CurvePreset {
+    /// Round a whole circle, reading clockwise over the top.
+    Circle,
+    /// Over the top of an arch.
+    ArcUp,
+    /// Along the bottom of a bowl.
+    ArcDown,
+    /// Along a wave.
+    Wave,
+}
+
+impl CurvePreset {
+    pub const ALL: [CurvePreset; 4] = [
+        CurvePreset::Circle,
+        CurvePreset::ArcUp,
+        CurvePreset::ArcDown,
+        CurvePreset::Wave,
+    ];
 }
 
 impl TextOnPath {
@@ -1421,6 +3060,20 @@ impl TextOnPath {
         self.mirror = false;
         self.mirror_h = h;
         self.mirror_v = v;
+    }
+
+    /// Move the text `distance` from the path, keeping it where it is along
+    /// the path: the offset is measured along the baseline, which grows
+    /// or shrinks with the distance (round a circle, with its radius), so
+    /// it is scaled with the baseline's length. Text centred on the bottom
+    /// of a circle stays centred there as it moves out or in (#193).
+    pub fn set_distance(&mut self, distance: f64) {
+        let before = self.baseline().length();
+        self.distance = distance;
+        let after = self.baseline().length();
+        if before > 1e-9 && after.is_finite() {
+            self.offset *= after / before;
+        }
     }
 
     /// The letters are drawn flipped across the baseline (one mirror on).
@@ -1465,6 +3118,9 @@ impl Baseline {
     /// Longest corner extension when moving a polyline sideways, as a
     /// multiple of the distance.
     const MITER_LIMIT: f64 = 4.0;
+    /// The most two chords may turn, degrees, for the direction to turn
+    /// smoothly between them; more is a corner.
+    const SMOOTH_TURN: f64 = 20.0;
 
     /// The first subpath of `path` as a polyline, reversed when asked,
     /// then moved `distance` to its left (corners mitred).
@@ -1629,7 +3285,53 @@ impl Baseline {
             return None;
         }
         let t = ((s - start) / len).clamp(0.0, 1.0);
-        Some((a + v * t, v / len))
+        let dir = v / len;
+        // Along a curve the direction turns smoothly: from the mean of
+        // this chord's and the one before's at its start to the mean
+        // with the one after at its end, so letters on a flattened curve
+        // turn with it instead of in steps of a chord's angle (#2715:
+        // round a circle letters stood visibly tilted). At a corner (the
+        // chords turn more than `SMOOTH_TURN`) the chord's own direction
+        // holds.
+        let segs = self.points.len() - 1;
+        let chord = |k: usize| -> Option<Vec2> {
+            let (p, q) = (*self.points.get(k)?, *self.points.get(k + 1)?);
+            let w = q - p;
+            let l = w.hypot();
+            (l > 0.0).then(|| w / l)
+        };
+        let before = match i {
+            0 if self.closed => chord(segs - 1),
+            0 => None,
+            _ => chord(i - 1),
+        };
+        let after = if i + 1 < segs {
+            chord(i + 1)
+        } else if self.closed {
+            chord(0)
+        } else {
+            None
+        };
+        let cos_limit = Self::SMOOTH_TURN.to_radians().cos();
+        let joint = |other: Option<Vec2>| -> Vec2 {
+            match other {
+                Some(o) if o.dot(dir) >= cos_limit => {
+                    let m = o + dir;
+                    let l = m.hypot();
+                    if l > 1e-12 {
+                        m / l
+                    } else {
+                        dir
+                    }
+                }
+                _ => dir,
+            }
+        };
+        let (d0, d1) = (joint(before), joint(after));
+        let d = d0 * (1.0 - t) + d1 * t;
+        let l = d.hypot();
+        let d = if l > 1e-12 { d / l } else { dir };
+        Some((a + v * t, d))
     }
 
     /// The shortest distance from `p` to the baseline.
@@ -1650,6 +3352,64 @@ impl Baseline {
     }
 }
 
+/// A further fill's look of its own (the Properties docker's Grow, Move
+/// and Blur under the fill): its area grown (or, below nothing, shrunk)
+/// by `grow` mm, moved by `move_x` / `move_y` mm and blurred by `blur`
+/// mm, as live effects on that fill alone, after the object's own.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FillLook {
+    pub grow: f64,
+    pub move_x: f64,
+    pub move_y: f64,
+    pub blur: f64,
+}
+
+impl FillLook {
+    /// No look of its own: the fill drawn as the object is.
+    pub fn is_plain(&self) -> bool {
+        *self == FillLook::default()
+    }
+
+    /// The live effects that draw the look, in order: grow, move, blur.
+    pub fn effects(&self) -> Vec<crate::live::Effect> {
+        use crate::live::Effect;
+        let mut out = Vec::new();
+        if self.grow.abs() > 1e-9 {
+            out.push(Effect::OffsetPath {
+                distance: self.grow,
+                smooth: 0.0,
+                join: Default::default(),
+                merge: false,
+            });
+        }
+        if self.move_x.abs() > 1e-9 || self.move_y.abs() > 1e-9 {
+            out.push(Effect::Transform {
+                scale_x: 100.0,
+                scale_y: 100.0,
+                move_x: self.move_x,
+                move_y: self.move_y,
+                angle: 0.0,
+                copies: 0,
+                reflect_x: false,
+                reflect_y: false,
+                random: false,
+                seed: 0,
+                scale_strokes: false,
+                pivot_x: 0.0,
+                pivot_y: 0.0,
+            });
+        }
+        if self.blur > 1e-9 {
+            out.push(Effect::GaussianBlur {
+                radius: self.blur,
+                pins: Vec::new(),
+            });
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
     pub id: ShapeId,
@@ -1658,6 +3418,10 @@ pub struct Shape {
     /// Local-to-page transform.
     pub transform: Affine,
     pub fill: Fill,
+    /// Paint a bitmap with its fill, using the original pixels as an alpha
+    /// mask. Used by detached shadows to retain their feathered silhouette.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bitmap_alpha_fill: bool,
     pub stroke: Option<Stroke>,
     pub visible: bool,
     pub locked: bool,
@@ -1678,6 +3442,10 @@ pub struct Shape {
     /// Object data fields (name/value), like the Object Data docker.
     #[serde(default)]
     pub data: Vec<(String, String)>,
+    /// A text that shows the number of the page it is drawn on (Layout >
+    /// Insert Page Number on a master layer, #807).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_number: Option<PageNumberField>,
     /// Live effects, evaluated at render time (see `live.rs`).
     #[serde(default)]
     pub effects: Vec<crate::live::Effect>,
@@ -1712,6 +3480,20 @@ pub struct Shape {
     /// drops them and leaves an ordinary curve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spline: Option<Vec<Point>>,
+    /// Which of the B-spline's control points are fixed: the curve passes
+    /// through a fixed point (with a corner there), and only comes near
+    /// a floating one. Empty (every point floating), or one flag a point
+    /// of [`Shape::spline`] (#1758).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spline_fixed: Vec<bool>,
+    /// The settings of a curve drawn with the Common Shapes tool (#4045):
+    /// which shape it is, the box it was drawn into and its adjustments,
+    /// so the Shape tool shows its handles and dragging one draws the
+    /// shape again ([`Command::SetCommonShape`]). Any other change to the
+    /// curve's outline, and Convert To Curves, drops them and leaves an
+    /// ordinary curve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_shape: Option<Box<CommonShapeParams>>,
     /// The object's identity across saves, undo and moves between
     /// drawings (see [`Uid`]); the engine gives one to every object.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1722,16 +3504,42 @@ pub struct Shape {
     /// frame itself is not drawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity_mask: Option<OpacityMask>,
+    /// How a group's members are put together (see [`GroupLook`]);
+    /// `None` draws them one after another onto what lies beneath.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_look: Option<GroupLook>,
+    /// On a symbol's definition: its stretch zones (see [`ScaleGrid`]),
+    /// which keep the corners of a stretched instance their size. Boxed:
+    /// few objects have them, and every object's size counts where
+    /// drawings nest deep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_grid: Option<Box<ScaleGrid>>,
     /// Effects switched off in the effect stack, each with the place it
     /// holds in the stack; they are kept but not drawn.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parked_effects: Vec<ParkedEffect>,
+    /// A bitmap whose colour mode is CMYK (a print picture: read from a
+    /// `.cdr` CMYK image, or converted by Convert Colors or Bitmaps >
+    /// Mode, #1254). Its pixels stay RGB for the screen; the mode is what
+    /// Convert Colors switches and the status line shows. Other kinds of
+    /// object never set it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cmyk_bitmap: bool,
+    /// A bitmap's ink channels as it prints (a `.cdr` CMYK image's C,
+    /// M, Y and K bytes), which colour separations print from while they
+    /// fit the pixels (#1659, [`crate::picture_inks`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_inks: Option<Box<crate::picture_inks::PictureInks>>,
     /// Further fills, painted over `fill` in order (see [`Shape::layers`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_fills: Vec<Fill>,
     /// Further outlines, drawn over `stroke` in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_strokes: Vec<Stroke>,
+    /// The looks of the further fills of their own, one for each of
+    /// `extra_fills` in order (missing ones plain; see [`FillLook`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_looks: Option<Box<Vec<FillLook>>>,
     /// Bitmap effects on an object that is not a bitmap: the object stays
     /// as it is and is drawn as the picture they make of it (see
     /// [`Shape::drawn_as`]).
@@ -1742,6 +3550,28 @@ pub struct Shape {
     /// again from it whenever it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qr: Option<Box<QrCode>>,
+    /// How the fill covers the places where the outline's contours
+    /// overlap (#1211, #1919): even-odd (the default: an overlap of two
+    /// contours is a hole, as in a combined ring) or nonzero (an overlap
+    /// of contours turning the same way stays filled, as in traced
+    /// lettering made of overlapping parts). Text always fills nonzero.
+    #[serde(default, skip_serializing_if = "crate::shaping::FillRule::is_even_odd")]
+    pub fill_rule: crate::shaping::FillRule,
+    /// Linked text content (#1568): the texts carrying the same key keep
+    /// the same characters, each in its own font, colours and effects
+    /// (see [`crate::linked_text`]). Not the flow of linked paragraph
+    /// frames, which is another feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_link: Option<u64>,
+    /// A heading of the table of contents (#1660): the text is listed
+    /// in the drawing's tables of contents at this level, 1 to 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toc_level: Option<u8>,
+    /// A table of contents (#1660): the text lists the headings of the
+    /// drawing with their page numbers, worked out anew whenever it is
+    /// drawn, printed or exported (see [`crate::toc`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toc: Option<crate::toc::TocField>,
 }
 
 /// What a QR code holds: the kind of content, which decides the fields
@@ -1756,10 +3586,14 @@ pub enum QrKind {
     Contact,
     Text,
     Location,
+    /// A Brazilian instant payment (Pix): the receiver's key, name and
+    /// city, and an optional amount, reference and message, written as
+    /// the payment code banks' apps read (see [`pix_payload`]).
+    Pix,
 }
 
 impl QrKind {
-    pub const ALL: [QrKind; 7] = [
+    pub const ALL: [QrKind; 8] = [
         QrKind::Url,
         QrKind::Email,
         QrKind::Phone,
@@ -1767,6 +3601,7 @@ impl QrKind {
         QrKind::Contact,
         QrKind::Text,
         QrKind::Location,
+        QrKind::Pix,
     ];
 
     /// The names of the kind's fields (keys of the interface's strings),
@@ -1788,6 +3623,14 @@ impl QrKind {
             ],
             QrKind::Text => &["qr.field_text"],
             QrKind::Location => &["qr.field_latitude", "qr.field_longitude"],
+            QrKind::Pix => &[
+                "qr.field_pix_key",
+                "qr.field_receiver",
+                "qr.field_city",
+                "qr.field_amount",
+                "qr.field_reference",
+                "qr.field_message",
+            ],
         }
     }
 
@@ -1807,10 +3650,28 @@ impl QrKind {
     }
 }
 
+/// The kind of 2D code a QR code object draws (#4228): a QR code, a
+/// Data Matrix (square, for small parts and labels) or a rectangular
+/// micro QR code (rMQR, for narrow spaces).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QrSymbol {
+    #[default]
+    Qr,
+    DataMatrix,
+    Rmqr,
+}
+
+impl QrSymbol {
+    pub const ALL: [QrSymbol; 3] = [QrSymbol::Qr, QrSymbol::DataMatrix, QrSymbol::Rmqr];
+}
+
 /// A QR code object's settings (see [`Shape::qr`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct QrCode {
+    /// The kind of code drawn; a QR code in drawings that don't say.
+    #[serde(skip_serializing_if = "is_qr_symbol")]
+    pub symbol: QrSymbol,
     pub kind: QrKind,
     /// The kind's fields, in the order [`QrKind::fields`] names them.
     pub fields: Vec<String>,
@@ -1827,6 +3688,7 @@ pub struct QrCode {
 impl Default for QrCode {
     fn default() -> Self {
         QrCode {
+            symbol: QrSymbol::Qr,
             kind: QrKind::Url,
             fields: vec!["https://github.com/alefe7z/Cdrtracedraw".into()],
             pixel_mm: 2.5,
@@ -1835,6 +3697,10 @@ impl Default for QrCode {
             outline: None,
         }
     }
+}
+
+fn is_qr_symbol(s: &QrSymbol) -> bool {
+    *s == QrSymbol::Qr
 }
 
 impl QrCode {
@@ -1876,8 +3742,138 @@ impl QrCode {
             }
             QrKind::Location if f(0).is_empty() || f(1).is_empty() => String::new(),
             QrKind::Location => format!("geo:{},{}", f(0), f(1)),
+            QrKind::Pix => pix_payload(f(0), f(1), f(2), f(3), f(4), f(5)),
         }
     }
+}
+
+/// A Pix payment code: the fields as tag, two-digit length and value
+/// (the merchant-presented code layout), ending with the CRC-16 (CCITT,
+/// start 0xFFFF) of everything before it. Empty while the key, the
+/// receiver's name or the city is missing.
+///
+/// Names and cities are written in plain ASCII (accents
+/// taken off) and cut to the lengths the layout allows (25 and 15); a
+/// key made of a tax number's digits and dots, dashes or slashes keeps
+/// only its digits; the amount takes a comma or a point and is written
+/// with two decimals (left out when empty or not above zero); the
+/// reference keeps letters and digits, up to 25, `***` when empty.
+pub fn pix_payload(
+    key: &str,
+    name: &str,
+    city: &str,
+    amount: &str,
+    reference: &str,
+    message: &str,
+) -> String {
+    let key = pix_key(key);
+    let name = pix_text(name, 25);
+    let city = pix_text(city, 15);
+    if key.is_empty() || name.is_empty() || city.is_empty() {
+        return String::new();
+    }
+    let tlv = |tag: &str, v: &str| format!("{tag}{:02}{v}", v.len());
+    let mut account = tlv("00", "br.gov.bcb.pix") + &tlv("01", &key);
+    let message = pix_text(message, 99);
+    // The account field holds 99 characters at most.
+    let room = 99usize.saturating_sub(account.len() + 4);
+    let message: String = message.chars().take(room).collect();
+    if !message.is_empty() {
+        account += &tlv("02", &message);
+    }
+    if account.len() > 99 {
+        return String::new();
+    }
+    let mut out = tlv("00", "01") + &tlv("26", &account) + &tlv("52", "0000") + &tlv("53", "986");
+    let amount = amount.trim().replace(',', ".");
+    if let Ok(v) = amount.parse::<f64>() {
+        if v.is_finite() && v > 0.0 && v < 1e10 {
+            out += &tlv("54", &format!("{v:.2}"));
+        }
+    }
+    out += &tlv("58", "BR");
+    out += &tlv("59", &name);
+    out += &tlv("60", &city);
+    let mut reference: String = reference
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(25)
+        .collect();
+    if reference.is_empty() {
+        reference = "***".into();
+    }
+    out += &tlv("62", &tlv("05", &reference));
+    out += "6304";
+    let crc = crc16_ccitt(out.as_bytes());
+    out + &format!("{crc:04X}")
+}
+
+/// A Pix key as written in the code: an email or random key as typed, a
+/// phone number with its `+` and digits, a tax number as its digits.
+fn pix_key(key: &str) -> String {
+    let key = key.trim();
+    let digits_only = |s: &str| s.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
+    if let Some(rest) = key.strip_prefix('+') {
+        if rest.chars().all(|c| c.is_ascii_digit() || " ()-.".contains(c)) {
+            return format!("+{}", digits_only(rest));
+        }
+    }
+    if !key.is_empty()
+        && key.chars().any(|c| c.is_ascii_digit())
+        && key.chars().all(|c| c.is_ascii_digit() || " .-/".contains(c))
+    {
+        return digits_only(key);
+    }
+    key.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Text for a Pix code: accents taken off, other characters outside
+/// printable ASCII left out, spaces run together, cut to `max`.
+fn pix_text(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        let plain = match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+            'Á' | 'À' | 'Â' | 'Ã' | 'Ä' => 'A',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'É' | 'È' | 'Ê' | 'Ë' => 'E',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'Í' | 'Ì' | 'Î' | 'Ï' => 'I',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+            'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ö' => 'O',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'Ú' | 'Ù' | 'Û' | 'Ü' => 'U',
+            'ç' => 'c',
+            'Ç' => 'C',
+            'ñ' => 'n',
+            'Ñ' => 'N',
+            c if c.is_ascii_graphic() => c,
+            c if c.is_whitespace() => ' ',
+            _ => continue,
+        };
+        if plain == ' ' && (out.is_empty() || out.ends_with(' ')) {
+            continue;
+        }
+        out.push(plain);
+    }
+    let out = out.trim_end();
+    out.chars().take(max).collect::<String>().trim_end().to_string()
+}
+
+/// CRC-16/CCITT with start value 0xFFFF and no final change.
+fn crc16_ccitt(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0xFFFF;
+    for &b in data {
+        crc ^= (b as u16) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x1021
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
 }
 
 /// Bitmap effects on a vector object, and the picture they make of it.
@@ -1892,12 +3888,18 @@ pub struct RasterFx {
     pub width_px: u32,
     pub height_px: u32,
     /// The object with its visible effects; empty until made.
-    #[serde(with = "png_bytes")]
-    pub png: Vec<u8>,
+    pub png: crate::SharedBytes,
     /// A fingerprint of what the picture was made from (see
     /// [`Shape::raster_source`]); another one means it is out of date.
     #[serde(default)]
     pub source: u64,
+}
+
+/// A live effect that draws objects beside the object (a blend's steps)
+/// rather than changing the object: with bitmap effects on the object they
+/// stay vector objects around its picture, made from the object as it is.
+pub fn beside_picture(e: &crate::live::Effect) -> bool {
+    matches!(e, crate::live::Effect::Blend { .. })
 }
 
 /// The lengths the transform gives the object's x and y unit vectors.
@@ -1917,6 +3919,69 @@ pub struct ParkedEffect {
     pub effect: crate::live::Effect,
 }
 
+/// How a group's members are put together before the group goes onto
+/// what lies beneath it (see `Shape::group_look`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct GroupLook {
+    /// The group is drawn on its own first, then laid down as one
+    /// picture: its transparency goes on the whole (members that overlap
+    /// do not show through each other) and its members' merge modes mix
+    /// only with the group's own members.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub as_one: bool,
+    /// Each member hides the members beneath it where it lies, even where
+    /// it is see-through: see-through members show what lies beneath the
+    /// group, not the other members. Drawn on its own first, as `as_one`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub knockout: bool,
+}
+
+impl GroupLook {
+    /// Neither set: the same as no look.
+    pub fn is_plain(&self) -> bool {
+        !self.as_one && !self.knockout
+    }
+}
+
+/// A symbol's stretch zones: four lines set in from the sides of its
+/// objects, in millimetres of the symbol's own size. A stretched instance
+/// keeps the corner zones their size, stretches the side zones along
+/// their side and the middle zone both ways (see `scale_grid`).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct ScaleGrid {
+    pub left: f64,
+    pub right: f64,
+    pub top: f64,
+    pub bottom: f64,
+}
+
+impl ScaleGrid {
+    /// Every inset finite and not below zero.
+    pub fn sanitized(self) -> ScaleGrid {
+        let ok = |v: f64| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        ScaleGrid {
+            left: ok(self.left),
+            right: ok(self.right),
+            top: ok(self.top),
+            bottom: ok(self.bottom),
+        }
+    }
+}
+
+/// The settings of a shape of the Common Shapes tool (see
+/// [`Shape::common_shape`]). The application draws the outline from
+/// them; the document only keeps them with the curve.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommonShapeParams {
+    /// The shape, by the key of its name (such as `shape.arrow`).
+    pub shape: String,
+    /// The box it is drawn into, in local space.
+    pub rect: Rect,
+    /// Its adjustments, in the order the shape defines them.
+    #[serde(default)]
+    pub values: Vec<f64>,
+}
+
 /// How a clip frame masks its contents (see `Shape::opacity_mask`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OpacityMask {
@@ -1932,6 +3997,31 @@ pub struct OpacityMask {
 /// it with its original gets a new one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Uid(pub u128);
+
+/// Hashing of identities, which are random already: their bits folded.
+#[derive(Default, Clone, Copy)]
+pub struct UidHasher(u64);
+
+impl std::hash::Hasher for UidHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut b = [0u8; 8];
+            b[..chunk.len()].copy_from_slice(chunk);
+            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(b))
+                .wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+        }
+    }
+    fn write_u128(&mut self, v: u128) {
+        self.0 =
+            ((v as u64) ^ ((v >> 64) as u64).rotate_left(29)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+/// The hasher maps of identities use.
+pub type UidHash = std::hash::BuildHasherDefault<UidHasher>;
 
 impl std::fmt::Display for Uid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1984,6 +4074,7 @@ impl Shape {
             kind,
             transform: Affine::IDENTITY,
             fill: Fill::None,
+            bitmap_alpha_fill: false,
             stroke: Some(Stroke::default()),
             visible: true,
             locked: false,
@@ -1993,26 +4084,63 @@ impl Shape {
             overprint_outline: false,
             link: None,
             data: Vec::new(),
+            page_number: None,
             effects: Vec::new(),
             wrap_text: false,
             wrap_style: crate::text_flow::TextWrap::default(),
             style: None,
             node_types: std::collections::BTreeMap::new(),
             spline: None,
+            spline_fixed: Vec::new(),
+            common_shape: None,
             uid: None,
             opacity_mask: None,
+            group_look: None,
+            scale_grid: None,
             parked_effects: Vec::new(),
+            cmyk_bitmap: false,
+            picture_inks: None,
             extra_fills: Vec::new(),
             extra_strokes: Vec::new(),
+            fill_looks: None,
             raster_fx: None,
             qr: None,
+            fill_rule: crate::shaping::FillRule::EvenOdd,
+            content_link: None,
+            toc_level: None,
+            toc: None,
         }
     }
 
     /// How the object is drawn: itself, or, with visible bitmap effects
     /// whose picture is made, a bitmap of that picture in its place (its
     /// fill, outlines, shadow, effects and opacity are in the picture).
+    /// Live effects that draw objects beside it (a blend's steps, see
+    /// [`beside_picture`]) are not in the picture: the object is then a
+    /// group of those objects, drawn from it as it is, around the picture.
     pub fn drawn_as(&self) -> Option<Shape> {
+        let pic = self.picture()?;
+        if !self.effects.iter().any(beside_picture) {
+            return Some(pic);
+        }
+        let mut plain = self.clone();
+        plain.raster_fx = None;
+        plain.effects.retain(beside_picture);
+        let ev = crate::live::evaluate(&plain);
+        let mut children = ev.below;
+        children.push(pic);
+        children.extend(ev.above);
+        for c in &mut children {
+            c.effects.clear();
+        }
+        let mut group = Shape::new(self.id, ShapeKind::Group { children });
+        group.visible = self.visible;
+        Some(group)
+    }
+
+    /// The bitmap of the picture its visible bitmap effects make, in its
+    /// place, when that picture is made (see [`Shape::drawn_as`]).
+    pub fn picture(&self) -> Option<Shape> {
         let fx = self.raster_fx.as_ref()?;
         if fx.png.is_empty() || !fx.effects.iter().any(|e| e.visible) {
             return None;
@@ -2030,6 +4158,7 @@ impl Shape {
         s.stroke = None;
         s.extra_fills.clear();
         s.extra_strokes.clear();
+        s.fill_looks = None;
         s.shadow = None;
         s.effects.clear();
         s.parked_effects.clear();
@@ -2037,63 +4166,119 @@ impl Shape {
         Some(s)
     }
 
-    /// A text whose characters have their own fill or outline, as the
-    /// texts it is drawn in: one per look (fill and outline), in the order
-    /// the looks first appear, each laid out as the whole text with the
-    /// other characters left undrawn (`TextSpan::layout_only`). The
-    /// character backgrounds and the frame background are left out of the
-    /// parts (they are drawn once under the text) and only the first part
-    /// keeps the shadow. `None` for other shapes and for text whose
-    /// characters all take the object's fill and outline.
+    /// A text whose characters have their own fill, outline or overprint,
+    /// as the texts it is drawn in: one per look (fill, outline and the
+    /// two overprints), in the order the looks first appear, each laid
+    /// out as the whole text with the other characters left undrawn
+    /// (`TextSpan::layout_only`). The character backgrounds and the frame
+    /// background are left out of the parts (they are drawn once under
+    /// the text) and only the first part keeps the shadow. `None` for
+    /// other shapes and for text whose characters all take the object's
+    /// fill, outline and overprint.
     pub fn text_parts(&self) -> Option<Vec<Shape>> {
-        let ShapeKind::Text { spans, .. } = &self.kind else {
+        let ShapeKind::Text {
+            spans, align, para, ..
+        } = &self.kind
+        else {
             return None;
         };
-        if spans.iter().any(|s| s.layout_only)
-            || spans
-                .iter()
-                .all(|s| s.fill.is_none() && s.outline.is_none())
+        if spans.iter().any(|s| s.layout_only) || para.bullet_part.is_some() {
+            return None;
+        }
+        // Bullets and numbers of a colour of their own: each colour is a
+        // part of its own (#3682).
+        let mut bullet_colors: Vec<crate::Color> = Vec::new();
+        let styled = spans.iter().any(|s| s.paragraph.is_some());
+        let styles = if styled {
+            crate::paragraphs::paragraph_styles(spans, *align, para)
+        } else {
+            vec![(*align, para.clone())]
+        };
+        for (_, ps) in &styles {
+            if let (true, Some(c)) = (ps.bullets, ps.bullet.color) {
+                if !bullet_colors.contains(&c) {
+                    bullet_colors.push(c);
+                }
+            }
+        }
+        if bullet_colors.is_empty()
+            && spans.iter().all(|s| {
+                s.fill.is_none()
+                    && s.outline.is_none()
+                    && s.overprint_fill.is_none_or(|o| o == self.overprint_fill)
+                    && s.overprint_outline
+                        .is_none_or(|o| o == self.overprint_outline)
+            })
         {
             return None;
         }
-        let look = |s: &TextSpan| -> (Fill, Option<Stroke>) {
+        let bullet_part = (!bullet_colors.is_empty()).then_some(BulletPart::Text);
+        let look = |s: &TextSpan| -> TextLook {
             let fill = s.fill.clone().unwrap_or_else(|| self.fill.clone());
             let stroke = match &s.outline {
                 Some(o) if o.width > 0.0 => Some(o.clone()),
                 Some(_) => None,
                 None => self.stroke.clone(),
             };
-            (fill, stroke)
+            TextLook {
+                fill,
+                stroke,
+                overprint_fill: s.overprint_fill.unwrap_or(self.overprint_fill),
+                overprint_outline: s.overprint_outline.unwrap_or(self.overprint_outline),
+            }
         };
-        let mut looks: Vec<(Fill, Option<Stroke>)> = Vec::new();
+        let mut looks: Vec<TextLook> = Vec::new();
         for s in spans.iter().filter(|s| s.char_count() > 0) {
             let l = look(s);
             if !looks.contains(&l) {
                 looks.push(l);
             }
         }
-        let parts = looks
+        let mut parts = looks
             .into_iter()
             .enumerate()
-            .map(|(i, (fill, stroke))| {
+            .map(|(i, l)| {
                 let mut part = self.clone();
                 if let ShapeKind::Text { spans, para, .. } = &mut part.kind {
                     for s in spans.iter_mut() {
-                        s.layout_only = look(s) != (fill.clone(), stroke.clone());
+                        s.layout_only = look(s) != l;
                         s.background = None;
                         s.fill = None;
                         s.outline = None;
+                        s.overprint_fill = None;
+                        s.overprint_outline = None;
                     }
                     para.frame_fill = None;
+                    para.bullet_part = bullet_part;
                 }
-                part.fill = fill;
-                part.stroke = stroke;
+                part.fill = l.fill;
+                part.stroke = l.stroke;
+                part.overprint_fill = l.overprint_fill;
+                part.overprint_outline = l.overprint_outline;
                 if i > 0 {
                     part.shadow = None;
                 }
                 part
             })
-            .collect();
+            .collect::<Vec<_>>();
+        for c in bullet_colors {
+            let mut part = self.clone();
+            if let ShapeKind::Text { spans, para, .. } = &mut part.kind {
+                for s in spans.iter_mut() {
+                    s.layout_only = true;
+                    s.background = None;
+                    s.fill = None;
+                    s.outline = None;
+                    s.overprint_fill = None;
+                    s.overprint_outline = None;
+                }
+                para.frame_fill = None;
+                para.bullet_part = Some(BulletPart::Color(c));
+            }
+            part.fill = Fill::Solid(c);
+            part.shadow = None;
+            parts.push(part);
+        }
         Some(parts)
     }
 
@@ -2105,8 +4290,11 @@ impl Shape {
         let mut c = self.clone();
         let (sx, sy) = transform_scale(c.transform);
         c.transform = Affine::IDENTITY;
+        // A blend's steps are not in the picture: moving its end does not
+        // make the picture again.
+        c.effects.retain(|e| !beside_picture(e));
         if let Some(fx) = c.raster_fx.as_mut() {
-            fx.png.clear();
+            fx.png = Default::default();
             fx.source = 0;
             fx.rect = Rect::ZERO;
             fx.width_px = 0;
@@ -2164,6 +4352,14 @@ impl Shape {
         (effects, parked)
     }
 
+    /// The look of further fill `i` (plain when it has none).
+    pub fn fill_look(&self, i: usize) -> FillLook {
+        self.fill_looks
+            .as_ref()
+            .and_then(|v| v.get(i).copied())
+            .unwrap_or_default()
+    }
+
     /// An object with further fills or outlines as the plain objects that
     /// draw it, bottom first: the outlines drawn behind the fill, its
     /// fill, each further fill, then the other outlines, its own first
@@ -2176,6 +4372,7 @@ impl Shape {
         let mut plain = self.clone();
         plain.extra_fills.clear();
         plain.extra_strokes.clear();
+        plain.fill_looks = None;
         plain.shadow = None;
         let strokes: Vec<&Stroke> = self.stroke.iter().chain(&self.extra_strokes).collect();
         let stroke_part = |st: &Stroke| {
@@ -2194,10 +4391,12 @@ impl Shape {
         let mut fill = plain.clone();
         fill.stroke = None;
         out.push(fill);
-        for f in &self.extra_fills {
+        for (i, f) in self.extra_fills.iter().enumerate() {
             let mut s = plain.clone();
             s.fill = f.clone();
             s.stroke = None;
+            // A look of its own: live effects on this fill alone.
+            s.effects.extend(self.fill_look(i).effects());
             out.push(s);
         }
         out.extend(
@@ -2229,29 +4428,225 @@ impl Shape {
         })
     }
 
+    /// Make a rectangle's rounded corners keep their size when it is
+    /// resized (Relative corner scaling off), at the size they measure on
+    /// the page now; a rectangle whose axes scale differently gets round
+    /// corners of the smaller scale, and when its axes stay square the
+    /// stretch goes into its size, so its transform scales evenly and
+    /// later stretches keep it a rectangle (not when its outline scales
+    /// with it, and a skewed rectangle is left as it is). Corners keep their size even
+    /// past half the shorter side (one corner may take a whole side; the
+    /// drawing fits corners too big for it). Other shapes, square corners
+    /// and corners that already keep their size are left as they are.
+    pub fn keep_corner_size(&mut self) {
+        let Some(page) = self.page_corners() else {
+            return;
+        };
+        if page.fixed || page.max() <= 0.0 {
+            return;
+        }
+        let Some((mut rect, _)) = self.kind.rect_corners() else {
+            return;
+        };
+        let [a, b, c, d, _, _] = self.transform.as_coeffs();
+        let (sx, sy) = axis_scale(self.transform);
+        // A skewed rectangle keeps corners that follow it: fixed ones
+        // could not be written to the files that keep rectangles plain.
+        let square = (a * c + b * d).abs() <= 1e-9 * sx * sy;
+        if !square {
+            return;
+        }
+        // An outline that scales with the object would thin out if the
+        // stretch left the transform; fixed corners draw round under the
+        // stretch anyway.
+        let widens_outline = self.stroke.as_ref().is_some_and(|s| s.scale_with_object);
+        if sx > 1e-12 && sy > 1e-12 && !widens_outline && (sx - sy).abs() > 1e-9 * sx.max(sy) {
+            rect = Rect::new(rect.x0 * sx, rect.y0 * sy, rect.x1 * sx, rect.y1 * sy);
+            self.transform *= Affine::scale_non_uniform(1.0 / sx, 1.0 / sy);
+        }
+        self.kind = ShapeKind::rect_with_corners(
+            rect,
+            Corners {
+                fixed: true,
+                ..page
+            },
+        );
+    }
+
+    /// A rectangle's corners as they are drawn, measured on the page:
+    /// `page_corners` with every corner shrunk by the factor that fits
+    /// the two corners on each side into it (`Corners::fit_factor`), the
+    /// sizes the property bar shows. `None` for other kinds.
+    pub fn drawn_page_corners(&self) -> Option<Corners> {
+        let (rect, c) = self.kind.rect_corners()?;
+        let k = c.fit_factor(rect, axis_scale(self.transform));
+        let page = self.page_corners()?.sanitized();
+        Some(Corners {
+            radii: page.radii.map(|r| r * k),
+            ..page
+        })
+    }
+
     /// This rectangle with corners measured on the page (as
-    /// `page_corners` gives them), each at most half the shorter side.
-    /// `None` for other kinds.
+    /// `page_corners` gives them). A corner is not cut to half the
+    /// shorter side: the sizes are kept as given, and the drawing shrinks
+    /// every corner by the same factor only when the two on a side
+    /// together are longer than it (`Corners::fit_factor`, #1757).
+    /// Negative and non-finite sizes become square corners. `None` for
+    /// other kinds.
     pub fn with_page_corners(&self, page: Corners) -> Option<ShapeKind> {
         let (rect, _) = self.kind.rect_corners()?;
         let rect = rect.abs();
-        let (sx, sy) = axis_scale(self.transform);
-        let limit = (rect.width() * sx).min(rect.height() * sy) / 2.0;
-        let mut c = page;
-        let fit = |r: f64, limit: f64| {
-            if r.is_finite() {
-                r.clamp(0.0, limit.max(0.0))
-            } else {
-                0.0
+        let mut c = page.sanitized();
+        if !c.fixed {
+            let (sx, sy) = axis_scale(self.transform);
+            let k = sx.min(sy).max(1e-9);
+            c.radii = c.radii.map(|r| r / k);
+        }
+        Some(ShapeKind::rect_with_corners(rect, c.sanitized()))
+    }
+
+    /// Lay a parent's uniform transparency over the shape's own, as when a
+    /// group is ungrouped or flattened for a file: `parent` is the group's
+    /// opacity, 1 being opaque.
+    pub fn absorb_opacity(&mut self, parent: f64) {
+        self.opacity = (self.opacity * parent).clamp(0.0, 1.0);
+    }
+
+    /// A clip frame whose transparency fades only the frame's fill and
+    /// outline, the objects inside keeping their own (#4360).
+    pub fn clip_contents_opaque(&self) -> bool {
+        matches!(self.kind, ShapeKind::ClipFrame { .. })
+            && self
+                .data
+                .iter()
+                .any(|(k, v)| k == CLIP_CONTENTS_OPAQUE && v == "1")
+    }
+
+    /// A clip frame whose frame is a group: Ungroup takes it apart into
+    /// the group's objects, each a clip frame holding the contents (#1605).
+    pub fn is_clip_frame_of_group(&self) -> bool {
+        matches!(&self.kind, ShapeKind::ClipFrame { frame, .. }
+            if matches!(frame.kind, ShapeKind::Group { .. }))
+    }
+
+    /// Whether Break Apart has parts to give: a curve of several
+    /// subpaths, a brush stroke (its band and its path, see
+    /// [`Self::is_brush_stroke`]), or a clip frame whose frame is a curve
+    /// of several subpaths (each part then a clip frame holding the
+    /// contents, #1607).
+    pub fn breaks_into_parts(&self) -> bool {
+        if self.is_brush_stroke() {
+            return true;
+        }
+        let path = match &self.kind {
+            ShapeKind::Path { path, .. } => path,
+            ShapeKind::ClipFrame { frame, .. } => match &frame.kind {
+                ShapeKind::Path { path, .. } => path,
+                _ => return false,
+            },
+            _ => return false,
+        };
+        path.elements()
+            .iter()
+            .filter(|e| matches!(e, geometry::PathEl::MoveTo(_)))
+            .count()
+            > 1
+    }
+
+    /// A curve drawn with a brush: its outline is a band of its own
+    /// shape along it (a brush stroke, a variable or calligraphic
+    /// outline). Break Apart sets the band apart from the path.
+    pub fn is_brush_stroke(&self) -> bool {
+        matches!(self.kind, ShapeKind::Path { .. })
+            && self.stroke.as_ref().is_some_and(|s| s.is_brush())
+    }
+
+    /// The band a brush stroke draws (see [`Self::is_brush_stroke`]), in
+    /// page space as its object stands in its layer, fitted to curves:
+    /// one path per separate part, each an outer contour with its holes.
+    /// `None` for any other object, or a band that comes out empty.
+    pub fn brush_band_parts(&self) -> Option<Vec<BezPath>> {
+        if !self.is_brush_stroke() {
+            return None;
+        }
+        let st = self.stroke.as_ref()?;
+        let page = self.page_path();
+        let scale = if st.scale_with_object {
+            let c = self.transform.as_coeffs();
+            ((c[0] * c[3] - c[1] * c[2]).abs()).sqrt().max(1e-6)
+        } else {
+            1.0
+        };
+        // A variable width from a finer flattening, as it is fitted to
+        // curves (as Convert Outline to Object does, #627).
+        let band = if st.widths.is_empty() {
+            crate::shaping::outline_band(&page, st, scale)?
+        } else {
+            let nodes: Vec<crate::style::WidthNode> = st
+                .widths
+                .iter()
+                .map(|n| crate::style::WidthNode {
+                    at: n.at,
+                    left: n.left * scale,
+                    right: n.right * scale,
+                })
+                .collect();
+            crate::shaping::variable_band_within(&page, st.width * scale, &nodes, 0.005, st.cap)
+        };
+        let band = crate::fit::fit_path(&band, 0.01);
+        // The contours come outer first, then its holes, which wind the
+        // other way.
+        let mut parts: Vec<BezPath> = Vec::new();
+        let mut outer_sign = 0.0;
+        let mut contour = BezPath::new();
+        let mut flush = |contour: &mut BezPath, parts: &mut Vec<BezPath>| {
+            let c = std::mem::take(contour);
+            let area = c.area();
+            if c.elements().is_empty() || !area.is_finite() || area.abs() <= 1e-12 {
+                return;
+            }
+            if outer_sign == 0.0 {
+                outer_sign = area.signum();
+            }
+            match parts.last_mut() {
+                Some(part) if area.signum() != outer_sign => part.extend(c),
+                _ => parts.push(c),
             }
         };
-        c.radii = c.radii.map(|r| fit(r, limit));
-        if !c.fixed {
-            let k = sx.min(sy).max(1e-9);
-            let local_limit = rect.width().min(rect.height()) / 2.0;
-            c.radii = c.radii.map(|r| fit(r / k, local_limit));
+        for el in band.elements() {
+            if matches!(el, geometry::PathEl::MoveTo(_)) {
+                flush(&mut contour, &mut parts);
+            }
+            contour.push(*el);
         }
-        Some(ShapeKind::rect_with_corners(rect, c))
+        flush(&mut contour, &mut parts);
+        (!parts.is_empty()).then_some(parts)
+    }
+
+    /// A copy with ids from `next` for the object and everything inside
+    /// it (a group's objects, a clip frame's frame and contents), and no
+    /// uid, so the copy gets one of its own.
+    pub fn with_fresh_ids(&self, next: &mut dyn FnMut() -> ShapeId) -> Shape {
+        let mut c = self.clone();
+        c.id = next();
+        c.uid = None;
+        match &mut c.kind {
+            ShapeKind::Text { on_path: Some(tp), .. } => tp.source = None,
+            ShapeKind::Group { children } => {
+                let copies: Vec<Shape> =
+                    children.iter().map(|ch| ch.with_fresh_ids(next)).collect();
+                *children = copies;
+            }
+            ShapeKind::ClipFrame { frame, contents } => {
+                **frame = frame.with_fresh_ids(next);
+                let copies: Vec<Shape> =
+                    contents.iter().map(|ch| ch.with_fresh_ids(next)).collect();
+                *contents = copies;
+            }
+            _ => {}
+        }
+        c
     }
 
     /// Put `parent` in front of the shape's own transform (ungrouping,
@@ -2303,11 +4698,14 @@ impl Shape {
             }
         }
         self.transform = next;
+        // A symmetry's mirror lines go with the object.
+        self.carry_effects(parent);
     }
 
     /// A rectangle that one round radius describes (what formats with a
-    /// single radius store): the rectangle, the radius in its space and the
-    /// transform that places it, usually the shape's own. A stretched
+    /// single radius store): the rectangle, the radius drawn in its space
+    /// (at most half the shorter side) and the transform that places it,
+    /// usually the shape's own. A stretched
     /// rectangle whose corners keep their size has the stretch moved into
     /// the rectangle's size, so that its corners stay circles of their page
     /// radius; not when the stretch also widens a scaling outline or the
@@ -2323,9 +4721,24 @@ impl Shape {
             return None;
         };
         let t = self.transform;
-        let Some(c) = corners else {
-            return Some((*rect, *radius, t));
+        // The radius drawn: equal corners stop at half the shorter side,
+        // and files get that size rather than one they might draw
+        // differently.
+        let half = rect.width().abs().min(rect.height().abs()) / 2.0;
+        let local = |r: f64| {
+            if r.is_finite() {
+                r.clamp(0.0, half)
+            } else {
+                0.0
+            }
         };
+        let Some(c) = corners else {
+            return Some((*rect, local(*radius), t));
+        };
+        // Bowed edges (#2188) go out as the curve they draw.
+        if c.has_bulge() {
+            return None;
+        }
         if c.is_square() {
             return Some((*rect, 0.0, t));
         }
@@ -2333,7 +4746,7 @@ impl Shape {
             return None;
         }
         if !c.fixed {
-            return Some((*rect, c.radii[0], t));
+            return Some((*rect, local(c.radii[0]), t));
         }
         let (sx, sy) = axis_scale(t);
         if sx < 1e-9 || sy < 1e-9 {
@@ -2373,6 +4786,9 @@ impl Shape {
             },
             ShapeKind::Ellipse { rect, arc } => match arc {
                 None => geometry::ellipse_path(*rect),
+                Some(a) if a.pie && a.inner > 0.0 => {
+                    geometry::ellipse_ring_path(*rect, a.start_deg, a.end_deg, a.inner)
+                }
                 Some(a) => geometry::ellipse_arc_path(*rect, a.start_deg, a.end_deg, a.pie),
             },
             ShapeKind::Polygon {
@@ -2381,9 +4797,10 @@ impl Shape {
                 sharpness,
                 complex,
                 twist,
+                bend,
             } => match complex {
                 Some(k) => geometry::complex_star_path(*rect, *points, *k),
-                None => geometry::twisted_polygon_path(*rect, *points, *sharpness, *twist),
+                None => geometry::bent_polygon_path(*rect, *points, *sharpness, *twist, *bend),
             },
             ShapeKind::Path { path, .. } => path.clone(),
             ShapeKind::Text {
@@ -2407,7 +4824,8 @@ impl Shape {
                     }
                     // Paragraph text hangs from the top of its frame;
                     // artistic text sits on its baseline.
-                    return text_layout_shift(*origin, *frame, false, para.vertical) * p;
+                    return text_layout_shift(*origin, *frame, false, para.columns_from_right())
+                        * p;
                 }
                 // No text engine registered: rough box, 0.5 em per character.
                 let size_mm: f64 =
@@ -2472,7 +4890,10 @@ impl Shape {
                                     inner.height().max(0.1),
                                 )),
                                 align: cell.align,
-                                para: ParagraphStyle::default(),
+                                para: ParagraphStyle {
+                                    vertical_align: cell.valign,
+                                    ..ParagraphStyle::default()
+                                },
                                 on_path: None,
                             },
                         );
@@ -2501,38 +4922,98 @@ impl Shape {
             }
             ShapeKind::SymbolInstance { index } => symbols
                 .get(*index)
-                .map(|s| vec![s.shape.clone()])
+                .map(|s| {
+                    // Stretch zones keep a stretched instance's corners.
+                    let shaped = s.shape.scale_grid.as_deref().and_then(|g| {
+                        crate::scale_grid::stretched(&s.shape, *g, self.transform, symbols)
+                    });
+                    vec![shaped.unwrap_or_else(|| s.shape.clone())]
+                })
                 .unwrap_or_default(),
             _ => Vec::new(),
         }
     }
 
-    /// Whether Convert to Curves changes this object: curves and groups
-    /// already are curves, and a bitmap has no outline to become one.
+    /// Whether Convert to Curves changes this object: curves already are
+    /// curves, a bitmap has no outline to become one, and a group changes
+    /// when something it holds does.
     pub fn converts_to_curves(&self) -> bool {
         match &self.kind {
             // A B-spline becomes an ordinary curve: its nodes instead of
             // its control points.
-            ShapeKind::Path { .. } => self.spline.is_some(),
-            ShapeKind::Group { .. } | ShapeKind::Bitmap { .. } => false,
+            ShapeKind::Path { .. } => self.spline.is_some() || self.common_shape.is_some(),
+            ShapeKind::Bitmap { .. } => false,
+            ShapeKind::Group { children } => {
+                let warps = !self.outline_stays_live();
+                children.iter().any(|c| c.converts_to_curves_deep(1, warps))
+            }
             // A clip frame changes only when its frame or something it
-            // holds (inside groups too) is not a curve yet.
+            // holds (inside groups too) is not a curve yet, or something it
+            // holds has a warp to bake. The frame's own warp stays: the
+            // contents are clipped to its outline without it.
             ShapeKind::ClipFrame { frame, contents } => {
-                frame.converts_to_curves_deep(0)
-                    || contents.iter().any(|c| c.converts_to_curves_deep(0))
+                let warps = !self.outline_stays_live();
+                frame.converts_to_curves_deep(0, false)
+                    || contents.iter().any(|c| c.converts_to_curves_deep(0, warps))
             }
             _ => true,
         }
     }
 
-    /// [`Shape::converts_to_curves`], looking inside groups.
-    fn converts_to_curves_deep(&self, depth: usize) -> bool {
+    /// [`Shape::converts_to_curves`], looking inside groups; `warps` when
+    /// an outline warp would be baked too.
+    fn converts_to_curves_deep(&self, depth: usize, warps: bool) -> bool {
+        let warp = warps && self.has_outline_warp();
         match &self.kind {
-            ShapeKind::Group { children } if depth < 16 => children
-                .iter()
-                .any(|c| c.converts_to_curves_deep(depth + 1)),
-            _ => self.converts_to_curves(),
+            ShapeKind::Group { children } if depth < 16 => {
+                let inner = warps && !self.outline_stays_live();
+                warp || children
+                    .iter()
+                    .any(|c| c.converts_to_curves_deep(depth + 1, inner))
+            }
+            ShapeKind::Group { .. } => warp,
+            _ => warp || self.converts_to_curves(),
         }
+    }
+
+    /// The object converted to curves (Convert to Curves): its kind as
+    /// [`Shape::curves_kind`] makes it, then its envelope, perspective and
+    /// distortion made part of the curves, the other effects kept (#647).
+    /// `None` when it stays as it is.
+    pub fn converted_to_curves(
+        &self,
+        symbols: &[Symbol],
+        next_id: &mut dyn FnMut() -> ShapeId,
+    ) -> Option<Shape> {
+        let mut out = self.clone();
+        let mut changed = false;
+        // A group's or clip frame's warps go first, then those of what it
+        // holds, as they are drawn; an object's own after its conversion.
+        let container = matches!(
+            self.kind,
+            ShapeKind::Group { .. } | ShapeKind::ClipFrame { .. }
+        );
+        if container {
+            if let Some(baked) = crate::live::bake_outline_warps(&out) {
+                out = baked;
+                changed = true;
+            }
+        }
+        if let Some(kind) = out.curves_kind_depth(symbols, next_id, 0, true) {
+            out.kind = kind;
+            out.node_types.clear();
+            out.spline = None;
+            out.spline_fixed.clear();
+            out.common_shape = None;
+            changed = true;
+        }
+        if !container {
+            if let Some(baked) = crate::live::bake_outline_warps(&out) {
+                out = baked;
+                changed = true;
+            }
+        }
+        changed.then_some(out)
     }
 
     /// The kind this object takes when converted to curves, or `None` when
@@ -2545,14 +5026,18 @@ impl Shape {
         symbols: &[Symbol],
         next_id: &mut dyn FnMut() -> ShapeId,
     ) -> Option<ShapeKind> {
-        self.curves_kind_depth(symbols, next_id, 0)
+        self.curves_kind_depth(symbols, next_id, 0, false)
     }
 
+    /// [`Shape::curves_kind`]; `bake` makes the outline warps of the
+    /// objects inside part of their curves too (see
+    /// [`Shape::converted_to_curves`]).
     fn curves_kind_depth(
         &self,
         symbols: &[Symbol],
         next_id: &mut dyn FnMut() -> ShapeId,
         depth: usize,
+        bake: bool,
     ) -> Option<ShapeKind> {
         // A symbol that holds itself would never end.
         const MAX_DEPTH: usize = 16;
@@ -2566,57 +5051,129 @@ impl Shape {
                     return None;
                 }
                 for c in &mut children {
-                    c.curves_deep(symbols, next_id, depth + 1);
+                    c.curves_deep(symbols, next_id, depth + 1, bake);
                 }
                 Some(ShapeKind::Group { children })
             }
             // A clip frame stays a clip frame: its frame and what it holds
-            // become curves (keeping their ids) and stay clipped.
+            // become curves (keeping their ids) and stay clipped. The
+            // frame keeps its own warps: the contents are clipped to its
+            // outline without them.
             ShapeKind::ClipFrame { frame, contents } => {
                 let mut frame = frame.clone();
                 let mut contents = contents.clone();
-                frame.curves_in_place(symbols, next_id, depth + 1);
+                let inner = bake && !self.outline_stays_live();
+                frame.curves_in_place(symbols, next_id, depth + 1, false);
                 for c in &mut contents {
-                    c.curves_in_place(symbols, next_id, depth + 1);
+                    c.curves_in_place(symbols, next_id, depth + 1, inner);
                 }
                 let kind = ShapeKind::ClipFrame { frame, contents };
                 (kind != self.kind).then_some(kind)
             }
+            // A group stays a group: what it holds becomes curves,
+            // keeping the ids (#1324).
+            ShapeKind::Group { children } => {
+                let mut children = children.clone();
+                let inner = bake && !self.outline_stays_live();
+                for c in &mut children {
+                    c.curves_in_place(symbols, next_id, depth + 1, inner);
+                }
+                let kind = ShapeKind::Group { children };
+                (kind != self.kind).then_some(kind)
+            }
             // A B-spline keeps its outline; the control points go.
             ShapeKind::Path { .. } => Some(self.kind.clone()),
+            // Characters with a fill or outline of their own: a group of
+            // curves, one a look, each in its own colours. All took the
+            // object's fill (#3107).
+            ShapeKind::Text { .. } if self.text_parts().is_some() => {
+                let children: Vec<Shape> = self
+                    .text_parts()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|p| {
+                        let path = crate::shaping::nonzero_as_even_odd(&p.local_path());
+                        if path.elements().is_empty() {
+                            return None;
+                        }
+                        let mut c = Shape::new(next_id(), ShapeKind::Path { path, closed: true });
+                        c.fill = p.fill;
+                        c.stroke = p.stroke;
+                        c.overprint_fill = p.overprint_fill;
+                        c.overprint_outline = p.overprint_outline;
+                        Some(c)
+                    })
+                    .collect();
+                Some(ShapeKind::Group { children })
+            }
+            // Text fills with the nonzero rule, curves with even-odd: the
+            // overlapping strokes of a glyph would leave holes (#800).
+            ShapeKind::Text { .. } => Some(ShapeKind::Path {
+                path: crate::shaping::nonzero_as_even_odd(&self.local_path()),
+                closed: true,
+            }),
+            // An open arc stays an open curve, its arrowheads with it; it
+            // was closed and lost them (#2983).
             _ => Some(ShapeKind::Path {
                 path: self.local_path(),
-                closed: true,
+                closed: !self.kind.is_open_curve(),
             }),
         }
     }
 
     /// Turn this object, and everything inside a group or clip frame, into
     /// curves, keeping the ids of the objects that were there (new pieces
-    /// of tables and symbols get new ones).
+    /// of tables and symbols get new ones); `bake` makes their outline
+    /// warps part of the curves too.
     fn curves_in_place(
         &mut self,
         symbols: &[Symbol],
         next_id: &mut dyn FnMut() -> ShapeId,
         depth: usize,
+        bake: bool,
     ) {
         if depth > 16 {
             return;
         }
+        let container = self.bake_container_warps(bake);
+        let inner = bake && !self.outline_stays_live();
         match &mut self.kind {
             ShapeKind::Group { children } => {
                 for c in children {
-                    c.curves_in_place(symbols, next_id, depth + 1);
+                    c.curves_in_place(symbols, next_id, depth + 1, inner);
                 }
             }
             _ => {
-                if let Some(kind) = self.curves_kind_depth(symbols, next_id, depth) {
+                if let Some(kind) = self.curves_kind_depth(symbols, next_id, depth, bake) {
                     self.kind = kind;
                     self.node_types.clear();
                     self.spline = None;
+                    self.spline_fixed.clear();
+                    self.common_shape = None;
+                }
+                if bake && !container {
+                    if let Some(b) = crate::live::bake_outline_warps(self) {
+                        *self = b;
+                    }
                 }
             }
         }
+    }
+
+    /// With `bake`, a group's or clip frame's outline warps made part of
+    /// what it holds, before the warps of those objects, as they are
+    /// drawn. Whether this is such a container.
+    fn bake_container_warps(&mut self, bake: bool) -> bool {
+        let container = matches!(
+            self.kind,
+            ShapeKind::Group { .. } | ShapeKind::ClipFrame { .. }
+        );
+        if bake && container {
+            if let Some(b) = crate::live::bake_outline_warps(self) {
+                *self = b;
+            }
+        }
+        container
     }
 
     /// Give this object and everything inside it new ids, and turn every
@@ -2626,27 +5183,38 @@ impl Shape {
         symbols: &[Symbol],
         next_id: &mut dyn FnMut() -> ShapeId,
         depth: usize,
+        bake: bool,
     ) {
         self.id = next_id();
+        let container = self.bake_container_warps(bake);
+        let inner = bake && !self.outline_stays_live();
         match &mut self.kind {
             ShapeKind::Group { children } => {
                 for c in children {
-                    c.curves_deep(symbols, next_id, depth + 1);
+                    c.curves_deep(symbols, next_id, depth + 1, inner);
                 }
             }
-            // A frame keeps what it holds; both become curves.
+            // A frame keeps what it holds; both become curves, the frame
+            // keeping its own warps (the contents are clipped without).
             ShapeKind::ClipFrame { frame, contents } => {
-                frame.curves_deep(symbols, next_id, depth + 1);
+                frame.curves_deep(symbols, next_id, depth + 1, false);
                 for c in contents {
-                    c.curves_deep(symbols, next_id, depth + 1);
+                    c.curves_deep(symbols, next_id, depth + 1, inner);
                 }
             }
             _ => {
                 // The pieces of a converted table or symbol get their ids there.
-                if let Some(kind) = self.curves_kind_depth(symbols, next_id, depth) {
+                if let Some(kind) = self.curves_kind_depth(symbols, next_id, depth, bake) {
                     self.kind = kind;
                     self.node_types.clear();
                     self.spline = None;
+                    self.spline_fixed.clear();
+                    self.common_shape = None;
+                }
+                if bake && !container {
+                    if let Some(b) = crate::live::bake_outline_warps(self) {
+                        *self = b;
+                    }
                 }
             }
         }
@@ -2668,6 +5236,150 @@ impl Shape {
             }
             _ => self.local_path(),
         }
+    }
+
+    /// `self` is or holds (in groups and clip frames, up to eight levels
+    /// deep) a symbol instance.
+    pub fn holds_symbol_instance(&self) -> bool {
+        const DEEPEST: usize = 8;
+        fn holds(s: &Shape, depth: usize) -> bool {
+            depth <= DEEPEST
+                && match &s.kind {
+                    ShapeKind::SymbolInstance { .. } => true,
+                    ShapeKind::Group { children } => children.iter().any(|c| holds(c, depth + 1)),
+                    ShapeKind::ClipFrame { frame, contents } => {
+                        holds(frame, depth + 1) || contents.iter().any(|c| holds(c, depth + 1))
+                    }
+                    _ => false,
+                }
+        }
+        holds(self, 0)
+    }
+
+    /// `self` with every symbol instance it is or holds (in groups, clip
+    /// frames and nested symbol definitions, up to eight levels deep)
+    /// replaced by its symbol's objects placed as the instance places
+    /// them. `None` when `self` holds no instance.
+    pub fn with_symbols_drawn(&self, symbols: &[Symbol]) -> Option<Shape> {
+        fn drawn(s: &Shape, symbols: &[Symbol], depth: usize) -> Shape {
+            const DEEPEST: usize = 8;
+            if depth > DEEPEST {
+                return s.clone();
+            }
+            match &s.kind {
+                ShapeKind::SymbolInstance { .. } => match s.expand(symbols).into_iter().next() {
+                    Some(exp) => {
+                        let mut d = drawn(&exp, symbols, depth + 1);
+                        d.absorb(s.transform);
+                        if !s.effects.is_empty() {
+                            let mut g = s.clone();
+                            g.kind = ShapeKind::Group { children: vec![d] };
+                            g.transform = Affine::IDENTITY;
+                            g
+                        } else {
+                            d.id = s.id;
+                            d
+                        }
+                    }
+                    None => s.clone(),
+                },
+                ShapeKind::Group { children } => {
+                    let mut g = s.clone();
+                    g.kind = ShapeKind::Group {
+                        children: children
+                            .iter()
+                            .map(|c| drawn(c, symbols, depth + 1))
+                            .collect(),
+                    };
+                    g
+                }
+                ShapeKind::ClipFrame { frame, contents } => {
+                    let mut c = s.clone();
+                    c.kind = ShapeKind::ClipFrame {
+                        frame: Box::new(drawn(frame, symbols, depth + 1)),
+                        contents: contents
+                            .iter()
+                            .map(|k| drawn(k, symbols, depth + 1))
+                            .collect(),
+                    };
+                    c
+                }
+                _ => s.clone(),
+            }
+        }
+        self.holds_symbol_instance()
+            .then(|| drawn(self, symbols, 0))
+    }
+
+    /// Apply `t` to the object (in the space its transform maps to): its
+    /// transform, and the places its live effects hold (those switched
+    /// off too), such as a symmetry's mirror lines, which go with it (see
+    /// [`crate::live::carry_effects`]).
+    pub fn transform_by(&mut self, t: Affine) {
+        self.transform = t * self.transform;
+        self.carry_effects(t);
+    }
+
+    /// The fountain fills and gradient transparencies of the object and of
+    /// the objects inside it carried along with `t`, a page-space
+    /// transformation about to be applied to it; `parent` maps its space
+    /// to the page. The fills are placed on the page box of each object,
+    /// so without this a turned or mirrored object kept its gradient
+    /// running the old way (#775).
+    pub fn carry_fills(&mut self, t: Affine, parent: Affine) {
+        let to_page = parent * self.transform;
+        match &mut self.kind {
+            ShapeKind::Group { children } => {
+                for c in children {
+                    c.carry_fills(t, to_page);
+                }
+            }
+            ShapeKind::ClipFrame { frame, contents } => {
+                frame.carry_fills(t, to_page);
+                for c in contents {
+                    c.carry_fills(t, to_page);
+                }
+            }
+            _ => {}
+        }
+        let gradient = |f: &Fill| matches!(f, Fill::Fountain(_));
+        let masks = |e: &crate::live::Effect| matches!(e, crate::live::Effect::Transparency { mask, .. } if gradient(mask));
+        if !gradient(&self.fill) && !self.effects.iter().any(masks) {
+            return;
+        }
+        let path = to_page * self.local_path();
+        let before = path.bounding_box();
+        let after = (t * path).bounding_box();
+        self.fill.carry(t, before, after);
+        for e in &mut self.effects {
+            if let crate::live::Effect::Transparency { mask, .. } = e {
+                mask.carry(t, before, after);
+            }
+        }
+    }
+
+    /// Keep the object's fountain fill and gradient transparency where
+    /// they lie on the page while its outline changes and its page box
+    /// goes from `before` to `after` (#1491): moving nodes or cropping cuts
+    /// them instead of squeezing them into the new box.
+    pub fn keep_paint_in_place(&mut self, before: Rect, after: Rect) {
+        self.fill.keep_in_place(before, after);
+        for e in self
+            .effects
+            .iter_mut()
+            .chain(self.parked_effects.iter_mut().map(|p| &mut p.effect))
+        {
+            if let crate::live::Effect::Transparency { mask, .. } = e {
+                mask.keep_in_place(before, after);
+            }
+        }
+    }
+
+    /// The places the object's live effects hold, those switched off too,
+    /// moved by `t` (see [`crate::live::carry_effects`]).
+    pub fn carry_effects(&mut self, t: Affine) {
+        crate::live::carry_effects(&mut self.effects, t);
+        crate::live::carry_effects(self.parked_effects.iter_mut().map(|p| &mut p.effect), t);
     }
 
     /// Outline in page coordinates (transform applied).
@@ -2696,7 +5408,141 @@ impl Shape {
     /// Axis-aligned bounds in page coordinates, ignoring outline width.
     /// Paragraph text counts its whole frame (empty or not), and a group
     /// the bounds of its objects.
+    /// The page box of a text object from the box the text engine keeps
+    /// with its outline, when the object is neither turned nor skewed
+    /// (the box then maps onto the page box exactly); `None` otherwise or
+    /// for other objects. Asking for the outline itself copies all of its
+    /// points, which in a drawing of long, large text took most of every
+    /// frame: the box is asked for many times a frame (#802).
+    fn text_bounds(&self) -> Option<Rect> {
+        let ShapeKind::Text {
+            spans,
+            origin,
+            frame,
+            align,
+            para,
+            on_path,
+        } = &self.kind
+        else {
+            return None;
+        };
+        let req = text_outline::TextRequest {
+            spans,
+            frame: *frame,
+            align: *align,
+            para,
+            on_path: on_path.as_ref(),
+        };
+        let local = if on_path.is_some() {
+            Affine::translate(origin.to_vec2())
+        } else {
+            text_layout_shift(*origin, *frame, false, para.columns_from_right())
+        };
+        let m = self.transform * local;
+        let [a, b, c, d, _, _] = m.as_coeffs();
+        let scale = a.abs().max(d.abs()).max(1e-12);
+        if b.abs() > 1e-12 * scale || c.abs() > 1e-12 * scale {
+            return None;
+        }
+        let r = text_outline::bounds(&req)?;
+        let (p, q) = (m * Point::new(r.x0, r.y0), m * Point::new(r.x1, r.y1));
+        let out = Rect::from_points(p, q);
+        (out.x0.is_finite() && out.y0.is_finite() && out.x1.is_finite() && out.y1.is_finite())
+            .then_some(out)
+    }
+
     pub fn bounds(&self) -> Rect {
+        self.bounds_under(Affine::IDENTITY)
+    }
+
+    /// The exact box of the shape in its own (local) coordinates. Kinds
+    /// that know their box answer without an outline; a curve's box is
+    /// read off its stored path, not off a copy of it.
+    pub fn local_bounds(&self) -> Rect {
+        match &self.kind {
+            ShapeKind::Path { path, .. } => path.bounding_box(),
+            ShapeKind::Group { children } => {
+                // A member that draws nothing takes no room, as in
+                // [`Shape::bounds_under`] (#996).
+                children
+                    .iter()
+                    .filter(|c| !c.is_empty_path())
+                    .map(|c| c.bounds())
+                    .reduce(|a, b| a.union(b))
+                    .unwrap_or_else(|| self.local_path().bounding_box())
+            }
+            ShapeKind::ClipFrame { frame, .. } => frame.bounds(),
+            // A text's box from the engine's cached outline box, moved as
+            // `local_path` moves the outline (a plain shift): copying the
+            // outline of every letter only to measure it cost most of the
+            // time on drawings with thousands of labels (#4192).
+            ShapeKind::Text {
+                spans,
+                origin,
+                frame,
+                align,
+                para,
+                on_path,
+            } => {
+                let req = text_outline::TextRequest {
+                    spans,
+                    frame: *frame,
+                    align: *align,
+                    para,
+                    on_path: on_path.as_ref(),
+                };
+                let shift = if on_path.is_some() {
+                    Affine::translate(origin.to_vec2())
+                } else {
+                    text_layout_shift(*origin, *frame, false, para.columns_from_right())
+                };
+                match text_outline::bounds(&req) {
+                    Some(r) => shift.transform_rect_bbox(r),
+                    None => self.local_path().bounding_box(),
+                }
+            }
+            _ => match self.kind.known_box() {
+                Some(r) => r,
+                None => self.local_path().bounding_box(),
+            },
+        }
+    }
+
+    /// [`Shape::bounds`] with `outer` applied on top of the shape's own
+    /// transformation. A group passes its transformation down instead of
+    /// copying each member with it: the copy took the member's whole
+    /// subtree, so groups nested deep were copied once per level, which
+    /// on a drawing of a million nested objects ran out of memory (#3340).
+    fn bounds_under(&self, outer: Affine) -> Rect {
+        match &self.kind {
+            ShapeKind::Group { children } => {
+                // A member that draws nothing (an empty curve, such as a
+                // dimension's arrowheads when it has none) takes no room:
+                // its box would stretch the group's to the origin (#996).
+                let t = outer * self.transform;
+                children
+                    .iter()
+                    .filter(|c| !c.is_empty_path())
+                    .map(|c| c.bounds_under(t))
+                    .reduce(|a, b| a.union(b))
+                    .unwrap_or_else(|| (outer * self.page_path()).bounding_box())
+            }
+            _ if outer == Affine::IDENTITY => self.own_bounds(),
+            // A curve's box from its own segments, each placed as it is
+            // measured: the whole curve was copied (and copied again with
+            // its transformation) for every box asked for, a cost on long
+            // curves many times a frame (#3559).
+            ShapeKind::Path { path, .. } => path_bounds_under(path, outer * self.transform),
+            _ => {
+                let mut c = self.clone();
+                c.transform = outer * c.transform;
+                c.own_bounds()
+            }
+        }
+    }
+
+    /// [`Shape::bounds`] of an object that is not a group.
+    fn own_bounds(&self) -> Rect {
         match &self.kind {
             ShapeKind::Text {
                 origin,
@@ -2711,6 +5557,9 @@ impl Shape {
                     origin.y + f.height.max(0.0),
                 );
                 let fb = (self.transform * frame.to_path(0.01)).bounding_box();
+                if let Some(tb) = self.text_bounds() {
+                    return tb.union(fb);
+                }
                 let path = self.page_path();
                 if path.elements().is_empty() {
                     fb
@@ -2718,17 +5567,23 @@ impl Shape {
                     path.bounding_box().union(fb)
                 }
             }
-            ShapeKind::Group { children } => children
-                .iter()
-                .map(|c| {
-                    let mut c = c.clone();
-                    c.transform = self.transform * c.transform;
-                    c.bounds()
-                })
-                .reduce(|a, b| a.union(b))
+            ShapeKind::Text { .. } => self
+                .text_bounds()
                 .unwrap_or_else(|| self.page_path().bounding_box()),
-            _ => self.page_path().bounding_box(),
+            ShapeKind::Path { path, .. } => path_bounds_under(path, self.transform),
+            // A rectangle, a whole ellipse, a bitmap, a table or a
+            // symbol's box is known without an outline; a move, scale or
+            // mirror (no turn or skew) maps the box exactly.
+            _ => match self.kind.known_box().filter(|_| axis_aligned(self.transform)) {
+                Some(r) => self.transform.transform_rect_bbox(r),
+                None => self.page_path().bounding_box(),
+            },
         }
+    }
+
+    /// A curve with no segments: it draws nothing.
+    pub fn is_empty_path(&self) -> bool {
+        matches!(&self.kind, ShapeKind::Path { path, .. } if path.elements().is_empty())
     }
 
     /// The frame of paragraph text in page space (its four corners, the
@@ -2755,6 +5610,16 @@ impl Shape {
     }
 }
 
+/// The box of `path` placed by `t`, the same as
+/// `(t * path).bounding_box()` without copying the curve: each segment is
+/// placed and measured on its own (#3559).
+fn path_bounds_under(path: &BezPath, t: Affine) -> Rect {
+    path.segments()
+        .map(|seg| (t * seg).bounding_box())
+        .reduce(|a, b| a.union(b))
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
     pub id: LayerId,
@@ -2767,6 +5632,19 @@ pub struct Layer {
     /// For master layers: which pages show this layer.
     #[serde(default)]
     pub scope: MasterScope,
+    /// For master layers: the document positions where the layer appears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_range: Option<PageRanges>,
+    /// For master layers: drawn in front of the page's own layers
+    /// instead of behind them (#1132).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub in_front: bool,
+    /// For master layers: the master page's desktop layer, which every
+    /// new drawing has: objects on it, beside the pages or on them, show
+    /// and are picked from every page (#1161, #1775). Always behind the
+    /// pages, not counted among the numbered master layers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub desktop: bool,
 }
 
 /// Which pages a master layer appears on.
@@ -2808,6 +5686,64 @@ pub struct ObjectStyle {
     /// The transparency part: opacity, 1 being opaque.
     #[serde(default = "one")]
     pub opacity: f64,
+    /// The text parts (#4235): the characters' look and the paragraphs'
+    /// layout, taken from a text object. Not in older files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<Box<StyleText>>,
+}
+
+/// What an object style holds for text (#4235).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StyleText {
+    /// The character part: font, size, bold and italic, spacing, width,
+    /// lines, capitals and the characters' own colour; its text unused.
+    pub character: TextSpan,
+    /// The paragraph part: the alignment and the paragraph settings
+    /// (spacing, indents, tabs, bullets, columns).
+    pub align: TextAlign,
+    pub para: ParagraphStyle,
+}
+
+impl StyleText {
+    /// The text parts of a text object: its first run's character look,
+    /// its alignment and paragraph settings.
+    pub fn of(shape: &Shape) -> Option<StyleText> {
+        let ShapeKind::Text {
+            spans, align, para, ..
+        } = &shape.kind
+        else {
+            return None;
+        };
+        let mut character = spans.first()?.clone();
+        character.text.clear();
+        character.paragraph = None;
+        Some(StyleText {
+            character,
+            align: *align,
+            para: para.clone(),
+        })
+    }
+
+    /// Give every run of `spans` the character part, keeping its text.
+    fn apply_character(&self, spans: &mut [TextSpan]) {
+        let c = &self.character;
+        for s in spans {
+            s.font_family = c.font_family.clone();
+            s.size_pt = c.size_pt;
+            s.bold = c.bold;
+            s.italic = c.italic;
+            s.tracking_pct = c.tracking_pct;
+            s.width_pct = c.width_pct;
+            s.underline = c.underline;
+            s.strikethrough = c.strikethrough;
+            s.all_caps = c.all_caps;
+            s.fill = c.fill.clone();
+            s.outline = c.outline.clone();
+            s.background = c.background.clone();
+            s.features = c.features.clone();
+            s.variations = c.variations.clone();
+        }
+    }
 }
 
 /// Which properties an object style sets.
@@ -2817,6 +5753,10 @@ pub struct StyleParts {
     pub fill: bool,
     pub outline: bool,
     pub transparency: bool,
+    /// The text parts (#4235): the characters' look, and the paragraphs'
+    /// alignment and settings. Off in older files.
+    pub character: bool,
+    pub paragraph: bool,
 }
 
 impl Default for StyleParts {
@@ -2826,14 +5766,18 @@ impl Default for StyleParts {
             fill: true,
             outline: true,
             transparency: false,
+            character: false,
+            paragraph: false,
         }
     }
 }
 
 impl ObjectStyle {
-    /// A style named `name` with the fill and outline of `shape`, and its
-    /// transparency when it has some.
+    /// A style named `name` with the fill and outline of `shape`, its
+    /// transparency when it has some, and of a text object its character
+    /// and paragraph parts (#4235).
     pub fn from_shape(name: impl Into<String>, shape: &Shape) -> ObjectStyle {
+        let text = StyleText::of(shape);
         ObjectStyle {
             name: name.into(),
             fill: shape.fill.clone(),
@@ -2843,8 +5787,22 @@ impl ObjectStyle {
                 fill: true,
                 outline: true,
                 transparency: shape.opacity < 1.0,
+                character: text.is_some(),
+                paragraph: text.is_some(),
             },
             opacity: shape.opacity,
+            text: text.map(Box::new),
+        }
+    }
+
+    /// Take the parts' values from `shape` (Update from selection): its
+    /// fill, outline and opacity, and of a text object its text parts.
+    pub fn update_from(&mut self, shape: &Shape) {
+        self.fill = shape.fill.clone();
+        self.stroke = shape.stroke.clone();
+        self.opacity = shape.opacity;
+        if let Some(t) = StyleText::of(shape) {
+            self.text = Some(Box::new(t));
         }
     }
 
@@ -2858,6 +5816,18 @@ impl ObjectStyle {
         }
         if self.parts.transparency {
             shape.opacity = self.opacity.clamp(0.0, 1.0);
+        }
+        // The text parts reach text objects only.
+        if let (Some(t), ShapeKind::Text { spans, align, para, .. }) =
+            (self.text.as_deref(), &mut shape.kind)
+        {
+            if self.parts.character {
+                t.apply_character(spans);
+            }
+            if self.parts.paragraph {
+                *align = t.align;
+                *para = t.para.clone();
+            }
         }
     }
 }
@@ -2881,6 +5851,70 @@ pub struct ObjectDefaults {
 pub struct DefaultProperties {
     pub fill: Fill,
     pub stroke: Option<Stroke>,
+    /// Which of the fill and outline colours are the untouched default
+    /// black, the one that follows the drawing's colour mode (see
+    /// [`ObjectDefaults::in_mode`]); a colour the user picked is never
+    /// marked. `None` in files and settings from before the mark: see
+    /// [`DefaultProperties::follows`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow: Option<FollowBlack>,
+}
+
+/// The parts of one kind's defaults that are the default black and
+/// follow the drawing's colour mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FollowBlack {
+    pub fill: bool,
+    pub outline: bool,
+}
+
+/// The blacks of the two colour modes.
+fn mode_blacks() -> [crate::Color; 2] {
+    [
+        PrimaryColorMode::Cmyk.black(),
+        PrimaryColorMode::Rgb.black(),
+    ]
+}
+
+impl DefaultProperties {
+    /// Which parts follow the drawing's black. Defaults saved before the
+    /// mark existed carry none; for them a black (CMYK 100 % K or RGB
+    /// black) where the built-in defaults put one counts as the
+    /// untouched default and follows: the outline of graphics and the
+    /// fill of text. Any other colour, and a black anywhere else, counts
+    /// as chosen.
+    pub fn follows(&self, kind: DefaultKind) -> FollowBlack {
+        if let Some(f) = self.follow {
+            return f;
+        }
+        let black = |c: &crate::Color| mode_blacks().contains(c);
+        match kind {
+            DefaultKind::Graphic => FollowBlack {
+                fill: false,
+                outline: self.stroke.as_ref().is_some_and(|s| black(&s.color)),
+            },
+            DefaultKind::ArtisticText | DefaultKind::ParagraphText => FollowBlack {
+                fill: matches!(&self.fill, Fill::Solid(c) if black(c)),
+                outline: false,
+            },
+        }
+    }
+
+    /// The fill is the user's own from now on (picked, even when it is
+    /// the same black).
+    pub fn choose_fill(&mut self, kind: DefaultKind) {
+        let mut f = self.follows(kind);
+        f.fill = false;
+        self.follow = Some(f);
+    }
+
+    /// The outline colour is the user's own from now on.
+    pub fn choose_outline(&mut self, kind: DefaultKind) {
+        let mut f = self.follows(kind);
+        f.outline = false;
+        self.follow = Some(f);
+    }
 }
 
 /// The kinds of new objects with their own defaults.
@@ -2917,27 +5951,91 @@ impl Default for ObjectDefaults {
 }
 
 impl ObjectDefaults {
-    /// Graphics: no fill and a 0.2 mm CMYK black outline; text: a black
-    /// fill in the drawing's primary colour mode (CMYK or RGB black) and
-    /// no outline.
+    /// Graphics: no fill and a 0.2 mm black outline; text: a black fill
+    /// and no outline. The black is the one of the drawing's primary
+    /// colour mode (100 % K in CMYK, RGB black in RGB).
     pub fn for_mode(mode: PrimaryColorMode) -> Self {
         let text = DefaultProperties {
             fill: Fill::Solid(mode.black()),
             stroke: None,
+            follow: Some(FollowBlack {
+                fill: true,
+                outline: false,
+            }),
         };
         ObjectDefaults {
             graphic: DefaultProperties {
                 fill: Fill::None,
                 stroke: Some(Stroke {
-                    color: crate::Color::cmyk_pct(0.0, 0.0, 0.0, 100.0),
+                    color: mode.black(),
                     width: 0.2,
                     ..Stroke::default()
+                }),
+                follow: Some(FollowBlack {
+                    fill: false,
+                    outline: true,
                 }),
             },
             artistic_text: text.clone(),
             paragraph_text: text,
             paragraph: ParagraphStyle::default(),
         }
+    }
+
+    /// These defaults as a drawing in `mode` takes them: a fill or
+    /// outline that is still the untouched default black (see
+    /// [`DefaultProperties::follows`]) becomes the mode's black, so new
+    /// objects are black in the drawing's own colour mode; a colour the
+    /// user picked, black or not, and everything else, stays exactly as
+    /// saved. The marks come out filled in.
+    pub fn in_mode(&self, mode: PrimaryColorMode) -> Self {
+        let mut out = self.clone();
+        for kind in DefaultKind::ALL {
+            let props = out.get_mut(kind);
+            let follow = props.follows(kind);
+            props.follow = Some(follow);
+            let to_mode = |c: &mut crate::Color| {
+                if mode_blacks().contains(c) {
+                    *c = mode.black();
+                }
+            };
+            if follow.fill {
+                if let Fill::Solid(c) = &mut props.fill {
+                    to_mode(c);
+                }
+            }
+            if follow.outline {
+                if let Some(stroke) = &mut props.stroke {
+                    to_mode(&mut stroke.color);
+                }
+            }
+        }
+        out
+    }
+
+    /// `self`, about to replace `before`, with the marks kept honest: a
+    /// part still marked as following the default black only because the
+    /// mark was copied along with the rest loses it when its colour
+    /// changed (the user picked another colour); a mark set afresh (a
+    /// reset to the defaults of the mode) stays. A width or anything
+    /// else changing leaves the mark.
+    pub fn settled(&self, before: &ObjectDefaults) -> Self {
+        let mut out = self.clone();
+        for kind in DefaultKind::ALL {
+            let old = before.get(kind);
+            let props = out.get_mut(kind);
+            let was = old.follows(kind);
+            let mut now = props.follows(kind);
+            if was.fill && now.fill && props.fill != old.fill {
+                now.fill = false;
+            }
+            let color = |s: &Option<Stroke>| s.as_ref().map(|s| s.color);
+            if was.outline && now.outline && color(&props.stroke) != color(&old.stroke) {
+                now.outline = false;
+            }
+            props.follow = Some(now);
+        }
+        out
     }
 }
 
@@ -2981,9 +6079,13 @@ impl ParagraphStyle {
         to.tabs = self.tabs.clone();
         to.columns = self.columns;
         to.gutter = self.gutter;
+        to.column_widths = self.column_widths.clone();
+        to.column_gutters = self.column_gutters.clone();
+        to.columns_right_to_left = self.columns_right_to_left;
         to.bullets = self.bullets;
         to.bullet_char = self.bullet_char.clone();
         to.bullet_indent = self.bullet_indent;
+        to.bullet = self.bullet.clone();
         to.drop_cap_lines = self.drop_cap_lines;
     }
 }
@@ -2998,11 +6100,123 @@ pub struct ColorStyle {
     pub harmony: Option<String>,
 }
 
+/// The data key of a clip frame whose transparency fades the frame's own
+/// fill and outline only, the objects inside keeping their own opacity
+/// (#4360: as `.cdr` files draw a see-through container).
+pub const CLIP_CONTENTS_OPAQUE: &str = "clip.contents_opaque";
+
 /// A symbol definition; instances reference it by index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Symbol {
     pub name: String,
     pub shape: Shape,
+}
+
+/// Whether `shape` draws an instance of symbol `index`, directly or
+/// through the definitions of the symbols it draws (Edit Symbol refuses
+/// such a definition: it would draw itself without end). Symbols met
+/// once are not walked again, so a cycle already in a file ends.
+pub fn draws_symbol(shape: &Shape, index: usize, symbols: &[Symbol]) -> bool {
+    fn walk(s: &Shape, index: usize, symbols: &[Symbol], seen: &mut Vec<bool>) -> bool {
+        match &s.kind {
+            ShapeKind::SymbolInstance { index: i } => {
+                if *i == index {
+                    return true;
+                }
+                match (symbols.get(*i), seen.get_mut(*i)) {
+                    (Some(sym), Some(flag)) if !*flag => {
+                        *flag = true;
+                        walk(&sym.shape, index, symbols, seen)
+                    }
+                    _ => false,
+                }
+            }
+            ShapeKind::Group { children } => children.iter().any(|c| walk(c, index, symbols, seen)),
+            ShapeKind::ClipFrame { frame, contents } => {
+                walk(frame, index, symbols, seen)
+                    || contents.iter().any(|c| walk(c, index, symbols, seen))
+            }
+            _ => false,
+        }
+    }
+    let mut seen = vec![false; symbols.len()];
+    walk(shape, index, symbols, &mut seen)
+}
+
+/// The most objects one symbol stands for, the objects of the symbols
+/// it draws counted in: more is a file built to never finish drawing.
+pub const SYMBOL_MAX_OBJECTS: u64 = 1_000_000;
+
+/// The most symbols one symbol draws inside one another.
+pub const SYMBOL_MAX_NESTING: usize = 64;
+
+impl Document {
+    /// Turn every instance in a symbol that would draw without end, or
+    /// far past what any drawing holds, into an empty group in its place.
+    /// A file whose symbol drew itself (directly or through another one)
+    /// overflowed the stack and ended the program when drawn, and one of
+    /// 40 symbols each drawing the one before twice stood for a trillion
+    /// objects and never finished. Edit Symbol already refuses a symbol
+    /// drawing itself; this mends a file made elsewhere.
+    pub fn break_symbol_loops(&mut self) {
+        const OPEN: u64 = u64::MAX;
+        // Objects each symbol stands for; OPEN while it is being walked.
+        let mut size: Vec<Option<u64>> = vec![None; self.symbols.len()];
+        fn symbol(i: usize, syms: &mut [Symbol], size: &mut [Option<u64>], depth: usize) -> u64 {
+            if let Some(n) = size[i] {
+                return n;
+            }
+            size[i] = Some(OPEN);
+            let mut shape = std::mem::replace(
+                &mut syms[i].shape,
+                Shape::new(
+                    ShapeId(0),
+                    ShapeKind::Group {
+                        children: Vec::new(),
+                    },
+                ),
+            );
+            let n = walk(&mut shape, syms, size, depth);
+            syms[i].shape = shape;
+            size[i] = Some(n);
+            n
+        }
+        fn walk(s: &mut Shape, syms: &mut [Symbol], size: &mut [Option<u64>], depth: usize) -> u64 {
+            let n = match &mut s.kind {
+                ShapeKind::SymbolInstance { index } => {
+                    let i = *index;
+                    if i >= syms.len() {
+                        return 1;
+                    }
+                    let n = match size[i] {
+                        Some(OPEN) => OPEN,
+                        _ if depth >= SYMBOL_MAX_NESTING => OPEN,
+                        _ => symbol(i, syms, size, depth + 1),
+                    };
+                    if n > SYMBOL_MAX_OBJECTS {
+                        s.kind = ShapeKind::Group {
+                            children: Vec::new(),
+                        };
+                        return 1;
+                    }
+                    n
+                }
+                ShapeKind::Group { children } => children
+                    .iter_mut()
+                    .fold(0u64, |a, c| a.saturating_add(walk(c, syms, size, depth))),
+                ShapeKind::ClipFrame { frame, contents } => contents
+                    .iter_mut()
+                    .fold(walk(frame, syms, size, depth), |a, c| {
+                        a.saturating_add(walk(c, syms, size, depth))
+                    }),
+                _ => 0,
+            };
+            n.saturating_add(1)
+        }
+        for i in 0..self.symbols.len() {
+            symbol(i, &mut self.symbols, &mut size, 0);
+        }
+    }
 }
 
 /// Document properties (File > Document Properties).
@@ -3039,9 +6253,162 @@ pub struct Metadata {
     /// Document Options > General: Auto inflate bitmaps for effects is on
     /// unless this is set.
     pub no_auto_inflate: bool,
+    /// Space between the pages of the Multipage View, mm (Page > Page
+    /// Spacing, Document Setup > Layout); `None`: the default
+    /// [`DEFAULT_PAGE_SPACING`]. Left out of the file while unset, so
+    /// older drawings read and write as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_spacing: Option<f64>,
+    /// Facing pages (Layout > Facing Pages, Document Options > Layout,
+    /// #1972, #1660): the pages show side by side in spreads, see
+    /// [`crate::spreads`]. Left out of the file while off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub facing_pages: bool,
+    /// The side the first page of facing pages sits on: alone on the
+    /// right (the default) or starting a spread on the left.
+    #[serde(skip_serializing_if = "crate::spreads::PageSide::is_right")]
+    pub facing_start: crate::spreads::PageSide,
+    /// The pages the Multipage View shows, as a range of page numbers
+    /// such as "1-3, 7" (#1440); empty: every page. Left out of the file
+    /// while empty.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub multipage_pages: String,
+    /// The page margins for book layouts (Document Setup > Layout,
+    /// #1660): the box the text and pictures of every page keep inside,
+    /// shown on the pages as a dashed frame. `None`: no margins. Left out
+    /// of the file while unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margins: Option<PageMargins>,
 }
 
+/// Page margins, mm (#1660). With facing pages the inside margin lies at
+/// the spine and the outside one at the page's free edge, so they swap
+/// sides between the left and the right pages of a spread; a page shown
+/// alone takes the inside margin on its left, as a right-hand page.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PageMargins {
+    pub top: f64,
+    pub bottom: f64,
+    pub inside: f64,
+    pub outside: f64,
+}
+
+/// The widest page margin taken, mm.
+pub const MAX_PAGE_MARGIN: f64 = 1000.0;
+
+impl PageMargins {
+    /// The same margin all round.
+    pub fn uniform(mm: f64) -> Self {
+        PageMargins {
+            top: mm,
+            bottom: mm,
+            inside: mm,
+            outside: mm,
+        }
+    }
+
+    /// Each margin kept between 0 and [`MAX_PAGE_MARGIN`] (0 for a value
+    /// that is not a number).
+    pub fn clamped(self) -> Self {
+        let c = |v: f64| {
+            if v.is_finite() {
+                v.clamp(0.0, MAX_PAGE_MARGIN)
+            } else {
+                0.0
+            }
+        };
+        PageMargins {
+            top: c(self.top),
+            bottom: c(self.bottom),
+            inside: c(self.inside),
+            outside: c(self.outside),
+        }
+    }
+
+    /// No margin is set.
+    pub fn is_zero(&self) -> bool {
+        let m = self.clamped();
+        m.top == 0.0 && m.bottom == 0.0 && m.inside == 0.0 && m.outside == 0.0
+    }
+
+    /// The box inside the margins of a page whose box is `page` (y up),
+    /// sitting on `side` of a spread: the inside margin at the spine,
+    /// on the right of a left page and on the left of a right page.
+    /// Margins wider than the page leave a box of no width there.
+    pub fn inner(&self, page: Rect, side: crate::spreads::PageSide) -> Rect {
+        let m = self.clamped();
+        let (left, right) = match side {
+            crate::spreads::PageSide::Left => (m.outside, m.inside),
+            crate::spreads::PageSide::Right => (m.inside, m.outside),
+        };
+        let x0 = (page.x0 + left).min(page.x1);
+        let y0 = (page.y0 + m.bottom).min(page.y1);
+        Rect::new(x0, y0, (page.x1 - right).max(x0), (page.y1 - m.top).max(y0))
+    }
+}
+
+/// The pages of `range` ("1-3, 5"; page numbers from 1, ranges either
+/// way round, commas or semicolons between) that exist among `count`,
+/// 0-based, in page order, each once. A part that is not a page number
+/// or a range of them makes the whole range read as none.
+pub fn parse_page_range(range: &str, count: usize) -> Vec<usize> {
+    let mut seen = vec![false; count];
+    for part in range.split([',', ';']) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (a, b) = match part.split_once('-') {
+            Some((a, b)) => (a.trim().parse::<usize>(), b.trim().parse::<usize>()),
+            None => (part.parse::<usize>(), part.parse::<usize>()),
+        };
+        let (Ok(a), Ok(b)) = (a, b) else {
+            return Vec::new();
+        };
+        if a == 0 || b == 0 {
+            return Vec::new();
+        }
+        let (lo, hi) = (a.min(b), a.max(b).min(count));
+        for n in lo..=hi {
+            if let Some(f) = seen.get_mut(n - 1) {
+                *f = true;
+            }
+        }
+    }
+    seen.iter()
+        .enumerate()
+        .filter_map(|(i, f)| f.then_some(i))
+        .collect()
+}
+
+/// The space between pages in the Multipage View when a drawing sets
+/// none, mm.
+pub const DEFAULT_PAGE_SPACING: f64 = 30.0;
+
+/// The largest space between pages the Multipage View takes, mm.
+pub const MAX_PAGE_SPACING: f64 = 1000.0;
+
 impl Metadata {
+    /// The space between the pages of the Multipage View, mm: the
+    /// drawing's own, kept between 0 and [`MAX_PAGE_SPACING`], else the
+    /// default (also for a value that is not a number).
+    pub fn page_spacing(&self) -> f64 {
+        match self.page_spacing {
+            Some(v) if v.is_finite() => v.clamp(0.0, MAX_PAGE_SPACING),
+            _ => DEFAULT_PAGE_SPACING,
+        }
+    }
+
+    /// The pages (0-based, in order) the Multipage View shows of a
+    /// drawing of `count` pages: those of [`Metadata::multipage_pages`],
+    /// or `None` for every page (no range, or one that names no page of
+    /// the drawing).
+    pub fn multipage_page_indices(&self, count: usize) -> Option<Vec<usize>> {
+        let pages = parse_page_range(&self.multipage_pages, count);
+        (!pages.is_empty()).then_some(pages)
+    }
+
     /// Bitmap effects that spread past the edges grow the bitmap first.
     pub fn auto_inflate_bitmaps(&self) -> bool {
         !self.no_auto_inflate
@@ -3064,9 +6431,215 @@ impl PrimaryColorMode {
             PrimaryColorMode::Rgb => crate::Color::BLACK,
         }
     }
+
+    /// A grey of `k` % black in this mode: `k` % K in CMYK, the RGB grey
+    /// that light in RGB (#3006).
+    pub fn gray(self, k: f32) -> crate::Color {
+        match self {
+            PrimaryColorMode::Cmyk => crate::Color::cmyk_pct(0.0, 0.0, 0.0, k),
+            PrimaryColorMode::Rgb => {
+                let v = (1.0 - k / 100.0).clamp(0.0, 1.0);
+                crate::Color::Rgb { r: v, g: v, b: v }
+            }
+        }
+    }
+}
+
+/// How a page number field shows the number (Layout > Insert Page
+/// Number): the number of the first page, the style and the text around
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageNumberField {
+    pub start_at: i64,
+    /// The page (1-based) that shows `start_at`; the pages before it,
+    /// such as covers, show no number (#2127).
+    #[serde(default = "first_numbered_page")]
+    pub first_page: usize,
+    /// 0 arabic, 1 upper roman, 2 lower roman, 3 upper alpha, 4 lower alpha.
+    pub style: u8,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub suffix: String,
+    /// The last pages, this many of them, show no number, such as a back
+    /// cover (#3789).
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub skip_last: usize,
+    /// Pages left without a number ("5, 9-10", from 1); the numbering
+    /// goes on after them without counting them (#3789).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub skip: String,
+}
+
+fn first_numbered_page() -> usize {
+    1
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
+}
+
+impl Default for PageNumberField {
+    fn default() -> Self {
+        PageNumberField {
+            start_at: 1,
+            first_page: 1,
+            style: 0,
+            prefix: String::new(),
+            suffix: String::new(),
+            skip_last: 0,
+            skip: String::new(),
+        }
+    }
+}
+
+impl PageNumberField {
+    /// The page at `index` (0-based) shows a number: it is not one of
+    /// the pages before the first numbered page (#2127).
+    pub fn numbers(&self, index: usize) -> bool {
+        self.numbers_in(index, usize::MAX)
+    }
+
+    /// The page at `index` (0-based) of a drawing of `pages` pages shows
+    /// a number: it is not before the first numbered page (#2127), nor
+    /// one of the last pages left out or one of the pages listed to skip
+    /// (#3789).
+    pub fn numbers_in(&self, index: usize, pages: usize) -> bool {
+        index + 1 >= self.first_page.max(1)
+            && index < pages.saturating_sub(self.skip_last)
+            && !self.skips(index)
+    }
+
+    /// The page at `index` is one of the pages listed to skip.
+    fn skips(&self, index: usize) -> bool {
+        !self.skip.trim().is_empty() && parse_page_range(&self.skip, index + 1).contains(&index)
+    }
+
+    /// The text for the page at `index` (0-based): empty on the pages
+    /// before the first numbered page (#2127).
+    pub fn label(&self, index: usize) -> String {
+        self.label_in(index, usize::MAX)
+    }
+
+    /// The text for the page at `index` (0-based) of a drawing of `pages`
+    /// pages: empty on a page that shows no number; the pages skipped
+    /// before it are not counted (#3789).
+    pub fn label_in(&self, index: usize, pages: usize) -> String {
+        if !self.numbers_in(index, pages) {
+            return String::new();
+        }
+        let first = self.first_page.max(1) - 1;
+        let skipped = if self.skip.trim().is_empty() {
+            0
+        } else {
+            parse_page_range(&self.skip, index + 1)
+                .into_iter()
+                .filter(|i| *i >= first && *i < index)
+                .count()
+        };
+        let n = self.start_at + index as i64 - first as i64 - skipped as i64;
+        let body = match self.style {
+            1 => roman(n),
+            2 => roman(n).to_lowercase(),
+            3 => alpha(n),
+            4 => alpha(n).to_lowercase(),
+            _ => n.to_string(),
+        };
+        format!("{}{}{}", self.prefix, body, self.suffix)
+    }
+}
+
+fn roman(mut n: i64) -> String {
+    if n <= 0 {
+        return n.to_string();
+    }
+    const T: [(i64, &str); 13] = [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut out = String::new();
+    for (v, s) in T {
+        while n >= v {
+            out.push_str(s);
+            n -= v;
+        }
+    }
+    out
+}
+
+fn alpha(n: i64) -> String {
+    if n <= 0 {
+        return n.to_string();
+    }
+    // A..Z, then AA, AB... like spreadsheet columns.
+    let mut n = n - 1;
+    let mut out = Vec::new();
+    loop {
+        out.push((b'A' + (n % 26) as u8) as char);
+        n /= 26;
+        if n == 0 {
+            break;
+        }
+        n -= 1;
+    }
+    out.iter().rev().collect()
+}
+
+impl Shape {
+    /// This object, or one inside it, is a page number field.
+    pub fn holds_page_number(&self) -> bool {
+        self.page_number.is_some()
+            || match &self.kind {
+                ShapeKind::Group { children } => children.iter().any(Shape::holds_page_number),
+                _ => false,
+            }
+    }
+
+    /// Page number fields in this object show the number of the page at
+    /// `index` (0-based).
+    pub fn show_page_number(&mut self, index: usize) {
+        self.show_page_number_of(index, usize::MAX);
+    }
+
+    /// Page number fields in this object show the number of the page at
+    /// `index` (0-based) of a drawing of `pages` pages (#3789).
+    pub fn show_page_number_of(&mut self, index: usize, pages: usize) {
+        if let (Some(f), ShapeKind::Text { spans, .. }) = (&self.page_number, &mut self.kind) {
+            let label = f.label_in(index, pages);
+            spans.truncate(1);
+            if let Some(first) = spans.first_mut() {
+                first.text = label;
+            }
+        }
+        if let ShapeKind::Group { children } = &mut self.kind {
+            for c in children {
+                c.show_page_number_of(index, pages);
+            }
+        }
+    }
 }
 
 impl Layer {
+    /// Whether this master layer appears at the 0-based page position.
+    pub fn applies_to(&self, index: usize) -> bool {
+        self.scope.applies(index)
+            && self
+                .page_range
+                .as_ref()
+                .is_none_or(|range| range.contains(index))
+    }
+
     pub fn master(id: LayerId, name: impl Into<String>, scope: MasterScope) -> Self {
         let mut l = Layer::new(id, name);
         l.scope = scope;
@@ -3082,6 +6655,9 @@ impl Layer {
             locked: false,
             shapes: Vec::new(),
             scope: MasterScope::All,
+            page_range: None,
+            in_front: false,
+            desktop: false,
         }
     }
 }
@@ -3204,7 +6780,7 @@ impl GuideStyle {
 
 /// A guideline on a page: its line, and how it looks. A guideline
 /// without its own colour uses the document's default guideline colour.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Guide {
     #[serde(flatten)]
     pub line: GuideLine,
@@ -3215,6 +6791,64 @@ pub struct Guide {
     /// Locked guidelines can be selected but not moved or deleted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
+    /// Hidden by its own eye in the Objects docker: not drawn, picked
+    /// or snapped to, while the others of its set show (#1775).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    /// The name given in the Objects docker (Rename), shown in its row
+    /// instead of where the guideline is (#3574).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// A margin or bleed guideline of a preset: the page edge it keeps
+    /// its distance from, so it follows that edge when the page is
+    /// resized (#4268).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<GuideAnchor>,
+}
+
+/// The page edge a preset guideline keeps its distance from (#4268).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuideEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// A guideline's distance from a page edge, mm, inward (negative:
+/// outside the page, as bleed guidelines are).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GuideAnchor {
+    pub edge: GuideEdge,
+    pub distance: f64,
+}
+
+impl GuideAnchor {
+    /// The line at this distance from the edge of a page of `size`.
+    pub fn line(&self, size: crate::geometry::Size) -> GuideLine {
+        match self.edge {
+            GuideEdge::Left => GuideLine::Vertical { x: self.distance },
+            GuideEdge::Right => GuideLine::Vertical {
+                x: size.width - self.distance,
+            },
+            GuideEdge::Bottom => GuideLine::Horizontal { y: self.distance },
+            GuideEdge::Top => GuideLine::Horizontal {
+                y: size.height - self.distance,
+            },
+        }
+    }
+
+    /// The same distance from the opposite side edge: the left and right
+    /// margins of a page facing the other way.
+    pub fn mirrored(&self) -> GuideAnchor {
+        let edge = match self.edge {
+            GuideEdge::Left => GuideEdge::Right,
+            GuideEdge::Right => GuideEdge::Left,
+            e => e,
+        };
+        GuideAnchor { edge, ..*self }
+    }
 }
 
 impl From<GuideLine> for Guide {
@@ -3224,6 +6858,9 @@ impl From<GuideLine> for Guide {
             color: None,
             style: GuideStyle::default(),
             locked: false,
+            hidden: false,
+            name: None,
+            anchor: None,
         }
     }
 }
@@ -3251,13 +6888,24 @@ impl Guide {
     pub fn through(&self, p: crate::geometry::Point) -> Guide {
         Guide {
             line: self.line.through(p),
-            ..*self
+            ..self.clone()
         }
     }
 
     /// The same guideline with another line.
     pub fn with_line(&self, line: GuideLine) -> Guide {
-        Guide { line, ..*self }
+        Guide {
+            line,
+            ..self.clone()
+        }
+    }
+
+    /// An anchored guideline put back at its distance from its edge on a
+    /// page of `size` (#4268); others stay.
+    pub fn refit(&mut self, size: crate::geometry::Size) {
+        if let Some(a) = self.anchor {
+            self.line = a.line(size);
+        }
     }
 }
 
@@ -3324,6 +6972,10 @@ pub struct RulerSettings {
     /// or "m"), kept for the dialog; empty for millimetres.
     pub scale_page_units: String,
     pub scale_world_units: String,
+    /// The vertical ruler counts from the top of the page downwards, its
+    /// origin mirrored within the page (#3872); off: from the bottom up.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub vertical_from_top: bool,
 }
 
 impl Default for RulerSettings {
@@ -3336,11 +6988,24 @@ impl Default for RulerSettings {
             scale_world: 1.0,
             scale_page_units: String::new(),
             scale_world_units: String::new(),
+            vertical_from_top: false,
         }
     }
 }
 
 impl RulerSettings {
+    /// The page y (mm) the vertical ruler counts from on a page whose
+    /// bottom and top are `bottom` and `top`: the origin, or with the
+    /// ruler counting from the top the origin mirrored within the page,
+    /// so the default origin lies at the top edge (#3872).
+    pub fn vertical_zero(&self, bottom: f64, top: f64) -> f64 {
+        if self.vertical_from_top {
+            top + bottom - self.origin_y
+        } else {
+            self.origin_y
+        }
+    }
+
     /// World millimetres per page millimetre: 1 for a 1:1 drawing, 100 for
     /// 1:100. Never zero, negative or infinite (1 then).
     pub fn world_per_page(&self) -> f64 {
@@ -3406,6 +7071,17 @@ pub struct Document {
     /// Master layers, drawn beneath every page's own layers.
     #[serde(default)]
     pub master: Vec<Layer>,
+    /// The master page's guidelines (#1928): shown on every page, set
+    /// once for all of them, beside each page's own guidelines.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub master_guides: Vec<Guide>,
+    /// The master page's guidelines are hidden by their own eye in the
+    /// Objects docker, the pages' own still shown (#1775).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub master_guides_hidden: bool,
+    /// The pages whose own guidelines are hidden by their eye (#1775).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_guides_hidden: Vec<PageId>,
     #[serde(default)]
     pub object_styles: Vec<ObjectStyle>,
     /// The fill and outline new objects get.
@@ -3420,10 +7096,20 @@ pub struct Document {
     /// Document-level palette (the bottom "document palette").
     #[serde(default)]
     pub palette: Vec<crate::Color>,
+    /// Names given to the document palette's colours in the Palette
+    /// Editor (#2187): a spot colour goes by its ink's name instead, and
+    /// a colour without one by the name a palette gives it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palette_names: Vec<PaletteName>,
     /// Time Tracker records. Like the id counter they stay as they are
     /// when the drawing's changes are undone.
     #[serde(default, skip_serializing_if = "TimeTracker::is_empty")]
     pub time_tracker: TimeTracker,
+    /// The view the drawing was last saved with, for Options > Display >
+    /// View when a drawing opens: As saved (#1134). Like the Time
+    /// Tracker it stays out of the undo history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_view: Option<SavedView>,
     /// Selection groups 0 to 9: objects stored under a number to be
     /// selected again with it, saved with the drawing.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -3444,6 +7130,80 @@ pub struct Document {
     /// Review comments pinned to the pages (never printed or exported).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// Name and value pairs scripts and plugins keep with the drawing
+    /// (`ActiveDocument.Data`, #4137), like an object's own data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data: Vec<(String, String)>,
+    /// Where the object found last by its id lay, so looking up the
+    /// objects of a selection one after the other does not walk the
+    /// whole drawing for each (never saved, never compared).
+    #[serde(skip)]
+    pub find_hint: FindHint,
+}
+
+/// The layer (counted as [`Document::all_layers`] gives them) and the
+/// place among its objects of the object [`Document::find_shape`] found
+/// last. Only a hint: a lookup checks the object there first and walks
+/// the drawing when it is not the one, so a stale hint costs nothing.
+///
+/// It also keeps where each object on a layer was when the drawing was
+/// last walked ([`FindHint::tops`]), checked on use like the hint: the
+/// objects of a large selection looked up out of drawing order
+/// (Distribute, Align) each walked the drawing again.
+#[derive(Debug, Default)]
+pub struct FindHint(
+    std::sync::atomic::AtomicU64,
+    std::sync::Mutex<std::collections::HashMap<ShapeId, (u32, u32)>>,
+);
+
+impl FindHint {
+    fn get(&self) -> (usize, usize) {
+        let v = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        ((v >> 32) as usize, (v & 0xffff_ffff) as usize)
+    }
+
+    fn set(&self, layer: usize, index: usize) {
+        let v = ((layer as u64 & 0xffff_ffff) << 32) | (index as u64 & 0xffff_ffff);
+        self.0.store(v, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl FindHint {
+    /// Where the object on a layer `id` was last seen, if it was.
+    fn top(&self, id: ShapeId) -> Option<(usize, usize)> {
+        let map = self.1.lock().ok()?;
+        map.get(&id).map(|&(k, i)| (k as usize, i as usize))
+    }
+
+    /// Note where each object on the layers `layers` is now.
+    fn note_tops<'a>(&self, layers: impl Iterator<Item = &'a Layer>) {
+        let Ok(mut map) = self.1.lock() else {
+            return;
+        };
+        map.clear();
+        for (k, layer) in layers.enumerate() {
+            for (i, s) in layer.shapes.iter().enumerate() {
+                map.insert(s.id, (k as u32, i as u32));
+            }
+        }
+    }
+}
+
+impl Clone for FindHint {
+    fn clone(&self) -> Self {
+        FindHint(
+            std::sync::atomic::AtomicU64::new(self.0.load(std::sync::atomic::Ordering::Relaxed)),
+            Default::default(),
+        )
+    }
+}
+
+/// A hint is no part of the drawing: two drawings are equal whatever
+/// their hints.
+impl PartialEq for FindHint {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 /// What a comment points at on its page (page millimetres).
@@ -3497,6 +7257,23 @@ pub struct Comment {
     pub replies: Vec<CommentReply>,
     #[serde(default)]
     pub resolved: bool,
+}
+
+/// A name the document palette gives one of its colours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PaletteName {
+    pub color: crate::Color,
+    pub name: String,
+}
+
+impl Document {
+    /// The name the document palette gives colour `c`, if any.
+    pub fn palette_name_of(&self, c: crate::Color) -> Option<&str> {
+        self.palette_names
+            .iter()
+            .find(|n| n.color == c)
+            .map(|n| n.name.as_str())
+    }
 }
 
 /// A spot ink: its number (what `Color::Spot` refers to), its name and
@@ -3583,15 +7360,50 @@ impl std::fmt::Debug for DocumentFont {
     }
 }
 
-/// Shared binary data as base64 text, like bitmaps.
+/// Shared binary data as base64 text, like bitmaps (a reference to the
+/// table of a packed file, as pictures are).
 mod shared_bytes {
-    use serde::{Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer};
     use std::sync::Arc;
     pub fn serialize<S: Serializer>(v: &Arc<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
-        super::png_bytes::serialize(v.as_slice(), s)
+        match crate::bytes::blob_reference(crate::bytes::Blob::Font(v.clone())) {
+            Some(r) => s.serialize_str(&r),
+            None => super::png_bytes::serialize(v.as_slice(), s),
+        }
     }
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<Vec<u8>>, D::Error> {
-        super::png_bytes::deserialize(d).map(Arc::new)
+        let text = String::deserialize(d)?;
+        if let Some(found) = crate::bytes::blob_read(&text) {
+            return found
+                .map(|b| Arc::new(b.to_vec()))
+                .map_err(serde::de::Error::custom);
+        }
+        crate::bytes::decode_base64(&text)
+            .map(Arc::new)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Where a drawing was viewed when it was saved: the page shown (its
+/// index), the page point in the middle of the window (mm) and the zoom
+/// in percent of real size (#1134).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SavedView {
+    pub page: usize,
+    pub x: f64,
+    pub y: f64,
+    pub zoom_percent: f64,
+}
+
+impl SavedView {
+    /// Usable for a drawing of `pages` pages: the page is there and the
+    /// numbers are finite, the zoom above zero.
+    pub fn is_valid(&self, pages: usize) -> bool {
+        self.page < pages
+            && self.x.is_finite()
+            && self.y.is_finite()
+            && self.zoom_percent.is_finite()
+            && self.zoom_percent > 0.0
     }
 }
 
@@ -3657,6 +7469,39 @@ impl TimeTracker {
     }
 }
 
+/// `s` itself when it is `id`, or the object `id` in it (in its groups
+/// and clip frames).
+/// Whether `s` is `id` or holds it (in a group or clip frame).
+pub(crate) fn holds(s: &Shape, id: ShapeId) -> bool {
+    find_in(s, id).is_some()
+}
+
+fn find_in(s: &Shape, id: ShapeId) -> Option<&Shape> {
+    if s.id == id {
+        return Some(s);
+    }
+    match &s.kind {
+        ShapeKind::Group { children } => children.iter().find_map(|c| find_in(c, id)),
+        ShapeKind::ClipFrame { frame, contents } => {
+            find_in(frame, id).or_else(|| contents.iter().find_map(|c| find_in(c, id)))
+        }
+        _ => None,
+    }
+}
+
+fn wraps_along_path(s: &Shape, id: ShapeId) -> Option<bool> {
+    if s.id == id {
+        return Some(s.wrap_text);
+    }
+    let child = match &s.kind {
+        ShapeKind::Group { children } => children.iter().find_map(|c| wraps_along_path(c, id)),
+        ShapeKind::ClipFrame { frame, contents } => wraps_along_path(frame, id)
+            .or_else(|| contents.iter().find_map(|c| wraps_along_path(c, id))),
+        _ => None,
+    }?;
+    Some(s.wrap_text || child)
+}
+
 impl Default for Document {
     fn default() -> Self {
         Document::new("Untitled", paper::A4)
@@ -3680,6 +7525,9 @@ impl Document {
             pages: vec![page],
             ids,
             master: Vec::new(),
+            master_guides: Vec::new(),
+            master_guides_hidden: false,
+            page_guides_hidden: Vec::new(),
             object_styles: Vec::new(),
             defaults: ObjectDefaults::default(),
             color_styles: Vec::new(),
@@ -3689,12 +7537,16 @@ impl Document {
                 ..Default::default()
             },
             palette: Vec::new(),
+            palette_names: Vec::new(),
             time_tracker: TimeTracker::default(),
+            saved_view: None,
             selection_groups: std::collections::BTreeMap::new(),
             fonts: Vec::new(),
             cmyk_profile: None,
             inks: Vec::new(),
             comments: Vec::new(),
+            data: Vec::new(),
+            find_hint: FindHint::default(),
         }
     }
 
@@ -3733,10 +7585,90 @@ impl Document {
             .chain(self.pages.iter().flat_map(|p| &p.layers))
     }
 
+    /// The layer number `k` of [`Document::all_layers`], without walking
+    /// the layers before it: only the pages are counted (each lookup of
+    /// an object walked every layer of a drawing of thousands of pages,
+    /// which made filling a large print merge slow).
+    fn nth_layer(&self, mut k: usize) -> Option<&Layer> {
+        if k < self.master.len() {
+            return self.master.get(k);
+        }
+        k -= self.master.len();
+        for p in &self.pages {
+            if k < p.layers.len() {
+                return p.layers.get(k);
+            }
+            k -= p.layers.len();
+        }
+        None
+    }
+
+    fn nth_layer_mut(&mut self, mut k: usize) -> Option<&mut Layer> {
+        if k < self.master.len() {
+            return self.master.get_mut(k);
+        }
+        k -= self.master.len();
+        for p in &mut self.pages {
+            if k < p.layers.len() {
+                return p.layers.get_mut(k);
+            }
+            k -= p.layers.len();
+        }
+        None
+    }
+
     pub fn all_layers_mut(&mut self) -> impl Iterator<Item = &mut Layer> {
         self.master
             .iter_mut()
             .chain(self.pages.iter_mut().flat_map(|p| &mut p.layers))
+    }
+
+    /// Set the spans in family `from` in family `to`: text and table cells
+    /// on every layer, in groups, clip frames and symbols. The number of
+    /// spans changed.
+    pub fn replace_font_family(&mut self, from: &str, to: &str) -> usize {
+        fn spans(spans: &mut [TextSpan], from: &str, to: &str) -> usize {
+            let mut n = 0;
+            for sp in spans.iter_mut().filter(|sp| sp.font_family == from) {
+                sp.font_family = to.to_string();
+                n += 1;
+            }
+            n
+        }
+        fn walk(s: &mut Shape, from: &str, to: &str) -> usize {
+            match &mut s.kind {
+                ShapeKind::Text { spans: sp, .. } => spans(sp, from, to),
+                ShapeKind::Table(t) => t
+                    .cells
+                    .iter_mut()
+                    .map(|c| spans(&mut c.text, from, to))
+                    .sum(),
+                ShapeKind::Group { children } => {
+                    children.iter_mut().map(|c| walk(c, from, to)).sum()
+                }
+                ShapeKind::ClipFrame { frame, contents } => {
+                    walk(frame, from, to)
+                        + contents
+                            .iter_mut()
+                            .map(|c| walk(c, from, to))
+                            .sum::<usize>()
+                }
+                _ => 0,
+            }
+        }
+        if from == to || to.is_empty() {
+            return 0;
+        }
+        let mut n = 0;
+        for l in self.all_layers_mut() {
+            for s in l.shapes.iter_mut() {
+                n += walk(s, from, to);
+            }
+        }
+        for sym in self.symbols.iter_mut() {
+            n += walk(&mut sym.shape, from, to);
+        }
+        n
     }
 
     /// The font families the drawing's text uses, sorted: text on layers,
@@ -3781,21 +7713,107 @@ impl Document {
         out.into_iter().collect()
     }
 
-    /// Layers drawn for a page, bottom to top: applicable master layers,
-    /// then the page's own layers.
+    /// Layers drawn for a page, bottom to top: applicable master layers
+    /// behind the page, the page's own layers as they are stored, then
+    /// applicable master layers in front of the page (#1132); what clicks
+    /// and selections take objects from.
+    /// The guidelines shown on `page`: the master page's (every page
+    /// has them, #1928), then the page's own, each set only while its eye
+    /// shows it (#1775).
+    pub fn guides_on_page(&self, page: PageId) -> Result<Vec<Guide>> {
+        let p = self.page(page)?;
+        let master: &[Guide] = if self.guides_shown(None) {
+            &self.master_guides
+        } else {
+            &[]
+        };
+        let own: &[Guide] = if self.guides_shown(Some(page)) {
+            &p.guides
+        } else {
+            &[]
+        };
+        // A guideline hidden by its own eye is left out (#1775).
+        Ok(master
+            .iter()
+            .chain(own.iter())
+            .filter(|g| !g.hidden)
+            .cloned()
+            .collect())
+    }
+
+    /// Whether the guidelines of the master page (`page` `None`) or of
+    /// `page` are shown, as their eye in the Objects docker says (#1775).
+    pub fn guides_shown(&self, page: Option<PageId>) -> bool {
+        match page {
+            None => !self.master_guides_hidden,
+            Some(p) => !self.page_guides_hidden.contains(&p),
+        }
+    }
+
     pub fn layers_for_page(&self, page: PageId) -> Result<Vec<&Layer>> {
-        let idx = self
-            .pages
+        let idx = self.page_index(page)?;
+        let masters = |front: bool| {
+            self.master
+                .iter()
+                .filter(move |l| l.applies_to(idx) && l.in_front == front)
+        };
+        let mut out: Vec<&Layer> = masters(false).collect();
+        out.extend(self.pages[idx].layers.iter());
+        out.extend(masters(true));
+        Ok(out)
+    }
+
+    /// [`Document::layers_for_page`] as drawn, printed and exported: a
+    /// master layer holding a page number field comes as a copy showing
+    /// this page's number (#807), and a layer holding a table of contents
+    /// as a copy listing the headings as they stand (#1660).
+    pub fn layers_drawn_for_page(&self, page: PageId) -> Result<Vec<std::borrow::Cow<'_, Layer>>> {
+        use std::borrow::Cow;
+        let idx = self.page_index(page)?;
+        let count = self.pages.len();
+        // The headings, found once for the tables of contents (#1660).
+        let entries = std::cell::OnceCell::new();
+        Ok(self
+            .layers_for_page(page)?
+            .into_iter()
+            .map(|l| {
+                let master = self.master.iter().any(|m| m.id == l.id);
+                if l.shapes.iter().any(Shape::holds_toc) {
+                    let entries = entries.get_or_init(|| crate::toc::entries(self));
+                    let mut l = l.clone();
+                    if master {
+                        l.shapes
+                            .retain(|s| s.page_number.as_ref().is_none_or(|f| f.numbers_in(idx, count)));
+                    }
+                    for s in &mut l.shapes {
+                        if master {
+                            s.show_page_number_of(idx, count);
+                        }
+                        s.show_toc(entries);
+                    }
+                    Cow::Owned(l)
+                } else if master && l.shapes.iter().any(Shape::holds_page_number) {
+                    let mut l = l.clone();
+                    // A field on a page before the first numbered page
+                    // is left out (#2127).
+                    l.shapes
+                        .retain(|s| s.page_number.as_ref().is_none_or(|f| f.numbers_in(idx, count)));
+                    for s in &mut l.shapes {
+                        s.show_page_number_of(idx, count);
+                    }
+                    Cow::Owned(l)
+                } else {
+                    Cow::Borrowed(l)
+                }
+            })
+            .collect())
+    }
+
+    fn page_index(&self, page: PageId) -> Result<usize> {
+        self.pages
             .iter()
             .position(|p| p.id == page)
-            .ok_or(Error::PageNotFound(page))?;
-        let mut out: Vec<&Layer> = self
-            .master
-            .iter()
-            .filter(|l| l.scope.applies(idx))
-            .collect();
-        out.extend(self.pages[idx].layers.iter());
-        Ok(out)
+            .ok_or(Error::PageNotFound(page))
     }
 
     pub fn layer(&self, id: LayerId) -> Result<&Layer> {
@@ -3812,50 +7830,150 @@ impl Document {
 
     /// Find a top-level shape and the layer holding it.
     pub fn shape(&self, id: ShapeId) -> Result<(&Layer, &Shape)> {
-        for layer in self.all_layers() {
-            if let Some(s) = layer.shapes.iter().find(|s| s.id == id) {
-                return Ok((layer, s));
-            }
-        }
-        Err(Error::ShapeNotFound(id))
+        let (k, i) = self.locate_on_layer(id).ok_or(Error::ShapeNotFound(id))?;
+        let layer = self.nth_layer(k).ok_or(Error::ShapeNotFound(id))?;
+        Ok((layer, &layer.shapes[i]))
     }
 
     pub fn shape_mut(&mut self, id: ShapeId) -> Result<&mut Shape> {
-        for layer in self.all_layers_mut() {
-            if let Some(s) = layer.shapes.iter_mut().find(|s| s.id == id) {
-                return Ok(s);
+        let (k, i) = self.locate_on_layer(id).ok_or(Error::ShapeNotFound(id))?;
+        self.nth_layer_mut(k)
+            .and_then(|l| l.shapes.get_mut(i))
+            .ok_or(Error::ShapeNotFound(id))
+    }
+
+    /// The layer number and place of the object `id` lying on a layer
+    /// (not in a group), trying where the last lookup found its object,
+    /// and the places next to it, first (see [`FindHint`]).
+    fn locate_on_layer(&self, id: ShapeId) -> Option<(usize, usize)> {
+        let (k, i) = self.find_hint.get();
+        if let Some(layer) = self.nth_layer(k) {
+            for j in [i, i + 1, i.wrapping_sub(1)] {
+                if layer.shapes.get(j).is_some_and(|s| s.id == id) {
+                    self.find_hint.set(k, j);
+                    return Some((k, j));
+                }
             }
         }
-        Err(Error::ShapeNotFound(id))
+        for (k, layer) in self.all_layers().enumerate() {
+            if let Some(i) = layer.shapes.iter().position(|s| s.id == id) {
+                self.find_hint.set(k, i);
+                return Some((k, i));
+            }
+        }
+        None
     }
 
     /// Position of a shape: (layer id, index inside the layer).
     pub fn locate(&self, id: ShapeId) -> Result<(LayerId, usize)> {
-        for layer in self.all_layers() {
-            if let Some(i) = layer.shapes.iter().position(|s| s.id == id) {
-                return Ok((layer.id, i));
-            }
-        }
-        Err(Error::ShapeNotFound(id))
+        let (k, i) = self.locate_on_layer(id).ok_or(Error::ShapeNotFound(id))?;
+        let layer = self.nth_layer(k).ok_or(Error::ShapeNotFound(id))?;
+        Ok((layer.id, i))
     }
 
     /// Find any shape, including children of groups and clip frames.
     pub fn find_shape(&self, id: ShapeId) -> Option<&Shape> {
-        fn walk(s: &Shape, id: ShapeId) -> Option<&Shape> {
-            if s.id == id {
-                return Some(s);
+        let (k, i) = self.locate_top(id)?;
+        let top = self.nth_layer(k)?.shapes.get(i)?;
+        find_in(top, id)
+    }
+
+    /// True when `id` or an enclosing group or clip frame has `wrap_text` on.
+    pub fn shape_or_ancestor_wraps_text(&self, id: ShapeId) -> bool {
+        let Some((k, i)) = self.locate_top(id) else {
+            return false;
+        };
+        self.nth_layer(k)
+            .and_then(|l| l.shapes.get(i))
+            .and_then(|top| wraps_along_path(top, id))
+            .unwrap_or(false)
+    }
+
+    /// The layer number and the place on it of the object on a layer
+    /// that is `id` or holds it (in a group or clip frame), trying where
+    /// the last lookup found its object, and the places next to it,
+    /// first (each object of a selection of thousands walked the
+    /// whole drawing to be found, so moving them all took seconds).
+    fn locate_top(&self, id: ShapeId) -> Option<(usize, usize)> {
+        let (k, i) = self.find_hint.get();
+        if let Some(layer) = self.nth_layer(k) {
+            if layer
+                .shapes
+                .get(i)
+                .is_some_and(|s| find_in(s, id).is_some())
+            {
+                return Some((k, i));
             }
-            match &s.kind {
-                ShapeKind::Group { children } => children.iter().find_map(|c| walk(c, id)),
-                ShapeKind::ClipFrame { frame, contents } => {
-                    walk(frame, id).or_else(|| contents.iter().find_map(|c| walk(c, id)))
+            for j in [i + 1, i.wrapping_sub(1)] {
+                if layer.shapes.get(j).is_some_and(|s| s.id == id) {
+                    self.find_hint.set(k, j);
+                    return Some((k, j));
                 }
-                _ => None,
             }
         }
-        self.all_layers()
-            .flat_map(|l| &l.shapes)
-            .find_map(|s| walk(s, id))
+        // Where it was when the drawing was last walked, if it is still
+        // there.
+        if let Some((k, i)) = self.find_hint.top(id) {
+            if self
+                .nth_layer(k)
+                .and_then(|l| l.shapes.get(i))
+                .is_some_and(|s| s.id == id)
+            {
+                self.find_hint.set(k, i);
+                return Some((k, i));
+            }
+        }
+        for (k, layer) in self.all_layers().enumerate() {
+            if let Some(i) = layer.shapes.iter().position(|s| find_in(s, id).is_some()) {
+                self.find_hint.set(k, i);
+                // An object on a layer that was not where it was last
+                // seen: note where they all are now, for the next ones.
+                if layer.shapes[i].id == id {
+                    self.find_hint.note_tops(self.all_layers());
+                }
+                return Some((k, i));
+            }
+        }
+        None
+    }
+
+    /// Keep in `ids` only the objects still in the drawing (on a layer or
+    /// inside a group or clip frame), in their order. A long list is
+    /// checked against one walk of the drawing: looking up thousands of
+    /// objects that are gone (after Undo of a Duplicate) walked it once
+    /// for each.
+    pub fn retain_existing(&self, ids: &mut Vec<ShapeId>) {
+        if ids.len() <= 16 {
+            ids.retain(|id| self.find_shape(*id).is_some());
+            return;
+        }
+        let mut all = std::collections::HashSet::new();
+        fn walk(s: &Shape, all: &mut std::collections::HashSet<ShapeId>, depth: usize) {
+            all.insert(s.id);
+            if depth > 512 {
+                return;
+            }
+            match &s.kind {
+                ShapeKind::Group { children } => {
+                    for c in children {
+                        walk(c, all, depth + 1);
+                    }
+                }
+                ShapeKind::ClipFrame { frame, contents } => {
+                    walk(frame, all, depth + 1);
+                    for c in contents {
+                        walk(c, all, depth + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for layer in self.all_layers() {
+            for s in &layer.shapes {
+                walk(s, &mut all, 0);
+            }
+        }
+        ids.retain(|id| all.contains(id));
     }
 
     /// Find any shape to change it, including children of groups and clip
@@ -3873,9 +7991,9 @@ impl Document {
                 _ => None,
             }
         }
-        self.all_layers_mut()
-            .flat_map(|l| &mut l.shapes)
-            .find_map(|s| walk(s, id))
+        let (k, i) = self.locate_top(id)?;
+        let top = self.nth_layer_mut(k)?.shapes.get_mut(i)?;
+        walk(top, id)
     }
 
     /// The transform taking the space of `id` to the page: the product of
@@ -3895,9 +8013,9 @@ impl Document {
                 _ => None,
             }
         }
-        self.all_layers()
-            .flat_map(|l| &l.shapes)
-            .find_map(|s| walk(s, id, Affine::IDENTITY))
+        let (k, i) = self.locate_top(id)?;
+        let top = self.nth_layer(k)?.shapes.get(i)?;
+        walk(top, id, Affine::IDENTITY)
     }
 
     /// A copy of any object, nested ones too, whose transform takes it
@@ -3908,6 +8026,8 @@ impl Document {
         }
         let parent = self.parent_transform(id)?;
         let mut s = self.find_shape(id)?.clone();
+        // The effects stay as stored (in the parent's space): what reads
+        // them here writes them back to the object.
         s.transform = parent * s.transform;
         Some(s)
     }
@@ -3932,13 +8052,17 @@ impl Document {
             }
             found
         }
+        // Only the object on a layer that holds it is walked: walking the
+        // drawing from its start for each of thousands of objects (Convert
+        // to Curves before Combine) took seconds.
+        let Some((k, i)) = self.locate_top(id) else {
+            return Vec::new();
+        };
         let mut path = Vec::new();
-        for s in self.all_layers().flat_map(|l| &l.shapes) {
-            if walk(s, id, &mut path) {
-                return path;
-            }
+        match self.nth_layer(k).and_then(|l| l.shapes.get(i)) {
+            Some(top) if walk(top, id, &mut path) => path,
+            _ => Vec::new(),
         }
-        Vec::new()
     }
 
     /// The object lies inside a group or a clip frame (not on a layer).
@@ -3949,20 +8073,8 @@ impl Document {
     /// The object on a layer that holds `id` (itself when it lies on a
     /// layer).
     pub fn top_level_of(&self, id: ShapeId) -> Option<ShapeId> {
-        fn holds(s: &Shape, id: ShapeId) -> bool {
-            s.id == id
-                || match &s.kind {
-                    ShapeKind::Group { children } => children.iter().any(|c| holds(c, id)),
-                    ShapeKind::ClipFrame { frame, contents } => {
-                        holds(frame, id) || contents.iter().any(|c| holds(c, id))
-                    }
-                    _ => false,
-                }
-        }
-        self.all_layers()
-            .flat_map(|l| &l.shapes)
-            .find(|s| holds(s, id))
-            .map(|s| s.id)
+        let (k, i) = self.locate_top(id)?;
+        self.nth_layer(k)?.shapes.get(i).map(|s| s.id)
     }
 
     /// Union of all shape bounds on a page, or None when the page is empty.
@@ -4010,8 +8122,11 @@ impl Document {
                 }
             }
         }
-        // Who keeps each identity: the lowest id carrying it.
-        let mut owner: std::collections::HashMap<Uid, ShapeId> = std::collections::HashMap::new();
+        // Who keeps each identity: the lowest id carrying it. Identities
+        // are random already, so a plain fold of their bits hashes them
+        // (std's keyed hash made this walk a fifth of every edit, #345).
+        let mut owner: std::collections::HashMap<Uid, ShapeId, UidHash> =
+            std::collections::HashMap::with_capacity_and_hasher(1024, UidHash::default());
         let mut count = 0usize;
         let mut carried = 0usize;
         {
@@ -4041,7 +8156,8 @@ impl Document {
         if carried == count && owner.len() == count {
             return 0;
         }
-        let mut seen: std::collections::HashSet<Uid> = std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<Uid, UidHash> =
+            std::collections::HashSet::with_capacity_and_hasher(owner.len(), UidHash::default());
         let mut given = 0;
         let mut fix = |s: &mut Shape| {
             let keep = s
@@ -4078,7 +8194,56 @@ impl Document {
     /// for a newer number), for an older CD Draw: the current layout is
     /// taken down one step at a time ([`DOWN_STEPS`]).
     pub fn to_json_version(&self, version: u32) -> Result<String> {
-        let mut v = serde_json::to_value(self)?;
+        let mut out = Vec::new();
+        self.write_json_version(&mut out, version)?;
+        // serde_json writes UTF-8 only.
+        Ok(String::from_utf8(out)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
+    }
+
+    /// Write the `.tdraw` JSON of format `version` to `w` as it is made.
+    /// The current format goes straight to the writer; only an older one
+    /// builds the whole tree in memory first (many times the drawing's
+    /// size), to take it down. Every number written is a number: a value
+    /// that is not one (a division by zero somewhere, or an import with
+    /// a number too large to hold, can leave one in a coordinate, an
+    /// outline width, a transparency, a colour component or a font size)
+    /// is written as 0, not as `null`, which no reader before 0.35 took
+    /// for a number, so one such value made the whole file refuse to
+    /// open in those versions and the drawing was lost.
+    ///
+    /// The JSON is compact, with no line breaks or indents (#2345): the
+    /// indented layout gave every coordinate its own line, indented
+    /// further at each group inside a group, so a curve node took 0.5 to
+    /// 1.3 KB and a drawing with many nodes in nested groups ran to
+    /// hundreds of megabytes. Every reader takes either layout.
+    pub fn write_json_version<W: std::io::Write>(&self, mut w: W, version: u32) -> Result<()> {
+        if self.nesting() <= SHALLOW_NESTING {
+            return self.write_json_here(w, version);
+        }
+        let json = self.deep_json(|d, buf| d.write_json_here(buf, version))?;
+        w.write_all(&json).map_err(serde_json::Error::io)?;
+        Ok(())
+    }
+
+    fn write_json_here<W: std::io::Write>(&self, w: W, version: u32) -> Result<()> {
+        use crate::finite::{Finite, FiniteSerializer};
+        if (version as usize) >= DOWN_STEPS.len() {
+            #[derive(Serialize)]
+            struct Versioned<'a> {
+                #[serde(flatten)]
+                doc: &'a Document,
+                format_version: u32,
+            }
+            let mut ser = serde_json::Serializer::new(w);
+            Versioned {
+                doc: self,
+                format_version: TDRAW_FORMAT_VERSION,
+            }
+            .serialize(FiniteSerializer(&mut ser))?;
+            return Ok(());
+        }
+        let mut v = serde_json::to_value(Finite(self))?;
         if let serde_json::Value::Object(m) = &mut v {
             m.insert(
                 FORMAT_VERSION_KEY.into(),
@@ -4088,33 +8253,459 @@ impl Document {
         for step in DOWN_STEPS.iter().skip(version as usize).rev() {
             step(&mut v);
         }
-        Ok(serde_json::to_string_pretty(&v)?)
+        if let serde_json::Value::Object(m) = &mut v {
+            m.insert(FORMAT_VERSION_KEY.into(), serde_json::Value::from(version));
+        }
+        serde_json::to_writer(w, &v)?;
+        Ok(())
+    }
+
+    /// Write a `.tdraw` file of format `version` to `w`, as Save does.
+    /// From [`PACKED_VERSION`] on the file is packed (#2849): each
+    /// distinct picture and font once, in a table at the end that the
+    /// objects refer to, and the whole JSON gzip-compressed (the file
+    /// starts with gzip's `1f 8b`; [`tdraw_text`] reads both kinds). An
+    /// older version is written as plain JSON, as that TraceDraw reads it.
+    pub fn write_tdraw_version<W: std::io::Write>(&self, w: W, version: u32) -> Result<()> {
+        if version < PACKED_VERSION {
+            return self.write_json_version(w, version);
+        }
+        let mut gz = flate2::write::GzEncoder::new(w, flate2::Compression::new(TDRAW_GZIP_LEVEL));
+        if self.nesting() <= SHALLOW_NESTING {
+            self.write_packed_here(&mut gz)?;
+        } else {
+            let json = self.deep_json(|d, buf| d.write_packed_here(buf))?;
+            use std::io::Write as _;
+            gz.write_all(&json).map_err(serde_json::Error::io)?;
+        }
+        gz.finish().map_err(serde_json::Error::io)?;
+        Ok(())
+    }
+
+    /// The JSON `write` makes of a deeply nested drawing (groups inside
+    /// groups past [`SHALLOW_NESTING`]), made on a thread with room for
+    /// it ([`on_deep_stack`]): any thread's stack has room for a shallow
+    /// one, not for a few thousand groups inside groups. A drawing nested
+    /// deeper than a file may be ([`MAX_JSON_DEPTH`]) is not written:
+    /// the error says so, instead of a file that would refuse to open.
+    fn deep_json(
+        &self,
+        write: impl FnOnce(&Document, &mut Vec<u8>) -> Result<()> + Send,
+    ) -> Result<Vec<u8>> {
+        let json = on_deep_stack(|| {
+            let mut buf = Vec::new();
+            write(self, &mut buf).map(|()| buf)
+        })?;
+        let depth = json_depth_of(&json);
+        if depth > MAX_JSON_DEPTH {
+            return Err(<serde_json::Error as serde::ser::Error>::custom(format!(
+                "the drawing nests {depth} levels deep (groups inside groups); a file holds at most {MAX_JSON_DEPTH}, so it would not open again: ungroup some of it"
+            ))
+            .into());
+        }
+        Ok(json)
+    }
+
+    /// How deep objects nest in the drawing: 1 for objects on a layer, one
+    /// more for each group or clip frame they are inside.
+    pub fn nesting(&self) -> usize {
+        let mut deepest = 0;
+        let mut stack: Vec<(&Shape, usize)> = Vec::new();
+        let layers = self
+            .pages
+            .iter()
+            .flat_map(|p| &p.layers)
+            .chain(&self.master);
+        for l in layers {
+            stack.extend(l.shapes.iter().map(|s| (s, 1)));
+        }
+        stack.extend(self.symbols.iter().map(|sym| (&sym.shape, 1)));
+        while let Some((s, d)) = stack.pop() {
+            deepest = deepest.max(d);
+            match &s.kind {
+                ShapeKind::Group { children } => {
+                    stack.extend(children.iter().map(|c| (c, d + 1)));
+                }
+                ShapeKind::ClipFrame { frame, contents } => {
+                    stack.push((frame, d + 1));
+                    stack.extend(contents.iter().map(|c| (c, d + 1)));
+                }
+                _ => {}
+            }
+        }
+        deepest
+    }
+
+    /// The packed JSON of the current format, uncompressed: the drawing
+    /// with references for its pictures and fonts, then their table.
+    pub fn write_packed<W: std::io::Write>(&self, mut w: W) -> Result<()> {
+        if self.nesting() <= SHALLOW_NESTING {
+            return self.write_packed_here(w);
+        }
+        let json = self.deep_json(|d, buf| d.write_packed_here(buf))?;
+        w.write_all(&json).map_err(serde_json::Error::io)?;
+        Ok(())
+    }
+
+    fn write_packed_here<W: std::io::Write>(&self, w: W) -> Result<()> {
+        use crate::finite::FiniteSerializer;
+        #[derive(Serialize)]
+        struct Packed<'a> {
+            #[serde(flatten)]
+            doc: &'a Document,
+            format_version: u32,
+            // Last, so that the drawing has filled it.
+            blobs: crate::bytes::BlobsOut,
+        }
+        let _table = crate::bytes::WritingTable::start();
+        let mut ser = serde_json::Serializer::new(std::io::BufWriter::new(w));
+        Packed {
+            doc: self,
+            format_version: TDRAW_FORMAT_VERSION,
+            blobs: crate::bytes::BlobsOut,
+        }
+        .serialize(FiniteSerializer(&mut ser))?;
+        use std::io::Write as _;
+        ser.into_inner().flush().map_err(serde_json::Error::io)?;
+        Ok(())
+    }
+
+    /// Read a `.tdraw` file's bytes, packed or plain JSON of any version.
+    pub fn from_tdraw_bytes(bytes: &[u8]) -> Result<Self> {
+        let text = tdraw_text(bytes).map_err(serde_json::Error::io)?;
+        Self::from_json(&text)
     }
 
     /// Read a `.tdraw` file of any version: older ones are brought up to
     /// date by [`migrate`]; newer ones are read as far as this version
     /// knows them (fields it does not know are left out).
     pub fn from_json(s: &str) -> Result<Self> {
-        let mut v: serde_json::Value = serde_json::from_str(s)?;
+        // Reading nests a few large stack frames per level of the file:
+        // a drawing of a couple of hundred nested groups, which the file
+        // may hold (MAX_JSON_DEPTH), overflowed the stack and ended the
+        // program. A deep file is read on a thread of its own with room.
+        if json_depth(s) > SHALLOW_JSON_DEPTH {
+            return on_deep_stack(|| Self::from_json_here(s));
+        }
+        Self::from_json_here(s)
+    }
+
+    fn from_json_here(s: &str) -> Result<Self> {
+        // Read straight from the text when it can be: every step of
+        // `migrate` keeps the layout, so a file of any version reads as
+        // it is. A drawing's JSON taken in as a value first held several
+        // times the text in memory: a 246 MB file with large drawings
+        // took more than 20 GB to open (#3833). A file that does not read
+        // this way (a number written as null, a wrong table) goes the
+        // long way below, which mends what it can or says what is wrong.
+        if STEPS_KEEP_LAYOUT {
+            if let Some(doc) = Self::from_json_text(s) {
+                return Ok(doc.opened());
+            }
+        }
+        let mut v: serde_json::Value = json_value(s)?;
         let from = tdraw_version(&v);
         migrate(&mut v, from);
+        // A packed file's pictures and fonts (#2849): the objects refer
+        // to this table while they are read.
+        let mut blobs = Vec::new();
         if let serde_json::Value::Object(m) = &mut v {
             m.remove(FORMAT_VERSION_KEY);
+            if let Some(serde_json::Value::Array(list)) = m.remove(BLOBS_KEY) {
+                blobs = list
+                    .into_iter()
+                    .map(|b| match b {
+                        serde_json::Value::String(t) => t,
+                        _ => String::new(),
+                    })
+                    .collect();
+            }
         }
-        let mut doc: Document = serde_json::from_value(v)?;
+        let _table = crate::bytes::ReadingTable::start(blobs);
+        let doc: Document = match Document::deserialize(&v) {
+            Ok(doc) => doc,
+            Err(e) => numbers_lost_as_zero(v, e)?,
+        };
+        Ok(doc.opened())
+    }
+
+    /// The drawing `s` holds, read from the text without a JSON value in
+    /// between (#3833): first the table of pictures and fonts at its end
+    /// (the rest skipped over), then the drawing, its pictures looked up
+    /// in the table. `None` when the text does not read this way.
+    fn from_json_text(s: &str) -> Option<Self> {
+        if json_depth(s) > MAX_JSON_DEPTH {
+            return None;
+        }
+        #[derive(Deserialize)]
+        struct Table {
+            #[serde(default)]
+            blobs: Vec<String>,
+        }
+        let mut de = serde_json::Deserializer::from_str(s);
+        de.disable_recursion_limit();
+        let table = Table::deserialize(&mut de).ok()?;
+        let _table = crate::bytes::ReadingTable::start(table.blobs);
+        let mut de = serde_json::Deserializer::from_str(s);
+        de.disable_recursion_limit();
+        let doc = Document::deserialize(&mut de).ok()?;
+        de.end().ok()?;
+        Some(doc)
+    }
+
+    /// A drawing just read, with what a file does not save worked out.
+    fn opened(mut self) -> Self {
         // What text wraps around is not saved: work it out again.
-        doc.refresh_text_flow();
-        Ok(doc)
+        self.refresh_text_flow();
+        self.refit_text_meshes();
+        self.break_symbol_loops();
+        self
+    }
+
+    /// Stretch the mesh fill of every text whose grid lies inside the
+    /// text's box but no longer covers it back over the whole box. Before
+    /// 0.47 a text typed over (a T made a C, more letters) kept the grid
+    /// made over its old box; the part past it had no fill, and a block
+    /// or inner shadow showed through it (#2892, #2894). A file saved
+    /// that way opens with the text filled again. A grid reaching past
+    /// the text's box, or already over it, is left as it is.
+    pub fn refit_text_meshes(&mut self) {
+        fn walk(s: &mut Shape) {
+            if let (ShapeKind::Text { .. }, Fill::Mesh(m)) = (&s.kind, &s.fill) {
+                let b = crate::geometry::Shape::bounding_box(&s.local_path());
+                if let Some(m) = m.refit_inside(b) {
+                    s.fill = Fill::Mesh(m);
+                }
+            }
+            match &mut s.kind {
+                ShapeKind::Group { children } => children.iter_mut().for_each(walk),
+                ShapeKind::ClipFrame { frame, contents } => {
+                    walk(frame);
+                    contents.iter_mut().for_each(walk);
+                }
+                _ => {}
+            }
+        }
+        for page in &mut self.pages {
+            for l in &mut page.layers {
+                l.shapes.iter_mut().for_each(walk);
+            }
+        }
+        for l in &mut self.master {
+            l.shapes.iter_mut().for_each(walk);
+        }
     }
 }
 
+/// How many brackets (`{` and `[`) of a `.tdraw` file may be open at
+/// once. A group inside a group nests three levels, so this is some
+/// 5,000 groups inside groups, read on a thread with room for it
+/// ([`DEEP_STACK`]). The JSON reader's own limit is 128 levels, about 30
+/// groups inside groups, which drawings do reach: such a drawing saved
+/// and then refused to open, and was lost. The limit was then 1024
+/// levels, some 330 groups inside groups, which the Group command goes
+/// past as easily: the drawing saved and would not open again. A drawing
+/// nested past this one is not saved (see `Document::deep_json`).
+pub const MAX_JSON_DEPTH: usize = 16384;
+
+/// Objects nested no deeper than this ([`Document::nesting`]) are
+/// written on the caller's thread: some 30 groups inside groups, within
+/// [`SHALLOW_JSON_DEPTH`].
+const SHALLOW_NESTING: usize = 30;
+
+/// JSON nested no deeper than this is read on the caller's thread; any
+/// thread's stack (1 MB at the least) has room for it.
+const SHALLOW_JSON_DEPTH: usize = 96;
+
+/// Stack for reading or writing a deeply nested drawing: room for
+/// [`MAX_JSON_DEPTH`] levels with plenty to spare (only the part used is
+/// ever taken from memory).
+const DEEP_STACK: usize = 512 * 1024 * 1024;
+
+/// `f` run on a thread of its own with a [`DEEP_STACK`], its result (or
+/// its panic) passed back.
+pub fn on_deep_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("deep-drawing".into())
+            .stack_size(DEEP_STACK)
+            .spawn_scoped(scope, f)
+            .expect("a thread to read a deeply nested drawing")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+/// The JSON of a `.tdraw` text as a value, with the reader's nesting
+/// limit lifted and [`MAX_JSON_DEPTH`] in its place.
+fn json_value(s: &str) -> Result<serde_json::Value> {
+    let depth = json_depth(s);
+    if depth > MAX_JSON_DEPTH {
+        return Err(<serde_json::Error as serde::de::Error>::custom(format!(
+            "the file nests {depth} levels deep; at most {MAX_JSON_DEPTH} are read"
+        ))
+        .into());
+    }
+    let mut de = serde_json::Deserializer::from_str(s);
+    de.disable_recursion_limit();
+    let v = serde_json::Value::deserialize(&mut de)?;
+    de.end()?;
+    Ok(v)
+}
+
+/// How deep the brackets of JSON text nest: the most `{` and `[` open at
+/// once, brackets inside strings not counted. Text that is not JSON
+/// gives some number; the reader then says what is wrong with it.
+fn json_depth(s: &str) -> usize {
+    json_depth_of(s.as_bytes())
+}
+
+/// [`json_depth`] of JSON bytes.
+fn json_depth_of(s: &[u8]) -> usize {
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    let mut in_string = false;
+    let mut escaped = false;
+    for &b in s {
+        if in_string {
+            match b {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' | b'[' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
+}
+
+/// A `.tdraw` file whose numbers are not all numbers, read with each
+/// such number as 0. A value that is not a number (the result of a
+/// division by zero somewhere, or of an import with a number too large
+/// to hold) is written as `null`, which the reader does not take for a
+/// number, so one such value anywhere in a drawing made the whole file
+/// refuse to open and the drawing was lost. Every `null` but those the
+/// format writes for a setting that is not there ([`NULL_SETTINGS`]) is
+/// read as 0; a file that still does not open gives the error `first`
+/// (the one reading `v` as it was gave), as does one with no such
+/// `null`.
+fn numbers_lost_as_zero(mut v: serde_json::Value, first: serde_json::Error) -> Result<Document> {
+    fn zeros(v: &mut serde_json::Value, key: Option<&str>, n: &mut usize) {
+        match v {
+            serde_json::Value::Null => {
+                if !key.is_some_and(|k| NULL_SETTINGS.contains(&k)) {
+                    *v = serde_json::Value::from(0.0);
+                    *n += 1;
+                }
+            }
+            serde_json::Value::Array(items) => {
+                items.iter_mut().for_each(|x| zeros(x, None, n));
+            }
+            serde_json::Value::Object(m) => {
+                m.iter_mut().for_each(|(k, x)| zeros(x, Some(k), n));
+            }
+            _ => {}
+        }
+    }
+    let mut n = 0;
+    zeros(&mut v, None, &mut n);
+    if n == 0 {
+        return Err(first.into());
+    }
+    serde_json::from_value(v).map_err(|_| first.into())
+}
+
+/// The keys the format writes as `null` for a setting that is not there
+/// (optional fields written without `skip_serializing_if`), which
+/// [`numbers_lost_as_zero`] leaves alone. A key that holds a number
+/// elsewhere is not among them, so a number lost under it is read as 0.
+const NULL_SETTINGS: [&str; 29] = [
+    "active",
+    "arc",
+    "background",
+    "border",
+    "by_length",
+    "ctrl_in",
+    "ctrl_out",
+    "fill",
+    "finish",
+    "forward",
+    "frame",
+    "grid",
+    "harmony",
+    "link",
+    "main",
+    "name",
+    "nodes",
+    "on_path",
+    "outline",
+    "outline_to",
+    "path",
+    "range",
+    "shade_from",
+    "shade_to",
+    "shadow",
+    "spacing",
+    "start",
+    "stroke",
+    "vanishing",
+];
+
 /// The `.tdraw` format's version, written into every file. A change that
-/// an older CD Draw would read wrongly (a field renamed, moved or given
+/// an older TraceDraw would read wrongly (a field renamed, moved or given
 /// another meaning) raises it and adds a step to [`migrate`]; a new field
 /// with a default does not. The next version is 2: 1 was written by
 /// CD Draw 0.5 to 0.9 for the layout of 0 and is read as 0. See
 /// `docs/tdraw-format.md`.
-pub const TDRAW_FORMAT_VERSION: u32 = 0;
+pub const TDRAW_FORMAT_VERSION: u32 = 2;
+
+/// The first format written packed and compressed (#2849): Save writes
+/// it, also for a plain file opened; TraceDraw 0.46 and older open only
+/// plain files (TraceDraw is an alpha, people know files move forward).
+pub const PACKED_VERSION: u32 = 2;
+
+/// gzip's level for `.tdraw` files: most of the gain of the highest at a
+/// fraction of the time (pictures are already compressed PNG).
+const TDRAW_GZIP_LEVEL: u32 = 4;
+
+/// The key of a packed file's table of pictures and fonts.
+const BLOBS_KEY: &str = "blobs";
+
+/// The JSON text of a `.tdraw` file's bytes: gzip (`1f 8b`, the packed
+/// files of 0.47 on) is decompressed, anything else is read as UTF-8
+/// text (the plain files of every version). Readers of `.tdraw` (the
+/// app, the thumbnailer, the command line, templates) read through it
+/// ([`read_tdraw_text`] for a stream).
+pub fn tdraw_text(bytes: &[u8]) -> std::io::Result<String> {
+    read_tdraw_text(bytes)
+}
+
+/// [`tdraw_text`] from a reader, as it reads (the window of a large
+/// file counts the bytes as they go).
+pub fn read_tdraw_text<R: std::io::BufRead>(mut r: R) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    if is_gzip(r.fill_buf()?) {
+        flate2::read::MultiGzDecoder::new(r).read_to_string(&mut text)?;
+    } else {
+        r.read_to_string(&mut text)?;
+    }
+    Ok(text)
+}
+
+/// Whether bytes start as gzip does (a packed `.tdraw`).
+pub fn is_gzip(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x1f, 0x8b])
+}
 
 /// The number CD Draw 0.5 to 0.9 wrote for the layout of version 0.
 const SAME_AS_ZERO: u64 = 1;
@@ -4133,25 +8724,63 @@ pub fn tdraw_version(v: &serde_json::Value) -> u32 {
 }
 
 /// The version a `.tdraw` text says it has (0 for unreadable text).
+/// Only that number is read, the rest of the text skipped over: taking
+/// the whole drawing in as a JSON value for it held several times the
+/// text in memory just before the drawing was read (#3833).
 pub fn tdraw_text_version(s: &str) -> u32 {
-    serde_json::from_str::<serde_json::Value>(s)
-        .map(|v| tdraw_version(&v))
-        .unwrap_or(0)
+    #[derive(Deserialize)]
+    struct Version {
+        #[serde(default)]
+        format_version: Option<u64>,
+    }
+    let read = || {
+        let mut de = serde_json::Deserializer::from_str(s);
+        de.disable_recursion_limit();
+        Version::deserialize(&mut de).ok()
+    };
+    let version = if json_depth(s) > SHALLOW_JSON_DEPTH {
+        on_deep_stack(read)
+    } else {
+        read()
+    };
+    match version {
+        Some(Version {
+            format_version: Some(n),
+        }) => {
+            let n = if n == SAME_AS_ZERO { 0 } else { n };
+            n.min(u64::from(u32::MAX)) as u32
+        }
+        Some(Version {
+            format_version: None,
+        }) => 0,
+        // Not a whole number, or text that is not JSON: as before.
+        None => json_value(s).map(|v| tdraw_version(&v)).unwrap_or(0),
+    }
 }
 
 /// One step of [`migrate`]: the JSON of version `i` to version `i + 1`.
 type Step = fn(&mut serde_json::Value);
 
-/// `STEPS[i]` takes a file from version `i` to `i + 1` (none yet).
-const STEPS: [Step; TDRAW_FORMAT_VERSION as usize] = [];
+/// `STEPS[i]` takes a file from version `i` to `i + 1`. 0 to 1 and 1 to
+/// 2 change no field: 1 has the layout of 0, and 2 only packs the file,
+/// which [`Document::from_json`] reads in any version.
+const STEPS: [Step; TDRAW_FORMAT_VERSION as usize] = [same_layout, same_layout];
 
 /// `DOWN_STEPS[i]` takes a file from version `i + 1` back to `i`, for
-/// saving in an older version (none yet).
-const DOWN_STEPS: [Step; TDRAW_FORMAT_VERSION as usize] = [];
+/// saving in an older version (a plain file, written unpacked).
+const DOWN_STEPS: [Step; TDRAW_FORMAT_VERSION as usize] = [same_layout, same_layout];
 
-/// The CD Draw release that first wrote each `.tdraw` format version
-/// (`TDRAW_RELEASES[v]`), for Save As.
-pub const TDRAW_RELEASES: [&str; TDRAW_FORMAT_VERSION as usize + 1] = ["0.4"];
+fn same_layout(_: &mut serde_json::Value) {}
+
+/// Every one of [`STEPS`] is [`same_layout`], so `Document::from_json`
+/// reads a file of any version straight from its text. A step that
+/// changes the layout must set this to false.
+const STEPS_KEEP_LAYOUT: bool = true;
+
+/// The TraceDraw release that first wrote each `.tdraw` format version
+/// (`TDRAW_RELEASES[v]`), for Save As. Version 1 is not offered: it has
+/// the layout of 0.
+pub const TDRAW_RELEASES: [&str; TDRAW_FORMAT_VERSION as usize + 1] = ["0.4", "0.5", "0.47"];
 
 /// Bring a `.tdraw` file's JSON from version `from` up to
 /// [`TDRAW_FORMAT_VERSION`], one step at a time.
@@ -4221,6 +8850,795 @@ mod index_keys {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn pix_codes_are_written_as_banks_read_them() {
+        use super::{crc16_ccitt, pix_payload, QrCode, QrKind};
+        // The example of the payment code's published layout.
+        let p = pix_payload(
+            "123e4567-e12b-12d1-a456-426655440000",
+            "Fulano de Tal",
+            "BRASILIA",
+            "",
+            "",
+            "",
+        );
+        assert_eq!(
+            p,
+            "00020126580014br.gov.bcb.pix0136123e4567-e12b-12d1-a456-426655440000\
+             5204000053039865802BR5913Fulano de Tal6008BRASILIA62070503***63041D3D"
+        );
+        // Accents off, tax number digits, amount with a comma, a
+        // reference and a message, names cut to their room.
+        let p = pix_payload(
+            "123.456.789-09",
+            "Gráfica São João Comunicação Visual Ltda",
+            "São José dos Campos",
+            "15,5",
+            "PED-0042",
+            "Pedido 42",
+        );
+        assert!(p.contains("0111123456789090209Pedido 42"), "{p}");
+        assert!(p.contains("540515.50"), "{p}");
+        assert!(p.contains("5925Grafica Sao Joao Comunica"), "{p}");
+        assert!(p.contains("6015Sao Jose dos Ca"), "{p}");
+        assert!(p.contains("62110507PED0042"), "{p}");
+        let crc = crc16_ccitt(p[..p.len() - 4].as_bytes());
+        assert!(p.ends_with(&format!("{crc:04X}")));
+        // A phone key keeps its plus; missing city: no code.
+        assert!(pix_payload("+55 (11) 91234-5678", "A", "B", "", "", "").contains("0114+5511912345678"));
+        assert_eq!(pix_payload("k", "A", " ", "", "", ""), "");
+        assert!(pix_payload("k", "A", "B", "0", "", "").contains("9865802BR"));
+        let q = QrCode {
+            kind: QrKind::Pix,
+            fields: vec!["k@x.br".into(), "Ana".into(), "Rio".into()],
+            ..QrCode::default()
+        };
+        assert!(q.payload().starts_with("000201"));
+    }
+
+    /// #3559: a curve's box is measured from its own segments, without
+    /// copying the curve; it is the box of the placed curve, turned,
+    /// slanted and inside a turned group too, and empty for no segments.
+    #[test]
+    fn a_curves_box_is_the_box_of_the_placed_curve() {
+        use super::{Shape, ShapeKind};
+        use crate::geometry::{Affine, BezPath, Rect, Shape as _};
+        let mut p = BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to((10.0, 30.0), (40.0, -20.0), (50.0, 5.0));
+        p.quad_to((60.0, 40.0), (20.0, 30.0));
+        p.line_to((5.0, 12.0));
+        p.close_path();
+        p.move_to((70.0, 70.0));
+        p.line_to((80.0, 75.0));
+        let mut s = Shape::new(
+            crate::id::IdSource::default().shape(),
+            ShapeKind::Path {
+                path: p.clone(),
+                closed: false,
+            },
+        );
+        s.transform = Affine::translate((3.0, -7.0))
+            * Affine::rotate(0.7)
+            * Affine::new([1.0, 0.0, 0.4, 1.3, 0.0, 0.0]);
+        let close = |a: Rect, b: Rect| {
+            (a.x0 - b.x0).abs() < 1e-9
+                && (a.y0 - b.y0).abs() < 1e-9
+                && (a.x1 - b.x1).abs() < 1e-9
+                && (a.y1 - b.y1).abs() < 1e-9
+        };
+        let want = (s.transform * p.clone()).bounding_box();
+        assert!(close(s.bounds(), want), "{:?} {want:?}", s.bounds());
+        let mut g = Shape::new(
+            crate::id::IdSource::default().shape(),
+            ShapeKind::Group {
+                children: vec![s.clone()],
+            },
+        );
+        g.transform = Affine::rotate(-1.1) * Affine::scale(2.0);
+        let want = (g.transform * s.transform * p).bounding_box();
+        assert!(close(g.bounds(), want), "{:?} {want:?}", g.bounds());
+        s.kind = ShapeKind::Path {
+            path: BezPath::new(),
+            closed: false,
+        };
+        assert_eq!(s.bounds(), Rect::ZERO);
+    }
+
+    /// Objects are found by id from where the last one was found (a
+    /// selection of thousands was looked up one after the other, walking
+    /// the whole drawing for each): whatever the hint, including one left
+    /// stale by objects removed or moved to another page, a lookup finds
+    /// the right object, in groups too, and nothing for an id that is gone.
+    #[test]
+    fn objects_are_found_whatever_the_last_lookup_left() {
+        use super::{Document, Layer, Page, Shape, ShapeKind};
+        use crate::geometry::{Affine, Rect, Size};
+        let mut doc = Document::new("Find", Size::new(100.0, 100.0));
+        let mut ids = doc.ids().clone();
+        let rect = |ids: &mut crate::id::IdSource| {
+            Shape::new(
+                ids.shape(),
+                ShapeKind::Rect {
+                    rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            )
+        };
+        let flat: Vec<Shape> = (0..50).map(|_| rect(&mut ids)).collect();
+        let flat_ids: Vec<_> = flat.iter().map(|s| s.id).collect();
+        let inner = rect(&mut ids);
+        let inner_id = inner.id;
+        let mut group = Shape::new(
+            ids.shape(),
+            ShapeKind::Group {
+                children: vec![inner],
+            },
+        );
+        group.transform = Affine::translate((5.0, 7.0));
+        let group_id = group.id;
+        doc.pages[0].layers[0].shapes = flat;
+        doc.pages.push(Page {
+            id: ids.page(),
+            name: "2".into(),
+            size: Size::new(100.0, 100.0),
+            layers: vec![Layer::new(ids.layer(), "L")],
+            guides: Vec::new(),
+            background: None,
+        });
+        doc.pages[1].layers[0].shapes.push(group);
+        doc.set_ids(ids);
+        // Forwards, backwards, and jumping about.
+        for &id in flat_ids.iter().chain(flat_ids.iter().rev()) {
+            assert_eq!(doc.find_shape(id).map(|s| s.id), Some(id));
+            assert_eq!(doc.shape(id).map(|(_, s)| s.id).ok(), Some(id));
+        }
+        for k in 0..50 {
+            let id = flat_ids[(k * 17) % 50];
+            assert_eq!(doc.locate(id).ok().map(|(_, i)| i), Some((k * 17) % 50));
+        }
+        // In a group on another page.
+        assert_eq!(doc.find_shape(inner_id).map(|s| s.id), Some(inner_id));
+        assert!(doc.shape(inner_id).is_err());
+        assert_eq!(doc.top_level_of(inner_id), Some(group_id));
+        assert_eq!(
+            doc.parent_transform(inner_id),
+            Some(Affine::translate((5.0, 7.0)))
+        );
+        // The hint left on the last object; objects before it removed,
+        // so everything shifts down, and the group moved to page 1.
+        assert!(doc.find_shape(flat_ids[49]).is_some());
+        doc.pages[0].layers[0].shapes.drain(0..10);
+        let moved = doc.pages[1].layers[0].shapes.remove(0);
+        doc.pages[0].layers[0].shapes.insert(3, moved);
+        assert_eq!(
+            doc.find_shape(flat_ids[49]).map(|s| s.id),
+            Some(flat_ids[49])
+        );
+        assert_eq!(doc.locate(flat_ids[49]).ok().map(|(_, i)| i), Some(40));
+        assert_eq!(doc.find_shape(inner_id).map(|s| s.id), Some(inner_id));
+        assert!(doc.find_shape(flat_ids[0]).is_none());
+        assert!(doc.find_shape_mut(flat_ids[5]).is_none());
+        doc.find_shape_mut(inner_id).expect("found to change").name = Some("x".into());
+        assert_eq!(
+            doc.find_shape(inner_id).and_then(|s| s.name.clone()),
+            Some("x".into())
+        );
+        // A hint is no part of the drawing.
+        let other = doc.clone();
+        assert!(doc.find_shape(flat_ids[20]).is_some());
+        assert_eq!(doc, other);
+    }
+
+    /// A drawing of more groups nested in one another than a thread's
+    /// stack had room for opens (it ended the program), one of 1,500
+    /// saves and opens again, and one nested past the most a file may
+    /// hold is not saved and says so.
+    #[test]
+    fn deeply_nested_groups_open() {
+        use super::{Document, Shape, ShapeKind, MAX_JSON_DEPTH};
+        use crate::geometry::{Rect, Size};
+        let nested = |depth: usize| {
+            let mut doc = Document::new("Deep", Size::new(100.0, 100.0));
+            let mut ids = doc.ids().clone();
+            let mut s = Shape::new(
+                ids.shape(),
+                ShapeKind::Rect {
+                    rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            for _ in 0..depth {
+                s = Shape::new(ids.shape(), ShapeKind::Group { children: vec![s] });
+            }
+            doc.pages[0].layers[0].shapes.push(s);
+            doc.set_ids(ids);
+            doc
+        };
+        // Written and read on a small stack, as on any worker thread.
+        let small = |f: Box<dyn FnOnce() -> Option<usize> + Send>| {
+            std::thread::Builder::new()
+                .stack_size(1024 * 1024)
+                .spawn(f)
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        let doc = nested(300);
+        let json = small(Box::new(move || {
+            let json = doc.to_json().ok()?;
+            Document::from_json(&json).ok()?;
+            Some(json.len())
+        }));
+        assert!(json.is_some());
+        // A drawing of 1,500 groups inside groups, which the Group command
+        // makes, saves and opens again, packed too: past 330 or so it saved
+        // and would not open (the file nested past the 1024 levels read).
+        let doc = nested(1500);
+        let opened = small(Box::new(move || {
+            let mut packed = Vec::new();
+            doc.write_tdraw_version(&mut packed, super::TDRAW_FORMAT_VERSION)
+                .ok()?;
+            let back = Document::from_tdraw_bytes(&packed).ok()?;
+            Some(back.nesting())
+        }));
+        assert_eq!(opened, Some(1501));
+        // Nested past what a file holds: not written, and the error says why.
+        let doc = nested(MAX_JSON_DEPTH / 3 + 10);
+        let err = super::on_deep_stack(|| doc.to_json().expect_err("too deep").to_string());
+        assert!(err.contains("would not open again"), "{err}");
+        let mut packed = Vec::new();
+        assert!(doc.write_tdraw_version(&mut packed, 2).is_err());
+    }
+
+    /// Bullet numbers (#1443): written as numbers, letters or Roman
+    /// numerals; a run of numbered paragraphs counts on from its start
+    /// and a paragraph without bullets ends it.
+    #[test]
+    fn bullet_numbers_count_runs_of_paragraphs() {
+        use super::{bullet_numbers, BulletStyle, Numbering};
+        assert_eq!(Numbering::LowerAlpha.format(1), "a");
+        assert_eq!(Numbering::UpperAlpha.format(27), "AA");
+        assert_eq!(Numbering::LowerRoman.format(4), "iv");
+        assert_eq!(Numbering::UpperRoman.format(1994), "MCMXCIV");
+        assert_eq!(Numbering::Arabic.format(12), "12");
+        let num = BulletStyle {
+            numbering: Numbering::Arabic,
+            prefix: "(".into(),
+            suffix: ")".into(),
+            start: 3,
+            ..Default::default()
+        };
+        assert_eq!(num.label("\u{2022}", 5), "(5)");
+        let sym = BulletStyle::default();
+        assert!(sym.is_plain());
+        assert_eq!(sym.label("\u{2022}", 5), "\u{2022}");
+        let n = bullet_numbers([
+            (true, &num),
+            (true, &num),
+            (false, &num),
+            (true, &num),
+            (true, &sym),
+            (true, &num),
+        ]);
+        assert_eq!(n, vec![3, 4, 0, 3, 0, 3]);
+    }
+
+    /// List levels (#3685): each level counts on its own and starts again
+    /// under each paragraph above it; Restart starts again within a run,
+    /// Continue goes on after paragraphs without bullets; one level
+    /// deeper sets the bullet in and takes the next numbering or symbol.
+    #[test]
+    fn list_levels_number_on_their_own() {
+        use super::{bullet_numbers, BulletStyle, Numbering, MAX_LIST_LEVEL};
+        let top = BulletStyle {
+            numbering: Numbering::Arabic,
+            ..Default::default()
+        };
+        let sub = BulletStyle {
+            level: 1,
+            numbering: Numbering::LowerAlpha,
+            ..Default::default()
+        };
+        let restart = BulletStyle {
+            restart: true,
+            ..top.clone()
+        };
+        let cont = BulletStyle {
+            continue_list: true,
+            ..top.clone()
+        };
+        let n = bullet_numbers([
+            (true, &top),
+            (true, &sub),
+            (true, &sub),
+            (true, &top),
+            (true, &sub),
+            (true, &top),
+            (true, &restart),
+            (false, &top),
+            (true, &cont),
+            (false, &top),
+            (true, &top),
+        ]);
+        assert_eq!(n, vec![1, 1, 2, 2, 1, 3, 1, 0, 2, 0, 1]);
+        assert_eq!(sub.label("", 2), "b.");
+        // Set in by the level's indent, past the bullet's offset.
+        let deep = BulletStyle {
+            offset: 2.0,
+            level: 2,
+            level_indent: 5.0,
+            ..Default::default()
+        };
+        assert_eq!(deep.lead(), 12.0);
+        assert_eq!(BulletStyle::default().lead(), 0.0);
+        // Deeper and higher.
+        let mut b = top.clone();
+        let mut sym = String::from("1");
+        assert!(b.change_level(&mut sym, true));
+        assert_eq!((b.level, b.numbering), (1, Numbering::LowerAlpha));
+        assert!(b.change_level(&mut sym, true));
+        assert_eq!((b.level, b.numbering), (2, Numbering::LowerRoman));
+        assert!(b.change_level(&mut sym, false));
+        assert_eq!((b.level, b.numbering), (1, Numbering::LowerAlpha));
+        let mut s = BulletStyle::default();
+        let mut dot = String::from("\u{2022}");
+        assert!(s.change_level(&mut dot, true));
+        assert_eq!(dot, "\u{25E6}");
+        assert!(s.change_level(&mut dot, false));
+        assert_eq!(dot, "\u{2022}");
+        assert!(!s.change_level(&mut dot, false), "already at the top");
+        s.level = MAX_LIST_LEVEL;
+        assert!(!s.change_level(&mut dot, true), "already at the deepest");
+        assert!(!s.is_plain());
+    }
+
+    /// Columns of their own widths share the frame in proportion and
+    /// turn round right to left (#2192); equal columns stay as they were.
+    #[test]
+    fn column_boxes_share_the_frame() {
+        use super::ParagraphStyle;
+        let equal = ParagraphStyle {
+            columns: 2,
+            gutter: 10.0,
+            ..Default::default()
+        };
+        assert_eq!(equal.column_boxes(110.0), vec![(0.0, 50.0), (60.0, 50.0)]);
+        let uneven = ParagraphStyle {
+            columns: 3,
+            column_widths: vec![20.0, 40.0, 20.0],
+            column_gutters: vec![10.0, 10.0],
+            ..Default::default()
+        };
+        assert!(uneven.uneven_columns());
+        // Typed for 100 mm, laid out in 200 mm: twice as wide.
+        let b = uneven.column_boxes(200.0);
+        assert_eq!(b, vec![(0.0, 40.0), (60.0, 80.0), (160.0, 40.0)]);
+        let rtl = ParagraphStyle {
+            columns_right_to_left: true,
+            ..uneven.clone()
+        };
+        assert_eq!(
+            rtl.column_boxes(100.0),
+            vec![(80.0, 20.0), (30.0, 40.0), (0.0, 20.0)]
+        );
+        // A width missing for a column: equal columns.
+        let short = ParagraphStyle {
+            column_widths: vec![20.0, 40.0],
+            ..uneven
+        };
+        assert!(!short.uneven_columns());
+    }
+
+    /// An empty curve in a group takes no room in the group's box: the
+    /// box of a dimension without arrowheads reached the origin (#996).
+    #[test]
+    fn an_empty_curve_takes_no_room_in_its_group() {
+        use crate::geometry::{Affine, BezPath, Rect};
+        let mut line = BezPath::new();
+        line.move_to((100.0, 300.0));
+        line.line_to((150.0, 310.0));
+        let part = |id: u64, path: BezPath| {
+            Shape::new(
+                ShapeId(id),
+                ShapeKind::Path {
+                    path,
+                    closed: false,
+                },
+            )
+        };
+        let mut group = Shape::new(
+            ShapeId(1),
+            ShapeKind::Group {
+                children: vec![part(2, line), part(3, BezPath::new())],
+            },
+        );
+        assert_eq!(group.bounds(), Rect::new(100.0, 300.0, 150.0, 310.0));
+        assert_eq!(group.visual_bounds(), group.bounds());
+        group.transform = Affine::translate((-20.0, 5.0));
+        assert_eq!(group.bounds(), Rect::new(80.0, 305.0, 130.0, 315.0));
+    }
+
+    /// The box of groups nested deep takes each level's transformation
+    /// and is worked out without copying the members: each level copied
+    /// all of its members, so a drawing of a million objects in blocks
+    /// nested fifteen deep ran out of memory on opening.
+    #[test]
+    fn the_box_of_groups_nested_deep_is_quick_and_right() {
+        use crate::geometry::{Affine, Rect};
+        let square = |id: u64, x: f64| {
+            Shape::new(
+                ShapeId(id),
+                ShapeKind::Rect {
+                    rect: Rect::new(x, 0.0, x + 1.0, 1.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            )
+        };
+        let mut id = 0;
+        let mut inner = square(0, 0.0);
+        for _ in 0..200 {
+            let mut children: Vec<Shape> = (0..50)
+                .map(|i| {
+                    id += 1;
+                    square(id, f64::from(i))
+                })
+                .collect();
+            children.push(inner);
+            id += 1;
+            inner = Shape::new(ShapeId(id), ShapeKind::Group { children });
+            inner.transform = Affine::translate((1.0, 2.0));
+        }
+        let t = std::time::Instant::now();
+        let b = inner.bounds();
+        assert!(t.elapsed().as_secs() < 2, "{:?}", t.elapsed());
+        // The innermost row moved 200 times, the outermost once.
+        assert_eq!(b, Rect::new(1.0, 2.0, 250.0, 401.0));
+        // Scaled and turned levels compose as before.
+        let mut outer = Shape::new(
+            ShapeId(9_000),
+            ShapeKind::Group {
+                children: vec![square(9_001, 0.0)],
+            },
+        );
+        outer.transform = Affine::scale(2.0);
+        let mut top = Shape::new(
+            ShapeId(9_002),
+            ShapeKind::Group {
+                children: vec![outer],
+            },
+        );
+        top.transform =
+            Affine::translate((10.0, 0.0)) * Affine::rotate(std::f64::consts::FRAC_PI_2);
+        let b = top.bounds();
+        assert!(
+            (b.x0 - 8.0).abs() < 1e-9 && (b.x1 - 10.0).abs() < 1e-9,
+            "{b:?}"
+        );
+        assert!(
+            (b.y0 - 0.0).abs() < 1e-9 && (b.y1 - 2.0).abs() < 1e-9,
+            "{b:?}"
+        );
+    }
+
+    /// The quick box paths (`ShapeKind::known_box`,
+    /// `geometry::transformed_bounds`, `Shape::local_bounds`) give the
+    /// boxes the outline gives (#3559): snapping, picking and the
+    /// renderer's culling read a box for every object on every pointer
+    /// move and every render, and must see the same boxes as before.
+    #[test]
+    fn the_quick_box_matches_the_outlines_box() {
+        use crate::geometry::{Affine, BezPath, Rect};
+        let mut curve = BezPath::new();
+        curve.move_to((1.0, 2.0));
+        curve.curve_to((10.0, 20.0), (30.0, -5.0), (40.0, 8.0));
+        curve.line_to((5.0, 9.0));
+        curve.close_path();
+        let rect = Rect::new(0.0, 0.0, 10.0, 6.0);
+        let shapes: Vec<Shape> = vec![
+            Shape::new(
+                ShapeId(1),
+                ShapeKind::Rect {
+                    rect,
+                    radius: 0.0,
+                    corners: None,
+                },
+            ),
+            Shape::new(
+                ShapeId(2),
+                ShapeKind::Rect {
+                    rect,
+                    radius: 1.5,
+                    corners: None,
+                },
+            ),
+            Shape::new(
+                ShapeId(3),
+                ShapeKind::Rect {
+                    rect,
+                    radius: 0.0,
+                    corners: Some(Corners {
+                        radii: [1.0, 0.0, 2.0, 0.0],
+                        kind: CornerKind::Scallop,
+                        ..Corners::default()
+                    }),
+                },
+            ),
+            // A bowed edge reaches past the rect: no quick box (#2188).
+            Shape::new(
+                ShapeId(4),
+                ShapeKind::Rect {
+                    rect,
+                    radius: 0.0,
+                    corners: Some(Corners {
+                        bulge: [0.5, 0.0, 0.0, 0.0],
+                        ..Corners::default()
+                    }),
+                },
+            ),
+            Shape::new(ShapeId(5), ShapeKind::Ellipse { rect, arc: None }),
+            Shape::new(
+                ShapeId(6),
+                ShapeKind::Ellipse {
+                    rect,
+                    arc: Some(EllipseArc {
+                        start_deg: 10.0,
+                        end_deg: 250.0,
+                        pie: true,
+                        inner: 0.0,
+                    }),
+                },
+            ),
+            Shape::new(
+                ShapeId(7),
+                ShapeKind::Ellipse {
+                    rect,
+                    arc: Some(EllipseArc {
+                        start_deg: 10.0,
+                        end_deg: 250.0,
+                        pie: false,
+                        inner: 0.0,
+                    }),
+                },
+            ),
+            Shape::new(
+                ShapeId(8),
+                ShapeKind::Polygon {
+                    rect,
+                    points: 5,
+                    sharpness: 0.0,
+                    complex: None,
+                    twist: 0.0,
+                    bend: 0.0,
+                },
+            ),
+            Shape::new(
+                ShapeId(9),
+                ShapeKind::Polygon {
+                    rect,
+                    points: 7,
+                    sharpness: 0.5,
+                    complex: None,
+                    twist: 0.2,
+                    bend: 0.3,
+                },
+            ),
+            Shape::new(
+                ShapeId(10),
+                ShapeKind::Path {
+                    path: curve.clone(),
+                    closed: true,
+                },
+            ),
+            Shape::new(
+                ShapeId(11),
+                ShapeKind::Path {
+                    path: curve,
+                    closed: false,
+                },
+            ),
+            Shape::new(
+                ShapeId(12),
+                ShapeKind::Bitmap {
+                    rect,
+                    width_px: 2,
+                    height_px: 2,
+                    png: Vec::new().into(),
+                    fx: None,
+                },
+            ),
+            Shape::new(ShapeId(13), ShapeKind::SymbolInstance { index: 0 }),
+            Shape::new(
+                ShapeId(14),
+                ShapeKind::Table(Table {
+                    rect,
+                    col_widths: vec![5.0, 5.0],
+                    row_heights: vec![6.0],
+                    cells: Vec::new(),
+                    border: None,
+                    cell_fill: Fill::None,
+                    padding: 0.0,
+                    margins: None,
+                    spacing: None,
+                    source_xlsx: None,
+                }),
+            ),
+        ];
+        // A clip frame's box is its frame's, a group's its members'.
+        let frame = shapes[0].clone();
+        let clip = Shape::new(
+            ShapeId(15),
+            ShapeKind::ClipFrame {
+                frame: Box::new(frame),
+                contents: Vec::new(),
+            },
+        );
+        let mut moved = shapes[9].clone();
+        moved.transform = Affine::translate((3.0, -2.0)) * Affine::rotate(0.4);
+        let group = Shape::new(
+            ShapeId(16),
+            ShapeKind::Group {
+                children: vec![shapes[0].clone(), moved],
+            },
+        );
+        let transforms = [
+            Affine::IDENTITY,
+            Affine::translate((17.0, -4.0)),
+            Affine::scale_non_uniform(2.0, 0.5),
+            Affine::scale(-1.0),
+            Affine::rotate(0.7),
+            Affine::skew(0.3, -0.1),
+            Affine::translate((5.0, 6.0)) * Affine::rotate(1.1) * Affine::scale_non_uniform(3.0, 0.25),
+        ];
+        for s in shapes.iter().chain([&clip, &group]) {
+            // The local box is the box of the local outline, up to the
+            // wobble of the outline's curve fitting (a rounded corner's
+            // outline starts a hair outside its own rectangle).
+            let from_outline = s.local_path().bounding_box();
+            let local = s.local_bounds();
+            assert!(
+                (local.x0 - from_outline.x0).abs() < 1e-9
+                    && (local.y0 - from_outline.y0).abs() < 1e-9
+                    && (local.x1 - from_outline.x1).abs() < 1e-9
+                    && (local.y1 - from_outline.y1).abs() < 1e-9,
+                "local box of {s:?}: {local:?} vs outline {from_outline:?}"
+            );
+            for t in transforms {
+                let mut m = s.clone();
+                m.transform = t * m.transform;
+                let from_outline = m.page_path().bounding_box();
+                let b = m.bounds();
+                assert!(
+                    (b.x0 - from_outline.x0).abs() < 1e-9
+                        && (b.y0 - from_outline.y0).abs() < 1e-9
+                        && (b.x1 - from_outline.x1).abs() < 1e-9
+                        && (b.y1 - from_outline.y1).abs() < 1e-9,
+                    "{:?} under {t:?}: {b:?} vs outline {from_outline:?}",
+                    s.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn page_numbers_skip_the_last_pages_and_listed_pages_without_counting_them() {
+        let f = PageNumberField {
+            first_page: 2,
+            skip_last: 1,
+            skip: "4-5".into(),
+            ..Default::default()
+        };
+        let labels: Vec<String> = (0..8).map(|i| f.label_in(i, 8)).collect();
+        assert_eq!(labels, ["", "1", "2", "", "", "3", "4", ""]);
+        assert!(!f.numbers_in(7, 8) && f.numbers_in(6, 8));
+        // Saved before: no pages skipped.
+        let old: PageNumberField =
+            serde_json::from_str(r#"{"start_at":1,"first_page":1,"style":0}"#).unwrap();
+        assert_eq!(old, PageNumberField::default());
+        assert_eq!(old.label_in(4, 5), "5");
+    }
+
+    /// Round numbers map exactly: the quick box is bit-for-bit the
+    /// rectangle the shape was given, where the outline's curve fitting
+    /// wobbles by a hair under a move (#3559).
+    #[test]
+    fn the_quick_box_is_exact_on_whole_numbers() {
+        use crate::geometry::{Affine, Rect};
+        let mut s = Shape::new(
+            ShapeId(1),
+            ShapeKind::Ellipse {
+                rect: Rect::new(0.0, 0.0, 10.0, 6.0),
+                arc: None,
+            },
+        );
+        for (t, want) in [
+            (Affine::IDENTITY, Rect::new(0.0, 0.0, 10.0, 6.0)),
+            (Affine::translate((17.0, -4.0)), Rect::new(17.0, -4.0, 27.0, 2.0)),
+            (Affine::scale_non_uniform(2.0, 0.5), Rect::new(0.0, 0.0, 20.0, 3.0)),
+            (Affine::scale(-1.0), Rect::new(-10.0, -6.0, 0.0, 0.0)),
+        ] {
+            s.transform = t;
+            let b = s.bounds();
+            assert_eq!(b, want, "{t:?}");
+            // The outline's own box stays within a hair of it.
+            let from_outline = s.page_path().bounding_box();
+            assert!(
+                (b.x0 - from_outline.x0).abs() < 1e-9
+                    && (b.y0 - from_outline.y0).abs() < 1e-9
+                    && (b.x1 - from_outline.x1).abs() < 1e-9
+                    && (b.y1 - from_outline.y1).abs() < 1e-9,
+                "{t:?}: {b:?} vs outline {from_outline:?}"
+            );
+        }
+    }
+
+    /// The cost of [`Shape::bounds`] against the way it was found before
+    /// (build the page outline, then box it) on a drawing's worth of
+    /// shapes: run with `cargo test --release -p tracedraw-core --
+    /// --ignored bounds_cost --nocapture` (#3559).
+    #[test]
+    #[ignore]
+    fn bounds_cost_against_the_outline_way() {
+        use crate::geometry::{Affine, BezPath, Rect};
+        let mut curve = BezPath::new();
+        curve.move_to((0.0, 0.0));
+        for i in 1..40 {
+            let x = f64::from(i);
+            curve.curve_to((x, 2.0), (x + 0.3, -2.0), (x + 1.0, 0.0));
+        }
+        let mut shapes = Vec::new();
+        for i in 0..80_000u64 {
+            let mut s = match i % 3 {
+                0 => Shape::new(
+                    ShapeId(i),
+                    ShapeKind::Rect {
+                        rect: Rect::new(0.0, 0.0, 10.0, 6.0),
+                        radius: 1.5,
+                        corners: None,
+                    },
+                ),
+                1 => Shape::new(
+                    ShapeId(i),
+                    ShapeKind::Ellipse {
+                        rect: Rect::new(0.0, 0.0, 10.0, 6.0),
+                        arc: None,
+                    },
+                ),
+                _ => Shape::new(
+                    ShapeId(i),
+                    ShapeKind::Path {
+                        path: curve.clone(),
+                        closed: false,
+                    },
+                ),
+            };
+            s.transform = Affine::translate((f64::from(i as u32) * 0.01, 3.0))
+                * Affine::scale_non_uniform(1.5, 0.75);
+            shapes.push(s);
+        }
+        let t = std::time::Instant::now();
+        let mut area = 0.0;
+        for s in &shapes {
+            let b = s.bounds();
+            area += b.width() * b.height();
+        }
+        let quick = t.elapsed();
+        let t = std::time::Instant::now();
+        let mut area2 = 0.0;
+        for s in &shapes {
+            let b = s.page_path().bounding_box();
+            area2 += b.width() * b.height();
+        }
+        let outline = t.elapsed();
+        eprintln!(
+            "80k shapes: bounds() {quick:?}, page_path().bounding_box() {outline:?} ({:.1}x), areas {area:.3} {area2:.3}",
+            outline.as_secs_f64() / quick.as_secs_f64().max(1e-9)
+        );
+    }
+
+    #[test]
     fn node_types_of_curves_inside_groups_survive_the_native_format() {
         use crate::geometry::BezPath;
         let mut path = BezPath::new();
@@ -4259,7 +9677,758 @@ mod tests {
         );
     }
 
+    /// A text saved with a mesh grid left over its old, smaller box (typed
+    /// over before 0.47: a T made a C) opens with the grid over its whole
+    /// box again, inside a group too, so no part of it is left without
+    /// fill for the shadows to show through (#2892, #2894). A grid
+    /// reaching past the text's box is left as it is.
+    #[test]
+    fn a_texts_mesh_left_over_its_old_box_covers_it_when_the_file_opens() {
+        use crate::geometry::{Point, Rect};
+        let text = |s: &str| {
+            Shape::new(
+                ShapeId(1),
+                ShapeKind::Text {
+                    spans: vec![TextSpan::new(s, "Any", 72.0)],
+                    origin: Point::ZERO,
+                    frame: None,
+                    align: Default::default(),
+                    para: Default::default(),
+                    on_path: None,
+                },
+            )
+        };
+        let bounds = |s: &Shape| crate::geometry::Shape::bounding_box(&s.local_path());
+        let grid = |f: &Fill| {
+            let Fill::Mesh(m) = f else { panic!("{f:?}") };
+            let p = m.nodes[0].pos;
+            m.nodes
+                .iter()
+                .fold(Rect::from_points(p, p), |r, n| r.union_pt(n.pos))
+        };
+        let old = bounds(&text("T"));
+        let mut cc = text("CC");
+        let wide = bounds(&cc);
+        assert!(wide.width() > old.width() * 1.5, "{wide:?} vs {old:?}");
+        cc.fill = Fill::Mesh(crate::Mesh::new(old, 2, 2, crate::Color::BLACK));
+        let mut past = text("CC");
+        let big = wide.inflate(10.0, 10.0);
+        past.fill = Fill::Mesh(crate::Mesh::new(big, 2, 2, crate::Color::BLACK));
+        let group = Shape::new(
+            ShapeId(2),
+            ShapeKind::Group {
+                children: vec![cc.clone()],
+            },
+        );
+        let mut doc = Document::default();
+        doc.pages[0].layers[0].shapes = vec![cc, group, past];
+        let json = doc.to_json().expect("json");
+        let back = Document::from_json(&json).expect("opens");
+        let shapes = &back.pages[0].layers[0].shapes;
+        let ShapeKind::Group { children } = &shapes[1].kind else {
+            panic!("a group");
+        };
+        for (got, want) in [
+            (grid(&shapes[0].fill), wide),
+            (grid(&children[0].fill), wide),
+            (grid(&shapes[2].fill), big),
+        ] {
+            for (g, w) in [
+                (got.x0, want.x0),
+                (got.y0, want.y0),
+                (got.x1, want.x1),
+                (got.y1, want.y1),
+            ] {
+                assert!((g - w).abs() < 1e-9, "{got:?} vs {want:?}");
+            }
+        }
+    }
+
     use super::*;
+
+    /// A drawing with a value that is not a number anywhere in it (a
+    /// division by zero's result, an imported number too large to hold)
+    /// is saved with 0 for that value, so the file opens in every
+    /// version: the writer wrote `null`, which no reader before 0.35
+    /// took for a number, so one such value made the whole file refuse
+    /// to open there and the drawing was lost. The `null`s in the file
+    /// are the settings that are not there, and nothing else.
+    #[test]
+    fn a_value_that_is_not_a_number_is_saved_as_zero() {
+        fn nulls(v: &serde_json::Value, key: Option<&str>, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Null => {
+                    if !key.is_some_and(|k| NULL_SETTINGS.contains(&k)) {
+                        out.push(key.unwrap_or("[]").to_string());
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    items.iter().for_each(|x| nulls(x, None, out));
+                }
+                serde_json::Value::Object(m) => {
+                    m.iter().for_each(|(k, x)| nulls(x, Some(k), out));
+                }
+                _ => {}
+            }
+        }
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut doc = Document::default();
+            let mut rect = Shape::new(
+                ShapeId(1),
+                ShapeKind::Rect {
+                    rect: crate::geometry::Rect::new(5.0, 5.0, v, 30.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            rect.transform = crate::geometry::Affine::new([1.0, 0.0, 0.0, 1.0, v, 0.0]);
+            rect.stroke = Some(Stroke::new(crate::Color::BLACK, v));
+            rect.opacity = v;
+            let mut text = Shape::new(
+                ShapeId(2),
+                ShapeKind::Text {
+                    spans: vec![TextSpan::new("Hello", "Sans", v)],
+                    origin: crate::geometry::Point::new(10.0, 60.0),
+                    frame: None,
+                    align: TextAlign::Left,
+                    para: ParagraphStyle::default(),
+                    on_path: None,
+                },
+            );
+            text.fill = Fill::Solid(crate::Color::Rgb {
+                r: v as f32,
+                g: 0.5,
+                b: 0.0,
+            });
+            doc.pages[0].layers[0].shapes = vec![rect, text];
+            doc.pages[0].size = crate::geometry::Size::new(100.0, v);
+            for version in [TDRAW_FORMAT_VERSION, 0] {
+                let json = doc.to_json_version(version).expect("json");
+                let tree: serde_json::Value = serde_json::from_str(&json).expect("parses");
+                let mut lost = Vec::new();
+                nulls(&tree, None, &mut lost);
+                assert!(lost.is_empty(), "version {version}: null under {lost:?}");
+                assert_eq!(tree["pages"][0]["size"]["height"], serde_json::json!(0.0));
+                let shape = &tree["pages"][0]["layers"][0]["shapes"][0];
+                assert_eq!(shape["opacity"], serde_json::json!(0.0));
+                assert_eq!(shape["stroke"]["width"], serde_json::json!(0.0));
+                let back = Document::from_json(&json).expect("opens again");
+                let shapes = &back.pages[0].layers[0].shapes;
+                assert_eq!(shapes.len(), 2);
+                let ShapeKind::Rect { rect, .. } = &shapes[0].kind else {
+                    panic!("a rectangle");
+                };
+                assert_eq!((rect.x0, rect.x1, rect.y1), (5.0, 0.0, 30.0));
+                assert_eq!(shapes[0].transform.as_coeffs()[4], 0.0);
+                assert_eq!(shapes[0].opacity, 0.0);
+                let ShapeKind::Text { spans, .. } = &shapes[1].kind else {
+                    panic!("a text");
+                };
+                assert_eq!((spans[0].text.as_str(), spans[0].size_pt), ("Hello", 0.0));
+                assert_eq!(back.pages[0].size.height, 0.0);
+            }
+        }
+        // A setting that is not there is still `null`, as the format has it.
+        fn settings(v: &serde_json::Value, key: Option<&str>, n: &mut usize) {
+            match v {
+                serde_json::Value::Null if key.is_some_and(|k| NULL_SETTINGS.contains(&k)) => {
+                    *n += 1;
+                }
+                serde_json::Value::Array(items) => {
+                    items.iter().for_each(|x| settings(x, None, n));
+                }
+                serde_json::Value::Object(m) => {
+                    m.iter().for_each(|(k, x)| settings(x, Some(k), n));
+                }
+                _ => {}
+            }
+        }
+        let json = Document::default().to_json().expect("json");
+        let tree: serde_json::Value = serde_json::from_str(&json).expect("parses");
+        let mut n = 0;
+        settings(&tree, None, &mut n);
+        assert!(n > 0, "{json}");
+    }
+
+    /// A `.tdraw` file saved before 0.35 with `null` for a value that is
+    /// not a number still opens: the value is read as 0 and everything
+    /// else is as it was. A `null` where something other than a number
+    /// belongs is still an error.
+    #[test]
+    fn a_file_with_a_value_that_is_not_a_number_still_opens() {
+        let bad = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+        for v in bad {
+            let mut doc = Document::default();
+            let mut rect = Shape::new(
+                ShapeId(1),
+                ShapeKind::Rect {
+                    rect: crate::geometry::Rect::new(5.0, 5.0, v, 30.0),
+                    radius: 0.0,
+                    corners: None,
+                },
+            );
+            rect.transform = crate::geometry::Affine::new([1.0, 0.0, 0.0, 1.0, v, 0.0]);
+            rect.stroke = Some(Stroke::new(crate::Color::BLACK, v));
+            rect.opacity = v;
+            let mut text = Shape::new(
+                ShapeId(2),
+                ShapeKind::Text {
+                    spans: vec![TextSpan::new("Hello", "Sans", v)],
+                    origin: crate::geometry::Point::new(10.0, 60.0),
+                    frame: None,
+                    align: TextAlign::Left,
+                    para: ParagraphStyle::default(),
+                    on_path: None,
+                },
+            );
+            text.fill = Fill::Solid(crate::Color::Rgb {
+                r: v as f32,
+                g: 0.5,
+                b: 0.0,
+            });
+            doc.pages[0].layers[0].shapes = vec![rect, text];
+            doc.pages[0].size = crate::geometry::Size::new(100.0, v);
+            let json = doc.to_json().expect("json");
+            assert!(json.contains("null"), "written as null");
+            let back = Document::from_json(&json).expect("opens again");
+            let shapes = &back.pages[0].layers[0].shapes;
+            assert_eq!(shapes.len(), 2);
+            let ShapeKind::Rect { rect, .. } = &shapes[0].kind else {
+                panic!("a rectangle");
+            };
+            assert_eq!((rect.x0, rect.x1, rect.y1), (5.0, 0.0, 30.0));
+            assert_eq!(shapes[0].transform.as_coeffs()[4], 0.0);
+            assert_eq!(shapes[0].stroke.as_ref().map(|s| s.width), Some(0.0));
+            assert_eq!(shapes[0].opacity, 0.0);
+            let ShapeKind::Text { spans, .. } = &shapes[1].kind else {
+                panic!("a text");
+            };
+            assert_eq!((spans[0].text.as_str(), spans[0].size_pt), ("Hello", 0.0));
+            assert_eq!(
+                shapes[1].fill,
+                Fill::Solid(crate::Color::Rgb {
+                    r: 0.0,
+                    g: 0.5,
+                    b: 0.0
+                })
+            );
+            assert_eq!(back.pages[0].size.height, 0.0);
+        }
+        // A null that is not a lost number is still refused.
+        let json = Document::default().to_json().expect("json");
+        let broken = json.replacen("\"pages\":[", "\"pages\":null,\"x\":[", 1);
+        assert!(broken.contains("\"pages\":null"));
+        assert!(Document::from_json(&broken).is_err());
+    }
+
+    /// A `.tdraw` file is compact JSON (#2345): its size follows the
+    /// drawing's nodes, not how deep they sit in groups inside groups,
+    /// and it opens as the same drawing. The indented layout wrote 5.3 MB
+    /// for these 10,000 curve nodes, and 13 MB inside eight groups.
+    #[test]
+    fn tdraw_size_does_not_grow_with_group_depth() {
+        use crate::geometry::BezPath;
+        let save = |depth: u64| {
+            let mut doc = Document::default();
+            let mut shapes: Vec<Shape> = (0..50u64)
+                .map(|k| {
+                    let mut p = BezPath::new();
+                    p.move_to((k as f64, k as f64 / 3.0));
+                    for i in 1..=200 {
+                        let f = i as f64 * 1.37 + k as f64 * 3.1;
+                        p.curve_to(
+                            (f / 7.0, f / 11.0),
+                            (f / 13.0, f / 17.0),
+                            (f / 19.0, f / 23.0),
+                        );
+                    }
+                    Shape::new(
+                        ShapeId(100 + k),
+                        ShapeKind::Path {
+                            path: p,
+                            closed: true,
+                        },
+                    )
+                })
+                .collect();
+            for d in 0..depth {
+                shapes = vec![Shape::new(
+                    ShapeId(10 + d),
+                    ShapeKind::Group { children: shapes },
+                )];
+            }
+            doc.pages[0].layers[0].shapes = shapes;
+            let json = doc.to_json().expect("json");
+            let back = Document::from_json(&json).expect("opens");
+            let nodes = |d: &Document| {
+                (100..150u64)
+                    .filter_map(|k| match &d.find_shape(ShapeId(k))?.kind {
+                        ShapeKind::Path { path, .. } => Some(path.elements().len()),
+                        _ => None,
+                    })
+                    .sum::<usize>()
+            };
+            assert_eq!((nodes(&back), nodes(&doc)), (50 * 201, 50 * 201));
+            json
+        };
+        let flat = save(0);
+        let deep = save(8);
+        assert!(!flat.contains('\n'), "no line breaks");
+        // About 155 bytes for each curve node (its three points in full);
+        // each group adds its own fields, some 500 bytes.
+        assert!(flat.len() < 1_700_000, "{} bytes", flat.len());
+        assert!(
+            deep.len() < flat.len() + 8_000,
+            "{} against {}",
+            deep.len(),
+            flat.len()
+        );
+    }
+
+    /// An open arc converted to curves stays an open curve, so its
+    /// arrowheads stay; it came out closed, without them (#2983).
+    #[test]
+    fn an_open_arc_converted_to_curves_keeps_its_arrowheads() {
+        let mut arc = Shape::new(
+            ShapeId(1),
+            ShapeKind::Ellipse {
+                rect: Rect::new(0.0, 0.0, 40.0, 30.0),
+                arc: Some(EllipseArc {
+                    start_deg: 0.0,
+                    end_deg: 200.0,
+                    pie: false,
+                    inner: 0.0,
+                }),
+            },
+        );
+        let mut st = crate::style::Stroke::new(crate::Color::BLACK, 1.0);
+        st.end_arrow = crate::style::Arrowhead::Arrow;
+        arc.stroke = Some(st.clone());
+        let heads = crate::style::arrowhead_paths(&arc.page_path(), &st).len();
+        assert_eq!(heads, 1);
+        let got = arc
+            .converted_to_curves(&[], &mut || ShapeId(2))
+            .expect("converted");
+        assert!(
+            matches!(got.kind, ShapeKind::Path { closed: false, .. }),
+            "{:?}",
+            got.kind
+        );
+        assert_eq!(
+            crate::style::arrowhead_paths(&got.page_path(), &st).len(),
+            heads
+        );
+        // A pie stays closed.
+        let mut pie = arc.clone();
+        if let ShapeKind::Ellipse { arc: Some(a), .. } = &mut pie.kind {
+            a.pie = true;
+        }
+        let got = pie
+            .converted_to_curves(&[], &mut || ShapeId(3))
+            .expect("pie");
+        assert!(matches!(got.kind, ShapeKind::Path { closed: true, .. }));
+    }
+
+    /// Variable font axis values (#870) are set, replaced and taken off
+    /// per tag, saved with the text in the native format and left out of
+    /// it when none is set.
+    #[test]
+    fn variable_font_axes_are_kept_with_the_text() {
+        let mut sp = TextSpan::new("Hello", "Quicksand", 24.0);
+        sp.set_variation("wght", Some(550.0));
+        sp.set_variation("wdth", Some(80.0));
+        sp.set_variation("wght", Some(620.0));
+        sp.set_variation("XOPQ", Some(f64::NAN));
+        assert_eq!(sp.variation("wght"), Some(620.0));
+        assert_eq!(sp.variations.len(), 2);
+        sp.set_variation("wdth", None);
+        assert_eq!(sp.variation("wdth"), None);
+
+        let text = |sp: TextSpan| {
+            Shape::new(
+                ShapeId(1),
+                ShapeKind::Text {
+                    spans: vec![sp],
+                    origin: crate::geometry::Point::new(0.0, 0.0),
+                    frame: None,
+                    align: TextAlign::Left,
+                    para: ParagraphStyle::default(),
+                    on_path: None,
+                },
+            )
+        };
+        let mut doc = Document::default();
+        doc.pages[0].layers[0].shapes = vec![text(sp.clone())];
+        let json = doc.to_json().expect("json");
+        assert!(json.contains("\"wght\""));
+        let back = Document::from_json(&json).expect("opens again");
+        let ShapeKind::Text { spans, .. } = &back.pages[0].layers[0].shapes[0].kind else {
+            panic!("a text");
+        };
+        assert_eq!(spans[0].variations, sp.variations);
+
+        doc.pages[0].layers[0].shapes = vec![text(TextSpan::new("Hello", "Quicksand", 24.0))];
+        let json = doc.to_json().expect("json");
+        assert!(!json.contains("variations"));
+        // Files written before keep opening.
+        let back = Document::from_json(&json).expect("opens again");
+        let ShapeKind::Text { spans, .. } = &back.pages[0].layers[0].shapes[0].kind else {
+            panic!("a text");
+        };
+        assert!(spans[0].variations.is_empty());
+    }
+
+    /// Bowed edges (#2188): a square bulged all round is a circle through
+    /// its corners, a little bow keeps the corners where they were and
+    /// lifts the edges' middles, rounded corners stay tangent to the
+    /// bowed edges, and a rectangle that bows is never written as a plain
+    /// one. No bow leaves the outline as it was.
+    #[test]
+    fn bulged_edges_bow_the_rectangle_out() {
+        use crate::geometry::{ParamCurve, ParamCurveDeriv, ParamCurveNearest, Shape as _};
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let full = Corners {
+            bulge: [1.0; 4],
+            ..Corners::default()
+        };
+        let p = full.path(r, (1.0, 1.0));
+        // Every point of the outline on the circle through the corners.
+        let c = Point::new(50.0, 50.0);
+        let radius = 50.0 * std::f64::consts::SQRT_2;
+        for seg in p.segments() {
+            for i in 0..=8 {
+                let q = seg.eval(i as f64 / 8.0);
+                assert!(((q - c).hypot() - radius).abs() < 0.05, "{q:?}");
+            }
+        }
+        // A little bow on the top edge alone.
+        let top = Corners {
+            bulge: [0.5, 0.0, 0.0, 0.0],
+            ..Corners::default()
+        };
+        let (mid, out) = top.edge_middle(Corners::EDGE_TOP, r);
+        assert_eq!(out, Vec2::new(0.0, 1.0));
+        let sag = 0.5 * (std::f64::consts::SQRT_2 - 1.0) * 50.0;
+        assert!((mid.y - (100.0 + sag)).abs() < 1e-9 && (mid.x - 50.0).abs() < 1e-9);
+        let b = top.path(r, (1.0, 1.0)).bounding_box();
+        assert!((b.y1 - (100.0 + sag)).abs() < 1e-6, "{b:?}");
+        assert!(b.y0.abs() < 1e-9 && b.x0.abs() < 1e-9 && (b.x1 - 100.0).abs() < 1e-9);
+        assert!((Corners::bulge_for(Corners::EDGE_TOP, r, sag) - 0.5).abs() < 1e-9);
+        // Rounded corners: the cut ends on the bowed edge, and the outline
+        // turns smoothly there (no kink between the edge and the corner).
+        let round = Corners {
+            radii: [10.0; 4],
+            bulge: [0.6; 4],
+            ..Corners::default()
+        };
+        let path = round.path(r, (1.0, 1.0));
+        let segs: Vec<_> = path.segments().collect();
+        for w in segs.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let ta = a.to_cubic().deriv().eval(1.0).to_vec2();
+            let tb = b.to_cubic().deriv().eval(0.0).to_vec2();
+            let turn = ta.cross(tb).atan2(ta.dot(tb)).abs();
+            assert!(turn < 0.02, "kink of {turn} rad at {:?}", a.end());
+        }
+        // The square corner nodes stay on the corners; the cut ends of a
+        // round corner lie on the bowed edge, not inside it.
+        let ends = round.ends(r, (1.0, 1.0));
+        for (_, v, h) in ends {
+            for q in [v, h] {
+                let d = segs
+                    .iter()
+                    .map(|s| s.nearest(q, 1e-9).distance_sq)
+                    .fold(f64::MAX, f64::min);
+                assert!(d < 1e-6, "{q:?}");
+            }
+        }
+        // Kept as a rectangle with corners, never plain, and the bow
+        // survives a trip through the file.
+        let kind = ShapeKind::rect_with_corners(r, top);
+        assert!(matches!(kind, ShapeKind::Rect { corners: Some(c), .. } if c.bulge[0] == 0.5));
+        let s = Shape::new(ShapeId(1), kind);
+        assert!(s.plain_rect().is_none());
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Shape = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.kind, s.kind);
+        // No bow: the same outline as before, and no field in the file.
+        let plain = Corners {
+            radii: [10.0; 4],
+            ..Corners::default()
+        };
+        assert!(!serde_json::to_string(&plain).unwrap().contains("bulge"));
+        assert_eq!(plain.path(r, (1.0, 1.0)).elements().len(), 10);
+    }
+
+    /// Imported rounded corners keep their size (#619): a corner larger
+    /// than the shorter side stays as it was, and a stretched rectangle
+    /// takes the stretch into its size, its corners round at the smaller
+    /// scale.
+    #[test]
+    fn keep_corner_size_leaves_the_outline_and_takes_the_stretch() {
+        let mut ids = IdSource::default();
+        let corners = Corners {
+            radii: [30.0, 30.0, 0.0, 0.0],
+            kind: CornerKind::Round,
+            fixed: false,
+            ..Corners::default()
+        };
+        let mut s = Shape::new(
+            ids.shape(),
+            ShapeKind::rect_with_corners(Rect::new(0.0, 0.0, 100.0, 40.0), corners),
+        );
+        s.transform = Affine::translate((5.0, 5.0));
+        let before = s.page_path().area();
+        s.keep_corner_size();
+        let page = s.page_corners().expect("corners");
+        assert!(page.fixed);
+        assert_eq!(page.radii, [30.0, 30.0, 0.0, 0.0]);
+        assert!((s.page_path().area() - before).abs() < 1e-6);
+        // Stretched 2 x 1: the size takes it, the corners 2 mm round.
+        let mut t = Shape::new(
+            ids.shape(),
+            ShapeKind::rect_with_corners(
+                Rect::new(0.0, 0.0, 20.0, 10.0),
+                Corners::uniform(2.0, CornerKind::Round),
+            ),
+        );
+        t.transform = Affine::translate((5.0, 5.0)) * Affine::scale_non_uniform(2.0, 1.0);
+        let bounds = t.bounds();
+        t.keep_corner_size();
+        let (sx, sy) = axis_scale(t.transform);
+        assert!((sx - 1.0).abs() < 1e-9 && (sy - 1.0).abs() < 1e-9);
+        assert!(
+            matches!(t.kind, ShapeKind::Rect { rect, .. } if (rect.width() - 40.0).abs() < 1e-9)
+        );
+        let b = t.bounds();
+        assert!((b.x0 - bounds.x0).abs() < 1e-9 && (b.x1 - bounds.x1).abs() < 1e-9);
+        assert_eq!(t.page_corners().expect("corners").radii, [2.0; 4]);
+        // An outline that scales with the object keeps its width: the
+        // stretch stays in the transform.
+        let mut u = Shape::new(
+            ids.shape(),
+            ShapeKind::rect_with_corners(
+                Rect::new(0.0, 0.0, 20.0, 10.0),
+                Corners::uniform(2.0, CornerKind::Round),
+            ),
+        );
+        u.transform = Affine::scale_non_uniform(2.0, 1.0);
+        let mut stroke = Stroke::default();
+        stroke.scale_with_object = true;
+        u.stroke = Some(stroke);
+        let before = u.transform;
+        u.keep_corner_size();
+        assert_eq!(u.transform, before);
+        assert!(u.page_corners().expect("corners").fixed);
+        assert_eq!(u.page_corners().expect("corners").radii, [2.0; 4]);
+        // A skewed one is left as it was.
+        let mut k = Shape::new(
+            ids.shape(),
+            ShapeKind::rect_with_corners(
+                Rect::new(0.0, 0.0, 20.0, 10.0),
+                Corners::uniform(2.0, CornerKind::Round),
+            ),
+        );
+        k.transform = Affine::new([1.0, 0.0, 0.5, 1.0, 0.0, 0.0]);
+        let kind = k.kind.clone();
+        k.keep_corner_size();
+        assert_eq!(k.kind, kind);
+    }
+
+    /// A clip frame's warp is baked before the warps of what it holds, as
+    /// they are drawn, and its frame keeps its own envelope: the contents
+    /// are clipped to the frame's outline without it (#647).
+    #[test]
+    fn a_clip_frame_bakes_its_warp_before_the_warps_inside() {
+        use crate::live::{evaluate, Effect};
+        let b = Rect::new(0.0, 0.0, 40.0, 20.0);
+        let arch = |b: Rect| {
+            let mut nodes = crate::envelope::default_nodes(b);
+            nodes[5].y += 10.0;
+            let f = crate::envelope::Frame::from_parts(&nodes, &[], &[]).expect("frame");
+            Effect::from_envelope(&f, false, crate::envelope::Mapping::Putty)
+        };
+        let mut inner = Shape::new(
+            ShapeId(2),
+            ShapeKind::Rect {
+                rect: b,
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        inner.effects = vec![arch(b)];
+        let mut content = Shape::new(
+            ShapeId(3),
+            ShapeKind::Rect {
+                rect: Rect::new(5.0, 2.0, 35.0, 18.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        content.effects = vec![Effect::Perspective {
+            corners: [
+                Point::new(5.0, 2.0),
+                Point::new(35.0, 2.0),
+                Point::new(28.0, 18.0),
+                Point::new(12.0, 18.0),
+            ],
+        }];
+        let mut clip = Shape::new(
+            ShapeId(1),
+            ShapeKind::ClipFrame {
+                frame: Box::new(inner),
+                contents: vec![content],
+            },
+        );
+        clip.effects = vec![arch(b)];
+        let drawn = evaluate(&clip).main;
+        let ShapeKind::ClipFrame {
+            frame: drawn_frame,
+            contents: drawn_contents,
+        } = &drawn.kind
+        else {
+            panic!("a clip frame");
+        };
+        let want = evaluate(&drawn_contents[0]).main.local_path();
+        let mut n = 10;
+        let got = clip
+            .converted_to_curves(&[], &mut || {
+                n += 1;
+                ShapeId(n)
+            })
+            .expect("converted");
+        assert!(got.effects.is_empty());
+        let ShapeKind::ClipFrame { frame, contents } = &got.kind else {
+            panic!("still a clip frame: {:?}", got.kind);
+        };
+        assert!(contents[0].effects.is_empty());
+        assert!(matches!(contents[0].kind, ShapeKind::Path { .. }));
+        assert!(crate::live::same_outline(
+            &contents[0].local_path(),
+            &want,
+            0.02
+        ));
+        assert_eq!(frame.effects.len(), 1, "the frame keeps its envelope");
+        assert_eq!(
+            frame.local_path().elements(),
+            drawn_frame.local_path().elements()
+        );
+        // A clip frame whose only warp is its frame's has nothing to convert.
+        let mut only_frame = got.clone();
+        if let ShapeKind::ClipFrame { contents, .. } = &mut only_frame.kind {
+            contents[0].effects.clear();
+        }
+        assert!(!only_frame.converts_to_curves());
+        assert!(!only_frame.has_outline_warp());
+    }
+
+    /// The objects in a group whose contour stays live keep their warps:
+    /// baking them would change the contour drawn around them.
+    #[test]
+    fn warps_under_a_live_contour_stay() {
+        use crate::live::Effect;
+        let mut child = Shape::new(
+            ShapeId(2),
+            ShapeKind::Rect {
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        child.effects = vec![Effect::Distort(crate::effects::Distort::Twister {
+            angle_deg: 40.0,
+            center: None,
+        })];
+        let mut g = Shape::new(
+            ShapeId(1),
+            ShapeKind::Group {
+                children: vec![child],
+            },
+        );
+        g.effects = vec![Effect::BlockShadow {
+            offset: crate::geometry::Vec2::new(2.0, -2.0),
+            color: crate::Color::BLACK,
+            gap: 0.0,
+        }];
+        let clip = Shape::new(
+            ShapeId(5),
+            ShapeKind::ClipFrame {
+                frame: Box::new(Shape::new(
+                    ShapeId(6),
+                    ShapeKind::Rect {
+                        rect: Rect::new(0.0, 0.0, 30.0, 30.0),
+                        radius: 0.0,
+                        corners: None,
+                    },
+                )),
+                contents: vec![g],
+            },
+        );
+        let mut n = 10;
+        let got = clip
+            .converted_to_curves(&[], &mut || {
+                n += 1;
+                ShapeId(n)
+            })
+            .expect("the frame becomes a curve");
+        let ShapeKind::ClipFrame { contents, .. } = &got.kind else {
+            panic!("a clip frame");
+        };
+        let ShapeKind::Group { children } = &contents[0].kind else {
+            panic!("a group");
+        };
+        assert_eq!(children[0].effects.len(), 1, "the twister stays live");
+        assert!(matches!(children[0].kind, ShapeKind::Path { .. }));
+    }
+
+    /// A further fill's look of its own: its part gets the live effects
+    /// that draw it, after the object's own; the other parts stay plain.
+    /// Set Extra Paint keeps the looks with as many fills as there are.
+    #[test]
+    fn a_further_fill_has_a_look_of_its_own() {
+        use crate::Color;
+        let mut s = Shape::new(
+            ShapeId(1),
+            ShapeKind::Rect {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        s.stroke = None;
+        s.extra_fills = vec![Fill::Solid(Color::BLACK), Fill::Solid(Color::WHITE)];
+        let look = FillLook {
+            grow: 2.0,
+            move_x: 1.0,
+            move_y: 0.0,
+            blur: 0.5,
+        };
+        s.fill_looks = Some(Box::new(vec![look]));
+        assert!(FillLook::default().effects().is_empty());
+        let parts = s.layers().expect("parts");
+        assert_eq!(parts.len(), 3);
+        assert!(parts[0].effects.is_empty() && parts[2].effects.is_empty());
+        assert_eq!(parts[1].effects, look.effects());
+        assert_eq!(parts[1].effects.len(), 3);
+        assert!(parts.iter().all(|p| p.fill_looks.is_none()));
+        // Saved and read back.
+        let back: Shape = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.fill_look(0), look);
+        assert!(back.fill_look(1).is_plain());
+        // Fewer fills: the looks go with them; none left plain stays None.
+        let mut doc = Document::new("t", crate::geometry::Size::new(50.0, 50.0));
+        let layer = doc.pages[0].layers[0].id;
+        doc.pages[0].layers[0].shapes.push(s.clone());
+        crate::Command::SetExtraPaint {
+            shapes: vec![s.id],
+            fills: vec![],
+            strokes: vec![],
+            looks: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(doc.layer(layer).unwrap().shapes[0].fill_looks.is_none());
+    }
 
     #[test]
     fn further_fills_and_outlines_draw_in_layers() {
@@ -4354,6 +10523,211 @@ mod tests {
     }
 
     #[test]
+    fn tdraw_files_read_straight_from_their_text() {
+        // A drawing reads from its text without a JSON value in between,
+        // packed or plain, to the drawing the long way gives; the long way
+        // stays for what only it mends (#3833).
+        let mut doc = Document::new("Straight", crate::geometry::Size::new(100.0, 50.0));
+        let layer = doc.pages[0].layers[0].id;
+        for i in 0..3 {
+            let id = doc.ids_mut().shape();
+            let mut path = BezPath::new();
+            path.move_to((f64::from(i), 1.5));
+            path.curve_to((2.25, 3.0), (4.0, 5.125), (6.0, 7.0));
+            let s = Shape::new(
+                id,
+                ShapeKind::Path {
+                    path,
+                    closed: i % 2 == 0,
+                },
+            );
+            doc.layer_mut(layer).expect("layer").shapes.push(s);
+        }
+        let mut packed = Vec::new();
+        doc.write_tdraw_version(&mut packed, TDRAW_FORMAT_VERSION)
+            .expect("write");
+        for text in [
+            tdraw_text(&packed).expect("text"),
+            doc.to_json_version(0).expect("plain"),
+        ] {
+            let straight = Document::from_json_text(&text).expect("straight");
+            assert_eq!(straight.opened(), doc);
+            assert_eq!(Document::from_json(&text).expect("reads"), doc);
+        }
+        // The version alone is read the short way too, as the long way
+        // reads it.
+        assert_eq!(tdraw_text_version(&tdraw_text(&packed).expect("text")), TDRAW_FORMAT_VERSION);
+        assert_eq!(tdraw_text_version(&doc.to_json_version(0).expect("plain")), 0);
+        assert_eq!(tdraw_text_version("{\"format_version\": 1}"), 0);
+        assert_eq!(tdraw_text_version("{\"format_version\": 2.5}"), 0);
+        assert_eq!(tdraw_text_version("not json"), 0);
+        // A number lost as null reads only the long way, as 0.
+        let text = doc.to_json_version(0).expect("plain");
+        let lost = text.replacen("1.5", "null", 1);
+        assert!(Document::from_json_text(&lost).is_none());
+        let back = Document::from_json(&lost).expect("mended");
+        assert_eq!(back.pages[0].layers[0].shapes.len(), 3);
+    }
+
+    /// A saved drawing is packed (#2849): each distinct picture and font
+    /// once however many objects hold it, the whole JSON gzip-compressed;
+    /// it reads back the same, with the copies sharing one buffer again.
+    /// Plain files (version 0, and every file before 0.47) still open,
+    /// and Save As version 0 writes one.
+    #[test]
+    fn tdraw_files_are_packed_with_each_picture_once() {
+        let mut doc = Document::new("Packed", crate::geometry::Size::new(100.0, 50.0));
+        let layer = doc.pages[0].layers[0].id;
+        // A picture of 200 kB of noise (it does not compress), on 50
+        // objects, as copies and symbols of a large drawing hold it.
+        let mut seed = 7u32;
+        let noise: Vec<u8> = (0..200_000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                (seed >> 16) as u8
+            })
+            .collect();
+        let picture = crate::SharedBytes::from(noise.clone());
+        for i in 0..50 {
+            let id = doc.ids_mut().shape();
+            // Half of them a copy of the bytes, not the shared buffer.
+            let png = if i % 2 == 0 {
+                picture.clone()
+            } else {
+                crate::SharedBytes::from(noise.clone())
+            };
+            let s = Shape::new(
+                id,
+                ShapeKind::Bitmap {
+                    rect: Rect::new(0.0, 0.0, 20.0, 10.0),
+                    width_px: 4,
+                    height_px: 2,
+                    png,
+                    fx: None,
+                },
+            );
+            doc.layer_mut(layer).expect("layer").shapes.push(s);
+        }
+        doc.fonts
+            .push(DocumentFont::new("Embedded", vec![5u8; 3000]));
+        doc.fonts
+            .push(DocumentFont::new("Same bytes", vec![5u8; 3000]));
+        let mut packed = Vec::new();
+        doc.write_tdraw_version(&mut packed, TDRAW_FORMAT_VERSION)
+            .expect("write");
+        assert!(is_gzip(&packed));
+        let plain = doc.to_json_version(0).expect("plain");
+        // 50 copies of 200 kB in base64 would be some 13 MB.
+        assert!(plain.len() > 13_000_000, "{}", plain.len());
+        assert!(packed.len() < 300_000, "{} bytes", packed.len());
+        let text = tdraw_text(&packed).expect("text");
+        assert_eq!(text.matches(crate::bytes::BLOB_PREFIX).count(), 52);
+        let table: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(table[BLOBS_KEY].as_array().map(Vec::len), Some(2));
+        assert_eq!(tdraw_text_version(&text), TDRAW_FORMAT_VERSION);
+        // Read straight from the text, with the table (#3833).
+        assert!(Document::from_json_text(&text).is_some());
+        let back = Document::from_tdraw_bytes(&packed).expect("reads");
+        let pictures: Vec<&crate::SharedBytes> = back.pages[0].layers[0]
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.kind {
+                ShapeKind::Bitmap { png, .. } => Some(png),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pictures.len(), 50);
+        assert!(pictures.iter().all(|p| ***p == noise[..]));
+        assert!(pictures
+            .iter()
+            .all(|p| crate::SharedBytes::ptr_eq(p, pictures[0])));
+        assert_eq!(back.fonts.len(), 2);
+        assert_eq!(*back.fonts[1].data, vec![5u8; 3000]);
+        // The same drawing as before: its JSON matches.
+        assert_eq!(
+            back.to_json_version(0).expect("json"),
+            plain,
+            "the packed file reads back as the drawing"
+        );
+        // A plain file of 0.46 (version 0, no table) opens, as bytes too.
+        assert!(!is_gzip(plain.as_bytes()));
+        assert_eq!(tdraw_text_version(&plain), 0);
+        let old = Document::from_tdraw_bytes(plain.as_bytes()).expect("plain opens");
+        assert_eq!(old.to_json_version(0).expect("json"), plain);
+        // Save As version 0 writes that plain file.
+        let mut v0 = Vec::new();
+        doc.write_tdraw_version(&mut v0, 0).expect("v0");
+        assert_eq!(String::from_utf8(v0).expect("text"), plain);
+        // A reference outside the table is an error, not a panic.
+        let broken = text.replace("blob:1\"", "blob:9\"");
+        assert!(Document::from_json(&broken).is_err());
+        // No table is left behind for the next file read or written.
+        assert!(crate::bytes::blob_read("blob:0").is_none());
+        assert!(!doc
+            .to_json()
+            .expect("json")
+            .contains(crate::bytes::BLOB_PREFIX));
+    }
+
+    /// The file is written as it is made, and reads as the same JSON the
+    /// tree built in memory gave.
+    #[test]
+    fn tdraw_json_streams_to_the_writer() {
+        let mut doc = Document::new("Streamed", crate::geometry::Size::new(100.0, 50.0));
+        let layer = doc.pages[0].layers[0].id;
+        let id = doc.ids_mut().shape();
+        let mut s = Shape::new(
+            id,
+            ShapeKind::Rect {
+                rect: Rect::new(0.0, 0.0, 10.0, 5.0),
+                radius: 1.0,
+                corners: None,
+            },
+        );
+        s.fill = crate::Fill::Solid(crate::Color::rgb8(10, 20, 30));
+        doc.layer_mut(layer).expect("layer").shapes.push(s);
+        // A writer that sees the text in pieces, never all at once.
+        struct Pieces {
+            text: Vec<u8>,
+            writes: usize,
+        }
+        impl std::io::Write for Pieces {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.writes += 1;
+                self.text.extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut w = Pieces {
+            text: Vec::new(),
+            writes: 0,
+        };
+        doc.write_json_version(&mut w, TDRAW_FORMAT_VERSION)
+            .expect("written");
+        assert!(w.writes > 10, "{} writes", w.writes);
+        // The tree printed f32 values through f64 (0.6000000238418579
+        // for 0.6); both read back as the same drawing.
+        let mut tree = serde_json::to_value(&doc).expect("value");
+        tree.as_object_mut().expect("object").insert(
+            FORMAT_VERSION_KEY.into(),
+            serde_json::Value::from(TDRAW_FORMAT_VERSION),
+        );
+        let streamed = std::str::from_utf8(&w.text).expect("utf-8");
+        let a = Document::from_json(streamed).expect("streamed");
+        let b = Document::from_json(&tree.to_string()).expect("tree");
+        assert_eq!(
+            serde_json::to_value(&a).expect("a"),
+            serde_json::to_value(&b).expect("b")
+        );
+        assert_eq!(doc.to_json().expect("json").as_bytes(), &w.text[..]);
+        let back = a;
+        assert_eq!(back.pages, doc.pages);
+    }
+
+    #[test]
     fn tdraw_files_can_be_written_in_an_older_format_version() {
         let doc = Document {
             title: "Older".into(),
@@ -4361,7 +10735,9 @@ mod tests {
         };
         for version in 0..=TDRAW_FORMAT_VERSION {
             let json = doc.to_json_version(version).expect("json");
-            assert_eq!(tdraw_text_version(&json), version);
+            // 1 is read as 0, whose layout it has.
+            let read_as = if version == 1 { 0 } else { version };
+            assert_eq!(tdraw_text_version(&json), read_as);
             assert_eq!(Document::from_json(&json).expect("reads").title, "Older");
         }
         let newer = doc.to_json_version(TDRAW_FORMAT_VERSION + 5).expect("json");
@@ -4397,6 +10773,38 @@ mod tests {
         let (top, dir) = back.at(0.0).expect("point");
         assert!((top - Point::new(0.0, 8.0)).hypot() < 0.01, "{top:?}");
         assert!(dir.x < -0.99, "{dir:?}");
+    }
+
+    /// #2715: letters round a circle took each the direction of the
+    /// chord of the flattened circle they stood on, so they turned in
+    /// steps of a chord's angle (about 5 degrees on a 50 mm radius) and
+    /// some stood visibly tilted. The direction now follows the curve
+    /// within a fraction of a degree, and a corner stays sharp.
+    #[test]
+    fn text_baselines_turn_smoothly_round_a_curve_and_keep_corners() {
+        let r = 50.0;
+        let circle = clockwise_circle(r);
+        let b = Baseline::new(&circle, 0.0, false);
+        let total = b.length();
+        let mut worst: f64 = 0.0;
+        for k in 0..997 {
+            let s = total * k as f64 / 997.0;
+            let (p, d) = b.at(s).expect("point");
+            // Clockwise round the origin: the tangent is (y, -x) / r.
+            let want = Vec2::new(p.y, -p.x).normalize();
+            worst = worst.max(d.cross(want).abs().asin().to_degrees());
+        }
+        assert!(worst < 1.0, "off the curve by {worst} degrees");
+        // A corner: the chord's own direction right up to it.
+        let mut l = BezPath::new();
+        l.move_to((0.0, 0.0));
+        l.line_to((10.0, 0.0));
+        l.line_to((10.0, 10.0));
+        let corner = Baseline::new(&l, 0.0, false);
+        let (_, d) = corner.at(9.99).expect("point");
+        assert!((d - Vec2::new(1.0, 0.0)).hypot() < 1e-9, "{d:?}");
+        let (_, d) = corner.at(10.01).expect("point");
+        assert!((d - Vec2::new(0.0, 1.0)).hypot() < 1e-9, "{d:?}");
     }
 
     #[test]
@@ -4452,6 +10860,9 @@ mod tests {
             color: Some(crate::Color::rgb8(255, 0, 0)),
             style: GuideStyle::Dotted,
             locked: true,
+            hidden: true,
+            name: Some("Fold".into()),
+            anchor: None,
         };
         let json = serde_json::to_string(&g).unwrap();
         assert!(json.contains("\"dir\":\"vertical\""));
@@ -4496,6 +10907,63 @@ mod tests {
     }
 
     #[test]
+    fn page_ranges_read_numbers_and_ranges_in_page_order() {
+        assert_eq!(parse_page_range("1-3, 7", 10), vec![0, 1, 2, 6]);
+        assert_eq!(parse_page_range(" 7 ; 3-1 ", 10), vec![0, 1, 2, 6]);
+        assert_eq!(parse_page_range("2,2,2-3", 10), vec![1, 2]);
+        // Pages past the end are left out; a huge range costs nothing.
+        assert_eq!(parse_page_range("4-99999999999", 5), vec![3, 4]);
+        assert_eq!(parse_page_range("9", 5), Vec::<usize>::new());
+        // Not a range: none.
+        for bad in ["", "a", "0", "1-x", "1,,b", "-3"] {
+            assert!(parse_page_range(bad, 5).is_empty(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_multipage_pages_are_kept_and_default_to_all() {
+        // A drawing saved before the setting existed shows every page.
+        let m: Metadata = serde_json::from_str(r#"{"author":"a"}"#).unwrap();
+        assert_eq!(m.multipage_pages, "");
+        assert_eq!(m.multipage_page_indices(5), None);
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("multipage_pages"), "{json}");
+        let mut m = m;
+        m.multipage_pages = "1-2, 5".into();
+        let back: Metadata = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.multipage_page_indices(5), Some(vec![0, 1, 4]));
+        // Fewer pages now: the ones left; none of them: every page.
+        assert_eq!(back.multipage_page_indices(2), Some(vec![0, 1]));
+        m.multipage_pages = "7-9".into();
+        assert_eq!(m.multipage_page_indices(5), None);
+    }
+
+    #[test]
+    fn the_page_spacing_defaults_to_30_mm_and_round_trips() {
+        // A drawing saved before the setting existed.
+        let m: Metadata = serde_json::from_str(r#"{"author":"a"}"#).unwrap();
+        assert_eq!(m.page_spacing, None);
+        assert_eq!(m.page_spacing(), DEFAULT_PAGE_SPACING);
+        assert_eq!(DEFAULT_PAGE_SPACING, 30.0);
+        assert_eq!(Document::default().metadata.page_spacing(), 30.0);
+        // Unset, it stays out of the file.
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("page_spacing"), "{json}");
+        // Set, it is saved and read back.
+        let mut m = m;
+        m.page_spacing = Some(12.5);
+        let back: Metadata = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.page_spacing(), 12.5);
+        // Out of range values are kept in range.
+        m.page_spacing = Some(-4.0);
+        assert_eq!(m.page_spacing(), 0.0);
+        m.page_spacing = Some(1e9);
+        assert_eq!(m.page_spacing(), MAX_PAGE_SPACING);
+        m.page_spacing = Some(f64::NAN);
+        assert_eq!(m.page_spacing(), DEFAULT_PAGE_SPACING);
+    }
+
+    #[test]
     fn json_round_trip() {
         let mut doc = Document::default();
         let id = doc.ids_mut().shape();
@@ -4518,6 +10986,52 @@ mod tests {
         assert!((b.x0 - 15.0).abs() < 1e-6 && (b.y1 - 35.0).abs() < 1e-6);
         assert_eq!(back.locate(id).unwrap(), (layer, 0));
         let _ = Point::ZERO;
+    }
+
+    /// A drawing with groups inside groups, 40 deep, saves and opens
+    /// again. The JSON reader's own nesting limit (128 levels, about 30
+    /// groups inside groups) refused such a file as "recursion limit
+    /// exceeded", so a drawing that saved fine was lost on reopening.
+    /// A file nested past [`MAX_JSON_DEPTH`] is refused with a clear
+    /// error, not a crash, and the bracket count ignores strings.
+    #[test]
+    fn deeply_nested_groups_save_and_open_again() {
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        let mut ids = doc.ids().clone();
+        let mut inner = Shape::new(
+            ids.shape(),
+            ShapeKind::Rect {
+                rect: Rect::new(10.0, 10.0, 50.0, 30.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        for _ in 0..40 {
+            inner = Shape::new(
+                ids.shape(),
+                ShapeKind::Group {
+                    children: vec![inner],
+                },
+            );
+        }
+        doc.set_ids(ids);
+        doc.layer_mut(layer).unwrap().shapes.push(inner);
+        let json = doc.to_json().unwrap();
+        assert!(json_depth(&json) > 128, "{}", json_depth(&json));
+        assert_eq!(tdraw_text_version(&json), TDRAW_FORMAT_VERSION);
+        let back = Document::from_json(&json).unwrap();
+        assert_eq!(doc, back);
+
+        assert_eq!(json_depth(r#"{"a":"[[{{","b":[1,[2,"\"]]]"]]}"#), 3);
+        let too_deep = format!(
+            "{}{}",
+            "[".repeat(MAX_JSON_DEPTH + 1),
+            "]".repeat(MAX_JSON_DEPTH + 1)
+        );
+        let err = Document::from_json(&too_deep).unwrap_err().to_string();
+        assert!(err.contains("levels deep"), "{err}");
+        assert_eq!(tdraw_text_version(&too_deep), 0);
     }
 
     #[test]
@@ -4557,7 +11071,7 @@ mod tests {
             rect: Rect::new(0.0, 0.0, 20.0, 10.0),
             width_px: 4,
             height_px: 2,
-            png: vec![1, 2, 3, 4],
+            png: vec![1, 2, 3, 4].into(),
             fx,
         };
         let mut params = std::collections::BTreeMap::new();
@@ -4566,7 +11080,7 @@ mod tests {
             rect: Rect::new(1.0, 1.0, 19.0, 9.0),
             width_px: 3,
             height_px: 1,
-            png: vec![9, 8, 7],
+            png: vec![9, 8, 7].into(),
             effects: vec![
                 BitmapEffect {
                     id: "gaussian_blur".into(),
@@ -4745,6 +11259,66 @@ mod tests {
         assert!((area(&s) - (600.0 - 18.0)).abs() < 1e-9);
     }
 
+    /// The corner fields follow the corners as they lie on the page: a
+    /// rectangle turned by 180 degrees or flipped has its local top left
+    /// at another position (#1670).
+    #[test]
+    fn corners_are_read_where_they_are_seen() {
+        use std::f64::consts::PI;
+        let (tl, tr, bl, br) = (
+            Corners::TOP_LEFT,
+            Corners::TOP_RIGHT,
+            Corners::BOTTOM_LEFT,
+            Corners::BOTTOM_RIGHT,
+        );
+        assert_eq!(Corners::seen_through(Affine::IDENTITY), [tl, tr, bl, br]);
+        // Turned a little: where they were.
+        assert_eq!(Corners::seen_through(Affine::rotate(0.3)), [tl, tr, bl, br]);
+        assert_eq!(
+            Corners::seen_through(Affine::rotate(-0.3)),
+            [tl, tr, bl, br]
+        );
+        // Turned by 180 degrees (either way): every corner across.
+        assert_eq!(Corners::seen_through(Affine::rotate(PI)), [br, bl, tr, tl]);
+        assert_eq!(Corners::seen_through(Affine::rotate(-PI)), [br, bl, tr, tl]);
+        // Flipped across: left and right swap; upside down: top and bottom.
+        assert_eq!(
+            Corners::seen_through(Affine::scale_non_uniform(-1.0, 1.0)),
+            [tr, tl, br, bl]
+        );
+        assert_eq!(
+            Corners::seen_through(Affine::scale_non_uniform(1.0, -1.0)),
+            [bl, br, tl, tr]
+        );
+        // A quarter turn counter-clockwise: the local top left (x0, y1)
+        // goes to the bottom left.
+        assert_eq!(
+            Corners::seen_through(Affine::rotate(PI / 2.0)),
+            [tr, br, tl, bl]
+        );
+        // A stretch does not move them; a skew keeps one at each place.
+        assert_eq!(
+            Corners::seen_through(Affine::scale_non_uniform(4.0, 0.2)),
+            [tl, tr, bl, br]
+        );
+        let mut seen = Corners::seen_through(Affine::skew(1.5, 0.0));
+        seen.sort_unstable();
+        assert_eq!(seen, [0, 1, 2, 3]);
+        // Reading and writing the sizes by position.
+        let mut c = Corners::uniform(0.0, CornerKind::Round);
+        c.radii[tl] = 6.0;
+        let turned = Affine::rotate(PI);
+        assert_eq!(c.as_seen(turned).radii, [0.0, 0.0, 0.0, 6.0]);
+        assert_eq!(Corners::from_seen(c.as_seen(turned), turned), c);
+        let mut typed = Corners::uniform(0.0, CornerKind::Round);
+        typed.radii[tl] = 3.0;
+        assert_eq!(
+            Corners::from_seen(typed, turned).radii,
+            [0.0, 0.0, 0.0, 3.0]
+        );
+        assert_eq!(Corners::from_seen(typed, Affine::IDENTITY), typed);
+    }
+
     #[test]
     fn corner_ends_sit_on_the_edges() {
         let mut c = Corners::uniform(5.0, CornerKind::Round);
@@ -4822,6 +11396,79 @@ mod tests {
         assert!((ends[Corners::TOP_RIGHT].1.y - (37.0 - 30.0 * k)).abs() < 1e-9);
     }
 
+    /// A corner set on the page is not cut to half the shorter side: it
+    /// may take what its neighbours on both its sides leave (#1757).
+    #[test]
+    fn one_corner_may_take_what_its_neighbours_leave() {
+        // 100 x 80 mm, top left 10, top right 80: the top side holds 90
+        // of 100, the right side 80 of 80, so nothing shrinks.
+        for fixed in [true, false] {
+            let mut s = rect_shape(100.0, 80.0, Corners::default());
+            s.transform = Affine::scale(2.0);
+            let c = Corners {
+                radii: [20.0, 160.0, 0.0, 0.0],
+                fixed,
+                ..Corners::default()
+            };
+            s.kind = s.with_page_corners(c).unwrap();
+            assert_eq!(s.page_corners().unwrap().radii, [20.0, 160.0, 0.0, 0.0]);
+            assert_eq!(
+                s.drawn_page_corners().unwrap().radii,
+                [20.0, 160.0, 0.0, 0.0]
+            );
+            let ends = s
+                .kind
+                .rect_corners()
+                .unwrap()
+                .1
+                .ends(Rect::new(0.0, 0.0, 100.0, 80.0), axis_scale(s.transform));
+            // A quarter circle down the whole right side.
+            assert!((ends[Corners::TOP_RIGHT].1 - Point::new(100.0, 0.0)).hypot() < 1e-9);
+            assert!((ends[Corners::TOP_RIGHT].2 - Point::new(20.0, 80.0)).hypot() < 1e-9);
+        }
+    }
+
+    /// On a thin rectangle the corners of one long side can each be
+    /// larger than half the short side when their neighbours are smaller;
+    /// corners shrink, all by the same factor, only once the two on a
+    /// side together are longer than it (#1757).
+    #[test]
+    fn corners_shrink_only_when_a_side_is_too_short_for_its_two() {
+        let mut s = rect_shape(100.0, 20.0, Corners::default());
+        let mut c = Corners::uniform(0.0, CornerKind::Round);
+        c.fixed = true;
+        // A tab: 16 and 4 on the right side (20 of 20), 16 on the top left
+        // with 4 below it.
+        c.radii = [16.0, 16.0, 4.0, 4.0];
+        s.kind = s.with_page_corners(c).unwrap();
+        assert_eq!(s.page_corners().unwrap().radii, [16.0, 16.0, 4.0, 4.0]);
+        assert_eq!(
+            s.drawn_page_corners().unwrap().radii,
+            [16.0, 16.0, 4.0, 4.0]
+        );
+        // The area cut matches four quarter circles of those sizes (drawn
+        // as cubics, a hair outside the circle).
+        let cut = (4.0 - std::f64::consts::PI) / 4.0 * (2.0 * 256.0 + 2.0 * 16.0);
+        assert!((area(&s) - (2000.0 - cut)).abs() < 0.2, "{}", area(&s));
+        // 18 over 4 on the right side: 22 on 20, so every corner is drawn
+        // at 20 / 22 of its size; what was typed is kept.
+        c.radii = [16.0, 18.0, 4.0, 4.0];
+        s.kind = s.with_page_corners(c).unwrap();
+        assert_eq!(s.page_corners().unwrap().radii, [16.0, 18.0, 4.0, 4.0]);
+        let k = 20.0 / 22.0;
+        let drawn = s.drawn_page_corners().unwrap().radii;
+        for (d, r) in drawn.iter().zip([16.0, 18.0, 4.0, 4.0]) {
+            assert!((d - r * k).abs() < 1e-9, "{drawn:?}");
+        }
+        // Equal corners still stop at half the shorter side.
+        s.kind = s
+            .with_page_corners(Corners::uniform(30.0, CornerKind::Round))
+            .unwrap();
+        assert_eq!(s.drawn_page_corners().unwrap().radii, [10.0; 4]);
+        // Formats with one radius get the size that is drawn.
+        assert_eq!(s.plain_rect().unwrap().1, 10.0);
+    }
+
     #[test]
     fn fixed_corners_keep_their_size_when_scaled() {
         let r = 4.0;
@@ -4885,11 +11532,19 @@ mod tests {
             s.plain_rect(),
             Some((Rect::new(0.0, 0.0, 20.0, 10.0), 3.0, s.transform))
         );
-        // Fixed corners are stored as page sizes, limited by the page box.
+        // Fixed corners are stored as page sizes, as typed, and drawn
+        // fitted to the page box.
         let mut c = Corners::uniform(50.0, CornerKind::Scallop);
         c.fixed = true;
         let kind = s.with_page_corners(c).unwrap();
-        assert_eq!(kind.rect_corners().unwrap().1.radii, [10.0; 4]);
+        assert_eq!(kind.rect_corners().unwrap().1.radii, [50.0; 4]);
+        let mut fitted = s.clone();
+        fitted.kind = kind;
+        assert_eq!(fitted.drawn_page_corners().unwrap().radii, [10.0; 4]);
+        // Negative and non-finite sizes are square corners.
+        c.radii = [-1.0, f64::NAN, f64::INFINITY, 2.0];
+        let kind = s.with_page_corners(c).unwrap();
+        assert_eq!(kind.rect_corners().unwrap().1.radii, [0.0, 0.0, 0.0, 2.0]);
         // A fixed round radius on a uniformly scaled rectangle is still one radius.
         c.kind = CornerKind::Round;
         c.radii = [4.0; 4];
@@ -4953,6 +11608,7 @@ mod tests {
             sharpness: 0.0,
             complex: Some(3),
             twist: 0.0,
+            bend: 0.0,
         };
         let back: ShapeKind = serde_json::from_str(&serde_json::to_string(&k).unwrap()).unwrap();
         assert_eq!(back, k);
@@ -4964,10 +11620,25 @@ mod tests {
             sharpness: 0.4,
             complex: None,
             twist: 0.25,
+            bend: 0.0,
         };
         let json = serde_json::to_string(&twisted).unwrap();
         assert!(json.contains("twist"));
         assert_eq!(serde_json::from_str::<ShapeKind>(&json).unwrap(), twisted);
+        // An inverted star (#1331) keeps its negative sharpness; an older
+        // file's star reads with the sharpness it had.
+        assert!(matches!(old, ShapeKind::Polygon { sharpness, .. } if sharpness == 0.5));
+        let inverted = ShapeKind::Polygon {
+            rect: Rect::new(0.0, 0.0, 2.0, 2.0),
+            points: 5,
+            sharpness: -0.3,
+            complex: None,
+            twist: 0.0,
+            bend: 0.0,
+        };
+        let json = serde_json::to_string(&inverted).unwrap();
+        assert!(json.contains("\"sharpness\":-0.3"), "{json}");
+        assert_eq!(serde_json::from_str::<ShapeKind>(&json).unwrap(), inverted);
     }
 
     #[test]
@@ -5085,6 +11756,85 @@ mod tests {
         );
     }
 
+    /// The text direction of a paragraph (#2670): older files read as
+    /// left to right and do not write it; right to left is saved and read
+    /// back, also as a paragraph's own format.
+    #[test]
+    fn text_direction_defaults_to_left_to_right_and_round_trips() {
+        let old: ParagraphStyle = serde_json::from_str("{}").expect("parses");
+        assert_eq!(old.direction, TextDirection::LeftToRight);
+        let json = serde_json::to_string(&old).expect("writes");
+        assert!(!json.contains("direction"), "{json}");
+        let mut rtl = old.clone();
+        rtl.direction = TextDirection::RightToLeft;
+        let json = serde_json::to_string(&rtl).expect("writes");
+        assert!(json.contains("\"direction\":\"right_to_left\""), "{json}");
+        let back: ParagraphStyle = serde_json::from_str(&json).expect("parses");
+        assert_eq!(back.direction, TextDirection::RightToLeft);
+        let f = crate::ParagraphFormat::of(TextAlign::Right, &rtl);
+        let json = serde_json::to_string(&f).expect("writes");
+        let back: crate::ParagraphFormat = serde_json::from_str(&json).expect("parses");
+        let mut p = ParagraphStyle::default();
+        back.apply_to(&mut p);
+        assert_eq!(p.direction, TextDirection::RightToLeft);
+        let plain = serde_json::to_string(&crate::ParagraphFormat::default()).expect("writes");
+        assert!(!plain.contains("direction"), "{plain}");
+    }
+
+    /// Kashida (#3827): older files read as off, which is not written;
+    /// a setting is saved, read back and carried by a paragraph format.
+    #[test]
+    fn kashida_defaults_to_off_and_round_trips() {
+        let old: ParagraphStyle = serde_json::from_str("{}").expect("parses");
+        assert_eq!(old.kashida, Kashida::Off);
+        let json = serde_json::to_string(&old).expect("writes");
+        assert!(!json.contains("kashida"), "{json}");
+        let mut k = old.clone();
+        k.kashida = Kashida::Medium;
+        let json = serde_json::to_string(&k).expect("writes");
+        assert!(json.contains("\"kashida\":\"medium\""), "{json}");
+        let back: ParagraphStyle = serde_json::from_str(&json).expect("parses");
+        assert_eq!(back.kashida, Kashida::Medium);
+        let f = crate::ParagraphFormat::of(TextAlign::Justify, &k);
+        let json = serde_json::to_string(&f).expect("writes");
+        let back: crate::ParagraphFormat = serde_json::from_str(&json).expect("parses");
+        let mut p = ParagraphStyle::default();
+        back.apply_to(&mut p);
+        assert_eq!(p.kashida, Kashida::Medium);
+        let plain = serde_json::to_string(&crate::ParagraphFormat::default()).expect("writes");
+        assert!(!plain.contains("kashida"), "{plain}");
+    }
+
+    /// The column order of vertical text (#1986): older files read as
+    /// right to left, left to right is saved and read back, and such a
+    /// frame's text is placed from its top left.
+    #[test]
+    fn vertical_columns_default_to_right_to_left_and_round_trip() {
+        let old: ParagraphStyle = serde_json::from_str(r#"{"vertical":true}"#).expect("parses");
+        assert_eq!(old.vertical_columns, VerticalColumns::RightToLeft);
+        assert!(old.columns_from_right() && !old.columns_left_to_right());
+        let json = serde_json::to_string(&old).expect("writes");
+        assert!(!json.contains("vertical_columns"), "{json}");
+        let mut ltr = old.clone();
+        ltr.vertical_columns = VerticalColumns::LeftToRight;
+        let json = serde_json::to_string(&ltr).expect("writes");
+        assert!(
+            json.contains("\"vertical_columns\":\"left_to_right\""),
+            "{json}"
+        );
+        let back: ParagraphStyle = serde_json::from_str(&json).expect("reads");
+        assert_eq!(back, ltr);
+        assert!(back.columns_left_to_right() && !back.columns_from_right());
+        // Text set in lines keeps the setting but is not in columns.
+        let mut flat = ltr.clone();
+        flat.vertical = false;
+        assert!(!flat.columns_left_to_right() && !flat.columns_from_right());
+        let o = Point::new(10.0, 20.0);
+        let f = Some(geometry::Size::new(50.0, 80.0));
+        let shift = text_layout_shift(o, f, false, back.columns_from_right());
+        assert_eq!(shift * Point::ZERO, Point::new(10.0, 100.0));
+    }
+
     #[test]
     fn carried_fonts_are_saved_and_shared_between_copies() {
         let mut doc = Document::default();
@@ -5137,6 +11887,126 @@ mod tests {
         assert!(
             shown.contains("Press") && shown.contains("bytes: 4"),
             "{shown}"
+        );
+    }
+
+    #[test]
+    fn symbols_drawing_themselves_or_trillions_open_mended() {
+        let inst =
+            |id: u64, index: usize| Shape::new(ShapeId(id), ShapeKind::SymbolInstance { index });
+        let group = |children: Vec<Shape>| Shape::new(ShapeId(0), ShapeKind::Group { children });
+        let sym = |shape: Shape| Symbol {
+            name: "s".into(),
+            shape,
+        };
+        let empty =
+            |s: &Shape| matches!(&s.kind, ShapeKind::Group { children } if children.is_empty());
+        // 0 draws itself; 1 and 2 draw each other (the loop is cut where
+        // it closes, in 2); 2 also draws 0, which stays; 3 draws 2.
+        let mut doc = Document {
+            symbols: vec![
+                sym(group(vec![inst(1, 0)])),
+                sym(inst(2, 2)),
+                sym(group(vec![inst(3, 1), inst(4, 0)])),
+                sym(inst(5, 2)),
+            ],
+            ..Default::default()
+        };
+        doc.pages[0].layers[0].shapes = vec![inst(9, 3)];
+        let back = Document::from_json(&doc.to_json().expect("json")).expect("load");
+        let ShapeKind::Group { children } = &back.symbols[0].shape.kind else {
+            panic!()
+        };
+        assert!(empty(&children[0]));
+        assert!(matches!(
+            back.symbols[1].shape.kind,
+            ShapeKind::SymbolInstance { index: 2 }
+        ));
+        let ShapeKind::Group { children } = &back.symbols[2].shape.kind else {
+            panic!()
+        };
+        assert!(empty(&children[0]));
+        assert!(matches!(
+            children[1].kind,
+            ShapeKind::SymbolInstance { index: 0 }
+        ));
+        assert!(matches!(
+            back.symbols[3].shape.kind,
+            ShapeKind::SymbolInstance { index: 2 }
+        ));
+        assert_eq!(
+            back.pages[0].layers[0].shapes,
+            doc.pages[0].layers[0].shapes
+        );
+
+        // Each symbol draws the one before twice: 2^40 objects.
+        let mut bomb = Document::default();
+        bomb.symbols.push(sym(group(Vec::new())));
+        for i in 1..40 {
+            bomb.symbols
+                .push(sym(group(vec![inst(1, i - 1), inst(2, i - 1)])));
+        }
+        bomb.break_symbol_loops();
+        let kept = |s: &Symbol| match &s.shape.kind {
+            ShapeKind::Group { children } => children.iter().all(|c| !empty(c)),
+            _ => true,
+        };
+        // Symbol k stands for about 2^(k+2) objects: 18 is the first past
+        // a million, so 19 loses its instances of it, and 20 draws the
+        // little left of 19.
+        assert!(bomb.symbols[..19].iter().all(kept));
+        assert!(!kept(&bomb.symbols[19]));
+        assert!(kept(&bomb.symbols[20]));
+    }
+
+    #[test]
+    fn symbol_visual_bounds_cover_off_origin_and_nested_definitions() {
+        // A definition far from the origin (as .cdr definitions sit around
+        // the page centre), and a second symbol that places two copies of it.
+        let leaf = Shape::new(
+            ShapeId(0),
+            ShapeKind::Rect {
+                rect: Rect::new(120.0, 160.0, 150.0, 180.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        let mut a = Shape::new(ShapeId(1), ShapeKind::SymbolInstance { index: 0 });
+        a.transform = Affine::IDENTITY;
+        let mut b = Shape::new(ShapeId(2), ShapeKind::SymbolInstance { index: 0 });
+        b.transform = Affine::translate((40.0, -10.0));
+        let outer = Shape::new(
+            ShapeId(0),
+            ShapeKind::Group {
+                children: vec![a.clone(), b],
+            },
+        );
+        let symbols = vec![
+            Symbol {
+                name: "Leaf".into(),
+                shape: leaf,
+            },
+            Symbol {
+                name: "Pair".into(),
+                shape: outer,
+            },
+        ];
+        let r0 = a.visual_bounds_with(&symbols);
+        assert!(
+            (r0.x0 - 120.0).abs() < 1e-6
+                && (r0.y0 - 160.0).abs() < 1e-6
+                && (r0.x1 - 150.0).abs() < 1e-6
+                && (r0.y1 - 180.0).abs() < 1e-6,
+            "{r0:?}"
+        );
+        let inst_outer = Shape::new(ShapeId(3), ShapeKind::SymbolInstance { index: 1 });
+        let r1 = inst_outer.visual_bounds_with(&symbols);
+        assert!(
+            (r1.x0 - 120.0).abs() < 1e-6
+                && (r1.y0 - 150.0).abs() < 1e-6
+                && (r1.x1 - 190.0).abs() < 1e-6
+                && (r1.y1 - 180.0).abs() < 1e-6,
+            "{r1:?}"
         );
     }
 
@@ -5250,6 +12120,60 @@ mod tests {
         assert!(rect.text_parts().is_none());
     }
 
+    /// A bullet of its own colour (#3682) is drawn in a part of its own,
+    /// which draws no characters, and the characters' part leaves it out.
+    #[test]
+    fn bullets_of_their_own_colour_are_a_part_of_their_own() {
+        use crate::color::Color;
+        let red = Color::rgb8(255, 0, 0);
+        let para = ParagraphStyle {
+            bullets: true,
+            bullet: BulletStyle {
+                color: Some(red),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut shape = Shape::new(
+            ShapeId(1),
+            ShapeKind::Text {
+                spans: vec![TextSpan::new("ab", "Arial", 12.0)],
+                origin: Point::ZERO,
+                frame: None,
+                align: Default::default(),
+                para,
+                on_path: None,
+            },
+        );
+        shape.fill = Fill::Solid(Color::BLACK);
+        let parts = shape.text_parts().expect("parts");
+        assert_eq!(parts.len(), 2);
+        let part = |p: &Shape| match &p.kind {
+            ShapeKind::Text { spans, para, .. } => {
+                (spans.iter().all(|s| s.layout_only), para.bullet_part)
+            }
+            _ => panic!("text"),
+        };
+        assert_eq!(part(&parts[0]), (false, Some(BulletPart::Text)));
+        assert_eq!(parts[0].fill, Fill::Solid(Color::BLACK));
+        assert_eq!(part(&parts[1]), (true, Some(BulletPart::Color(red))));
+        assert_eq!(parts[1].fill, Fill::Solid(red));
+        assert!(parts.iter().all(|p| p.text_parts().is_none()));
+        assert!(!BulletPart::draws(Some(BulletPart::Text), Some(red), true));
+        assert!(BulletPart::draws(Some(BulletPart::Text), None, true));
+        assert!(BulletPart::draws(
+            Some(BulletPart::Color(red)),
+            Some(red),
+            false
+        ));
+        assert!(BulletPart::draws(None, Some(red), true));
+        // Without a colour of its own the text is drawn whole.
+        if let ShapeKind::Text { para, .. } = &mut shape.kind {
+            para.bullet.color = None;
+        }
+        assert!(shape.text_parts().is_none());
+    }
+
     #[test]
     fn character_outlines_are_saved_and_layout_only_is_not() {
         let mut s = TextSpan::new("a", "Arial", 12.0);
@@ -5266,5 +12190,278 @@ mod tests {
         )
         .expect("old");
         assert_eq!(old.outline, None);
+    }
+
+    /// OpenType features on and off (#1201): a tag turns a feature on, a
+    /// tag after a `-` turns a default feature off, and what the shaper
+    /// does anyway is not stored; superscript and subscript are kept
+    /// only when set, and older files read as plain text.
+    #[test]
+    fn features_switch_on_and_off_and_positions_round_trip() {
+        use super::{parse_feature, TextPosition, DEFAULT_ON_FEATURES};
+        assert_eq!(parse_feature("liga"), Some(("liga", true)));
+        assert_eq!(parse_feature("+liga"), Some(("liga", true)));
+        assert_eq!(parse_feature("-liga"), Some(("liga", false)));
+        assert_eq!(parse_feature("liga=0"), Some(("liga", false)));
+        assert_eq!(parse_feature("liga=1"), Some(("liga", true)));
+        assert_eq!(parse_feature(""), None);
+        assert_eq!(parse_feature("-"), None);
+        assert_eq!(parse_feature("toolong"), None);
+
+        let mut s = TextSpan::new("fi", "Quicksand", 12.0);
+        assert!(DEFAULT_ON_FEATURES.contains(&"liga"));
+        assert!(s.feature_on("liga"));
+        assert!(!s.feature_on("smcp"));
+        assert_eq!(s.feature_setting("liga"), None);
+        s.set_feature("liga", Some(false));
+        assert_eq!(s.features, vec!["-liga".to_string()]);
+        assert!(!s.feature_on("liga"));
+        assert_eq!(s.feature_setting("liga"), Some(false));
+        // Back on: nothing is stored, the shaper applies it anyway.
+        s.set_feature("liga", Some(true));
+        assert!(s.features.is_empty());
+        assert!(s.feature_on("liga"));
+        // A feature off by default is stored only when on.
+        s.set_feature("smcp", Some(true));
+        s.set_feature("onum", Some(true));
+        assert_eq!(s.features, vec!["smcp".to_string(), "onum".to_string()]);
+        s.set_feature("smcp", Some(false));
+        assert_eq!(s.features, vec!["onum".to_string()]);
+        s.set_feature("onum", None);
+        assert!(s.features.is_empty());
+        // The last entry for a tag wins, and an entry that is no feature
+        // is left alone.
+        s.features = vec!["liga".into(), "-liga".into(), "no feature".into()];
+        assert!(!s.feature_on("liga"));
+        s.set_feature("liga", None);
+        assert_eq!(s.features, vec!["no feature".to_string()]);
+
+        // Character width (#2190): full width is left out of the file and
+        // is what an older file reads as.
+        let mut w = TextSpan::new("a", "Arial", 12.0);
+        assert_eq!(w.width_pct, 100.0);
+        let json = serde_json::to_string(&w).expect("json");
+        assert!(!json.contains("width_pct"), "{json}");
+        w.width_pct = 80.0;
+        let json = serde_json::to_string(&w).expect("json");
+        assert!(json.contains("\"width_pct\":80.0"), "{json}");
+        assert_eq!(serde_json::from_str::<TextSpan>(&json).expect("back"), w);
+        let old: TextSpan = serde_json::from_str(
+            r#"{"text":"a","font_family":"Arial","size_pt":12.0,"bold":false,"italic":false}"#,
+        )
+        .expect("old");
+        assert_eq!(old.width_pct, 100.0);
+
+        // Superscript and subscript.
+        assert_eq!(TextPosition::Superscript.feature(), Some("sups"));
+        assert_eq!(TextPosition::Subscript.feature(), Some("subs"));
+        assert_eq!(TextPosition::Normal.feature(), None);
+        assert!(TextPosition::Superscript.synthetic_shift() > 0.0);
+        assert!(TextPosition::Subscript.synthetic_shift() < 0.0);
+        let mut s = TextSpan::new("2", "Arial", 12.0);
+        s.features = vec!["-liga".into()];
+        let json = serde_json::to_string(&s).expect("json");
+        assert!(!json.contains("position"), "{json}");
+        assert!(json.contains("\"-liga\""), "{json}");
+        s.position = TextPosition::Superscript;
+        let json = serde_json::to_string(&s).expect("json");
+        assert!(json.contains("\"position\":\"superscript\""), "{json}");
+        let back: TextSpan = serde_json::from_str(&json).expect("back");
+        assert_eq!(back, s);
+        // Older files: no position, and features as they were written.
+        let old: TextSpan = serde_json::from_str(
+            r#"{"text":"a","font_family":"Arial","size_pt":12.0,"bold":false,"italic":false,"features":["liga","smcp"]}"#,
+        )
+        .expect("old");
+        assert_eq!(old.position, TextPosition::Normal);
+        assert!(old.feature_on("liga") && old.feature_on("smcp"));
+    }
+
+    /// Underline and strike line styles (#1209): `true` and `false` of
+    /// older files read as a single thin line and no line and are written
+    /// back as they were; the other styles go by name; all caps, enclosed
+    /// and the overprints are kept only when set.
+    #[test]
+    fn line_styles_read_the_old_flags_and_write_them_back() {
+        let old: TextSpan = serde_json::from_str(
+            r#"{"text":"a","font_family":"Arial","size_pt":12.0,"bold":false,"italic":false,"underline":true,"strikethrough":false}"#,
+        )
+        .expect("old");
+        assert_eq!(old.underline, LineStyle::SingleThin);
+        assert_eq!(old.strikethrough, LineStyle::None);
+        assert!(!old.all_caps && !old.enclosed);
+        assert_eq!(old.overprint_fill, None);
+        assert_eq!(old.overprint_outline, None);
+        let json = serde_json::to_string(&old).expect("json");
+        assert!(json.contains("\"underline\":true"), "{json}");
+        assert!(json.contains("\"strikethrough\":false"), "{json}");
+        for key in [
+            "all_caps",
+            "enclosed",
+            "overprint_fill",
+            "overprint_outline",
+        ] {
+            assert!(!json.contains(key), "{key}: {json}");
+        }
+        // A file without the two fields at all: no lines.
+        let none: TextSpan = serde_json::from_str(
+            r#"{"text":"a","font_family":"Arial","size_pt":12.0,"bold":false,"italic":false}"#,
+        )
+        .expect("none");
+        assert_eq!(none.underline, LineStyle::None);
+        assert_eq!(none.strikethrough, LineStyle::None);
+
+        let mut s = TextSpan::new("a", "Arial", 12.0);
+        for style in LineStyle::ALL {
+            s.underline = style;
+            s.strikethrough = style;
+            let json = serde_json::to_string(&s).expect("json");
+            let back: TextSpan = serde_json::from_str(&json).expect("back");
+            assert_eq!(back, s, "{json}");
+        }
+        s.underline = LineStyle::DoubleThinWord;
+        s.strikethrough = LineStyle::SingleThick;
+        let json = serde_json::to_string(&s).expect("json");
+        assert!(
+            json.contains("\"underline\":\"double_thin_word\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"strikethrough\":\"single_thick\""),
+            "{json}"
+        );
+        s.all_caps = true;
+        s.enclosed = true;
+        s.overprint_fill = Some(true);
+        s.overprint_outline = Some(false);
+        let json = serde_json::to_string(&s).expect("json");
+        let back: TextSpan = serde_json::from_str(&json).expect("back");
+        assert_eq!(back, s);
+        assert!(json.contains("\"overprint_outline\":false"), "{json}");
+
+        assert_eq!(LineStyle::from(true), LineStyle::SingleThin);
+        assert_eq!(LineStyle::from(false), LineStyle::None);
+        assert!(!LineStyle::None.is_on() && LineStyle::None.is_none());
+        assert!(LineStyle::SingleThinWord.word_only());
+        assert!(!LineStyle::SingleThin.word_only());
+        assert!(LineStyle::DoubleThinWord.double() && LineStyle::DoubleThin.double());
+        assert_eq!(LineStyle::None.thickness_share(), 0.0);
+        assert!((LineStyle::SingleThin.thickness_share() - 1.0 / 14.0).abs() < 1e-12);
+        assert!((LineStyle::SingleThickWord.thickness_share() - 1.0 / 7.0).abs() < 1e-12);
+        assert_eq!(
+            LineStyle::DoubleThin.with_word_only(true),
+            LineStyle::DoubleThinWord
+        );
+        assert_eq!(
+            LineStyle::SingleThickWord.with_word_only(false),
+            LineStyle::SingleThick
+        );
+        assert_eq!(LineStyle::None.with_word_only(true), LineStyle::None);
+    }
+
+    /// Characters with their own overprint (#1209) are drawn as parts of
+    /// their own, each part marked as its characters say (the object's
+    /// overprint where they say nothing); characters that agree with the
+    /// object make no parts.
+    #[test]
+    fn text_parts_carry_the_characters_overprint() {
+        let mut plain = TextSpan::new("ab", "Arial", 12.0);
+        let mut over = TextSpan::new("cd", "Arial", 12.0);
+        let mut s = Shape::new(
+            ShapeId(1),
+            ShapeKind::Text {
+                spans: vec![plain.clone(), over.clone()],
+                origin: Point::ZERO,
+                frame: None,
+                align: TextAlign::Left,
+                para: ParagraphStyle::default(),
+                on_path: None,
+            },
+        );
+        assert!(s.text_parts().is_none());
+        over.overprint_fill = Some(true);
+        over.overprint_outline = Some(true);
+        plain.overprint_outline = Some(false);
+        s.kind = ShapeKind::Text {
+            spans: vec![plain.clone(), over.clone()],
+            origin: Point::ZERO,
+            frame: None,
+            align: TextAlign::Left,
+            para: ParagraphStyle::default(),
+            on_path: None,
+        };
+        let parts = s.text_parts().expect("parts");
+        assert_eq!(parts.len(), 2);
+        assert!(!parts[0].overprint_fill && !parts[0].overprint_outline);
+        assert!(parts[1].overprint_fill && parts[1].overprint_outline);
+        for p in &parts {
+            let ShapeKind::Text { spans, .. } = &p.kind else {
+                panic!("text");
+            };
+            assert!(spans
+                .iter()
+                .all(|sp| sp.overprint_fill.is_none() && sp.overprint_outline.is_none()));
+        }
+        // The same overprint as the object: nothing to split.
+        s.overprint_fill = true;
+        s.overprint_outline = true;
+        plain.overprint_outline = None;
+        s.kind = ShapeKind::Text {
+            spans: vec![plain, over],
+            origin: Point::ZERO,
+            frame: None,
+            align: TextAlign::Left,
+            para: ParagraphStyle::default(),
+            on_path: None,
+        };
+        assert!(s.text_parts().is_none());
+    }
+
+    /// The layer of a number is reached by counting pages, not layers
+    /// (each lookup of an object walked every layer before its own,
+    /// which made filling a print merge of thousands of pages slow): the
+    /// same layer as walking them all, master layers first, on pages
+    /// with any number of layers, and none past the last.
+    #[test]
+    fn a_layer_is_reached_by_its_number_without_walking_the_others() {
+        let mut doc = Document::new("d", crate::geometry::Size::new(100.0, 100.0));
+        for name in ["m1", "m2"] {
+            let id = doc.ids_mut().layer();
+            doc.master.push(Layer::new(id, name));
+        }
+        for extra in [0usize, 3, 0, 1, 2] {
+            let id = doc.ids_mut().page();
+            let mut page = doc.pages[0].clone();
+            page.id = id;
+            page.layers.clear();
+            for _ in 0..extra {
+                let l = doc.ids_mut().layer();
+                page.layers.push(Layer::new(l, "L"));
+            }
+            doc.pages.push(page);
+        }
+        let all: Vec<LayerId> = doc.all_layers().map(|l| l.id).collect();
+        assert_eq!(all.len(), 2 + 1 + 6);
+        for (k, id) in all.iter().enumerate() {
+            assert_eq!(doc.nth_layer(k).map(|l| l.id), Some(*id), "layer {k}");
+            assert_eq!(doc.nth_layer_mut(k).map(|l| l.id), Some(*id), "layer {k}");
+        }
+        assert!(doc.nth_layer(all.len()).is_none());
+        assert!(doc.nth_layer_mut(all.len() + 7).is_none());
+        // An object on the last page's last layer is found, and changed,
+        // where it is.
+        let shape = doc.ids_mut().shape();
+        let last = *all.last().expect("layers");
+        doc.layer_mut(last).expect("layer").shapes.push(Shape::new(
+            shape,
+            ShapeKind::Rect {
+                rect: crate::geometry::Rect::new(0.0, 0.0, 1.0, 1.0),
+                radius: 0.0,
+                corners: None,
+            },
+        ));
+        assert_eq!(doc.locate(shape).expect("found"), (last, 0));
+        doc.shape_mut(shape).expect("found").name = Some("x".into());
+        assert_eq!(doc.find_shape(shape).and_then(|s| s.name.clone()).as_deref(), Some("x"));
     }
 }

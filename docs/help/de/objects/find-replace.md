@@ -1,7 +1,8 @@
 # Suchen und Ersetzen
 
 Das Andockfenster [[docker.find_replace]] (<kbd>Ctrl+F</kbd>) sucht Text in der
-Zeichnung und ersetzt ihn, oder es sucht Objekte nach Namen. Öffnen Sie es mit
+Zeichnung und ersetzt ihn, sucht Objekte nach Namen oder nach Füllung,
+Umriss, Umrissbreite, Schrift oder Typ und ersetzt diese. Öffnen Sie es mit
 [[menu.edit > menu.edit.find_and_replace]].
 
 ![Das Andockfenster Suchen und Ersetzen](../../img/objects-find-replace.png)
@@ -22,6 +23,17 @@ Zeichnung und ersetzt ihn, oder es sucht Objekte nach Namen. Öffnen Sie es mit
 
 Das Andockfenster zeigt an, wie viele Treffer gefunden wurden.
 
+Was sich im Feld nicht tippen lässt, wählen Sie mit einem Rechtsklick
+auf das Feld unter [[find.special_character]]: [[find.code_paragraph]]
+(`^p`), [[menu.text.code_line_break]] (`^l`), [[find.code_tab]] (`^t`),
+[[menu.text.code_nonbreaking_space]] (`^s`) und, in [[dialog.find]],
+[[find.code_spaces]] (`^w`). Dieselben Codes gelten in
+[[dialog.replace_with]]: Suchen Sie zum Beispiel `^w` und ersetzen Sie es
+durch `^w`, damit überall nur ein Leerzeichen bleibt, oder suchen Sie `^p`
+und ersetzen Sie es durch ein Leerzeichen, um Absätze zu verbinden. `^^`
+steht für ein Zirkumflex. Das Kontextmenü hat außerdem [[menu.edit.cut]],
+[[menu.edit.copy]], [[menu.edit.paste]] und [[menu.edit.select_all]].
+
 ## Objekte suchen {#objects}
 
 Wählen Sie [[dialog.find_objects]], geben Sie einen Teil eines Namens oder eine
@@ -29,3 +41,27 @@ Objektart wie „Rectangle“ ein und klicken Sie auf [[dialog.find_next]] oder
 [[dialog.find_all]]. Die Suche umfasst die aktuelle Seite. Wie Sie Objekte
 benennen, lesen Sie unter
 [Objekte und Ebenen umbenennen](objects-and-layers.md#rename).
+
+## Nach Eigenschaften suchen und ersetzen {#properties}
+
+1. Wählen Sie [[find.properties]].
+2. Wählen Sie unter [[find.look_in]] [[find.this_page]] oder [[find.whole_drawing]].
+3. Kreuzen Sie unter [[find.find_objects_with]] an, wonach gesucht wird:
+   [[find.object_type]], [[find.fill]], [[find.outline]] (eine Farbe oder
+   [[find.none]]), [[find.outline_width]] oder [[find.font]]. Gefunden wird ein
+   Objekt, das alles Angekreuzte hat. [[find.from_selection]] übernimmt diese
+   Werte vom ausgewählten Objekt, etwa um alle Objekte mit seiner Füllfarbe zu
+   finden.
+4. Klicken Sie auf [[find.previous]] oder [[dialog.find_next]], um die Objekte
+   nacheinander auszuwählen (auch auf anderen Seiten), oder auf
+   [[dialog.find_all]], um die auf dieser Seite auszuwählen.
+5. Zum Ändern kreuzen Sie unter [[find.replace_with]] die neue Füllfarbe,
+   Umrissfarbe, Umrissbreite oder Schrift an und klicken auf
+   [[dialog.replace_all]]. Alle Änderungen lassen sich in einem Schritt
+   rückgängig machen.
+
+Eine gesuchte Füllfarbe wird überall ersetzt, wo sie vorkommt, auch in
+Verläufen. Gesperrte Objekte bleiben unverändert.
+
+Jede Option, wie Farben verglichen werden und was jede Ersetzung bewirkt,
+beschreibt [Nach Eigenschaften suchen und ersetzen](find-by-properties.md).

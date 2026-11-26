@@ -1,5 +1,7 @@
 # Recortar, cortar e apagar
 
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
 Quatro ferramentas do submenu Recortar tiram partes de objetos:
 [[tool.crop]], [[tool.knife]], [[tool.segment_delete]] e [[tool.eraser]]. Cada
 alteração é um passo de desfazer.
@@ -57,8 +59,15 @@ lugares onde eles cruzam outros contornos ou a si mesmos, por exemplo os
 pedaços de linha que sobram depois de um cruzamento.
 
 - Clique em uma parte de um contorno para excluí-la.
-- Arraste um retângulo para excluir todas as partes que ficam totalmente
-  dentro dele, em todos os objetos de uma vez.
+- Arraste um retângulo por cima dos contornos para excluir todas as partes que
+  ele tocar, em todos os objetos de uma vez. Cada parte sai inteira, até os
+  cruzamentos nas pontas, mesmo onde passa do retângulo; uma forma fechada que
+  nada cruza sai inteira.
+- Escolha **Mão livre** na barra de propriedades e arraste um traço por cima
+  dos contornos: cada parte que o traço cruzar é excluída, até os cruzamentos
+  com outras linhas, em um passo. Mantenha <kbd>Alt</kbd> pressionado ao
+  começar a arrastar para usar o outro modo (traço ou retângulo) só naquele
+  arraste.
 
 Retângulos, elipses e polígonos viram curvas; uma forma fechada que perde uma
 parte se abre, e um objeto sem nada sobrando é excluído.
@@ -75,6 +84,45 @@ A ferramenta [[tool.eraser]] (<kbd>X</kbd>) apaga partes de objetos.
 
 Objetos apagados viram curvas; um objeto apagado por inteiro é excluído.
 Clique duas vezes em um objeto com a ferramenta para excluí-lo inteiro.
-Bitmaps, grupos e molduras de recorte não são apagados. Os padrões da borracha
+Uma moldura de recorte é apagada pela moldura: ela perde a faixa e o
+conteúdo dentro dela some ao longo da faixa. Grupos não são apagados.
+
+Numa imagem a borracha deixa os pixels transparentes ao longo do bico, com
+borda suave: **Dureza** na barra de propriedades é quanto do bico apaga por
+completo antes de a borda esmaecer (0 % é borda toda suave), e
+**Intensidade** é quanto de cada pixel ela tira no máximo (100 % deixa
+totalmente transparente). Use um bico largo e suave para fazer uma imagem
+sumir aos poucos no fundo. Os padrões da borracha
 ficam na página [[tool.eraser]] das opções de ferramentas; veja
 [Opções das ferramentas](../customize/tool-options.md#eraser).
+
+## Criador de formas {#shape-builder}
+
+A ferramenta [[tool.shape_builder]] monta uma forma nova com as partes em
+que objetos sobrepostos se cortam, arrastando sobre elas.
+
+1. Selecione os objetos sobrepostos (retângulos, elipses, polígonos e
+   curvas fechadas; com nada selecionado, um clique com a ferramenta
+   seleciona).
+2. Escolha a ferramenta [[tool.shape_builder]]. A parte sob o ponteiro fica
+   hachurada: um lugar dentro dos mesmos objetos e fora dos outros.
+3. Arraste sobre as partes que quer num só objeto. Cada parte se destaca ao
+   ser cruzada. Ao soltar, as partes viram um objeto novo com o
+   preenchimento e o contorno do objeto da frente sobre a primeira parte, e
+   são recortadas dos objetos de onde vieram. Um objeto que fica sem nada é
+   apagado.
+
+Segure <kbd>Alt</kbd> ao arrastar para remover as partes: elas são
+recortadas e nada novo é criado. Um clique numa parte a torna um objeto à
+parte. Os objetos continuam selecionados, com o novo, para seguir montando.
+
+Marque **Usar linhas-guia** na barra de propriedades para que as
+linhas-guia visíveis na página também cortem os objetos em partes, como
+se cada uma fosse uma linha traçada sobre eles. As linhas-guia ficam onde
+estão. Vem desligado.
+
+![A parte sob o ponteiro do Construtor de formas fica hachurada](../../img/lines-shapes-cut-and-erase-shape-builder-1.png)
+
+![Um arraste por três partes destaca cada uma](../../img/lines-shapes-cut-and-erase-shape-builder-2.png)
+
+![As partes atravessadas viraram um objeto novo](../../img/lines-shapes-cut-and-erase-shape-builder-3.png)

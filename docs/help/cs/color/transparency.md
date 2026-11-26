@@ -8,7 +8,7 @@ měnit se napříč objektem jako přechod, nebo sledovat vzorek či texturu.
 - Nástrojem [[tool.transparency]]: klikněte na objekt a pak na liště
   vlastností zvolte druh průhlednosti, nebo táhněte přes objekt a vznikne
   přechodová průhlednost od neprůhledné (kde stisknete) po průhlednou (kde
-  uvolníte).
+  uvolníte). Uzly přechodu se pak ukážou na objektu jako u nástroje [[tool.interactive_fill]]: táhněte začátek, konec nebo kulatý uzel zkosení; tažením příčky mezi dvěma uzly (středový bod) posunete místo, kde je přechod v polovině; dvojklik na čáru přidá uzel, na uzel ho odebere.
 - V oddílu [[docker.transparency]] panelu [[docker.properties]].
 
 ## Nastavení {#settings}
@@ -27,6 +27,8 @@ měnit se napříč objektem jako přechod, nebo sledovat vzorek či texturu.
   [[transparency.target_outline]] nebo [[transparency.target_all]].
 - **Zmrazit**: zachová to, co prosvítá, v současné podobě, i když se objekty
   pod ním posunou.
+
+Chcete-li ji odstranit, klikněte na [[toolbar.clear_transparency]] na konci panelu vlastností (nebo jako druh zvolte [[transparency.none]]).
 
 Chcete-li zkopírovat průhlednost jiného objektu, použijte
 [[menu.object > menu.object.copy_effect > menu.object.copy_transparency_from]].

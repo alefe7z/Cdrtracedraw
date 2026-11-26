@@ -54,6 +54,19 @@ ervan, in het vulonderdeel van het paneel [[docker.properties]]:
 
 Een strook onder het type toont het hele kleurverloop zoals het getekend wordt.
 
+## Het dialoogvenster Vulling bewerken {#edit-fill}
+
+<kbd>F11</kbd> opent het dialoogvenster [[edit_fill.title]] op de vulling van
+de selectie. Voor een kleurverloop toont het een voorbeeld, de
+[[edit_fill.fill_picker]], het type, de herhaling en de kleurenband: klik op
+een knooppunt om het te kiezen, sleep om het te verplaatsen, dubbelklik om er
+een toe te voegen of te verwijderen. Onder de band: kleur, transparantie,
+positie en [[edit_fill.midpoint]] van het knooppunt, en [[edit_fill.reverse]].
+[[edit_fill.transform]] bevat draaiing, midden en randmarge. **OK** past toe
+wat u veranderde, met [[edit_fill.overprint]]. Zolang het dialoogvenster open is, toont de selectie de vulling terwijl u die wijzigt; **Annuleren** of <kbd>Esc</kbd> zet de oude vulling terug.
+
+![Het dialoogvenster Vulling bewerken](../../img/color-fills-edit-fill.png)
+
 ## Het gereedschap Interactieve vulling {#interactive-fill}
 
 Het gereedschap [[tool.interactive_fill]] (<kbd>G</kbd>) bewerkt vullingen op
@@ -80,10 +93,10 @@ dat door meerdere overlappende objecten wordt gevormd, door van dat gebied een
 nieuw object te maken. De objecten eromheen blijven zoals ze zijn.
 
 1. Kies het gereedschap [[tool.area_fill]].
-2. Kies de vulling en omtrek op de eigenschappenbalk: **Standaard gebruiken**
-   (de vulling en omtrek van nieuwe objecten; een kleur als dat geen vulling
-   is, zodat het gebied zichtbaar wordt), **Opgeven** (de kleur, en voor de
-   omtrek de breedte, ernaast) of **Geen**.
+2. Kies de vulling en omtrek op de eigenschappenbalk: **Opgeven** (de kleur,
+   en voor de omtrek de breedte, ernaast), **Standaard gebruiken** (de vulling
+   en omtrek van nieuwe objecten; een kleur als dat geen vulling is, zodat het
+   gebied zichtbaar wordt) of **Geen**.
 3. Klik binnen het gebied.
 
 Het nieuwe object komt bovenaan de actieve laag en wordt geselecteerd. Een klik
@@ -116,6 +129,10 @@ van een mesh behoudt de kleuren.
 - Een vulling [[docker.fill_texture]] is een gegenereerde, natuurlijk ogende
   textuur: [[texture.clouds]], [[texture.marble]], [[texture.noise]] of
   [[texture.wood]], met de kleuren en schaal ervan.
+- [[texture.holographic]] en [[texture.holo_glitter]] geven een vaste holografische folielook: regenboogkleuren tussen
+  donkere en lichte vlakken (kleuren A en B), de glitter met fonkelende
+  korrels. Het verandert niet met de kijkhoek; PDF en SVG bevatten het als
+  afbeelding.
 
 ## Meerdere vullingen op één object {#several-fills}
 

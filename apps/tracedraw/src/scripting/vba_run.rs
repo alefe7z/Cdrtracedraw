@@ -43,6 +43,10 @@ pub struct Changes {
     pub output: Vec<String>,
     /// The status line it left (`Application.Status`).
     pub status: Option<String>,
+    /// View > Simulate Overprints as it set it (`ActiveView.Type`).
+    pub simulate_overprints: Option<bool>,
+    /// Zoom To Fit and the other view steps it took (#4020).
+    pub view_steps: Vec<crate::view_steps::Taken>,
 }
 
 /// What the macro asks the app for.
@@ -58,6 +62,19 @@ pub enum Request {
         prompt: String,
         title: String,
         default: String,
+    },
+    /// Open a web or mail address with the system (ShellExecute, #2165).
+    Open(String),
+    /// The system's file dialog (`ScriptTools.GetFileBox`, #4315): `mode`
+    /// 0 opens a file, 1 saves one, 2 picks a folder; `filter` is
+    /// "Name (*.csv)|*.csv|...". The answer is [`Input::Text`] with the
+    /// path, empty for Cancel.
+    FileBox {
+        filter: String,
+        title: String,
+        mode: u8,
+        file: String,
+        folder: String,
     },
 }
 
@@ -130,6 +147,9 @@ pub struct Finished {
     pub changes: Changes,
     pub error: Option<RunError>,
     pub stopped: bool,
+    /// What the run skipped because TraceDraw cannot do it (keep going,
+    /// `tracedraw_vba::Options::keep_going`), each with how many times.
+    pub skipped: Vec<(RunError, u32)>,
 }
 
 /// A macro running on its thread.
@@ -138,7 +158,7 @@ pub struct MacroRun {
     pub input: Sender<Input>,
     pub stop: Arc<AtomicBool>,
     pub forms: Arc<Mutex<Forms>>,
-    pub started: std::time::Instant,
+    pub started: web_time::Instant,
     /// "Project.Module.Macro", for the status line and messages.
     pub name: String,
     handle: std::thread::JoinHandle<Finished>,
@@ -156,6 +176,7 @@ impl MacroRun {
                 changes: Changes::default(),
                 error: Some(RunError::parse("the macro's thread failed")),
                 stopped: false,
+                skipped: Vec::new(),
             },
         }
     }
@@ -237,6 +258,8 @@ fn take_changes(ctx: &mut Context, all: bool) -> Changes {
         page: Some(h.page),
         output: std::mem::take(&mut h.output),
         status: h.status.take(),
+        simulate_overprints: h.simulate_overprints.take(),
+        view_steps: std::mem::take(&mut h.view_steps),
     }
 }
 
@@ -329,6 +352,184 @@ fn native_inputbox(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
             Some(Input::Text(t)) => return Ok(text(t.unwrap_or_default())),
             Some(_) => continue,
         }
+    }
+}
+
+/// `__filebox(filter, title, mode, file, folder)`: the system's file
+/// dialog (#4315); the path chosen, "" for Cancel.
+fn native_filebox(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let filter = arg_str(args, 0, ctx)?;
+    let title = arg_str(args, 1, ctx)?;
+    let mode = arg_str(args, 2, ctx)?.trim().parse::<u8>().unwrap_or(0);
+    let file = arg_str(args, 3, ctx)?;
+    let folder = arg_str(args, 4, ctx)?;
+    flush(ctx);
+    if let Some(st) = ctx.get_data::<RunState>() {
+        let _ = st.requests.send(Request::FileBox {
+            filter,
+            title,
+            mode,
+            file,
+            folder,
+        });
+    }
+    loop {
+        match wait_input(ctx) {
+            None => return Ok(stop_value()),
+            Some(Input::Text(t)) => return Ok(text(t.unwrap_or_default())),
+            Some(_) => continue,
+        }
+    }
+}
+
+/// `__ask(prompt, title, default)`: the app's input box for a JavaScript
+/// script or plugin (#4139); the text, or null for Cancel. A stopped run
+/// ends with an error.
+fn native_ask(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let prompt = arg_str(args, 0, ctx)?;
+    let title = arg_str(args, 1, ctx)?;
+    let default = arg_str(args, 2, ctx)?;
+    flush(ctx);
+    if let Some(st) = ctx.get_data::<RunState>() {
+        let _ = st.requests.send(Request::InputBox {
+            prompt,
+            title,
+            default,
+        });
+    }
+    loop {
+        match wait_input(ctx) {
+            None => return Err(js_err("stopped")),
+            Some(Input::Text(Some(t))) => return Ok(text(t)),
+            Some(Input::Text(None)) => return Ok(JsValue::null()),
+            Some(_) => continue,
+        }
+    }
+}
+
+/// What a JavaScript script run on its thread asks the user with: the
+/// app's input box (#4139).
+const SCRIPT_GLUE: &str = r#"
+globalThis.InputBox = function (p, t, d) {
+  const r = __ask(String(p === undefined ? '' : p), String(t === undefined || t === null ? '' : t),
+    String(d === undefined || d === null ? '' : d));
+  return r === null ? '' : r;
+};
+globalThis.prompt = function (m, d) {
+  return __ask(String(m === undefined ? '' : m), '', String(d === undefined || d === null ? '' : d));
+};
+"#;
+
+/// Whether a JavaScript script asks the user for a value (`InputBox` or
+/// `prompt`), so it runs on a thread of its own that can wait for the
+/// answer (#4139).
+pub fn asks_user(src: &str) -> bool {
+    src.contains("InputBox") || src.contains("prompt(")
+}
+
+/// Start a JavaScript script (TraceDraw's object model) on a worker
+/// thread so `InputBox` and `prompt` can wait for the app's input box
+/// (#4139); `call` runs after it (a plugin's command, with `__input`).
+/// Desktop only.
+pub fn start_script(
+    app: &App,
+    src: &str,
+    call: Option<String>,
+    input: Option<String>,
+    name: String,
+) -> Result<MacroRun, String> {
+    let (req_tx, req_rx) = channel();
+    let (in_tx, in_rx) = channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let forms = Arc::new(Mutex::new(Forms::default()));
+    let snap = Snapshot(super::host_for(app, Trust::User));
+    let src = src.to_string();
+    let stop2 = stop.clone();
+    let forms2 = forms.clone();
+    let handle = std::thread::Builder::new()
+        .name("script".into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || script_thread(snap, src, call, input, req_tx, in_rx, stop2, forms2))
+        .map_err(|e| e.to_string())?;
+    Ok(MacroRun {
+        requests: req_rx,
+        input: in_tx,
+        stop,
+        forms,
+        started: web_time::Instant::now(),
+        name,
+        handle,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn script_thread(
+    snap: Snapshot,
+    src: String,
+    call: Option<String>,
+    input: Option<String>,
+    requests: Sender<Request>,
+    input_rx: Receiver<Input>,
+    stop: Arc<AtomicBool>,
+    forms: Arc<Mutex<Forms>>,
+) -> Finished {
+    let mut ctx = Context::default();
+    ctx.insert_data(Host(RefCell::new(snap.0)));
+    ctx.insert_data(RunState {
+        requests,
+        input: input_rx,
+        stop,
+        forms,
+        models: Vec::new(),
+        flushed: Cell::new(0),
+        stopped: Cell::new(false),
+        folder: None,
+    });
+    let result = (|| -> Result<(), String> {
+        let natives: [(
+            &str,
+            usize,
+            boa_engine::native_function::NativeFunctionPointer,
+        ); 2] = [("__td", 2, dispatch), ("__ask", 3, native_ask)];
+        for (name, n, f) in natives {
+            ctx.register_global_callable(JsString::from(name), n, NativeFunction::from_fn_ptr(f))
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(input) = &input {
+            ctx.register_global_property(
+                js_string!("__input"),
+                JsValue::from(JsString::from(input.as_str())),
+                boa_engine::property::Attribute::all(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        for src in [COMMON, super::PRELUDE, SCRIPT_GLUE] {
+            ctx.eval(Source::from_bytes(src))
+                .map_err(|e| format!("prelude: {e}"))?;
+        }
+        ctx.eval(Source::from_bytes(&src))
+            .map_err(|e| e.to_string())?;
+        if let Some(call) = &call {
+            ctx.eval(Source::from_bytes(call))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })();
+    let stopped = ctx
+        .get_data::<RunState>()
+        .is_some_and(|s| s.stopped.get() || s.stop.load(Ordering::Relaxed));
+    let changes = take_changes(&mut ctx, true);
+    Finished {
+        changes,
+        error: result.err().filter(|_| !stopped).map(|e| RunError {
+            number: 0,
+            description: e,
+            module: String::new(),
+            procedure: String::new(),
+            line: 0,
+        }),
+        stopped,
+        skipped: Vec::new(),
     }
 }
 
@@ -430,6 +631,129 @@ fn native_setting(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRes
     Ok(JsValue::null())
 }
 
+/// `__open(url)`: a web or mail address the macro opens (ShellExecute,
+/// #2165); the app opens it. True when it was handed over.
+fn native_open(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let url = arg_str(args, 0, ctx)?;
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:"))
+    {
+        return Ok(JsValue::from(false));
+    }
+    let sent = ctx
+        .get_data::<RunState>()
+        .is_some_and(|st| st.requests.send(Request::Open(url)).is_ok());
+    Ok(JsValue::from(sent))
+}
+
+/// `__download(url, path)`: fetch a web (or `file:`) address for a macro
+/// (URLDownloadToFile and URLDownloadToCacheFile, #2165) into `path`, or
+/// with an empty `path` into a file of the app's own; the file's path,
+/// or "" when nothing was written.
+fn native_download(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let url = arg_str(args, 0, ctx)?;
+    let path = arg_str(args, 1, ctx)?;
+    Ok(text(
+        download(url.trim(), &path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
+    ))
+}
+
+/// The most a macro's download may hold.
+const DOWNLOAD_LIMIT: u64 = 64 * 1024 * 1024;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn download(url: &str, path: &str) -> Option<std::path::PathBuf> {
+    let lower = url.to_ascii_lowercase();
+    let (bytes, kind) = if lower.starts_with("http://") || lower.starts_with("https://") {
+        // CD Draw makes no network connections (AGENTS.md, "Offline only").
+        return None;
+    } else if lower.starts_with("file:") {
+        let bytes = std::fs::read(file_url_path(url)).ok()?;
+        if bytes.len() as u64 > DOWNLOAD_LIMIT {
+            return None;
+        }
+        (bytes, String::new())
+    } else {
+        return None;
+    };
+    let target = if path.trim().is_empty() {
+        let dir = std::env::temp_dir().join("tracedraw-downloads");
+        std::fs::create_dir_all(&dir).ok()?;
+        let hash = url.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+        });
+        dir.join(format!("{hash:016x}.{}", download_extension(url, &kind)))
+    } else {
+        std::path::PathBuf::from(path.trim())
+    };
+    std::fs::write(&target, bytes).ok()?;
+    Some(target)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn download(_url: &str, _path: &str) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// The file a `file:` address names, its `%XX` escapes decoded.
+fn file_url_path(url: &str) -> String {
+    let rest = &url[5..];
+    let rest = rest.strip_prefix("//").unwrap_or(rest);
+    // `file:///C:/x` on Windows: no slash before the drive.
+    let rest = match rest.as_bytes() {
+        [b'/', d, b':', ..] if d.is_ascii_alphabetic() => &rest[1..],
+        _ => rest,
+    };
+    let b = rest.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&rest[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// The extension of a downloaded file, from the type the server gave or
+/// else from the address, so that importing it knows what it is.
+fn download_extension(url: &str, kind: &str) -> String {
+    let by_kind = [
+        ("image/png", "png"),
+        ("image/jpeg", "jpg"),
+        ("image/gif", "gif"),
+        ("image/bmp", "bmp"),
+        ("image/webp", "webp"),
+        ("image/tiff", "tif"),
+        ("image/svg+xml", "svg"),
+        ("application/postscript", "eps"),
+        ("application/pdf", "pdf"),
+    ];
+    if let Some((_, e)) = by_kind.iter().find(|(k, _)| kind.starts_with(k)) {
+        return (*e).to_string();
+    }
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let name = path.rsplit('/').next().unwrap_or("");
+    match name.rsplit_once('.') {
+        Some((_, e))
+            if !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()) =>
+        {
+            e.to_ascii_lowercase()
+        }
+        _ => "bin".to_string(),
+    }
+}
+
 /// `__folder()`: the macros folder (with a separator at the end), for
 /// the paths macros ask the host for.
 fn native_folder(_this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -439,6 +763,59 @@ fn native_folder(_this: &JsValue, _args: &[JsValue], ctx: &mut Context) -> JsRes
         .map(|d| format!("{}{}", d.display(), std::path::MAIN_SEPARATOR))
         .unwrap_or_default();
     Ok(text(f))
+}
+
+/// `__dir(path)`: `Dir(PathName)` of one file: its name when it exists,
+/// else "". A `*` or `?` in the name matches files of its folder; the
+/// first match in name order is given. A browser has no files: "".
+fn native_dir(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let path = args
+        .first()
+        .map(|v| v.to_string(ctx).map(|s| s.to_std_string_escaped()))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(text(dir_match(&path)))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn dir_match(path: &str) -> String {
+    fn matches(p: &[char], n: &[char]) -> bool {
+        match (p.first(), n.first()) {
+            (None, None) => true,
+            (Some('*'), _) => matches(&p[1..], n) || (!n.is_empty() && matches(p, &n[1..])),
+            (Some('?'), Some(_)) => matches(&p[1..], &n[1..]),
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b) && matches(&p[1..], &n[1..]),
+            _ => false,
+        }
+    }
+    let p = std::path::Path::new(path);
+    let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else {
+        return String::new();
+    };
+    if !name.contains(['*', '?']) {
+        return if p.is_file() { name } else { String::new() };
+    }
+    let folder = p
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let pattern: Vec<char> = name.chars().collect();
+    let mut found: Vec<String> = std::fs::read_dir(folder)
+        .map(|it| {
+            it.flatten()
+                .filter(|e| e.path().is_file())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| matches(&pattern, &n.chars().collect::<Vec<_>>()))
+                .collect()
+        })
+        .unwrap_or_default();
+    found.sort();
+    found.into_iter().next().unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn dir_match(_path: &str) -> String {
+    String::new()
 }
 
 /// `__stop()`: whether the user stopped the macro.
@@ -633,7 +1010,7 @@ pub fn start(
         input: in_tx,
         stop,
         forms,
-        started: std::time::Instant::now(),
+        started: web_time::Instant::now(),
         name,
         handle,
     })
@@ -668,8 +1045,13 @@ fn run_thread(
             &str,
             usize,
             boa_engine::native_function::NativeFunctionPointer,
-        ); 14] = [
+        ); 19] = [
+            ("__open", 1, native_open),
+            ("__filebox", 5, native_filebox),
+            ("__fs", 4, super::vba_files::native_fs),
+            ("__download", 2, native_download),
             ("__setting", 5, native_setting),
+            ("__dir", 1, native_dir),
             ("__folder", 0, native_folder),
             ("__td", 2, dispatch),
             ("__mb", 3, native_msgbox),
@@ -691,7 +1073,7 @@ fn run_thread(
         let _ = js_string!("");
         for (what, src) in [
             ("common", COMMON),
-            ("object model", vg::PRELUDE),
+            ("object model", vg::prelude()),
             ("VBA runtime", tracedraw_vba::RUNTIME_JS),
             ("forms", GLUE),
         ] {
@@ -714,6 +1096,7 @@ fn run_thread(
         }
     }
     let changes = take_changes(&mut ctx, true);
+    let skipped = skipped_steps(&mut ctx);
     Finished {
         changes,
         error: result
@@ -721,7 +1104,37 @@ fn run_thread(
             .filter(|_| !stopped)
             .map(|e| RunError::parse(&e)),
         stopped,
+        skipped,
     }
+}
+
+/// The steps a run kept going past (`__v.skipped`).
+fn skipped_steps(ctx: &mut Context) -> Vec<(RunError, u32)> {
+    let Ok(v) = ctx.eval(Source::from_bytes(
+        "JSON.stringify(typeof __v === 'object' && __v && __v.skipped ? __v.skipped : [])",
+    )) else {
+        return Vec::new();
+    };
+    let Ok(text) = v.to_string(ctx).map(|s| s.to_std_string_escaped()) else {
+        return Vec::new();
+    };
+    let list: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+    list.iter()
+        .map(|s| {
+            let st = |k: &str| s.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let num = |k: &str| s.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            (
+                RunError {
+                    number: num("n") as i32,
+                    description: st("d"),
+                    module: st("m"),
+                    procedure: st("p"),
+                    line: num("l") as u32,
+                },
+                num("c").max(1.0) as u32,
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

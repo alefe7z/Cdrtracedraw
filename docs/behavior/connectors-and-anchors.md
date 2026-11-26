@@ -24,8 +24,11 @@ the object and survive save and load without a model change.
 
 ## Connectors
 
-A connector drag starts on one object and ends on another. The end points
-are:
+A connector drag starts on one object and ends on another; while it is
+dragged, a blue hairline on a white line twice as wide runs from the
+start anchor to the pointer, so it shows over a black fill (#672; the
+Blend tool's drag from one object to another shows the same line from
+the object's centre). The end points are:
 
 - the anchor of the start object nearest to where the drag began, when
   the drag began on an anchor (within the hit radius),
@@ -53,7 +56,13 @@ the drawing:
 - moved on its own (or pasted elsewhere): it is let go and stays where it
   is as a plain line (Undo attaches it again);
 - one of its objects deleted: it stays where it is, and follows again if
-  Undo brings the object back.
+  Undo brings the object back;
+- one of its objects copied without it (Duplicate, a right click during a
+  drag and its Repeat, Copy and Paste in the same drawing): a copy of the
+  connector, of the same kind, outline and anchors, joins the object at the
+  other end to the copy, in the same undo step; copied with the connector,
+  or pasted into another drawing, no more is added (#476,
+  `connectors::tests::copies_of_connected_objects_bring_their_connector`).
 
 ## Property bar
 

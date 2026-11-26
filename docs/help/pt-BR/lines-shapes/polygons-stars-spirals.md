@@ -55,6 +55,21 @@ contorno padrão. Partes que devem parecer separadas, como as faces de um cubo,
 são partes separadas da curva, e furos como o meio de um anel continuam furos
 seja qual for o preenchimento.
 
+### Minhas formas {#my-shapes}
+
+A última aba do seletor de formas, **Minhas formas**, guarda formas suas.
+Selecione os objetos que darão origem à forma e clique em
+[[menu.object.add_common_shape]] nessa aba (também está em
+[[menu.object > menu.object.create]] e no menu do botão direito). Os
+contornos deles viram uma forma, que fica escolhida na hora. Desenhe-a
+como qualquer outra forma comum arrastando uma caixa; segure
+<kbd>Ctrl</kbd> para manter as proporções. Para tirar uma forma, escolha-a
+e clique em [[shapes.mine_remove]], ou clique nela com o botão direito. As
+formas incluídas não podem ser removidas.
+
+Suas formas ficam guardadas com as suas configurações, então continuam lá
+na próxima vez que o TraceDraw abrir.
+
 ## Linhas de ação {#action-lines}
 
 A ferramenta [[tool.action_lines]] desenha linhas de velocidade no estilo de
@@ -62,12 +77,26 @@ história em quadrinhos: um grupo de **linhas** (2 a 500, 12 de início)
 **paralelas** (de início) ou **radiais**. Os comprimentos variam, mas a mesma
 caixa sempre dá as mesmas linhas.
 
+## Balão de fala {#speech-balloons}
+
+[[tool.balloon]]: Desenha balões de fala para quadrinhos: corpo e rabicho numa só curva, o rabicho arrastado para apontar para qualquer um.
+
+1. Escolha o estilo na barra de propriedades: Fala, Pensamento, Sussurro, Grito ou Legenda.
+2. Arraste uma caixa: o balão a preenche, com o rabicho soldado numa só curva.
+3. Arraste o losango na ponta do rabicho para apontá-lo para alguém; ajuste a largura e a curva na barra.
+
 ## Papel milimetrado {#graph-paper}
 
 A ferramenta [[tool.graph_paper]] (<kbd>D</kbd>) desenha uma grade de células:
 um grupo de retângulos que preenchem exatamente a caixa. Defina as **linhas** e
 **colunas** (4 por 3 de início) na barra de propriedades. Mantenha
 <kbd>Ctrl</kbd> pressionado para células quadradas.
+
+Escolha **Radial** na barra de propriedades (**Células** volta) para uma grade
+radial: **Anéis** (5 de início) com o mesmo espaço entre eles, do centro até a
+borda da caixa, cortados por **Raios** (8 de início) do centro até o anel de
+fora, o primeiro apontando para cima. É um grupo de elipses e linhas, o anel
+de fora atrás; mantenha <kbd>Ctrl</kbd> pressionado para anéis redondos.
 
 Os valores padrão de pontas, voltas, linhas e colunas também estão nas páginas
 de ferramentas das opções; veja [Opções das ferramentas](../customize/tool-options.md).

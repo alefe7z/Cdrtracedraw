@@ -43,7 +43,7 @@ fn pairs(text: &str) -> Vec<Pair> {
         if let Ok(code) = c.trim().parse::<i32>() {
             out.push(Pair {
                 code,
-                value: v.trim_end_matches('\r').to_string(),
+                value: decode_unicode_escapes(v.trim_end_matches('\r')),
             });
         }
     }
@@ -171,7 +171,18 @@ struct Ctx<'a> {
     layer_colors: HashMap<String, i64>,
     blocks: HashMap<String, (Point, Vec<Entity>)>,
     warnings: Vec<String>,
+    /// Entities converted so far, block contents once per insert.
+    made: usize,
+    /// The most entities read (see [`MAX_OBJECTS`]).
+    max_objects: usize,
 }
+
+/// The most entities a drawing is read as, block contents counted once
+/// for every insert: a small file whose blocks insert each other ten
+/// times over, eight levels deep, stands for a hundred million objects
+/// and used up the computer's memory until the program was killed
+/// (#3045).
+const MAX_OBJECTS: usize = 1_000_000;
 
 impl Ctx<'_> {
     fn warn(&mut self, m: impl Into<String>) {
@@ -239,6 +250,15 @@ impl Ctx<'_> {
     }
 
     fn convert(&mut self, e: &Entity, depth: usize) -> Option<Shape> {
+        self.made += 1;
+        if self.made > self.max_objects {
+            let max = self.max_objects;
+            self.warn(format!(
+                "the drawing holds more than {max} objects once its blocks are placed; \
+                 the rest is left out"
+            ));
+            return None;
+        }
         match e.kind.as_str() {
             "LINE" => {
                 let a = self.pt(e, 10);
@@ -917,6 +937,11 @@ fn de_boor(ctrl: &[Point], knots: &[f64], p: usize, t: f64) -> Point {
 
 /// Parse DXF text.
 pub fn parse(text: &str, ids: &mut IdSource) -> Result<Imported, String> {
+    parse_at_most(text, ids, MAX_OBJECTS)
+}
+
+/// [`parse`] reading at most `max_objects` entities (see [`MAX_OBJECTS`]).
+fn parse_at_most(text: &str, ids: &mut IdSource, max_objects: usize) -> Result<Imported, String> {
     let all = pairs(text);
     if all.is_empty()
         || !all
@@ -1004,6 +1029,8 @@ pub fn parse(text: &str, ids: &mut IdSource) -> Result<Imported, String> {
         layer_colors: HashMap::new(),
         blocks: HashMap::new(),
         warnings: Vec::new(),
+        made: 0,
+        max_objects,
     };
     // Layer colours.
     if let Some(t) = section("TABLES") {
@@ -1168,7 +1195,13 @@ pub fn to_document(imp: Imported, title: &str) -> Document {
 // ----- export ---------------------------------------------------------------
 
 fn fmt(v: f64) -> String {
-    let s = format!("{v:.4}");
+    // A coordinate that is not a number would stop every reader.
+    if !v.is_finite() {
+        return "0".into();
+    }
+    // Six places: a drawing in metres or feet keeps a thousandth of a
+    // millimetre's detail as one in millimetres does (#3583).
+    let s = format!("{v:.6}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() || s == "-0" {
         "0".into()
@@ -1182,6 +1215,10 @@ struct Writer<'a> {
     symbols: &'a [tracedraw_core::Symbol],
     handle: u32,
     layer: String,
+    /// The drawing unit's size in mm (1 for millimetres, #3583).
+    unit: f64,
+    /// How outlines' curves are written (#4012).
+    curves: DxfCurves,
 }
 
 impl Writer<'_> {
@@ -1194,6 +1231,100 @@ impl Writer<'_> {
         format!("{:X}", self.handle)
     }
 
+    /// A table's head: its handle, owned by no one, and its record count.
+    fn table_start(&mut self, name: &str, handle: &str, count: usize) {
+        self.pair(0, "TABLE");
+        self.pair(2, name);
+        self.pair(5, handle);
+        self.pair(330, "0");
+        self.pair(100, "AcDbSymbolTable");
+        self.pair(70, &count.to_string());
+    }
+
+    /// A table record's head: its handle, its table and its subclass.
+    fn record_start(&mut self, kind: &str, handle: &str, table: &str, subclass: &str) {
+        self.pair(0, kind);
+        self.pair(5, handle);
+        self.pair(330, table);
+        self.pair(100, "AcDbSymbolTableRecord");
+        self.pair(100, subclass);
+    }
+
+    /// A layer's flags: locked, shown (a negative colour hides it) and
+    /// printed, with the solid line type, the default lineweight and the
+    /// "Normal" plot style. AutoCAD refuses a layer without its plot style
+    /// ("Error in LAYER Table. Did not receive PlotStyleName", #2610).
+    fn layer_flags(&mut self, locked: bool, visible: bool, printable: bool) {
+        self.pair(70, if locked { "4" } else { "0" });
+        self.pair(62, if visible { "7" } else { "-7" });
+        self.pair(6, "Continuous");
+        self.pair(290, if printable { "1" } else { "0" });
+        self.pair(370, "-3");
+        self.pair(390, fixed::PLOT_STYLE_NORMAL);
+    }
+
+    /// A LAYOUT object: plot settings for no device, then the layout's
+    /// name, tab, limits and extents (the page) and its block record.
+    fn layout(&mut self, handle: &str, name: &str, tab: &str, block: &str, w: f64, h: f64) {
+        self.pair(0, "LAYOUT");
+        self.pair(5, handle);
+        self.pair(330, fixed::LAYOUT_DICT);
+        self.pair(100, "AcDbPlotSettings");
+        self.pair(1, "");
+        self.pair(2, "none_device");
+        self.pair(4, "");
+        self.pair(6, "");
+        for code in 40..=47 {
+            self.pair(code, "0");
+        }
+        self.pair(48, "0");
+        self.pair(49, "0");
+        self.pair(140, "0");
+        self.pair(141, "0");
+        self.pair(142, "1");
+        self.pair(143, "1");
+        // Plot flags: plot viewport borders, show plot styles, plot
+        // lineweights, print, use standard scale (688 as files hold it).
+        self.pair(70, "688");
+        self.pair(72, "1");
+        self.pair(73, "0");
+        self.pair(74, "5");
+        self.pair(7, "");
+        self.pair(75, "16");
+        self.pair(147, "1");
+        self.pair(148, "0");
+        self.pair(149, "0");
+        self.pair(100, "AcDbLayout");
+        self.pair(1, name);
+        self.pair(70, "1");
+        self.pair(71, tab);
+        self.pair(10, "0");
+        self.pair(20, "0");
+        self.pair(11, &fmt(w));
+        self.pair(21, &fmt(h));
+        self.pair(12, "0");
+        self.pair(22, "0");
+        self.pair(32, "0");
+        self.pair(14, "0");
+        self.pair(24, "0");
+        self.pair(34, "0");
+        self.pair(15, &fmt(w));
+        self.pair(25, &fmt(h));
+        self.pair(35, "0");
+        self.pair(146, "0");
+        self.pair(13, "0");
+        self.pair(23, "0");
+        self.pair(33, "0");
+        self.pair(16, "1");
+        self.pair(26, "0");
+        self.pair(36, "0");
+        self.pair(17, "0");
+        self.pair(27, "1");
+        self.pair(37, "0");
+        self.pair(76, "0");
+        self.pair(330, block);
+    }
+
     fn entity_header(&mut self, kind: &str, color: Color, subclass: &str) {
         self.entity_header_lw(kind, color, subclass, 0.0);
     }
@@ -1202,8 +1333,9 @@ impl Writer<'_> {
         self.pair(0, kind);
         let h = self.next_handle();
         self.pair(5, &h);
+        self.pair(330, fixed::MODEL_SPACE);
         self.pair(100, "AcDbEntity");
-        let layer = self.layer.clone();
+        let layer = dxf_string(&self.layer);
         self.pair(8, &layer);
         let rgb = color.to_rgb8();
         self.pair(62, &rgb_to_aci(rgb).to_string());
@@ -1212,18 +1344,13 @@ impl Writer<'_> {
         if width_mm > 0.0 {
             // Lineweight in 1/100 mm (nearest standard value is the
             // reader's business).
-            self.pair(
-                370,
-                &((width_mm * 100.0).round() as i64)
-                    .clamp(0, 211)
-                    .to_string(),
-            );
+            self.pair(370, &lineweight(width_mm).to_string());
         }
         self.pair(100, subclass);
     }
 
     /// Flatten a path into polylines (one per subpath).
-    fn polylines(path: &BezPath) -> Vec<(Vec<Point>, bool)> {
+    fn polylines(path: &BezPath, tolerance: f64) -> Vec<(Vec<Point>, bool)> {
         let mut out: Vec<(Vec<Point>, bool)> = Vec::new();
         let mut cur: Vec<Point> = Vec::new();
         let mut closed = false;
@@ -1234,7 +1361,7 @@ impl Writer<'_> {
                 cur.clear();
             }
         };
-        tracedraw_core::geometry::flatten(path, 0.05, &mut |el| match el {
+        tracedraw_core::geometry::flatten(path, tolerance, &mut |el| match el {
             PathEl::MoveTo(p) => {
                 flush(&mut cur, closed, &mut out);
                 closed = false;
@@ -1257,11 +1384,71 @@ impl Writer<'_> {
         self.pair(90, &pts.len().to_string());
         self.pair(70, if closed { "1" } else { "0" });
         if width_mm > 0.0 {
-            self.pair(43, &fmt(width_mm));
+            self.pair(43, &fmt(width_mm / self.unit));
         }
         for p in pts {
             self.pair(10, &fmt(p.x));
             self.pair(20, &fmt(p.y));
+        }
+    }
+
+    /// An LWPOLYLINE whose vertices carry the bulge of the arc to the
+    /// next one (0 for a straight segment).
+    fn bulge_polyline(&mut self, pts: &[(Point, f64)], closed: bool, color: Color, width_mm: f64) {
+        self.entity_header_lw("LWPOLYLINE", color, "AcDbPolyline", width_mm);
+        self.pair(90, &pts.len().to_string());
+        self.pair(70, if closed { "1" } else { "0" });
+        if width_mm > 0.0 {
+            self.pair(43, &fmt(width_mm / self.unit));
+        }
+        for (p, bulge) in pts {
+            self.pair(10, &fmt(p.x));
+            self.pair(20, &fmt(p.y));
+            if bulge.abs() > 1e-9 {
+                self.pair(42, &fmt(*bulge));
+            }
+        }
+    }
+
+    /// A cubic SPLINE through the Bézier segments of one subpath: their
+    /// nodes and handles are its control points, each node a knot of
+    /// multiplicity three, so the spline is the very same curve.
+    fn spline(&mut self, sub: &CubicSubpath, color: Color, width_mm: f64) {
+        let n = sub.segments.len();
+        if n == 0 {
+            return;
+        }
+        self.entity_header_lw("SPLINE", color, "AcDbSpline", width_mm);
+        self.pair(210, "0");
+        self.pair(220, "0");
+        self.pair(230, "1");
+        // Planar; a closed subpath's ends meet at its first node.
+        self.pair(70, "8");
+        self.pair(71, "3");
+        self.pair(72, &(3 * n + 5).to_string());
+        self.pair(73, &(3 * n + 1).to_string());
+        self.pair(74, "0");
+        self.pair(42, "0.0000001");
+        self.pair(43, "0.0000001");
+        for _ in 0..4 {
+            self.pair(40, "0");
+        }
+        for i in 1..n {
+            for _ in 0..3 {
+                self.pair(40, &i.to_string());
+            }
+        }
+        for _ in 0..4 {
+            self.pair(40, &n.to_string());
+        }
+        let mut controls = vec![sub.segments[0][0]];
+        for seg in &sub.segments {
+            controls.extend_from_slice(&seg[1..]);
+        }
+        for p in controls {
+            self.pair(10, &fmt(p.x));
+            self.pair(20, &fmt(p.y));
+            self.pair(30, "0");
         }
     }
 
@@ -1390,7 +1577,8 @@ impl Writer<'_> {
         if path.elements().is_empty() {
             return;
         }
-        let polys = Self::polylines(&path);
+        // Curves followed to 0.05 mm, in drawing units.
+        let polys = Self::polylines(&path, 0.05 / self.unit);
         if let Fill::Solid(c) = &shape.fill {
             let closed: Vec<(Vec<Point>, bool)> = polys
                 .iter()
@@ -1405,6 +1593,7 @@ impl Writer<'_> {
                 Fill::Pattern(tracedraw_core::Pattern::TwoColor { front, .. }) => Some(*front),
                 Fill::Texture(t) => Some(t.color_a),
                 Fill::Mesh(m) => m.nodes.first().map(|n| n.color),
+                Fill::Procedural(p) => Some(p.foreground),
                 _ => None,
             }
             .unwrap_or(Color::Gray { v: 0.5 });
@@ -1416,9 +1605,10 @@ impl Writer<'_> {
             self.hatch(&closed, c);
         }
         if let Some(s) = &shape.stroke {
+            // The object's own scale, the drawing unit's taken out.
             let scale = {
                 let c = transform.as_coeffs();
-                (c[0] * c[3] - c[1] * c[2]).abs().sqrt()
+                (c[0] * c[3] - c[1] * c[2]).abs().sqrt() * self.unit
             };
             let w = if s.scale_with_object {
                 s.width * scale
@@ -1426,121 +1616,846 @@ impl Writer<'_> {
                 s.width
             };
             let w = if w <= Stroke::HAIRLINE + 1e-9 { 0.0 } else { w };
-            for (pts, closed) in &polys {
-                self.lwpolyline(pts, *closed, s.color, w);
+            match self.curves {
+                DxfCurves::Lines => {
+                    for (pts, closed) in &polys {
+                        self.lwpolyline(pts, *closed, s.color, w);
+                    }
+                }
+                DxfCurves::Arcs => {
+                    // Arcs within a hundredth of a millimetre.
+                    for (pts, closed) in arc_polylines(&path, 0.01 / self.unit) {
+                        self.bulge_polyline(&pts, closed, s.color, w);
+                    }
+                }
+                DxfCurves::Splines => {
+                    for sub in cubic_subpaths(&path) {
+                        self.spline(&sub, s.color, w);
+                    }
+                }
             }
         }
     }
 }
 
 fn escape_text(s: &str) -> String {
-    s.replace('\\', "\\\\")
+    dxf_string(s)
 }
 
-/// Write one page as an ASCII DXF (AC1015 / AutoCAD 2000 dialect).
-pub fn page_to_dxf(doc: &Document, page_index: usize) -> String {
-    let mut w = Writer {
-        out: String::new(),
-        symbols: &doc.symbols,
-        handle: 0x100,
-        layer: "0".into(),
+/// Handles of the objects every AutoCAD 2000 drawing holds, written
+/// with fixed values; the objects of the drawing count up from 0x100.
+mod fixed {
+    pub const BLOCK_RECORD_TABLE: &str = "1";
+    pub const LAYER_TABLE: &str = "2";
+    pub const STYLE_TABLE: &str = "3";
+    pub const LTYPE_TABLE: &str = "5";
+    pub const VIEW_TABLE: &str = "6";
+    pub const UCS_TABLE: &str = "7";
+    pub const VPORT_TABLE: &str = "8";
+    pub const APPID_TABLE: &str = "9";
+    pub const DIMSTYLE_TABLE: &str = "A";
+    pub const ROOT_DICT: &str = "C";
+    pub const GROUP_DICT: &str = "D";
+    pub const PLOT_STYLE_DICT: &str = "E";
+    pub const PLOT_STYLE_NORMAL: &str = "F";
+    pub const LAYOUT_DICT: &str = "1A";
+    pub const MODEL_LAYOUT: &str = "1E";
+    pub const PAPER_LAYOUT: &str = "23";
+    pub const LAYER_0: &str = "10";
+    pub const STYLE_STANDARD: &str = "11";
+    pub const APPID_ACAD: &str = "12";
+    pub const LTYPE_BYBLOCK: &str = "14";
+    pub const LTYPE_BYLAYER: &str = "15";
+    pub const LTYPE_CONTINUOUS: &str = "16";
+    pub const PAPER_SPACE: &str = "1B";
+    pub const PAPER_BLOCK: &str = "1C";
+    pub const PAPER_ENDBLK: &str = "1D";
+    pub const MODEL_SPACE: &str = "1F";
+    pub const VPORT_ACTIVE: &str = "20";
+    pub const MODEL_BLOCK: &str = "21";
+    pub const MODEL_ENDBLK: &str = "22";
+    pub const DIMSTYLE_STANDARD: &str = "27";
+}
+
+/// The standard lineweights (1/100 mm) a DXF reader accepts in group 370;
+/// any other value makes AutoCAD reject the file.
+const LINEWEIGHTS: [i64; 24] = [
+    0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200,
+    211,
+];
+
+/// The standard lineweight nearest a width in millimetres.
+fn lineweight(width_mm: f64) -> i64 {
+    let w = (width_mm * 100.0).round();
+    LINEWEIGHTS
+        .iter()
+        .copied()
+        .min_by(|a, b| (*a as f64 - w).abs().total_cmp(&(*b as f64 - w).abs()))
+        .unwrap_or(0)
+}
+
+/// A string for a DXF of the AutoCAD 2000 dialect, read in the drawing's
+/// code page: characters past ASCII are written as `\U+XXXX`, which
+/// every reader turns back into the character.
+fn dxf_string(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\r' | '\n' => out.push(' '),
+            c if c.is_ascii() => out.push(c),
+            c if (c as u32) <= 0xFFFF => {
+                let _ = write!(out, "\\U+{:04X}", c as u32);
+            }
+            // Past the basic plane: a replacement mark, as AutoCAD does.
+            _ => out.push('?'),
+        }
+    }
+    out
+}
+
+/// Characters written as `\U+XXXX` (see [`dxf_string`]) back to the
+/// characters.
+fn decode_unicode_escapes(s: &str) -> String {
+    if !s.contains("\\U+") && !s.contains("\\u+") {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(i) = [rest.find("\\U+"), rest.find("\\u+")]
+        .into_iter()
+        .flatten()
+        .min()
+    {
+        out.push_str(&rest[..i]);
+        let hex = rest.get(i + 3..i + 7).unwrap_or("");
+        match u32::from_str_radix(hex, 16).ok().and_then(char::from_u32) {
+            Some(c) if hex.len() == 4 => {
+                out.push(c);
+                rest = &rest[i + 7..];
+            }
+            _ => {
+                out.push_str(&rest[i..i + 3]);
+                rest = &rest[i + 3..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// One subpath as cubic Bézier segments (straight and quadratic ones
+/// raised to cubics), and whether it was closed.
+#[derive(Debug, Clone, PartialEq)]
+struct CubicSubpath {
+    segments: Vec<[Point; 4]>,
+    closed: bool,
+}
+
+/// The subpaths of `path` as cubic segments (#4012). A closed subpath
+/// gets its closing line as a segment.
+fn cubic_subpaths(path: &BezPath) -> Vec<CubicSubpath> {
+    let mut out = Vec::new();
+    let mut cur = CubicSubpath {
+        segments: Vec::new(),
+        closed: false,
     };
+    let (mut start, mut at) = (Point::ZERO, Point::ZERO);
+    let line = |a: Point, b: Point| [a, a.lerp(b, 1.0 / 3.0), a.lerp(b, 2.0 / 3.0), b];
+    let flush = |cur: &mut CubicSubpath, out: &mut Vec<CubicSubpath>| {
+        if !cur.segments.is_empty() {
+            out.push(std::mem::replace(
+                cur,
+                CubicSubpath {
+                    segments: Vec::new(),
+                    closed: false,
+                },
+            ));
+        }
+    };
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                flush(&mut cur, &mut out);
+                start = p;
+                at = p;
+            }
+            PathEl::LineTo(p) => {
+                cur.segments.push(line(at, p));
+                at = p;
+            }
+            PathEl::QuadTo(c, p) => {
+                cur.segments.push([
+                    at,
+                    at + (c - at) * (2.0 / 3.0),
+                    p + (c - p) * (2.0 / 3.0),
+                    p,
+                ]);
+                at = p;
+            }
+            PathEl::CurveTo(a, b, p) => {
+                cur.segments.push([at, a, b, p]);
+                at = p;
+            }
+            PathEl::ClosePath => {
+                if (at - start).hypot() > 1e-9 {
+                    cur.segments.push(line(at, start));
+                }
+                cur.closed = true;
+                flush(&mut cur, &mut out);
+                at = start;
+            }
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+/// The point at `t` of cubic `c`.
+fn cubic_at(c: &[Point; 4], t: f64) -> Point {
+    let u = 1.0 - t;
+    let v = c[0].to_vec2() * (u * u * u)
+        + c[1].to_vec2() * (3.0 * u * u * t)
+        + c[2].to_vec2() * (3.0 * u * t * t)
+        + c[3].to_vec2() * (t * t * t);
+    v.to_point()
+}
+
+/// Cubic `c` split at its middle.
+fn split_cubic(c: &[Point; 4]) -> ([Point; 4], [Point; 4]) {
+    split_cubic_at(c, 0.5)
+}
+
+/// Cubic `c` split at parameter `t`.
+fn split_cubic_at(c: &[Point; 4], t: f64) -> ([Point; 4], [Point; 4]) {
+    let m = |a: Point, b: Point| a.lerp(b, t);
+    let (ab, bc, cd) = (m(c[0], c[1]), m(c[1], c[2]), m(c[2], c[3]));
+    let (abc, bcd) = (m(ab, bc), m(bc, cd));
+    let mid = m(abc, bcd);
+    ([c[0], ab, abc, mid], [mid, bcd, cd, c[3]])
+}
+
+/// The parameters inside (0, 1) where cubic `c` changes the way it
+/// bends: an arc can only bend one way, so a biarc fits each piece
+/// between them far better than the whole S.
+fn cubic_inflections(c: &[Point; 4]) -> Vec<f64> {
+    let a = c[1] - c[0];
+    let b = c[2] - c[1] - a;
+    let d = (c[3] - c[2]) - (c[2] - c[1]) * 2.0 + a;
+    // B'(t) / 3 = a + 2bt + dt^2; B'(t) x B''(t) = 0 is a quadratic.
+    let (qa, qb, qc) = (b.cross(d), a.cross(d), a.cross(b));
+    let mut ts = Vec::new();
+    if qa.abs() < 1e-12 {
+        if qb.abs() > 1e-12 {
+            ts.push(-qc / qb);
+        }
+    } else {
+        let disc = qb * qb - 4.0 * qa * qc;
+        if disc >= 0.0 {
+            let r = disc.sqrt();
+            ts.push((-qb - r) / (2.0 * qa));
+            ts.push((-qb + r) / (2.0 * qa));
+        }
+    }
+    ts.retain(|t| *t > 1e-6 && *t < 1.0 - 1e-6);
+    ts.sort_by(f64::total_cmp);
+    ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
+    ts
+}
+
+/// Cubic `c` cut at its inflections.
+fn split_at_inflections(c: &[Point; 4]) -> Vec<[Point; 4]> {
+    let mut out = Vec::new();
+    let mut rest = *c;
+    let mut done = 0.0;
+    for t in cubic_inflections(c) {
+        let (a, b) = split_cubic_at(&rest, (t - done) / (1.0 - done));
+        out.push(a);
+        rest = b;
+        done = t;
+    }
+    out.push(rest);
+    out
+}
+
+/// The bulge of the arc from `a` to `b` that leaves `a` along the unit
+/// tangent `t`: the tangent of a quarter of its included angle, positive
+/// counter-clockwise.
+fn bulge_from_tangent(a: Point, b: Point, t: Vec2) -> f64 {
+    let ch = b - a;
+    let half = t.cross(ch).atan2(t.dot(ch));
+    (half / 2.0).tan()
+}
+
+/// The distance from `p` to the arc (or segment, bulge 0) from `a` to
+/// `b` with bulge `bulge`.
+fn distance_to_bulge_arc(p: Point, a: Point, b: Point, bulge: f64) -> f64 {
+    let ch = b - a;
+    let len = ch.hypot();
+    if len < 1e-12 {
+        return (p - a).hypot();
+    }
+    if bulge.abs() < 1e-9 {
+        let t = ((p - a).dot(ch) / (len * len)).clamp(0.0, 1.0);
+        return (p - (a + ch * t)).hypot();
+    }
+    // The centre: on the chord's perpendicular, at the sagitta's distance.
+    let theta = 4.0 * bulge.atan();
+    let r = len / (2.0 * (theta / 2.0).sin()).abs();
+    let normal = Vec2::new(-ch.y, ch.x) / len;
+    let off = (r * r - len * len / 4.0).max(0.0).sqrt();
+    // A bulge under 1 (less than half a circle) has its centre on the
+    // side the arc does not bow to.
+    let side = if bulge.abs() < 1.0 { 1.0 } else { -1.0 } * bulge.signum();
+    let c = a.midpoint(b) + normal * (off * side);
+    let on_circle = ((p - c).hypot() - r).abs();
+    // Within the arc's sweep: the circle's distance; outside it, the
+    // nearer end's.
+    let ang = |q: Point| (q - c).y.atan2((q - c).x);
+    let (a0, ap) = (ang(a), ang(p));
+    let sweep = theta;
+    let mut d = ap - a0;
+    if sweep > 0.0 {
+        while d < 0.0 {
+            d += std::f64::consts::TAU;
+        }
+        while d >= std::f64::consts::TAU {
+            d -= std::f64::consts::TAU;
+        }
+        if d <= sweep {
+            return on_circle;
+        }
+    } else {
+        while d > 0.0 {
+            d -= std::f64::consts::TAU;
+        }
+        while d <= -std::f64::consts::TAU {
+            d += std::f64::consts::TAU;
+        }
+        if d >= sweep {
+            return on_circle;
+        }
+    }
+    (p - a).hypot().min((p - b).hypot())
+}
+
+/// A biarc for cubic `c`: two arcs meeting at a point with one tangent,
+/// the first leaving `c`'s start along its tangent, the second reaching
+/// its end along its tangent. `None` when the curve has no tangents.
+fn biarc(c: &[Point; 4]) -> Option<(Point, f64, f64)> {
+    let dir = |v: Vec2| {
+        let l = v.hypot();
+        (l > 1e-12).then(|| v / l)
+    };
+    let t1 = dir(c[1] - c[0])
+        .or_else(|| dir(c[2] - c[0]))
+        .or_else(|| dir(c[3] - c[0]))?;
+    let t2 = dir(c[3] - c[2])
+        .or_else(|| dir(c[3] - c[1]))
+        .or_else(|| dir(c[3] - c[0]))?;
+    let v = c[3] - c[0];
+    if v.hypot() < 1e-12 {
+        return None;
+    }
+    let t = t1 + t2;
+    let denom = 2.0 * (1.0 - t1.dot(t2));
+    let d = if denom.abs() < 1e-9 {
+        let vt2 = v.dot(t2);
+        if vt2.abs() < 1e-12 {
+            return None;
+        }
+        v.dot(v) / (4.0 * vt2)
+    } else {
+        let vt = v.dot(t);
+        let disc = vt * vt + denom * v.dot(v);
+        (-vt + disc.max(0.0).sqrt()) / denom
+    };
+    if !(d.is_finite() && d > 0.0) {
+        return None;
+    }
+    let q1 = c[0] + t1 * d;
+    let q2 = c[3] - t2 * d;
+    let joint = q1.midpoint(q2);
+    let b1 = bulge_from_tangent(c[0], joint, t1);
+    // The second arc, read backwards, leaves the end against its tangent.
+    let b2 = -bulge_from_tangent(c[3], joint, -t2);
+    Some((joint, b1, b2))
+}
+
+/// Cubic `c` as arcs within `tol`: the points the arcs start from, each
+/// with its bulge, up to (not including) `c`'s end.
+fn cubic_to_arcs(c: &[Point; 4], tol: f64, depth: u32, out: &mut Vec<(Point, f64)>) {
+    // A straight segment (its handles on the line) is one.
+    let chord = c[3] - c[0];
+    let len = chord.hypot();
+    let off_line = |p: Point| {
+        if len < 1e-12 {
+            (p - c[0]).hypot()
+        } else {
+            chord.cross(p - c[0]).abs() / len
+        }
+    };
+    if off_line(c[1]) <= tol * 0.25 && off_line(c[2]) <= tol * 0.25 {
+        out.push((c[0], 0.0));
+        return;
+    }
+    if let Some((joint, b1, b2)) = biarc(c) {
+        let fits = (1..16).all(|k| {
+            let p = cubic_at(c, f64::from(k) / 16.0);
+            distance_to_bulge_arc(p, c[0], joint, b1)
+                .min(distance_to_bulge_arc(p, joint, c[3], b2))
+                <= tol
+        });
+        if fits || depth >= 12 {
+            out.push((c[0], b1));
+            out.push((joint, b2));
+            return;
+        }
+    } else if depth >= 12 {
+        out.push((c[0], 0.0));
+        return;
+    }
+    let (a, b) = split_cubic(c);
+    cubic_to_arcs(&a, tol, depth + 1, out);
+    cubic_to_arcs(&b, tol, depth + 1, out);
+}
+
+/// The subpaths of `path` as polylines of arcs within `tol` (#4012):
+/// each vertex with the bulge of the arc to the next, and whether the
+/// subpath is closed.
+fn arc_polylines(path: &BezPath, tol: f64) -> Vec<(Vec<(Point, f64)>, bool)> {
+    cubic_subpaths(path)
+        .into_iter()
+        .map(|sub| {
+            let mut pts = Vec::new();
+            for seg in &sub.segments {
+                for piece in split_at_inflections(seg) {
+                    cubic_to_arcs(&piece, tol, 0, &mut pts);
+                }
+            }
+            if !sub.closed {
+                if let Some(last) = sub.segments.last() {
+                    pts.push((last[3], 0.0));
+                }
+            }
+            (pts, sub.closed)
+        })
+        .filter(|(pts, _)| pts.len() >= 2)
+        .collect()
+}
+
+/// The drawing unit a DXF export writes its coordinates in (#3583):
+/// `$INSUNITS` names it, and every length is divided by its size in mm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DxfUnits {
+    #[default]
+    Millimeters,
+    Centimeters,
+    Meters,
+    Inches,
+    Feet,
+}
+
+impl DxfUnits {
+    /// Every unit, in the order the Export dialog lists them.
+    pub const ALL: [DxfUnits; 5] = [
+        DxfUnits::Millimeters,
+        DxfUnits::Centimeters,
+        DxfUnits::Meters,
+        DxfUnits::Inches,
+        DxfUnits::Feet,
+    ];
+
+    /// The unit's size in millimetres.
+    pub fn mm(self) -> f64 {
+        match self {
+            DxfUnits::Millimeters => 1.0,
+            DxfUnits::Centimeters => 10.0,
+            DxfUnits::Meters => 1000.0,
+            DxfUnits::Inches => 25.4,
+            DxfUnits::Feet => 304.8,
+        }
+    }
+
+    /// Its `$INSUNITS` code.
+    pub fn insunits(self) -> u8 {
+        match self {
+            DxfUnits::Millimeters => 4,
+            DxfUnits::Centimeters => 5,
+            DxfUnits::Meters => 6,
+            DxfUnits::Inches => 1,
+            DxfUnits::Feet => 2,
+        }
+    }
+
+    /// Whether `$MEASUREMENT` is metric.
+    pub fn metric(self) -> bool {
+        !matches!(self, DxfUnits::Inches | DxfUnits::Feet)
+    }
+}
+
+/// How a DXF export writes the curves of an outline (#4012).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DxfCurves {
+    /// Arcs joined smoothly, one tangent to the next (polylines with
+    /// bulges, read by every CAD and CAM program): a curve cut on a
+    /// machine runs as arcs, not as short straight steps.
+    #[default]
+    Arcs,
+    /// The curves exactly, as cubic splines of the same nodes.
+    Splines,
+    /// Short straight segments, as earlier versions wrote.
+    Lines,
+}
+
+impl DxfCurves {
+    /// Every choice, in the order the Export dialog lists them.
+    pub const ALL: [DxfCurves; 3] = [DxfCurves::Arcs, DxfCurves::Splines, DxfCurves::Lines];
+}
+
+/// The choices of a DXF export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DxfOptions {
+    pub units: DxfUnits,
+    /// How curves are written (#4012).
+    pub curves: DxfCurves,
+}
+
+/// Write one page as an ASCII DXF of the AutoCAD 2000 dialect (AC1015),
+/// with what that dialect requires of a file for AutoCAD to open it: every
+/// table (viewport, line types, layers, text style, views, UCS, registered
+/// applications, dimension style, block records), the model and paper
+/// space blocks, entities owned by the model space, unique handles with
+/// the next one in `$HANDSEED`, and the root dictionary with its group
+/// dictionary. Without them AutoCAD stopped at the end of the tables
+/// ("DXF read error") and Affinity refused the file (#2394).
+pub fn page_to_dxf(doc: &Document, page_index: usize) -> String {
+    page_to_dxf_with(doc, page_index, &DxfOptions::default())
+}
+
+/// [`page_to_dxf`] with the export's choices: the drawing unit the
+/// coordinates are written in (#3583).
+pub fn page_to_dxf_with(doc: &Document, page_index: usize, opts: &DxfOptions) -> String {
+    let unit = opts.units.mm();
+    // As the other vector exports see it: an open curve's fill as the
+    // screen shows it (none, unless the document fills open curves), the
+    // layers set not to print left out.
+    let doc = &*crate::for_export(doc, Some(page_index));
     let Some(page) = doc.pages.get(page_index) else {
         return String::new();
     };
-    let layers = doc.layers_for_page(page.id).unwrap_or_default();
-    // HEADER
-    w.pair(0, "SECTION");
-    w.pair(2, "HEADER");
-    w.pair(9, "$ACADVER");
-    w.pair(1, "AC1015");
-    w.pair(9, "$INSUNITS");
-    w.pair(70, "4");
-    w.pair(9, "$EXTMIN");
-    w.pair(10, "0");
-    w.pair(20, "0");
-    w.pair(30, "0");
-    w.pair(9, "$EXTMAX");
-    w.pair(10, &fmt(page.size.width));
-    w.pair(20, &fmt(page.size.height));
-    w.pair(30, "0");
-    w.pair(9, "$LIMMIN");
-    w.pair(10, "0");
-    w.pair(20, "0");
-    w.pair(9, "$LIMMAX");
-    w.pair(10, &fmt(page.size.width));
-    w.pair(20, &fmt(page.size.height));
-    w.pair(0, "ENDSEC");
-    // TABLES: line types and layers.
-    w.pair(0, "SECTION");
-    w.pair(2, "TABLES");
-    w.pair(0, "TABLE");
-    w.pair(2, "LTYPE");
-    w.pair(5, "5");
-    w.pair(100, "AcDbSymbolTable");
-    w.pair(70, "1");
-    w.pair(0, "LTYPE");
-    w.pair(5, "14");
-    w.pair(100, "AcDbSymbolTableRecord");
-    w.pair(100, "AcDbLinetypeTableRecord");
-    w.pair(2, "CONTINUOUS");
-    w.pair(70, "0");
-    w.pair(3, "Solid line");
-    w.pair(72, "65");
-    w.pair(73, "0");
-    w.pair(40, "0");
-    w.pair(0, "ENDTAB");
-    w.pair(0, "TABLE");
-    w.pair(2, "LAYER");
-    w.pair(5, "2");
-    w.pair(100, "AcDbSymbolTable");
-    w.pair(70, &layers.len().max(1).to_string());
-    let layer_names: Vec<String> = layers.iter().map(|l| safe_name(&l.name)).collect();
-    for (i, l) in layers.iter().enumerate() {
-        w.pair(0, "LAYER");
-        let h = w.next_handle();
-        w.pair(5, &h);
-        w.pair(100, "AcDbSymbolTableRecord");
-        w.pair(100, "AcDbLayerTableRecord");
-        w.pair(2, &layer_names[i]);
-        w.pair(70, if l.locked { "4" } else { "0" });
-        w.pair(62, if l.visible { "7" } else { "-7" });
-        w.pair(6, "CONTINUOUS");
-        w.pair(290, if l.printable { "1" } else { "0" });
+    let mut w = Writer {
+        out: String::new(),
+        symbols: &doc.symbols,
+        handle: 0xFF,
+        layer: "0".into(),
+        unit,
+        curves: opts.curves,
+    };
+    // The page in drawing units.
+    let size = tracedraw_core::geometry::Size::new(page.size.width / unit, page.size.height / unit);
+    let layers = doc.layers_drawn_for_page(page.id).unwrap_or_default();
+    // Layer names as DXF allows them, each once; "0" is the standard layer.
+    let mut layer_names: Vec<String> = Vec::new();
+    for l in &layers {
+        let base = safe_name(&l.name);
+        let mut name = base.clone();
+        let mut k = 2;
+        while layer_names.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+            name = format!("{base}_{k}");
+            k += 1;
+        }
+        layer_names.push(name);
     }
-    if layers.is_empty() {
-        w.pair(0, "LAYER");
-        w.pair(5, "10");
-        w.pair(100, "AcDbSymbolTableRecord");
-        w.pair(100, "AcDbLayerTableRecord");
-        w.pair(2, "0");
-        w.pair(70, "0");
-        w.pair(62, "7");
-        w.pair(6, "CONTINUOUS");
-    }
-    w.pair(0, "ENDTAB");
-    w.pair(0, "ENDSEC");
-    // BLOCKS (empty) and ENTITIES.
-    w.pair(0, "SECTION");
-    w.pair(2, "BLOCKS");
-    w.pair(0, "ENDSEC");
-    w.pair(0, "SECTION");
-    w.pair(2, "ENTITIES");
+    // ENTITIES first: the handles they take decide $HANDSEED.
     for (i, l) in layers.iter().enumerate() {
         if !l.visible {
             continue;
         }
         w.layer = layer_names[i].clone();
         for s in &l.shapes {
-            w.shape(s, Affine::IDENTITY);
+            w.shape(s, Affine::scale(1.0 / unit));
         }
     }
+    let entities = std::mem::take(&mut w.out);
+    let layer_handles: Vec<Option<String>> = layer_names
+        .iter()
+        .map(|n| (n != "0").then(|| w.next_handle()))
+        .collect();
+    let seed = w.next_handle();
+
+    // HEADER
+    w.pair(0, "SECTION");
+    w.pair(2, "HEADER");
+    w.pair(9, "$ACADVER");
+    w.pair(1, "AC1015");
+    w.pair(9, "$DWGCODEPAGE");
+    w.pair(3, "ANSI_1252");
+    w.pair(9, "$HANDSEED");
+    w.pair(5, &seed);
+    w.pair(9, "$INSUNITS");
+    w.pair(70, &opts.units.insunits().to_string());
+    w.pair(9, "$MEASUREMENT");
+    w.pair(70, if opts.units.metric() { "1" } else { "0" });
+    w.pair(9, "$EXTMIN");
+    w.pair(10, "0");
+    w.pair(20, "0");
+    w.pair(30, "0");
+    w.pair(9, "$EXTMAX");
+    w.pair(10, &fmt(size.width));
+    w.pair(20, &fmt(size.height));
+    w.pair(30, "0");
+    w.pair(9, "$LIMMIN");
+    w.pair(10, "0");
+    w.pair(20, "0");
+    w.pair(9, "$LIMMAX");
+    w.pair(10, &fmt(size.width));
+    w.pair(20, &fmt(size.height));
     w.pair(0, "ENDSEC");
+
+    // TABLES
+    w.pair(0, "SECTION");
+    w.pair(2, "TABLES");
+    // Viewport: the page in view.
+    w.table_start("VPORT", fixed::VPORT_TABLE, 1);
+    w.record_start(
+        "VPORT",
+        fixed::VPORT_ACTIVE,
+        fixed::VPORT_TABLE,
+        "AcDbViewportTableRecord",
+    );
+    w.pair(2, "*Active");
+    w.pair(70, "0");
+    w.pair(10, "0");
+    w.pair(20, "0");
+    w.pair(11, "1");
+    w.pair(21, "1");
+    w.pair(12, &fmt(size.width / 2.0));
+    w.pair(22, &fmt(size.height / 2.0));
+    w.pair(13, "0");
+    w.pair(23, "0");
+    w.pair(14, "10");
+    w.pair(24, "10");
+    w.pair(15, "10");
+    w.pair(25, "10");
+    w.pair(16, "0");
+    w.pair(26, "0");
+    w.pair(36, "1");
+    w.pair(17, "0");
+    w.pair(27, "0");
+    w.pair(37, "0");
+    w.pair(40, &fmt(size.height.max(1.0) * 1.1));
+    w.pair(
+        41,
+        &fmt((size.width / size.height.max(1e-6)).clamp(0.1, 10.0)),
+    );
+    w.pair(42, "50");
+    w.pair(43, "0");
+    w.pair(44, "0");
+    w.pair(50, "0");
+    w.pair(51, "0");
+    w.pair(71, "0");
+    w.pair(72, "1000");
+    w.pair(73, "1");
+    w.pair(74, "3");
+    w.pair(75, "0");
+    w.pair(76, "0");
+    w.pair(77, "0");
+    w.pair(78, "0");
+    w.pair(0, "ENDTAB");
+    // Line types.
+    w.table_start("LTYPE", fixed::LTYPE_TABLE, 3);
+    for (h, name, desc) in [
+        (fixed::LTYPE_BYBLOCK, "ByBlock", ""),
+        (fixed::LTYPE_BYLAYER, "ByLayer", ""),
+        (fixed::LTYPE_CONTINUOUS, "Continuous", "Solid line"),
+    ] {
+        w.record_start("LTYPE", h, fixed::LTYPE_TABLE, "AcDbLinetypeTableRecord");
+        w.pair(2, name);
+        w.pair(70, "0");
+        w.pair(3, desc);
+        w.pair(72, "65");
+        w.pair(73, "0");
+        w.pair(40, "0");
+    }
+    w.pair(0, "ENDTAB");
+    // Layers: the standard layer 0, then the page's.
+    let own = layer_handles.iter().filter(|h| h.is_some()).count();
+    w.table_start("LAYER", fixed::LAYER_TABLE, own + 1);
+    let zero = layer_names.iter().position(|n| n == "0");
+    w.record_start(
+        "LAYER",
+        fixed::LAYER_0,
+        fixed::LAYER_TABLE,
+        "AcDbLayerTableRecord",
+    );
+    w.pair(2, "0");
+    let (locked, visible, printable) = zero
+        .and_then(|i| layers.get(i))
+        .map_or((false, true, true), |l| (l.locked, l.visible, l.printable));
+    w.layer_flags(locked, visible, printable);
+    for (i, l) in layers.iter().enumerate() {
+        let Some(h) = &layer_handles[i] else {
+            continue;
+        };
+        w.record_start("LAYER", h, fixed::LAYER_TABLE, "AcDbLayerTableRecord");
+        let name = dxf_string(&layer_names[i]);
+        w.pair(2, &name);
+        w.layer_flags(l.locked, l.visible, l.printable);
+    }
+    w.pair(0, "ENDTAB");
+    // Text style: TEXT entities use Standard.
+    w.table_start("STYLE", fixed::STYLE_TABLE, 1);
+    w.record_start(
+        "STYLE",
+        fixed::STYLE_STANDARD,
+        fixed::STYLE_TABLE,
+        "AcDbTextStyleTableRecord",
+    );
+    w.pair(2, "Standard");
+    w.pair(70, "0");
+    w.pair(40, "0");
+    w.pair(41, "1");
+    w.pair(50, "0");
+    w.pair(71, "0");
+    w.pair(42, "2.5");
+    w.pair(3, "arial.ttf");
+    w.pair(4, "");
+    w.pair(0, "ENDTAB");
+    w.table_start("VIEW", fixed::VIEW_TABLE, 0);
+    w.pair(0, "ENDTAB");
+    w.table_start("UCS", fixed::UCS_TABLE, 0);
+    w.pair(0, "ENDTAB");
+    w.table_start("APPID", fixed::APPID_TABLE, 1);
+    w.record_start(
+        "APPID",
+        fixed::APPID_ACAD,
+        fixed::APPID_TABLE,
+        "AcDbRegAppTableRecord",
+    );
+    w.pair(2, "ACAD");
+    w.pair(70, "0");
+    w.pair(0, "ENDTAB");
+    // Dimension style: its records take their handle in group 105.
+    w.table_start("DIMSTYLE", fixed::DIMSTYLE_TABLE, 1);
+    w.pair(100, "AcDbDimStyleTable");
+    w.pair(0, "DIMSTYLE");
+    w.pair(105, fixed::DIMSTYLE_STANDARD);
+    w.pair(330, fixed::DIMSTYLE_TABLE);
+    w.pair(100, "AcDbSymbolTableRecord");
+    w.pair(100, "AcDbDimStyleTableRecord");
+    w.pair(2, "Standard");
+    w.pair(70, "0");
+    w.pair(0, "ENDTAB");
+    w.table_start("BLOCK_RECORD", fixed::BLOCK_RECORD_TABLE, 2);
+    for (h, name, layout) in [
+        (fixed::MODEL_SPACE, "*Model_Space", fixed::MODEL_LAYOUT),
+        (fixed::PAPER_SPACE, "*Paper_Space", fixed::PAPER_LAYOUT),
+    ] {
+        w.record_start(
+            "BLOCK_RECORD",
+            h,
+            fixed::BLOCK_RECORD_TABLE,
+            "AcDbBlockTableRecord",
+        );
+        w.pair(2, name);
+        w.pair(340, layout);
+    }
+    w.pair(0, "ENDTAB");
+    w.pair(0, "ENDSEC");
+
+    // BLOCKS: the model and paper space.
+    w.pair(0, "SECTION");
+    w.pair(2, "BLOCKS");
+    for (owner, begin, end, name) in [
+        (
+            fixed::MODEL_SPACE,
+            fixed::MODEL_BLOCK,
+            fixed::MODEL_ENDBLK,
+            "*Model_Space",
+        ),
+        (
+            fixed::PAPER_SPACE,
+            fixed::PAPER_BLOCK,
+            fixed::PAPER_ENDBLK,
+            "*Paper_Space",
+        ),
+    ] {
+        w.pair(0, "BLOCK");
+        w.pair(5, begin);
+        w.pair(330, owner);
+        w.pair(100, "AcDbEntity");
+        w.pair(8, "0");
+        w.pair(100, "AcDbBlockBegin");
+        w.pair(2, name);
+        w.pair(70, "0");
+        w.pair(10, "0");
+        w.pair(20, "0");
+        w.pair(30, "0");
+        w.pair(3, name);
+        w.pair(1, "");
+        w.pair(0, "ENDBLK");
+        w.pair(5, end);
+        w.pair(330, owner);
+        w.pair(100, "AcDbEntity");
+        w.pair(8, "0");
+        w.pair(100, "AcDbBlockEnd");
+    }
+    w.pair(0, "ENDSEC");
+
+    w.pair(0, "SECTION");
+    w.pair(2, "ENTITIES");
+    w.out.push_str(&entities);
+    w.pair(0, "ENDSEC");
+
+    // OBJECTS: the root dictionary with its group, layout and plot style
+    // dictionaries, the two layouts and the "Normal" plot style the layers
+    // point to (#2610).
     w.pair(0, "SECTION");
     w.pair(2, "OBJECTS");
     w.pair(0, "DICTIONARY");
-    w.pair(5, "C");
+    w.pair(5, fixed::ROOT_DICT);
+    w.pair(330, "0");
     w.pair(100, "AcDbDictionary");
+    w.pair(281, "1");
+    w.pair(3, "ACAD_GROUP");
+    w.pair(350, fixed::GROUP_DICT);
+    w.pair(3, "ACAD_LAYOUT");
+    w.pair(350, fixed::LAYOUT_DICT);
+    w.pair(3, "ACAD_PLOTSTYLENAME");
+    w.pair(350, fixed::PLOT_STYLE_DICT);
+    w.pair(0, "DICTIONARY");
+    w.pair(5, fixed::GROUP_DICT);
+    w.pair(330, fixed::ROOT_DICT);
+    w.pair(100, "AcDbDictionary");
+    w.pair(281, "1");
+    w.pair(0, "DICTIONARY");
+    w.pair(5, fixed::LAYOUT_DICT);
+    w.pair(330, fixed::ROOT_DICT);
+    w.pair(100, "AcDbDictionary");
+    w.pair(281, "1");
+    w.pair(3, "Layout1");
+    w.pair(350, fixed::PAPER_LAYOUT);
+    w.pair(3, "Model");
+    w.pair(350, fixed::MODEL_LAYOUT);
+    // The plot style dictionary has a default entry, "Normal".
+    w.pair(0, "ACDBDICTIONARYWDFLT");
+    w.pair(5, fixed::PLOT_STYLE_DICT);
+    w.pair(330, fixed::ROOT_DICT);
+    w.pair(100, "AcDbDictionary");
+    w.pair(281, "1");
+    w.pair(3, "Normal");
+    w.pair(350, fixed::PLOT_STYLE_NORMAL);
+    w.pair(100, "AcDbDictionaryWithDefault");
+    w.pair(340, fixed::PLOT_STYLE_NORMAL);
+    w.pair(0, "ACDBPLACEHOLDER");
+    w.pair(5, fixed::PLOT_STYLE_NORMAL);
+    w.pair(330, fixed::PLOT_STYLE_DICT);
+    for (h, name, tab, block) in [
+        (fixed::MODEL_LAYOUT, "Model", "0", fixed::MODEL_SPACE),
+        (fixed::PAPER_LAYOUT, "Layout1", "1", fixed::PAPER_SPACE),
+    ] {
+        w.layout(h, name, tab, block, size.width, size.height);
+    }
     w.pair(0, "ENDSEC");
     w.pair(0, "EOF");
     w.out
@@ -1642,6 +2557,53 @@ mod tests {
         assert!((b.x0 - 5.0).abs() < 1e-6, "{b:?}");
     }
 
+    /// Blocks that insert each other ten times over, eight levels deep,
+    /// stand for a hundred million lines: reading stops at the most
+    /// objects allowed, with a warning, instead of using up the memory.
+    #[test]
+    fn blocks_inserting_each_other_stop_at_the_most_objects() {
+        let block = |name: &str, body: &str| {
+            format!("  0\nBLOCK\n  8\n0\n  2\n{name}\n 70\n0\n 10\n0\n 20\n0\n{body}  0\nENDBLK\n")
+        };
+        let insert = |name: &str| format!("  0\nINSERT\n  8\n0\n  2\n{name}\n 10\n0\n 20\n0\n");
+        let line = "  0\nLINE\n  8\n0\n 10\n0\n 20\n0\n 11\n1\n 21\n1\n";
+        let mut blocks = block("L0", line);
+        for i in 1..9 {
+            blocks += &block(&format!("L{i}"), &insert(&format!("L{}", i - 1)).repeat(10));
+        }
+        let text = format!(
+            "  0\nSECTION\n  2\nBLOCKS\n{blocks}  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n{}  0\nENDSEC\n  0\nEOF\n",
+            insert("L8")
+        );
+        let mut ids = IdSource::default();
+        let imp = parse_at_most(&text, &mut ids, 5000).expect("parse");
+        fn count(s: &Shape) -> usize {
+            match &s.kind {
+                ShapeKind::Group { children } => 1 + children.iter().map(count).sum::<usize>(),
+                _ => 1,
+            }
+        }
+        let n: usize = imp.shapes.iter().map(count).sum();
+        assert!(n > 0 && n <= 5000, "{n}");
+        assert!(
+            imp.warnings
+                .iter()
+                .any(|w| w.contains("more than 5000 objects")),
+            "{:?}",
+            imp.warnings
+        );
+        // The same file within the limit reads whole: one insert of the
+        // lowest block and its line.
+        let small = format!(
+            "  0\nSECTION\n  2\nBLOCKS\n{}  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n{}  0\nENDSEC\n  0\nEOF\n",
+            block("L0", line),
+            insert("L0")
+        );
+        let imp = parse(&small, &mut ids).expect("parse");
+        assert_eq!(imp.shapes.iter().map(count).sum::<usize>(), 2);
+        assert!(imp.warnings.is_empty(), "{:?}", imp.warnings);
+    }
+
     #[test]
     fn mtext_codes_are_stripped() {
         assert_eq!(
@@ -1704,6 +2666,148 @@ mod tests {
         }
     }
 
+    /// #4012: a curved outline goes out as arcs that follow it within a
+    /// hundredth of a millimetre and meet tangent to each other, as the
+    /// exact spline of its nodes, or as short lines when asked.
+    #[test]
+    fn curves_export_as_smooth_arcs_or_exact_splines() {
+        let mut doc = Document::new("t", Size::new(100.0, 100.0));
+        let mut ids = doc.ids().clone();
+        let mut path = BezPath::new();
+        path.move_to((10.0, 50.0));
+        path.curve_to((10.0, 10.0), (60.0, 90.0), (90.0, 40.0));
+        path.line_to((90.0, 20.0));
+        let mut s = Shape::new(ids.shape(), ShapeKind::Path { path: path.clone(), closed: false });
+        s.fill = Fill::None;
+        s.stroke = Some(Stroke::new(Color::BLACK, 0.5));
+        doc.pages[0].layers[0].shapes = vec![s];
+        doc.set_ids(ids);
+        let with = |curves| {
+            page_to_dxf_with(
+                &doc,
+                0,
+                &DxfOptions {
+                    curves,
+                    ..Default::default()
+                },
+            )
+        };
+        let count = |out: &str, v: &str| out.lines().filter(|l| l.trim() == v).count();
+        // Arcs: one polyline with bulges, far fewer vertices than lines.
+        let arcs = with(DxfCurves::Arcs);
+        assert_eq!(arcs, page_to_dxf(&doc, 0), "arcs by default");
+        assert!(count(&arcs, "42") > 0, "bulges");
+        let arcs_n = arc_polylines(&path, 0.01)[0].0.len();
+        let lines_n = DxfWriterProbe::polylines(&path, 0.01)[0].0.len();
+        assert!(arcs_n * 2 < lines_n, "{arcs_n} {lines_n}");
+        // Read back, the arcs follow the curve (the page's way up, or
+        // the drawing's).
+        let back = parse(&arcs, &mut IdSource::default()).expect("reparse");
+        let got = back.shapes[0].page_path();
+        let near = |q: Point| {
+            use tracedraw_core::geometry::ParamCurveNearest as _;
+            path.segments()
+                .map(|seg| seg.nearest(q, 1e-9).distance_sq.sqrt())
+                .fold(f64::INFINITY, f64::min)
+        };
+        // The import may place the drawing anywhere on its page: line
+        // the boxes up first.
+        let (want, have) = (path.bounding_box(), got.bounding_box());
+        let shift = want.origin() - have.origin();
+        let shift_up = Vec2::new(want.x0 - have.x0, want.y1 - (100.0 - have.y0));
+        let (mut far, mut far_up) = (0.0f64, 0.0f64);
+        tracedraw_core::geometry::flatten(&got, 0.001, &mut |el| {
+            if let PathEl::LineTo(p) | PathEl::MoveTo(p) = el {
+                far = far.max(near(p + shift));
+                far_up = far_up.max(near(Point::new(p.x, 100.0 - p.y) + shift_up));
+            }
+        });
+        assert!(far.min(far_up) < 0.05, "{far} {far_up}");
+        // The arcs meet tangent to each other.
+        let polys = arc_polylines(&path, 0.01);
+        assert_eq!(polys.len(), 1);
+        let pts = &polys[0].0;
+        let turn = |v: Vec2, a: f64| Vec2::new(v.x * a.cos() - v.y * a.sin(), v.x * a.sin() + v.y * a.cos());
+        for w in pts.windows(3) {
+            let (a, b, c) = (w[0], w[1], w[2]);
+            let into = turn(b.0 - a.0, 2.0 * a.1.atan()).normalize();
+            let out = turn(c.0 - b.0, -2.0 * b.1.atan()).normalize();
+            // The corner where the curve meets the straight line stays one.
+            if (b.0 - Point::new(90.0, 40.0)).hypot() > 1e-6 {
+                assert!(into.dot(out) > 0.999, "{a:?} {b:?} {c:?} {into:?} {out:?}");
+            }
+        }
+        // Splines: one SPLINE, its control points the nodes and handles.
+        let spline = with(DxfCurves::Splines);
+        assert_eq!(count(&spline, "SPLINE"), 1);
+        assert_eq!(count(&spline, "LWPOLYLINE"), 0);
+        let back = parse(&spline, &mut IdSource::default()).expect("reparse spline");
+        let bb = back.shapes[0].page_path().bounding_box();
+        let want = path.bounding_box();
+        assert!(
+            (bb.width() - want.width()).abs() < 0.05 && (bb.height() - want.height()).abs() < 0.05,
+            "{bb:?} {want:?}"
+        );
+    }
+
+    struct DxfWriterProbe;
+    impl DxfWriterProbe {
+        fn polylines(path: &BezPath, tol: f64) -> Vec<(Vec<Point>, bool)> {
+            Writer::polylines(path, tol)
+        }
+    }
+
+    /// The export's drawing unit (#3583): every unit names itself in
+    /// `$INSUNITS` and writes the lengths in it, so the drawing reads back
+    /// at its own size in mm; outlines keep their width.
+    #[test]
+    fn export_writes_the_chosen_unit() {
+        let mut doc = Document::new("t", Size::new(100.0, 50.0));
+        let mut ids = doc.ids().clone();
+        let mut r = Shape::new(
+            ids.shape(),
+            ShapeKind::Rect {
+                rect: Rect::new(10.0, 10.0, 40.0, 30.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        r.fill = Fill::Solid(Color::rgb8(0, 0, 255));
+        r.stroke = Some(Stroke::new(Color::rgb8(255, 0, 0), 0.5));
+        doc.pages[0].layers[0].shapes = vec![r];
+        doc.set_ids(ids);
+        assert_eq!(
+            page_to_dxf(&doc, 0),
+            page_to_dxf_with(&doc, 0, &DxfOptions::default()),
+            "millimetres, as before"
+        );
+        for units in DxfUnits::ALL {
+            let out = page_to_dxf_with(
+                &doc,
+                0,
+                &DxfOptions {
+                    units,
+                    ..Default::default()
+                },
+            );
+            let pairs: Vec<&str> = out.lines().map(str::trim).collect();
+            let at = pairs.iter().position(|l| *l == "$INSUNITS").unwrap();
+            assert_eq!(pairs[at + 2], units.insunits().to_string(), "{units:?}");
+            // The page's width in the unit, as the extents.
+            let at = pairs.iter().position(|l| *l == "$EXTMAX").unwrap();
+            let w: f64 = pairs[at + 2].parse().unwrap();
+            assert!((w - 100.0 / units.mm()).abs() < 1e-5, "{units:?} {w}");
+            let back = parse(&out, &mut IdSource::default()).expect("reparse");
+            let hb = back.shapes[0].bounds();
+            assert!(
+                (hb.width() - 30.0).abs() < 1e-3 && (hb.height() - 20.0).abs() < 1e-3,
+                "{units:?} {hb:?}"
+            );
+            let s = back.shapes[1].stroke.as_ref().expect("stroke");
+            assert!((s.width - 0.5).abs() < 1e-3, "{units:?} {}", s.width);
+        }
+    }
+
     #[test]
     fn malformed_input_is_an_error_or_empty_never_a_panic() {
         let mut ids = IdSource::default();
@@ -1725,5 +2829,231 @@ mod tests {
         assert!(
             parse("  0\nSECTION", &mut ids).is_ok() || parse("  0\nSECTION", &mut ids).is_err()
         );
+    }
+
+    /// The page of #2394's checks: a filled rectangle, an ellipse, a text
+    /// with accents, and two layers whose names differ only in case.
+    fn sample_for_autocad() -> Document {
+        let mut doc = Document::new("t", Size::new(210.0, 297.0));
+        let mut ids = doc.ids().clone();
+        let mut r = Shape::new(
+            ids.shape(),
+            ShapeKind::Rect {
+                rect: Rect::new(10.0, 10.0, 40.0, 30.0),
+                radius: 0.0,
+                corners: None,
+            },
+        );
+        r.fill = Fill::Solid(Color::rgb8(0, 0, 255));
+        r.stroke = Some(Stroke::new(Color::rgb8(255, 0, 0), 0.33));
+        let mut e = Shape::new(
+            ids.shape(),
+            ShapeKind::Ellipse {
+                rect: Rect::new(60.0, 60.0, 50.0, 25.0),
+                arc: None,
+            },
+        );
+        e.stroke = Some(Stroke::new(Color::BLACK, 0.2));
+        let mut t = Shape::new(
+            ids.shape(),
+            ShapeKind::Text {
+                spans: vec![TextSpan::new("Olá, ação €", "Arial", 12.0)],
+                origin: Point::new(50.0, 140.0),
+                frame: None,
+                align: TextAlign::Left,
+                para: ParagraphStyle::default(),
+                on_path: None,
+            },
+        );
+        t.fill = Fill::Solid(Color::BLACK);
+        doc.pages[0].layers[0].name = "Walls".into();
+        doc.pages[0].layers[0].shapes = vec![r, e];
+        let mut second = tracedraw_core::Layer::new(ids.layer(), "walls");
+        second.shapes = vec![t];
+        doc.pages[0].layers.push(second);
+        doc.set_ids(ids);
+        doc
+    }
+
+    #[test]
+    fn every_layer_has_a_plot_style_that_exists() {
+        // AutoCAD LT 2025: "Error in LAYER Table. Did not receive
+        // PlotStyleName" (#2610).
+        let out = page_to_dxf(&sample_for_autocad(), 0);
+        let p = pairs(&out);
+        let layers: Vec<usize> = p
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| x.code == 0 && x.value == "LAYER")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(layers.len(), 3, "layer 0, Walls and walls_2");
+        let placeholder = p
+            .windows(2)
+            .find(|w| w[0].code == 0 && w[0].value == "ACDBPLACEHOLDER")
+            .map(|w| w[1].value.clone())
+            .expect("the Normal plot style");
+        for &i in &layers {
+            let rec = &p[i + 1..];
+            let end = rec.iter().position(|x| x.code == 0).unwrap();
+            let rec = &rec[..end];
+            let lw = rec.iter().position(|x| x.code == 370).unwrap();
+            assert_eq!(rec[lw + 1].code, 390, "plot style right after lineweight");
+            assert_eq!(rec[lw + 1].value, placeholder);
+        }
+        let has = |code: i32, value: &str| p.iter().any(|x| x.code == code && x.value == value);
+        assert!(has(3, "ACAD_PLOTSTYLENAME") && has(0, "ACDBDICTIONARYWDFLT"));
+        assert!(has(3, "ACAD_LAYOUT") && has(0, "LAYOUT"));
+        // Each block record names its layout, and the layout its record.
+        for (record, layout) in [("1F", "1E"), ("1B", "23")] {
+            assert!(p.windows(2).any(|w| w[0].code == 2
+                && w[0].value.starts_with('*')
+                && w[1].code == 340
+                && w[1].value == layout));
+            let at = p
+                .windows(2)
+                .position(|w| w[0].code == 0 && w[0].value == "LAYOUT" && w[1].value == layout)
+                .unwrap();
+            let rec = &p[at + 1..];
+            let end = rec.iter().position(|x| x.code == 0).unwrap();
+            assert_eq!(rec[end - 1].code, 330);
+            assert_eq!(rec[end - 1].value, record);
+        }
+    }
+
+    #[test]
+    fn export_has_what_autocad_needs_to_open_it() {
+        let out = page_to_dxf(&sample_for_autocad(), 0);
+        if let Ok(path) = std::env::var("TRACEDRAW_DXF_SAMPLE") {
+            std::fs::write(path, &out).unwrap();
+        }
+        let p = pairs(&out);
+        let has = |code: i32, value: &str| p.iter().any(|x| x.code == code && x.value == value);
+        assert!(has(1, "AC1015"), "the AutoCAD 2000 dialect");
+        for table in [
+            "VPORT",
+            "LTYPE",
+            "LAYER",
+            "STYLE",
+            "VIEW",
+            "UCS",
+            "APPID",
+            "DIMSTYLE",
+            "BLOCK_RECORD",
+        ] {
+            assert!(
+                p.windows(2)
+                    .any(|w| w[0].value == "TABLE" && w[1].code == 2 && w[1].value == table),
+                "table {table}"
+            );
+        }
+        assert!(has(2, "*Model_Space") && has(2, "*Paper_Space"));
+        assert!(has(0, "DICTIONARY") && has(3, "ACAD_GROUP"));
+        // Handles: unique, and all below the seed.
+        // (After the header, whose `$HANDSEED` value is also in a group 5.)
+        let after_header = out.split_once("ENDSEC").unwrap().1;
+        let raw = after_header.lines().skip(1).collect::<Vec<_>>();
+        let mut handles = Vec::new();
+        for w in raw.chunks(2) {
+            if w.len() == 2 && (w[0].trim() == "5" || w[0].trim() == "105") {
+                handles.push(u32::from_str_radix(w[1].trim(), 16).unwrap());
+            }
+        }
+        let mut sorted = handles.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), handles.len(), "unique handles");
+        let seed_at = p.iter().position(|x| x.value == "$HANDSEED").unwrap();
+        let seed = u32::from_str_radix(&p[seed_at + 1].value, 16).unwrap();
+        assert!(handles.iter().all(|&h| h < seed), "seed {seed:X}");
+        // Every entity is owned by the model space; line weights are standard.
+        let start = p
+            .iter()
+            .position(|x| x.code == 2 && x.value == "ENTITIES")
+            .unwrap();
+        let len = p[start..].iter().position(|x| x.value == "ENDSEC").unwrap();
+        let ep = &p[start + 1..start + len];
+        let kinds = ep.iter().filter(|x| x.code == 0).count();
+        let owned = ep
+            .iter()
+            .filter(|x| x.code == 330 && x.value == fixed::MODEL_SPACE)
+            .count();
+        assert!(
+            kinds >= 3 && owned >= kinds,
+            "{kinds} entities, {owned} owned"
+        );
+        for x in p.iter().filter(|x| x.code == 370) {
+            let v: i64 = x.value.trim().parse().unwrap();
+            assert!(v < 0 || LINEWEIGHTS.contains(&v), "line weight {v}");
+        }
+        // Text past ASCII in the file as escapes, and back on reading.
+        assert!(out.is_ascii());
+        assert!(out.contains("Ol\\U+00E1"));
+        assert!(has(2, "walls_2"), "layer names unique regardless of case");
+        let mut ids = IdSource::default();
+        let back = parse(&out, &mut ids).expect("reparse");
+        let text = back
+            .shapes
+            .iter()
+            .find_map(|s| match &s.kind {
+                ShapeKind::Text { spans, .. } => Some(spans[0].text.clone()),
+                _ => None,
+            })
+            .expect("a text");
+        assert_eq!(text, "Olá, ação €");
+    }
+
+    #[test]
+    fn a_coordinate_that_is_not_a_number_is_written_as_zero() {
+        assert_eq!(fmt(f64::NAN), "0");
+        assert_eq!(fmt(f64::INFINITY), "0");
+        assert_eq!(fmt(-1.5), "-1.5");
+    }
+}
+
+#[cfg(test)]
+mod export_view_tests {
+    use super::*;
+    use tracedraw_core::document::{Layer, Shape, ShapeKind};
+    use tracedraw_core::{Color, Fill};
+
+    fn curve(id: u64, closed: bool) -> Shape {
+        let mut p = tracedraw_core::BezPath::new();
+        p.move_to((20.0, 20.0));
+        p.curve_to((40.0, 80.0), (60.0, 0.0), (80.0, 50.0));
+        if closed {
+            p.close_path();
+        }
+        let mut s = Shape::new(
+            tracedraw_core::ShapeId(id),
+            ShapeKind::Path { path: p, closed },
+        );
+        s.fill = Fill::Solid(Color::rgb8(200, 30, 30));
+        s.stroke = Some(tracedraw_core::Stroke::new(Color::BLACK, 0.5));
+        s
+    }
+
+    /// A filled open curve shows no fill on screen, in SVG, PDF, EPS and
+    /// EMF; DXF filled it with a hatch. A layer set not to print is left
+    /// out, as the other exports leave it.
+    #[test]
+    fn dxf_sees_the_page_as_the_other_exports_do() {
+        let mut doc = Document::default();
+        let layer = doc.pages[0].layers[0].id;
+        doc.layer_mut(layer).unwrap().shapes.push(curve(1, false));
+        let out = page_to_dxf(&doc, 0);
+        assert!(!out.contains("HATCH"), "{out}");
+        assert!(out.contains("SPLINE") || out.contains("POLYLINE"), "{out}");
+        // With Fill open curves on, the fill is written.
+        doc.metadata.fill_open_curves = true;
+        assert!(page_to_dxf(&doc, 0).contains("HATCH"));
+        doc.metadata.fill_open_curves = false;
+        // A closed curve on a layer that does not print: not drawn.
+        let mut hidden = Layer::new(doc.ids_mut().layer(), "Notes");
+        hidden.printable = false;
+        hidden.shapes.push(curve(2, true));
+        doc.pages[0].layers.push(hidden);
+        let out = page_to_dxf(&doc, 0);
+        assert!(!out.contains("HATCH"), "{out}");
     }
 }

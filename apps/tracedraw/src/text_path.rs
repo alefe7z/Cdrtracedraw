@@ -20,7 +20,230 @@ pub struct FittedText {
     pub to_page: Affine,
 }
 
+/// `text` fitted to `curve` (see `App::fit_text_to_path`), and the
+/// text's transform with it: on a closed curve centred on the point
+/// nearest `at`, else on its highest point; with `at`, as far from the
+/// curve as `at` is, on its side. A text squeezed or
+/// stretched on one axis (a side handle of the Pick tool) keeps the
+/// letters' shape on the path: the squeeze goes into the characters'
+/// width and the transform keeps only the even scale, the turn and the
+/// place, so the letters standing on the sides of a circle are not
+/// squeezed across (#3485).
+pub fn fit(
+    text: &tracedraw_core::Shape,
+    curve: &tracedraw_core::Shape,
+    at: Option<Point>,
+) -> Option<(ShapeKind, Affine)> {
+    let ShapeKind::Text {
+        mut spans,
+        mut origin,
+        align,
+        para,
+        ..
+    } = text.kind.clone()
+    else {
+        return None;
+    };
+    let mut transform = text.transform;
+    if let Some(k) = squeeze(transform) {
+        transform *= Affine::scale_non_uniform(1.0 / k, 1.0);
+        origin = Point::new(origin.x * k, origin.y);
+        for sp in &mut spans {
+            let w = if sp.width_pct.is_finite() { sp.width_pct } else { 100.0 };
+            sp.width_pct = (w * k).clamp(1.0, 10000.0);
+        }
+    }
+    // The path turned and started as text sits on it (in page space,
+    // where outside and top are seen), then in the text's local space.
+    let (page_path, closed) = tracedraw_core::text_path::path_for_text_at(&curve.page_path(), at);
+    let to_local = Affine::translate(-origin.to_vec2()) * transform.inverse();
+    let path = to_local * page_path;
+    let (align, offset) = crate::ops2::placement_on(&path, closed, align);
+    let mut on_path = TextOnPath {
+        path,
+        offset,
+        distance: 0.0,
+        mirror: false,
+        ..Default::default()
+    };
+    if let Some((_, d)) = at.and_then(|p| on_path.guide().nearest(to_local * p)) {
+        if d.is_finite() {
+            on_path.set_distance(d);
+        }
+    }
+    Some((
+        ShapeKind::Text {
+            spans,
+            origin,
+            frame: None,
+            align,
+            para,
+            on_path: Some(on_path),
+        },
+        transform,
+    ))
+}
+
+/// How much wider than tall a text's transform draws it (its x axis's
+/// length over its y axis's), when the two differ and stand square to
+/// each other; `None` for an even scale or a slant.
+fn squeeze(t: Affine) -> Option<f64> {
+    let [a, b, c, d, _, _] = t.as_coeffs();
+    let (sx, sy) = (a.hypot(b), c.hypot(d));
+    if !(sx.is_finite() && sy.is_finite()) || sx < 1e-9 || sy < 1e-9 {
+        return None;
+    }
+    let square = ((a * c + b * d) / (sx * sy)).abs() < 1e-6;
+    let k = sx / sy;
+    (square && (k - 1.0).abs() > 1e-6).then_some(k)
+}
+
+/// What Fit Text to Path shows while the pointer is near a path: the
+/// letters and the line they would stand on, the point of the path
+/// nearest the pointer, where the text begins (point and direction) and
+/// its distance from the path, in page space.
+#[derive(Debug, Clone)]
+pub struct PathPreview {
+    pub letters: BezPath,
+    pub line: BezPath,
+    pub nearest: Point,
+    pub start: (Point, tracedraw_core::geometry::Vec2),
+    pub distance: f64,
+}
+
+/// How far from an object's outline, in screen pixels, the pointer still
+/// picks it for Fit Text to Path.
+const PATH_REACH: f64 = 150.0;
+
 impl App {
+    /// The path Fit Text to Path would take at `p`: the object under the
+    /// pointer, else the one whose outline is nearest within reach.
+    /// Texts, pictures and groups are not paths.
+    pub fn text_path_target(&self, p: Point) -> Option<ShapeId> {
+        let doc = self.doc();
+        let usable = |s: &tracedraw_core::Shape| {
+            !matches!(
+                s.kind,
+                ShapeKind::Text { .. } | ShapeKind::Bitmap { .. } | ShapeKind::Group { .. }
+            ) && !self.selection.contains(&s.id)
+        };
+        if let Some(id) = self.hit_test(p) {
+            if doc.shape(id).ok().is_some_and(|(_, s)| usable(s)) {
+                return Some(id);
+            }
+        }
+        let reach = PATH_REACH / f64::from(self.view.zoom()).max(1e-6);
+        let mut best: Option<(f64, ShapeId)> = None;
+        for s in self
+            .page_layers()
+            .into_iter()
+            .filter(|l| l.visible && !l.locked)
+            .flat_map(|l| l.shapes.iter())
+            .filter(|s| s.visible && !s.locked && usable(s))
+        {
+            // Only objects whose box comes within reach are measured.
+            if !s.bounds().inflate(reach, reach).contains(p) {
+                continue;
+            }
+            let path = s.page_path();
+            let d = path
+                .segments()
+                .map(|seg| {
+                    tracedraw_core::geometry::ParamCurveNearest::nearest(&seg, p, 1e-3).distance_sq
+                })
+                .fold(f64::INFINITY, f64::min)
+                .sqrt();
+            if d <= reach && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, s.id));
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
+    /// The preview of the selected text fitted to the path near `p`, while
+    /// Fit Text to Path waits for its path; none with no text selected.
+    pub fn text_path_preview(&self, p: Point) -> Option<PathPreview> {
+        let doc = self.doc();
+        let text = self.selection.iter().find_map(|id| {
+            doc.shape(*id)
+                .ok()
+                .map(|(_, s)| s)
+                .filter(|s| matches!(s.kind, ShapeKind::Text { .. }))
+        })?;
+        let target = self.text_path_target(p)?;
+        let (_, curve) = doc.shape(target).ok()?;
+        let (kind, transform) = fit(text, curve, Some(p))?;
+        let ShapeKind::Text {
+            spans,
+            origin,
+            align,
+            para,
+            on_path: Some(on_path),
+            ..
+        } = &kind
+        else {
+            return None;
+        };
+        let to_page = transform * Affine::translate(origin.to_vec2());
+        let req = tracedraw_core::document::text_outline::TextRequest {
+            spans,
+            frame: None,
+            align: *align,
+            para,
+            on_path: Some(on_path),
+        };
+        let letters = tracedraw_core::document::text_outline::outline(&req).unwrap_or_default();
+        // The text's length as set straight: where along the line it begins.
+        let straight = tracedraw_core::document::text_outline::TextRequest {
+            on_path: None,
+            ..req
+        };
+        let width = tracedraw_core::document::text_outline::outline(&straight)
+            .map(|o| o.bounding_box().width())
+            .unwrap_or(0.0);
+        let base = on_path.baseline();
+        let total = base.length();
+        let steps = ((total / 1.0).ceil() as usize).clamp(2, 4000);
+        let mut line = BezPath::new();
+        for i in 0..=steps {
+            if let Some((q, _)) = base.at(total * i as f64 / steps as f64) {
+                if i == 0 {
+                    line.move_to(q);
+                } else {
+                    line.line_to(q);
+                }
+            }
+        }
+        let begin = on_path.offset
+            + match align {
+                TextAlign::Center => (total - width) / 2.0,
+                TextAlign::Right => total - width,
+                _ => 0.0,
+            };
+        // The mark goes at the end of the run where the first letter is.
+        let first_letter = tracedraw_core::document::text_outline::glyphs(&req)
+            .and_then(|g| g.glyphs.into_iter().find(|g| !g.path.elements().is_empty()))
+            .map(|g| g.path.bounding_box().center());
+        let (a, b) = (base.at(begin)?, base.at(begin + width)?);
+        let (sp, dir) = match first_letter {
+            Some(c) if (c - b.0).hypot() < (c - a.0).hypot() => (b.0, -b.1),
+            _ => a,
+        };
+        let guide = on_path.guide();
+        let to_local = to_page.inverse();
+        let (s_near, _) = guide.nearest(to_local * p)?;
+        let (near, _) = guide.at(s_near)?;
+        let dir_page = to_page * (sp + dir) - to_page * sp;
+        let len = dir_page.hypot().max(1e-9);
+        Some(PathPreview {
+            letters: to_page * letters,
+            line: to_page * line,
+            nearest: to_page * near,
+            start: (to_page * sp, dir_page / len),
+            distance: on_path.distance,
+        })
+    }
+
     /// The selection is a single text fitted to a path.
     pub fn fitted_text(&self) -> Option<FittedText> {
         let [id] = self.selection.as_slice() else {
@@ -87,6 +310,10 @@ impl App {
     /// undo step.
     pub fn mirror_fitted_text(&mut self, h: bool, v: bool) {
         self.edit_fitted_text(|t, align| {
+            // Flipped, the letters stand on the path's other side, whose
+            // line is longer or shorter away from the path: the offset
+            // scales with it, as when the distance changes (#193).
+            let before = t.baseline().length();
             if t.mirrors().0 != h {
                 t.offset = -t.offset;
                 *align = match *align {
@@ -96,7 +323,75 @@ impl App {
                 };
             }
             t.set_mirrors(h, v);
+            let after = t.baseline().length();
+            if before > 1e-9 && after.is_finite() {
+                t.offset *= after / before;
+            }
         });
+    }
+
+    /// The commands that mirror, by the page transform `m` (a reflection,
+    /// left to right when `horizontal`), the selected texts fitted to a
+    /// path (not ones inside groups), each text's path mirrored instead
+    /// of its letters, so they still read (#3255): mirrored top to bottom
+    /// a text on the outside of a circle's top comes to the inside of its
+    /// bottom, reading left to right; mirrored left to right it keeps its
+    /// side and moves to the mirrored place along the path (its path
+    /// followed the other way, measured from the other end). The ids of
+    /// the texts so mirrored come with them.
+    pub(crate) fn mirror_fitted_texts(
+        &self,
+        m: Affine,
+        horizontal: bool,
+    ) -> (Vec<Command>, Vec<ShapeId>) {
+        let mut cmds = Vec::new();
+        let mut ids = Vec::new();
+        for id in &self.selection {
+            let Ok((_, s)) = self.doc().shape(*id) else {
+                continue;
+            };
+            let ShapeKind::Text {
+                spans,
+                origin,
+                frame,
+                align,
+                para,
+                on_path: Some(tp),
+            } = s.kind.clone()
+            else {
+                continue;
+            };
+            let to_page = s.transform * Affine::translate(origin.to_vec2());
+            if to_page.determinant().abs() < 1e-12 {
+                continue;
+            }
+            let local = to_page.inverse() * m * to_page;
+            let mut tp = tp;
+            tp.path = local * tp.path.clone();
+            let mut align = align;
+            if horizontal {
+                tp.path = tp.path.reverse_subpaths();
+                tp.offset = -tp.offset;
+                align = match align {
+                    TextAlign::Center => TextAlign::Center,
+                    TextAlign::Right => TextAlign::Left,
+                    _ => TextAlign::Right,
+                };
+            }
+            ids.push(*id);
+            cmds.push(Command::SetShapeKind {
+                shape: *id,
+                kind: ShapeKind::Text {
+                    spans,
+                    origin,
+                    frame,
+                    align,
+                    para,
+                    on_path: Some(tp),
+                },
+            });
+        }
+        (cmds, ids)
     }
 
     /// Whether the selected fitted text follows a closed path.
@@ -127,16 +422,18 @@ impl App {
         // highest (or lowest) point of the path.
         let far = 10.0 * b.height().max(b.width()).max(1.0);
         let at = Point::new(b.center().x, if bottom { b.y0 - far } else { b.y1 + far });
-        let (started, closed) = crate::ops2::path_for_text_at(&page, Some(at));
+        let (started, closed) = tracedraw_core::text_path::path_for_text_at(&page, Some(at));
         if !closed {
             return;
         }
         let local = ft.to_page.inverse() * started;
-        let (_, offset) = crate::ops2::placement_on(&local, true, TextAlign::Center);
         self.edit_fitted_text(|t, align| {
             t.path = local;
-            t.offset = offset;
             t.set_mirrors(bottom, bottom);
+            // Half the baseline the letters stand on, which is longer or
+            // shorter than the path when the text is set off it: half the
+            // path put text with a distance off the middle (#193).
+            t.offset = t.baseline().length() / 2.0;
             *align = TextAlign::Center;
         });
     }
@@ -153,7 +450,7 @@ impl App {
         let page = ft.to_page * tp.path.clone();
         let start = ft.to_page * tp.path.segments().next()?.start();
         let b = page.bounding_box();
-        let length = tp.guide().length();
+        let length = tp.baseline().length();
         let half = (tp.offset.abs() - length / 2.0).abs() < 0.05;
         match tp.mirrors() {
             (false, false) if half && (start.y - b.y1).abs() < 0.05 => Some(false),
@@ -189,12 +486,14 @@ impl App {
             d1 - d0
         };
         ft.on_path.offset += ds;
-        ft.on_path.distance += across;
+        let mut distance = ft.on_path.distance + across;
         // Tick snapping: away from the path in whole steps.
         let tick = self.settings.path_tick_mm;
         if self.settings.path_tick_snap && tick.is_finite() && tick > 1e-6 {
-            ft.on_path.distance = (ft.on_path.distance / tick).round() * tick;
+            distance = (distance / tick).round() * tick;
         }
+        // Across the path the text keeps its place along it.
+        ft.on_path.set_distance(distance);
         Some(ft)
     }
 
@@ -269,6 +568,128 @@ mod tests {
         app.selection = vec![t, l];
         app.begin_fit_text_to_path();
         t
+    }
+
+    /// #2423: editing a text fitted to a path, the caret, the selection
+    /// and clicks are where the letters stand on the path. The caret
+    /// stayed where the text was before it was fitted (here 70 mm above
+    /// the line), and moved along that straight line as letters were
+    /// typed.
+    #[test]
+    fn the_caret_of_a_text_on_a_path_stands_on_the_path() {
+        let mut app = App::headless();
+        app.settings.autocorrect.enabled = false;
+        let t = fitted_on_line(&mut app);
+        app.selection = vec![t];
+        app.begin_text_edit(t);
+        app.text_set_caret_at(2, false);
+        let (top, bottom, _) = app.text_caret_geometry().expect("caret");
+        for p in [top, bottom] {
+            assert!((45.0..60.0).contains(&p.y), "{top:?} {bottom:?}");
+            assert!((10.0..40.0).contains(&p.x), "{top:?} {bottom:?}");
+        }
+        // Typing moves it along the path.
+        app.text_insert("XX");
+        let (after, _, _) = app.text_caret_geometry().expect("caret");
+        assert!(
+            after.x > top.x + 1.0 && (45.0..60.0).contains(&after.y),
+            "{after:?}"
+        );
+        // A click on the first letter puts the caret before or after it.
+        let hit = app.text_hit_char(Point::new(11.0, 52.0));
+        assert!(matches!(hit, Some(0 | 1)), "{hit:?}");
+        // The selection lies on the path too.
+        app.text_select_all();
+        let (_, _, quads) = app.text_caret_geometry().expect("caret");
+        assert!(!quads.is_empty());
+        assert!(
+            quads.iter().flatten().all(|p| (40.0..65.0).contains(&p.y)),
+            "{quads:?}"
+        );
+    }
+
+    /// #2714: round a circle the letters that go on past the path's
+    /// start (the right half of a text centred on the top) could not be
+    /// clicked or selected: a click there was taken a whole round back.
+    /// A click on each letter now puts the caret beside that letter.
+    #[test]
+    fn every_letter_round_a_circle_can_be_clicked() {
+        tracedraw_text::install();
+        if tracedraw_text::fonts().families().is_empty() {
+            return;
+        }
+        let mut app = App::headless();
+        app.settings.autocorrect.enabled = false;
+        let e = app
+            .new_shape(ShapeKind::Ellipse {
+                rect: Rect::new(40.0, 100.0, 140.0, 200.0),
+                arc: None,
+            })
+            .expect("circle");
+        app.start_text(Point::new(10.0, 20.0), None);
+        let text = "ABCDEFGHIJKLMNOPQRSTUV";
+        app.text_insert(text);
+        app.finish_text();
+        let t = app.selection[0];
+        app.selection = vec![t, e];
+        app.fit_text_to_path();
+        app.selection = vec![t];
+        app.begin_text_edit(t);
+        let (layout, to_page) = app.text_layout_of(t).expect("layout");
+        let line = layout.lines.first().expect("line").clone();
+        assert_eq!(line.starts.len(), text.chars().count());
+        let mut xs = Vec::new();
+        for i in 0..line.starts.len() {
+            let x = (line.starts[i] + line.ends[i]) / 2.0;
+            let local = Point::new(x, line.baseline + line.ascent * 0.3);
+            let page = to_page * layout.placed(local);
+            xs.push(page.x);
+            let hit = app.text_hit_char(page);
+            assert!(
+                hit == Some(i) || hit == Some(i + 1),
+                "letter {i} at {page:?}: {hit:?}"
+            );
+        }
+        // The letters run across both sides of the circle.
+        let (lo, hi) = xs
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| {
+                (a.min(*x), b.max(*x))
+            });
+        assert!(lo < 80.0 && hi > 100.0, "{lo} to {hi}");
+    }
+
+    /// #2423: on a path going up the page the letters lie on their side,
+    /// and so does the caret: across the path, not upright.
+    #[test]
+    fn the_caret_turns_with_the_path() {
+        let mut app = App::headless();
+        app.settings.autocorrect.enabled = false;
+        let mut line = BezPath::new();
+        line.move_to((50.0, 10.0));
+        line.line_to((50.0, 110.0));
+        let l = app
+            .new_shape(ShapeKind::Path {
+                path: line,
+                closed: false,
+            })
+            .expect("line");
+        app.start_text(Point::new(100.0, 150.0), None);
+        app.text_insert("Path");
+        app.finish_text();
+        let t = app.selection[0];
+        app.selection = vec![t, l];
+        app.begin_fit_text_to_path();
+        app.selection = vec![t];
+        app.begin_text_edit(t);
+        app.text_set_caret_at(2, false);
+        let (top, bottom, _) = app.text_caret_geometry().expect("caret");
+        assert!((top.y - bottom.y).abs() < 0.5, "{top:?} {bottom:?}");
+        assert!((top.x - bottom.x).abs() > 1.0, "{top:?} {bottom:?}");
+        assert!(
+            (35.0..60.0).contains(&top.x) && (10.0..40.0).contains(&top.y),
+            "{top:?}"
+        );
     }
 
     #[test]
@@ -411,10 +832,175 @@ mod tests {
         assert_eq!(count(&app), 2);
     }
 
+    /// Text centred on the bottom of a circle stays centred there when it
+    /// is moved off the path, in or out, from the bar or after the mirror
+    /// buttons; it slid round the circle before (#193).
+    /// A text squeezed with a side handle and fitted to a circle (#3485)
+    /// lies on it as a text of that character width does: the squeeze
+    /// goes into the letters, the transform keeps an even scale, so the
+    /// letters on the sides of the circle are not squeezed across.
+    #[test]
+    fn a_squeezed_text_keeps_its_letters_on_a_circle() {
+        tracedraw_text::install();
+        if tracedraw_text::fonts().families().is_empty() {
+            return;
+        }
+        let mut app = App::headless();
+        let circle = |app: &mut App| {
+            app.new_shape(ShapeKind::Ellipse {
+                rect: Rect::new(60.0, 110.0, 160.0, 210.0),
+                arc: None,
+            })
+            .expect("circle")
+        };
+        let text = |app: &mut App| {
+            app.start_text(Point::new(10.0, 20.0), None);
+            app.text_insert("ABCDEFGHIJK SAMPLE TEXT");
+            app.finish_text();
+            app.selection[0]
+        };
+        // Squeezed to half its width with the Pick tool.
+        let t = text(&mut app);
+        app.selection = vec![t];
+        app.transform_selection(
+            Affine::translate((10.0, 0.0))
+                * Affine::scale_non_uniform(0.5, 1.0)
+                * Affine::translate((-10.0, 0.0)),
+        );
+        let e = circle(&mut app);
+        app.selection = vec![t, e];
+        app.fit_text_to_path();
+        let sh = app.doc().shape(t).expect("text").1.clone();
+        let [a, b, c, d, _, _] = sh.transform.as_coeffs();
+        assert!((a.hypot(b) - c.hypot(d)).abs() < 1e-9, "{:?}", sh.transform);
+        let ShapeKind::Text { spans, on_path, .. } = &sh.kind else {
+            panic!("a text");
+        };
+        assert!(on_path.is_some());
+        assert!(spans.iter().all(|sp| (sp.width_pct - 50.0).abs() < 1e-9));
+        // One undo: the squeezed straight text again.
+        app.undo();
+        let back = app.doc().shape(t).expect("text").1.clone();
+        assert!(matches!(&back.kind, ShapeKind::Text { on_path: None, .. }));
+        assert!((back.transform.as_coeffs()[0] - 0.5).abs() < 1e-9);
+        app.redo();
+        // As a text set at 50 % width and fitted to the same circle.
+        let u = text(&mut app);
+        app.selection = vec![u];
+        app.set_char_attrs("Character Width", |sp| sp.width_pct = 50.0);
+        let e2 = circle(&mut app);
+        app.selection = vec![u, e2];
+        app.fit_text_to_path();
+        let box_of = |app: &App, id| {
+            let sh = app.doc().shape(id).expect("text").1.clone();
+            app.visual_bounds(&sh)
+        };
+        let (bt, bu) = (box_of(&app, t), box_of(&app, u));
+        for (x, y) in [(bt.x0, bu.x0), (bt.y0, bu.y0), (bt.x1, bu.x1), (bt.y1, bu.y1)] {
+            assert!((x - y).abs() < 0.05, "{bt:?} {bu:?}");
+        }
+    }
+
+    #[test]
+    fn distance_from_the_path_keeps_the_text_in_its_place() {
+        tracedraw_text::install();
+        if tracedraw_text::fonts().families().is_empty() {
+            return;
+        }
+        let mut app = App::headless();
+        let e = app
+            .new_shape(ShapeKind::Ellipse {
+                rect: Rect::new(60.0, 110.0, 140.0, 190.0),
+                arc: None,
+            })
+            .expect("circle");
+        app.start_text(Point::new(10.0, 20.0), None);
+        app.text_insert("BOTTOM TEXT");
+        app.finish_text();
+        let t = app.selection[0];
+        app.selection = vec![t, e];
+        app.fit_text_to_path();
+        app.selection = vec![t];
+        let middle = |app: &App| {
+            let sh = app.doc().shape(t).expect("text").1.clone();
+            app.visual_bounds(&sh).center()
+        };
+        // Moved round to the bottom, then both mirrors.
+        app.place_fitted_text_round(false);
+        let len = app.fitted_text().unwrap().on_path.guide().length();
+        app.edit_fitted_text(|tp, _| tp.offset += len / 2.0);
+        // The letters' box is not quite symmetric about their advance; the
+        // place at no distance is the one kept.
+        app.mirror_fitted_text(true, false);
+        app.mirror_fitted_text(true, true);
+        let x0 = middle(&app).x;
+        assert!((x0 - 100.0).abs() < 1.0, "{x0}");
+        for d in [4.0, -4.0, 8.0] {
+            app.mirror_fitted_text(false, false);
+            app.edit_fitted_text(|tp, _| tp.set_distance(d));
+            app.mirror_fitted_text(true, false);
+            app.mirror_fitted_text(true, true);
+            let m = middle(&app);
+            assert!((m.x - x0).abs() < 0.3, "distance {d}: {m:?}");
+            assert!(m.y < 150.0, "under the middle: {m:?}");
+            app.edit_fitted_text(|tp, _| tp.set_distance(d + 2.0));
+            let m = middle(&app);
+            assert!((m.x - x0).abs() < 0.3, "moved off to {}: {m:?}", d + 2.0);
+        }
+    }
+
     /// On an ellipse the placement list's Top and Bottom centre the text
     /// on the highest and lowest points: at the top outside and upright,
     /// at the bottom inside and reading left to right (both mirrors);
     /// each is one undo step and the bar shows it again.
+    /// While Fit Text to Path waits for its path, the pointer near an
+    /// ellipse shows the text on it, centred under the pointer and as far
+    /// from it as the pointer; nothing far from every path; the click
+    /// puts the text where the preview showed it.
+    #[test]
+    fn the_path_near_the_pointer_previews_the_text_and_a_click_places_it() {
+        tracedraw_text::install();
+        let mut app = App::headless();
+        let e = app
+            .new_shape(ShapeKind::Ellipse {
+                rect: Rect::new(40.0, 100.0, 140.0, 160.0),
+                arc: None,
+            })
+            .expect("ellipse");
+        app.start_text(Point::new(10.0, 20.0), None);
+        app.text_insert("HOME");
+        app.finish_text();
+        let t = app.selection[0];
+        app.begin_fit_text_to_path();
+        assert!(app.pending_text_path);
+        // 10 mm above the top of the ellipse (y grows upwards).
+        let p = Point::new(90.0, 170.0);
+        let pv = app.text_path_preview(p).expect("a preview");
+        assert_eq!(app.text_path_target(p), Some(e));
+        assert!((pv.distance - 10.0).abs() < 0.3, "{}", pv.distance);
+        assert!((pv.nearest.x - 90.0).abs() < 0.5 && (pv.nearest.y - 160.0).abs() < 0.5);
+        let b = pv.letters.bounding_box();
+        assert!(b.y0 > 169.0, "the letters stand above the pointer: {b:?}");
+        assert!((b.center().x - 90.0).abs() < 2.0, "centred: {b:?}");
+        // The text begins left of the middle, on its line.
+        assert!(pv.start.0.x < 90.0, "{:?} {b:?}", pv.start);
+        // Far from every path: nothing.
+        assert!(app.text_path_preview(Point::new(400.0, 400.0)).is_none());
+        // The click (as `pending_click` does it).
+        let target = app.text_path_target(p).expect("target");
+        app.pending_text_path = false;
+        app.fit_text_to_picked_path(target, Some(p));
+        app.selection = vec![t];
+        let ft = app.fitted_text().expect("fitted");
+        assert!((ft.on_path.distance - 10.0).abs() < 0.3);
+        let sh = app.doc().shape(t).expect("text").1.clone();
+        let vb = app.visual_bounds(&sh);
+        assert!(
+            (vb.y1 - b.y1).abs() < 0.5 && (vb.x0 - b.x0).abs() < 0.5,
+            "{vb:?} {b:?}"
+        );
+    }
+
     #[test]
     fn top_and_bottom_placement_on_a_closed_path() {
         tracedraw_text::install();
@@ -475,5 +1061,113 @@ mod tests {
         let b = bottom_bounds;
         assert!((b.center().x - 90.0).abs() < 1.0, "{b:?}");
         assert!(b.y0 > 99.0 && b.y1 < 130.0, "{b:?}");
+    }
+
+    /// Bottom (and Top) centre text set off the path: the offset is half
+    /// the baseline the letters stand on, not half the path, so text with
+    /// a distance lands in the middle of the bottom, not an eighth of the
+    /// way round (#193, the reporter's stamp had a distance of -8.4 mm).
+    #[test]
+    fn bottom_placement_centres_text_set_off_the_path() {
+        tracedraw_text::install();
+        let mut app = App::headless();
+        let e = app
+            .new_shape(ShapeKind::Ellipse {
+                rect: Rect::new(40.0, 100.0, 140.0, 200.0),
+                arc: None,
+            })
+            .expect("ellipse");
+        app.start_text(Point::new(10.0, 20.0), None);
+        app.text_insert("ERNAKULAM");
+        app.finish_text();
+        let t = app.selection[0];
+        app.selection = vec![t, e];
+        app.fit_text_to_path();
+        app.selection = vec![t];
+        app.edit_fitted_text(|tp, _| tp.set_distance(-8.0));
+        for bottom in [true, false] {
+            app.place_fitted_text_round(bottom);
+            assert_eq!(app.fitted_text_round_placement(), Some(bottom));
+            let tp = app.fitted_text().expect("fitted").on_path;
+            assert!((tp.distance + 8.0).abs() < 1e-9);
+            let half = tp.baseline().length() / 2.0;
+            assert!((tp.offset - half).abs() < 1e-6, "{} {half}", tp.offset);
+            if tracedraw_text::fonts().families().is_empty() {
+                continue;
+            }
+            let sh = app.doc().shape(t).expect("text").1.clone();
+            let b = app.visual_bounds(&sh);
+            assert!((b.center().x - 90.0).abs() < 1.0, "{bottom} {b:?}");
+        }
+    }
+
+    /// #2962: scaling a text fitted to a path with the handles scales its
+    /// letters, and the text stays on the path; the path was scaled with
+    /// it, so the letters left the curve they were fitted to. With the
+    /// curve selected too, both scale as before.
+    #[test]
+    fn scaling_a_text_on_a_path_scales_its_letters_not_the_path() {
+        let mut app = App::headless();
+        app.settings.autocorrect.enabled = false;
+        let t = fitted_on_line(&mut app);
+        let line = app.doc().pages[0]
+            .layers
+            .iter()
+            .flat_map(|l| l.shapes.iter())
+            .map(|s| s.id)
+            .find(|id| *id != t)
+            .expect("line");
+        let before = app.doc().shape(t).expect("text").1.clone();
+        let (size, page_path) = match &before.kind {
+            ShapeKind::Text {
+                spans,
+                on_path: Some(p),
+                ..
+            } => (spans[0].size_pt, before.transform * p.path.clone()),
+            _ => panic!("a fitted text"),
+        };
+        app.select(vec![t]);
+        let corner = Affine::translate((10.0, 50.0))
+            * Affine::scale(2.0)
+            * Affine::translate((-10.0, -50.0));
+        assert!(app.resizes_fitted_text(t, corner, &[t]));
+        app.transform_selection(corner);
+        let after = app.doc().shape(t).expect("text").1.clone();
+        assert_eq!(after.transform, before.transform);
+        match &after.kind {
+            ShapeKind::Text {
+                spans,
+                on_path: Some(p),
+                ..
+            } => {
+                assert!(
+                    (spans[0].size_pt - 2.0 * size).abs() < 1e-9,
+                    "{}",
+                    spans[0].size_pt
+                );
+                assert_eq!(after.transform * p.path.clone(), page_path);
+            }
+            _ => panic!("still fitted"),
+        }
+        // One undo step; a side handle scales by its own side.
+        app.undo();
+        let side = Affine::scale_non_uniform(1.5, 1.0);
+        app.select(vec![t]);
+        app.transform_selection(side);
+        match &app.doc().shape(t).expect("text").1.kind {
+            ShapeKind::Text { spans, .. } => assert!((spans[0].size_pt - 1.5 * size).abs() < 1e-9),
+            _ => panic!("text"),
+        }
+        app.undo();
+        // A mirror, a turn, or the curve scaled along: as before.
+        assert!(!app.resizes_fitted_text(t, Affine::scale_non_uniform(-1.0, 1.0), &[t]));
+        assert!(!app.resizes_fitted_text(t, Affine::rotate(0.3), &[t]));
+        assert!(!app.resizes_fitted_text(t, corner, &[t, line]));
+        app.select(vec![t, line]);
+        app.transform_selection(corner);
+        assert_eq!(
+            app.doc().shape(t).expect("text").1.transform,
+            corner * before.transform
+        );
     }
 }

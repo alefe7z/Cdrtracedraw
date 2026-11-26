@@ -1,5 +1,7 @@
 # Adicionar e editar texto
 
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
 ## Adicionar texto {#add}
 
 1. Escolha a ferramenta [[tool.text]] (<kbd>F8</kbd>).
@@ -22,18 +24,41 @@ selecionadas com texto de exemplo, tanto quanto couber.
 
 Clique em um texto com a ferramenta [[tool.text]], ou clique duas vezes nele com
 a ferramenta [[tool.pick]], para editá-lo no lugar.
-[[menu.text > menu.text.edit_text]] (<kbd>Ctrl+Shift+T</kbd>) faz o mesmo.
+[[menu.text > menu.text.edit_text]] (<kbd>Ctrl+Shift+T</kbd>) abre uma caixa
+com o texto inteiro para editar; **OK** o devolve ao desenho, e os
+caracteres que você não mudou mantêm a formatação.
 
 | Teclas | O que fazem |
 |---|---|
 | Digitar, <kbd>Ctrl+V</kbd> | inserem no cursor, substituindo a seleção |
+| <kbd>Ctrl+C</kbd>, <kbd>Ctrl+X</kbd>, <kbd>Ctrl+V</kbd> | copiam, recortam e colam os caracteres selecionados; o menu [[menu.edit]], a barra de ferramentas e o menu do botão direito fazem o mesmo durante a edição. Colados aqui, mantêm fonte, tamanho e cores; outros programas recebem o texto simples |
 | <kbd>Backspace</kbd>, <kbd>Delete</kbd> | excluem a seleção, senão o caractere antes ou depois |
 | <kbd>Enter</kbd>, <kbd>Shift+Enter</kbd> | novo parágrafo, nova linha |
 | Setas, com <kbd>Ctrl</kbd> | movem um caractere ou uma palavra; <kbd>Shift</kbd> seleciona |
 | <kbd>Home</kbd>, <kbd>End</kbd>, com <kbd>Ctrl</kbd> | início ou fim da linha, ou do texto |
 | <kbd>Ctrl+A</kbd> | seleciona tudo |
 | <kbd>Ctrl+B</kbd>, <kbd>Ctrl+I</kbd>, <kbd>Ctrl+U</kbd> | negrito, itálico, sublinhado |
+| <kbd>Ctrl+L</kbd>, <kbd>Ctrl+E</kbd>, <kbd>Ctrl+R</kbd> | alinha à esquerda, ao centro, à direita |
+| <kbd>Ctrl+J</kbd>, <kbd>Ctrl+H</kbd>, <kbd>Ctrl+N</kbd> | justificado, justificado forçado, sem alinhamento |
+| <kbd>Shift+F3</kbd> | muda maiúsculas e minúsculas (veja [Ferramentas de escrita](writing-tools.md#change-case)) |
 | Clique duplo | seleciona uma palavra |
+
+Um novo alinhamento mantém o texto artístico no lugar, no ponto de referência
+dos campos X e Y da barra de propriedades; em um quadro, ele vale para os
+parágrafos do cursor.
+
+Texto em escritas da direita para a esquerda (árabe, hebraico) é disposto da
+direita para a esquerda, também quando misturado com palavras da esquerda para
+a direita, e as seleções sombreiam cada letra selecionada. Teclados e métodos
+de entrada que enviam caracteres (como os de tâmil e outras escritas indianas
+no Windows) digitam no texto e nos campos, e códigos <kbd>Alt</kbd> digitados
+no teclado numérico dão o caractere uma vez só.
+Letras digitadas com <kbd>AltGr</kbd> (polonês ą ę ł, alemão @ € { }) entram
+no texto e nos campos, inclusive no Windows.
+No Android o teclado da tela digita todas as escritas que seus métodos de
+entrada compõem (chinês, japonês, coreano, tâmil). Fontes antigas que põem as
+letras de uma escrita nos lugares das latinas (algumas fontes tâmeis) digitam
+como seus teclados esperam: a Autocorreção não muda as letras digitadas nelas.
 
 Tudo o que você digita em uma sessão de edição é um passo de desfazer.
 
@@ -43,10 +68,13 @@ Com a ferramenta [[tool.text]], ou com texto selecionado, a barra de
 propriedades tem a lista de fontes, o tamanho (digite ou escolha na lista),
 negrito, itálico, sublinhado, o alinhamento (esquerda, centro, direita,
 justificado), marcadores e capitular para texto de parágrafo,
-[[menu.text.text_docker]] (<kbd>Ctrl+T</kbd>) e [[menu.text.edit_text]].
+[[menu.text.text_docker]] (<kbd>Ctrl+T</kbd>) e [[menu.text.edit_text]]. O
+botão ao lado do tamanho da fonte abre os controles dos eixos de uma fonte
+variável (veja [Fontes variáveis](fonts.md#variable-fonts)).
 Durante a edição, elas agem sobre os caracteres selecionados; senão, sobre os
-textos selecionados inteiros. Sua escolha também passa a ser o padrão do
-próximo texto.
+textos selecionados inteiros, e só a opção que você muda: uma fonte nova para
+vários textos mantém o tamanho, o negrito e o itálico de cada um. Sua escolha
+também passa a ser o padrão do próximo texto.
 
 A lista de fontes mostra cada família na própria fonte, com as usadas por
 último no alto. Digite para filtrar a lista. Uma família com vários estilos tem
@@ -58,6 +86,13 @@ O painel [[docker.text]] (<kbd>Ctrl+T</kbd>) tem todas as configurações de
 texto, em três seções que você pode abrir e fechar: **Caractere**,
 **Parágrafo** e **Moldura**. Os três botões no alto mostram o painel a partir
 dessa seção.
+
+O justificado completo estica as linhas em chinês e japonês até a borda do
+quadro, pondo espaço entre os caracteres, e o texto de parágrafo nessas
+escritas quebra as linhas pelas regras delas: pontuação como ，。、 e
+parênteses de fechamento nunca começam uma linha, e parênteses de abertura
+nunca a terminam. Letras com outra cor mantêm o kerning da fonte com as
+vizinhas.
 
 ![O painel Texto](../../img/text-adding-text-text-docker.png)
 
@@ -91,10 +126,27 @@ cabe não é desenhado, impresso nem exportado. Para fazê-lo caber:
   mantêm o tamanho;
 - escolha [[menu.text > menu.text.paragraph_text_frame > menu.text.frame_fit_text]]
   para redimensionar o texto até preencher a moldura;
+- marque **Bloco tipográfico** nas configurações de quadro do painel de texto:
+  as palavras são distribuídas entre as linhas e cada linha ganha um tamanho
+  próprio, de modo que cada linha preenche exatamente a largura do quadro e as
+  linhas juntas preenchem a altura. Redimensione o quadro e o bloco se refaz;
+  cada palavra mantém a sua fonte;
 - ligue a moldura a outra, para o texto continuar nela:
   [[menu.text.frame_link]]. [[menu.text.frame_unlink]] desfaz a ligação.
+  Ou clique na pequena aba sob a borda de baixo do quadro e depois clique
+  em outro quadro (nesta página ou em outra) ou clique ou arraste num lugar
+  vazio para um quadro novo: o texto continua nele. Também dá para
+  arrastar a partir da aba e soltar sobre outro quadro ou num lugar vazio.
+- um quadro selecionado também tem uma pequena aba sobre a borda de cima:
+  clique nela e depois clique no quadro cujo texto deve fluir para este, ou
+  clique num lugar vazio para um quadro novo, onde o texto começa. A aba de
+  cima mostra dois elos quando entra texto, e a de baixo quando o texto
+  continua; enquanto você escolhe, uma linha tracejada vai da aba até o
+  ponteiro.
 
 [[menu.text > menu.text.show_text_frames]] mostra ou oculta as molduras.
+
+![Um texto de parágrafo como bloco tipográfico: cada linha preenche a largura do quadro](../../img/text-adding-text-type-block.png)
 
 ## Mover e girar caracteres {#characters}
 
@@ -111,14 +163,57 @@ verticais.
 1. Selecione um texto e uma curva ou forma.
 2. Escolha [[menu.text > menu.text.fit_text_to_path]].
 
+Com a ferramenta [[tool.pick]], você também pode arrastar um único texto
+sobre um caminho com o botão direito do mouse. Quando o contorno for
+destacado, solte e escolha [[menu.text.fit_text_to_path]]. Em um caminho
+fechado, o ponto onde você solta define o centro do texto sobre o caminho.
+O texto acompanha as edições no contorno, inclusive depois de reabrir um
+desenho no formato nativo.
+
+Para curvar um texto sem desenhar caminho, selecione-o e clique no botão
+**Curvar texto** da barra de propriedades do texto (ao lado do alinhamento):
+escolha círculo, arco para cima, arco para baixo ou onda, ou Reto para desfazer.
+O texto continua editável, fica no mesmo lugar e ganha os campos de caminho.
+Arraste um texto em círculo para cima de um objeto redondo e solte perto do
+meio: o texto pega o centro do objeto e corre por dentro da borda.
+
 Ou clique no contorno de um caminho com a ferramenta [[tool.text]] e digite. O
-texto em uma forma fechada fica do lado de fora dela, centralizado no alto. Com
-texto em um caminho selecionado, a barra de propriedades define a orientação
-das letras (giradas, inclinação vertical ou horizontal, ou em pé), a posição
-vertical (na linha de base, ascendente, descendente ou centro), a posição ao
-longo do caminho, a distância e o deslocamento, e o espelhamento. Arraste o
-texto para deslizá-lo pelo caminho. [[menu.text.straighten_text]] o tira do
-caminho.
+texto em uma forma fechada fica do lado de fora dela, centralizado no alto;
+clicado na parte de baixo de uma elipse, ele começa ali.
+
+Um texto que você estreitou ou alargou com uma alça lateral mantém a forma das
+letras no caminho: a mudança vai para a largura dos caracteres.
+
+Com texto em um caminho selecionado (também com a ferramenta [[tool.pick]]), a
+barra de propriedades mostra primeiro os campos do caminho e depois os campos
+de texto de sempre:
+
+- A orientação das letras: giradas, inclinação vertical, inclinação
+  horizontal, em pé ou radiais (a haste de cada letra numa linha que passa
+  pelo meio da caixa do caminho, como os números de um mostrador).
+- A posição vertical: na linha de base, na ascendente, na descendente ou
+  centralizada no caminho.
+- A posição ao longo do caminho: no início, no centro ou no fim e, em um
+  caminho fechado, também **Centro do topo** (centralizado no ponto mais alto,
+  do lado de fora e em pé) e **Centro da base** (centralizado no ponto mais
+  baixo, do lado de dentro e lido da esquerda para a direita, como a linha de
+  baixo de um carimbo).
+- A distância do caminho e o deslocamento ao longo dele. Uma nova distância
+  mantém o texto centralizado onde estava, então uma linha na base de um
+  círculo continua centralizada ao se afastar ou se aproximar.
+- Os dois botões de espelhar, que põem o texto do outro lado do caminho ou o
+  viram, e [[menu.text.straighten_text]], que o tira do caminho.
+- **Seguir caminho** (desligado): pressionado, o texto é ajustado de novo ao
+  caminho sempre que o caminho é movido, redimensionado ou remodelado,
+  mantendo seu lugar ao longo dele. Desfazer volta a mudança do caminho e a do
+  texto juntas. Apagar o caminho deixa o texto como está.
+
+Arraste o texto para deslizá-lo pelo caminho, ou através do caminho para
+afastá-lo dele.
+
+![Curvar texto: círculo, arco, tigela e onda](../../img/text-adding-text-curve-text.png)
+
+![Letras radiais em volta de um mostrador](../../img/text-adding-text-radial.png)
 
 ## Outros comandos de texto {#commands}
 

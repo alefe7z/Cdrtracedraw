@@ -22,14 +22,33 @@ Com o painel:
 
 ![O painel Contorno](../../img/effects-contour.png)
 
-Grupos e bitmaps não recebem contorno concêntrico.
+Um grupo recebe um contorno concêntrico em volta de todos os seus objetos
+juntos, nas cores do primeiro objeto. Bitmaps não recebem contorno
+concêntrico.
+
+## Alças no desenho {#handles}
+
+Com a ferramenta de contorno, um objeto com contorno concêntrico mostra uma
+linha a partir do meio da borda direita: para fora num contorno externo,
+para dentro num interno ou até o centro.
+
+- Arraste o **quadrado** na ponta da linha para mudar até onde o contorno
+  chega. Os passos continuam os mesmos, mais afastados ou mais juntos.
+- Arraste a **barra** sobre a linha, no primeiro passo, para mudar o número de
+  passos: em direção ao objeto para mais passos, para longe para menos. O
+  último passo fica onde está. Um contorno até o centro não tem barra, pois
+  usa quantos passos couberem.
+
+O contorno acompanha enquanto você arrasta, e cada arraste se desfaz em um
+só passo.
 
 ## Configurações {#settings}
 
 A barra de propriedades e o painel mostram as configurações do contorno
 selecionado e o mudam na hora.
 
-- **Até o centro**, **Interno** ou **Externo** (de início).
+- **Até o centro**, **Interno**, **Externo** (de início) ou **Ambos**, dentro
+  e fora ao mesmo tempo.
 - **Passos**: 3 de início, até 999. Até o centro faz quantos couberem.
 - **Deslocamento**: a distância entre os passos (2 mm de início).
 - **Cantos**: em ponta (de início), redondos ou chanfrados.
@@ -40,7 +59,10 @@ selecionado e o mudam na hora.
 - **Aceleração de objeto** e **aceleração de cor** (-100 a 100%) concentram os
   passos ou as cores perto do objeto ou do último passo.
 
-Os passos externos são desenhados atrás do objeto, os internos na frente dele.
+Os passos externos são desenhados atrás do objeto, os internos na frente dele;
+com **Ambos** você tem os dois ao mesmo tempo.
 
 **Limpar contorno** remove o contorno concêntrico; **Separar** transforma os
 passos em objetos.
+Os passos saem agrupados ao lado do objeto. [[menu.object > menu.object.break_contour_apart]] (<kbd>Ctrl+K</kbd>, também no
+menu do botão direito) faz o mesmo.

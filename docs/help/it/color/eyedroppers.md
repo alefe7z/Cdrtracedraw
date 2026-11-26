@@ -7,6 +7,9 @@ nella barra delle proprietà: **seleziona** (preleva un campione) e **applica**
 sul pulsante di selezione per campionare di nuovo. <kbd>Esc</kbd> scarta il
 campione e torna allo strumento [[tool.pick]].
 
+Il puntatore è una pipetta mentre lo strumento campiona e un secchiello mentre
+applica. Le immagini danno il loro colore anche dentro un gruppo o una cornice.
+
 ## Contagocce colore {#color-eyedropper}
 
 1. Scegli lo strumento [[tool.color_eyedropper]].
@@ -22,6 +25,12 @@ campione e torna allo strumento [[tool.pick]].
    riempie.
 
 La barra delle proprietà mostra il colore campionato.
+
+Mentre sposti il puntatore per prendere un colore, un piccolo riquadro accanto
+mostra il colore sotto: un campione, il nome del colore se è un colore della
+tavolozza o un inchiostro spot, i suoi valori nel modello di colore del
+disegno (CMYK o RGB) e il suo valore esadecimale. Il contagocce di un
+selettore di colore mostra lo stesso riquadro.
 
 ## Contagocce attributi {#attributes-eyedropper}
 

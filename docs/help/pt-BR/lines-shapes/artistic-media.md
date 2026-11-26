@@ -1,5 +1,7 @@
 # Pinceladas e pincéis pictóricos
 
+> *Tradução automática: esta página pode estar atrasada em relação à versão em inglês.*
+
 As pinceladas transformam uma linha que você desenha em uma forma preenchida
 de largura variável, como a tinta de uma caneta ou de um pincel. Os pincéis
 pictóricos pintam o contorno de um objeto com marcas de giz, tinta, aquarela e
@@ -8,9 +10,12 @@ outros materiais.
 ## Pinceladas {#brush-strokes}
 
 A ferramenta [[tool.brush_strokes]] (<kbd>I</kbd>) desenha traços em um de
-cinco modos. O traço é um objeto preenchido: recebe a cor de preenchimento
-atual (preto quando não há) e nenhum contorno, e você o edita como qualquer
-curva.
+sete modos. Um traço Predefinido, Pincel, Caligráfico ou Expressão continua
+sendo o caminho que você desenhou, uma curva aberta de poucos nós, com o
+pincel como contorno vivo: edite os nós com a ferramenta Forma depois e o
+pincel acompanha. O Pulverizador espalha objetos ao longo do caminho que você
+desenhou, que continua: edite os nós e os objetos acompanham. Separar
+(<kbd>Ctrl</kbd>+<kbd>K</kbd>) os transforma num grupo de objetos comuns.
 
 Para desenhar uma pincelada:
 
@@ -20,7 +25,12 @@ Para desenhar uma pincelada:
 3. Arraste na página.
 
 Para transformar curvas existentes em pinceladas, selecione-as e clique em
-[[docker.apply_to_curve]] no painel [[docker.brush_strokes]].
+[[docker.apply_to_curve]] no painel [[docker.brush_strokes]]; a curva continua
+uma curva, com o pincel como contorno.
+
+Com uma mesa digitalizadora, a pressão da caneta define a largura dos traços
+Predefinido, Pincel e Expressão; veja
+[Desenhar com uma mesa digitalizadora](pen-pressure.md).
 
 ![O painel Pinceladas](../../img/lines-shapes-artistic-media-brush-strokes.png)
 
@@ -33,19 +43,31 @@ Para transformar curvas existentes em pinceladas, selecione-as e clique em
   pontas (de início), afinar o início, afinar o fim, bojo, onda ou plano. A
   largura é o ponto mais largo.
 - **Pincel**: um perfil predefinido com borda áspera, de pincel seco.
-- **Expressão**: a largura segue a sua velocidade como se fosse a pressão da
-  caneta: traços lentos são largos. A configuração de pressão ajusta o efeito.
+- **Expressão**: a largura segue a pressão da caneta ou, com o mouse, a sua
+  velocidade: traços lentos são largos. A configuração de pressão ajusta o
+  efeito.
 - **Pulverizador**: formas (círculos, quadrados, estrelas, corações ou folhas)
   colocadas ao longo da linha a cada espaçamento (8 mm de início), cada uma
   entre 70% e 100% da largura.
+- **Ladrilhos**: um pequeno desenho (corrente, corda, ziguezague, traço e
+  ponto, ondas ou contas) repetido ponta a ponta ao longo da linha e curvado
+  para segui-la, com a largura escolhida. Os ladrilhos esticam um pouco para
+  encontrar as duas pontas. Como no Pulverizador, a linha continua e os
+  ladrilhos acompanham os nós.
+- **Fundir**: uma pincelada redonda da largura escolhida que vira um só
+  objeto com todo objeto que ela toca na camada ativa com a mesma cor de
+  preenchimento e sem contorno. Pinte sobre uma forma para aumentá-la numa
+  peça só.
 
 ### Configurações {#brush-settings}
 
 - **Largura**: 3 mm de início.
 - **Ângulo**: o ângulo da ponta, para Caligráfico.
 - **Suavização**: 0 a 100 (25 de início). Valores maiores eliminam tremores.
-- **Pressão**: para Expressão (0,5 de início).
+- **Pressão**: quanto a largura segue a pressão da caneta (0,5 de início),
+  para Predefinido, Pincel e Expressão.
 - **Espaçamento**: para Pulverizador.
+- **Forma**: o desenho do ladrilho, para Ladrilhos.
 
 ## Pincel pictórico {#painterly-brush}
 

@@ -7,6 +7,9 @@ vzorku se nástroj přepne na použití; dalším vzorkem začnete kliknutím na
 tlačítko výběru. <kbd>Esc</kbd> vzorek zahodí a vrátí se k nástroji
 [[tool.pick]].
 
+Ukazatel je kapátko, když nástroj odebírá vzorek, a kbelík s barvou, když ho
+používá. Obrázky dávají svou barvu i ve skupině nebo v rámečku.
+
 ## Kapátko barev {#color-eyedropper}
 
 1. Zvolte nástroj [[tool.color_eyedropper]].
@@ -20,6 +23,11 @@ tlačítko výběru. <kbd>Esc</kbd> vzorek zahodí a vrátí se k nástroji
    dovnitř prázdného uzavřeného tvaru jej vyplníte.
 
 Lišta vlastností ukazuje nabranou barvu.
+
+Když pohybujete ukazatelem, abyste vzali barvu, malé pole vedle něj ukazuje
+barvu pod ním: vzorek, název barvy, je-li to barva palety nebo přímá barva,
+její hodnoty v barevném režimu kresby (CMYK nebo RGB) a její hexadecimální
+hodnotu. Kapátko výběru barvy ukazuje totéž pole.
 
 ## Kapátko atributů {#attributes-eyedropper}
 

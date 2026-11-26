@@ -6,9 +6,13 @@ object with marks of chalk, ink, watercolor and other media.
 
 ## Brush Strokes {#brush-strokes}
 
-The [[tool.brush_strokes]] tool (<kbd>I</kbd>) draws strokes in one of five
-modes. The stroke is a filled object: it takes the current fill color (black
-when there is none) and no outline, and you edit it like any curve.
+The [[tool.brush_strokes]] tool (<kbd>I</kbd>) draws strokes in one of seven
+modes. A Preset, Brush, Calligraphic or Expression stroke stays the path you
+drew, an open curve of a few nodes, with the brush as its live outline: edit
+its nodes with the Shape tool afterwards and the brush follows. The Sprayer
+places objects along the path you drew, which stays: edit its nodes and the
+objects follow. Break Apart (<kbd>Ctrl</kbd>+<kbd>K</kbd>) turns them into a
+group of ordinary objects.
 
 To draw a brush stroke:
 
@@ -18,7 +22,12 @@ To draw a brush stroke:
 3. Drag on the page.
 
 To turn existing curves into strokes, select them and click
-[[docker.apply_to_curve]] in the [[docker.brush_strokes]] panel.
+[[docker.apply_to_curve]] in the [[docker.brush_strokes]] panel; the curve
+stays a curve with the brush as its outline.
+
+With a graphics tablet, the pen's pressure sets the width of Preset, Brush
+and Expression strokes; see
+[Drawing with a graphics tablet](pen-pressure.md).
 
 ![The Brush Strokes panel](../../img/lines-shapes-artistic-media-brush-strokes.png)
 
@@ -31,19 +40,28 @@ To turn existing curves into strokes, select them and click
   first), taper start, taper end, bulge, wave or flat. The width is the
   widest point.
 - **Brush**: a preset profile with a rough, dry-brush edge.
-- **Expression**: the width follows your speed as if it were pen pressure:
-  slow strokes are wide. The pressure setting scales the effect.
+- **Expression**: the width follows the pen's pressure, or with a mouse your
+  speed: slow strokes are wide. The pressure setting scales the effect.
 - **Sprayer**: shapes (circles, squares, stars, hearts or leaves) placed
   along the line every spacing (8 mm at first), each between 70% and 100%
   of the width.
+- **Tiles**: a small picture (chain, rope, zigzag, dash and dot, waves or
+  beads) repeated end to end along the line and bent to follow it, as wide
+  as the width. The tiles stretch a little so they meet both ends. Like the
+  Sprayer, the line stays and the tiles follow its nodes.
+- **Merge**: a round stroke of the width that becomes one object with every
+  object it touches that has the same fill color and no outline, on the
+  active layer. Paint over a shape to grow it in one piece.
 
 ### Settings {#brush-settings}
 
 - **Width**: 3 mm at first.
 - **Angle**: the nib's angle, for Calligraphic.
 - **Smoothing**: 0 to 100 (25 at first). Higher values smooth out wobbles.
-- **Pressure**: for Expression (0.5 at first).
+- **Pressure**: how much the width follows the pen pressure (0.5 at first),
+  for Preset, Brush and Expression.
 - **Spacing**: for Sprayer.
+- **Shape**: the tile picture, for Tiles.
 
 ## Painterly Brush {#painterly-brush}
 

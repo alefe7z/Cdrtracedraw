@@ -12,6 +12,7 @@ Every version of CD Draw has a release with files for each system. To
 install it:
 
 1. Open the [latest release](https://github.com/alefe7z/Cdrtracedraw/releases/latest).
+1. Open the [latest release](https://github.com/tracedraw/tracedraw/releases/latest).
 2. Download the file for your system (`<version>` is the version
    number):
 
@@ -20,9 +21,14 @@ install it:
    | Windows (x64) | `tracedraw-<version>-windows-x86_64-setup.exe` (installer) or `tracedraw-<version>-windows-x86_64-portable.zip` |
    | macOS (Apple silicon) | `tracedraw-<version>-macos-arm64.dmg` |
    | macOS (Intel) | `tracedraw-<version>-macos-x86_64.dmg` |
-   | Linux (x86_64) | the `.deb` package, `tracedraw-<version>-linux-x86_64.AppImage` or `tracedraw-<version>-linux-x86_64.tar.gz` |
+   | Linux (x86_64) | the `.deb` package (`_amd64`), `tracedraw-<version>-linux-amd64.AppImage` or `tracedraw-<version>-linux-x86_64.tar.gz` |
+   | Linux (arm64: Raspberry Pi 4/5 with a 64-bit system, ARM laptops) | the `.deb` package (`_arm64`), `tracedraw-<version>-linux-arm64.AppImage` or `tracedraw-<version>-linux-arm64.tar.gz` |
 
-3. Install or unpack it as you would any program on your system.
+3. Install or unpack it as you would any program on your system. The
+   Windows installer asks which language TraceDraw starts in; System
+   language, selected at first, follows the language of Windows. Other
+   copies start in the system's language. Change it at any time under
+   Tools > Options > Global > General.
 
 The downloads are not code-signed yet:
 
@@ -39,6 +45,31 @@ pre-release on the releases page is refreshed with every change.
 ## Start CD Draw
 
 When CD Draw starts, a splash screen shows while fonts load. Then the
+You can also [open TraceDraw in the browser](https://tracedraw.github.io/tracedraw/)
+with nothing to install. While it loads, the page shows a progress bar;
+the editor starts when the bar is full.
+
+The browser version is the same editor, with a few differences:
+
+- Opening and importing use the browser's file picker; saving, exporting
+  and printing download a file.
+- Your settings are kept in that browser on that computer.
+- Recent drawings are not listed, because uploaded files cannot be
+  reopened.
+- Fonts come with the page, and more are fetched the first time your
+  text needs them.
+- It suits a desktop browser with a mouse and keyboard; on a tablet, use
+  the Touch workspace (see [Customizing](customizing.md#workspaces)).
+  A phone screen is too small for editing.
+- `Ctrl+N`, `Ctrl+T` and `Ctrl+W` stay with the browser, so use the
+  **File** menu for New and Close.
+
+The full list of differences is in
+[the browser notes](../behavior/web.md).
+
+## Start TraceDraw
+
+When TraceDraw starts, a splash screen shows while fonts load. Then the
 main window opens, maximized the first time, and later at the size you
 left it.
 
@@ -97,14 +128,14 @@ Detail: [the New Document notes](../behavior/new-document.md).
 From top to bottom and left to right:
 
 - **Menu bar**: every command, grouped in menus such as File, Edit,
-  View, Layout, Object, Effects, Text, Tools, Window and Help, with each
+  View, Object, Text, Image, Effects, Page, Tools, Window and Help, with each
   command's shortcut shown beside it.
 - **Standard toolbar**: New, Open (its arrow lists recent drawings),
   Save and Print; Cut, Copy and Paste; Undo and Redo (their arrows list
   the steps, so you can undo several at once); Import, Export and
-  Publish to PDF; the zoom box; Show Rulers, Show Grid and Show
+  Export as PDF; the zoom box; Show Rulers, Show Grid and Show
   Guidelines; Snap Off and Snap To; Options; and Launch (Font Manager,
-  Welcome Screen, Color Management).
+  TraceCut, Welcome Screen).
 - **Property bar**: the settings for what you are doing right now. With
   nothing selected it shows the page size, orientation, units and nudge
   distance. With a selection it shows position, size, scale, rotation

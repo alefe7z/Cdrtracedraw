@@ -1,0 +1,215 @@
+# Fit Objects to Path
+
+Object > Fit Objects to Path opens the Fit Objects to Path panel. Select
+the objects to place, then the path last (Shift+click). The objects go
+along all the path's subpaths one after another (Treat subpaths as
+contiguous) or along its first subpath only; a closed path is walked
+all the way round, its closing side included. The code is in
+`apps/tracedraw/src/fit_path.rs`.
+
+The panel starts from the defaults below, with no preview, each time
+other objects are selected or another drawing is active (#1136). Once a
+value changes, dashed outlines on the canvas show where every object and
+copy will go. Apply is one undo step ("Fit Objects to Path"). The panel
+shows how many objects are selected (all but the path) and what kind of
+object the path is.
+
+## Settings and defaults
+
+| Setting | Choices | Default |
+|---|---|---|
+| Keep originals (Objects) | the selected objects stay where they are and copies are placed | off |
+| Group all objects (Objects) | the objects placed go into one group | off |
+| Treat subpaths as contiguous (Path) | all subpaths one after another, or the first only | on |
+| Spacing | Evenly along the path, Fixed distance (Distance) | Evenly, 10 mm |
+| Measure between | Centers, Edges | Centers |
+| Start offset | any length, negative included | 0 |
+| End offset | any length (open paths only) | 0 |
+| Place the row at (fixed distance) | Start, Middle, End | Start |
+| Copies | Each object once, Number of objects (1 to 1000), Fill the path (fixed distance only) | Each object once, 10 |
+| Placement | On the path, Above the path, Below the path, with a distance from the path | On the path, 0 |
+| Reference | Center of rotation, Bounding box, Bounding box with outline | Center of rotation |
+| Origin | nine points of the box, three by three (Bounding box references only) | the centre |
+| Rotation | Rotate objects to follow the path, Fixed angle; Angle in degrees counterclockwise | Fixed angle, 0 |
+| Ignore initial rotation | take the turn the objects have off them first | off |
+| Modify rotation: Style | None, Uniform, Progressive, Jitter, Progressive jitter | None |
+| Start angle, Spin angle, Revolutions, Range (±), Clockwise | degrees, degrees, a number, degrees, a switch; each enabled only for the styles that use it (below) | 0, 360, 1, 15, off |
+| Order | As selected, Reversed, Left to right, Right to left, Largest first, Smallest first, Large and small in turn, Top to bottom, Bottom to top, Tall to short, Short to tall, Wide to narrow, Narrow to wide, Random | As selected |
+| Reverse direction | start from the path's last node | off |
+
+## Formulas
+
+Lengths are in millimetres along the path, measured on the path
+flattened to 0.05 mm. With Reverse direction the path is walked from its
+last node (with several subpaths: the last subpath first). With
+several subpaths walked as one, the move from one to the next is not
+counted, and the path counts as closed only when every subpath is.
+`s0` is the start offset; on an open path of length `L`,
+`s1 = L - end offset`; on a closed path `s1 = s0 + L` and the end offset
+is not used.
+
+**Order.** The objects are sorted first: Left to right and Right to left
+by the x of their centres, Largest and Smallest first by the area of
+their bounds; Large and small in turn takes the largest, the smallest,
+the next largest, the next smallest and so on; Top to bottom and Bottom
+to top by the y of their centres, Tall to short and Short to tall by
+the height of their bounds, Wide to narrow and Narrow to wide by the
+width; Random shuffles them by a number worked out from each object's
+id (SplitMix64), so the preview and Apply agree and the same objects
+shuffle the same way each time (#1256,
+`fit_path::tests::orders_by_place_size_and_chance`).
+
+**Count.** `n` objects are selected. Each object once places `n`. A
+number `N` places `max(N, n)`: the selected objects, then copies of them
+in the same order (object `i mod n` at place `i`). Fill the path places
+as many as fit between `s0` and `s1` (round a closed path): `floor(room
+/ distance) + 1` between centres on an open path, `floor(L / distance)`
+on a closed one; between edges, objects are added while the next one,
+with its gap, still fits (on a closed path the gap back to the first
+counts too). Never fewer than `n` and never more than 1000 in all.
+
+**The box and the reference point.** Each object's box is its bounds;
+with Ignore initial rotation, the object is first turned back by the
+angle of its transform (`atan2(b, a)` of its matrix) about its centre and
+the box is that of the turned-back outline; Bounding box with outline
+grows the box by half the outline's width. The reference point is the
+point that goes on the path: the object's centre of rotation (the box's
+centre, or where it was moved with the Pick tool) or, for the two box
+references, the Origin point: column `u` and row `r` (0 to 2 from the
+top left) give `(x0 + u w / 2, y1 - r h / 2)`. `v` is the reference point
+less the box's centre.
+
+**Modify rotation.** A turn `e[i]` is added to object `i` of `m` (degrees
+counterclockwise, all negated with Clockwise): None `0`; Uniform the
+Start angle; Progressive `Start + Spin angle * Revolutions * i / k` with
+`k = m` on a closed path and `m - 1` on an open one; Jitter `Start +
+Range * j(i)`, where `j(i)` is a number from -1 to 1 worked out from `i`
+alone (SplitMix64), so the preview and Apply agree and the same object
+turns the same way each time; Progressive jitter both. Start angle and
+Clockwise are enabled for every style but None, Spin angle and
+Revolutions for the two progressive ones, Range for the two jitter ones.
+
+**Half lengths.** For an object whose box is `w` by `h` and which is
+turned by `a` relative to the path's direction (`Angle + e[i]` when it
+follows the path; `Angle + e[i] - phi`, with `phi` the path's direction,
+when the angle is fixed), its half length along the path is
+`hl = w/2 |cos a| + h/2 |sin a|`, across it `hc = w/2 |sin a| + h/2 |cos a|`,
+and `v` turned by `a` is `v'`. Its length before its reference point
+along the path is `b = hl + v'.x` and after it `f = hl - v'.x`. With a
+fixed angle (or a reference point off the centre) these depend on where
+the object lands, so the layout is worked out three times, each with the
+directions found by the last.
+
+**Places.** `d[i]` is the distance along the path of object `i`'s
+reference point and `m` the number placed.
+
+| Spacing | Between | `d[i]` |
+|---|---|---|
+| Evenly, open | centers | `s0 + (s1 - s0) i / (m - 1)` (one object: `(s0 + s1) / 2`) |
+| Evenly, closed | centers | `s0 + L i / m` |
+| Evenly, open | edges | `d[0] = s0 + b[0]`, then `d[i] = d[i-1] + f[i-1] + g + b[i]`, `g = (s1 - s0 - sum (b + f)) / (m - 1)` |
+| Evenly, closed | edges | `d[0] = s0`, the same step, `g = (L - sum (b + f)) / m` |
+| Fixed distance | centers | `base + distance i` |
+| Fixed distance | edges | `d[0] = base + b[0]`, then the step with `g = distance` |
+
+With a fixed distance the run goes from `lo = 0` to `hi` (the last
+reference point, or the last far edge between edges) and `base` is `s0` (Start),
+`(s0 + s1) / 2 - hi / 2` (Middle) or `s1 - hi` (End). On an open path a
+place past an end stays at that end; on a closed path it goes round.
+
+**Transform.** At `d[i]` the path has the point `p` and the unit
+direction `t`; its left normal is `(-t.y, t.x)` (the page's y axis
+points up, so this is above a path drawn from left to right). On the
+path the reference point goes to `p`. Above keeps the reference point's
+place along the path and moves the object along the normal so that its
+centre is `hc` plus the distance from the path off the path (the
+reference point goes to `p + (hc + distance + v'.y)` along the normal);
+Below the other way. The object (turned back first with Ignore initial
+rotation) turns about its reference point by `phi + Angle + e[i]`
+(follow) or `Angle + e[i]` (fixed).
+
+## Copies and groups
+
+Copies are made with fresh ids in their original's layer, above the
+objects already there, with the original's fill, outline and effects.
+With Keep originals every object placed is a copy and the originals
+stay where they were. After an Apply that made copies, the objects
+placed and the copies are selected (the path is not), so the panel
+starts again from its defaults. Without copies the selection stays.
+
+With Group all objects the objects placed (copies, and originals not
+already inside a group) are grouped in the same undo step, when there
+are at least two; the group is selected.
+
+## Live
+
+With Live on (off by default) the fit stays after Apply: the path keeps
+it in its object data (`fit_path.live`, JSON): the settings, each object
+fitted by its identity with the move (page space) the fit gave it, and
+the identities of the copies, in the order placed. After every change of
+the drawing each live fit is worked out again, in the same undo step,
+from the objects as they were before the fit (each object's move taken
+back off it), so:
+
+- moving, scaling or reshaping the path moves the objects with it;
+- an object resized, reshaped or recoloured is fitted again at its new
+  size, and its copies are made again from it;
+- an object moved off the path goes back onto it;
+- an object deleted leaves the fit; with none left, or the path deleted,
+  the fit ends;
+- a copy of the path (Duplicate, Paste) carries the data under another
+  identity and lets it go: the copy is a plain path;
+- an object is placed by one live fit only (the first path naming it).
+
+Nothing changes, and no step is added, when a refit would move nothing by
+more than a rounding error. Selecting the path, an object or a copy shows
+the fit's settings in the panel; a change refits at once, a run of
+changes with nothing in between is one undo step, and turning Live off
+lets the objects go where they are ("Release From Path"). Group all
+objects shows only before a fit is made live.
+
+With the Pick tool the selected live fit shows two handles:
+
+- a diamond on the second object's point on the path: dragging it along
+  the path sets the spacing so that the second object's point follows the
+  pointer (the nearest point of the path), the first object staying where
+  it is. The fit becomes spaced by a distance from the start, the offset
+  set so the first object does not move; with edges measured the distance
+  is the gap between the edges. A tag beside the pointer shows it;
+- a ring 30 pixels under the middle of the path's box, joined to a dot
+  there: dragging it turns all the objects by the pointer's turn about the
+  dot (the Angle, -180 to 180 degrees; Ctrl in steps of 15). A tag shows
+  the angle.
+
+Each handle drag is one undo step.
+
+### Strokes read from `.cdr` files
+
+A brush stroke a `.cdr` file links to its curve (#3680; the
+reader marks the curve with the stroke's objects, see `cdr-format.md`)
+opens as a live fit of those objects to the curve, when they lie on it
+as a fit places them. The settings are measured from the objects, taken
+from the start of the curve: the first object is the one fitted (turned
+back to how it lies along the path), the others are its copies; spaced by
+distance (the steps between the first and the last, in microns), copies
+filling the path, turned with it by the turn the first object has from
+the path's direction (thousandths of a degree, -180 to 180), starting
+where the first one's centre lands; a centre off the path places the
+objects above it with the side that makes up the shift (negative when
+the object straddles the path), and an end offset keeps the count the
+file's when the path has room for more. The fit worked out from those
+settings must put every node of every object within 0.15 mm of where
+the file drew it; otherwise the objects stay plain objects. Either way
+the mark goes; nothing is added to undo
+(`fit_live::tests::a_brush_stroke_read_from_a_cdr_file_opens_live`,
+`a_stroke_whose_objects_do_not_follow_a_fit_stays_as_drawn`). The
+objects keep the file's look until the curve or an object changes; then
+the fit places them (within that tolerance of the file).
+
+## Preview
+
+The preview is worked out again only when the settings, the selection or
+the drawing change; the frames between draw the outlines kept. Above 200
+objects each object previews as its bounding box. Selections of more than
+200 objects show no preview. `frame_times_of_the_fit_to_path_panel` in
+`pick_drag_tests.rs` measures a frame with the panel open.

@@ -161,6 +161,17 @@ impl Default for PictureMosaicSettings {
     }
 }
 
+impl PictureMosaicSettings {
+    /// Every setting back to its default; the picture library stays.
+    pub fn reset(&mut self) {
+        *self = Self {
+            library: self.library.take(),
+            images: std::mem::take(&mut self.images),
+            ..Self::default()
+        };
+    }
+}
+
 /// An image's average colour (premultiplied, flattened on white).
 pub fn average(img: &RgbaImage) -> [f32; 3] {
     let mut acc = [0f64; 3];
@@ -247,7 +258,9 @@ impl IndexJob {
     }
 }
 
-/// Start indexing a folder on worker threads.
+/// Start indexing a folder: on worker threads natively, at once in a
+/// browser (no threads; its folder is the pictures picked, kept in
+/// memory, #1399).
 pub fn start_index(dir: PathBuf) -> IndexJob {
     let paths = library_paths(&dir);
     let done = Arc::new(AtomicUsize::new(0));
@@ -259,8 +272,19 @@ pub fn start_index(dir: PathBuf) -> IndexJob {
         rx,
     };
     if paths.is_empty() {
-        // Nothing to read.
         let _ = tx.send(Vec::new());
+        return job;
+    }
+    if crate::files::WEB {
+        let index = paths
+            .iter()
+            .filter_map(|p| {
+                let entry = index_one(p);
+                done.fetch_add(1, Ordering::Relaxed);
+                entry
+            })
+            .collect();
+        let _ = tx.send(index);
         return job;
     }
     std::thread::spawn(move || {
@@ -585,7 +609,7 @@ impl crate::app::App {
                     rect,
                     width_px: w,
                     height_px: h,
-                    png,
+                    png: png.into(),
                     fx: None,
                 },
             );

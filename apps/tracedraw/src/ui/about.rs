@@ -7,6 +7,7 @@
 use crate::i18n::{tr, trf};
 use crate::theme::Tokens;
 use crate::ui::brand;
+use crate::ui::tips::RichTip;
 use egui::{
     Color32, Context, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, TextureHandle, Ui,
     Vec2,
@@ -71,6 +72,26 @@ fn banner(ui: &mut Ui, icon: Option<&TextureHandle>) {
         egui::StrokeKind::Inside,
     );
     painter.galley(chip_rect.min + Vec2::new(8.0, 3.0), version, Color32::WHITE);
+    // The ALPHA badge beside the version, its meaning on hover.
+    let alpha = painter.layout_no_wrap(
+        tr("dialog.alpha"),
+        FontId::proportional(11.5),
+        Color32::WHITE,
+    );
+    let badge = Rect::from_min_size(
+        Pos2::new(chip_rect.right() + 8.0, chip_rect.top()),
+        Vec2::new(alpha.size().x + 16.0, chip.y),
+    );
+    painter.rect(
+        badge,
+        CornerRadius::same(10),
+        Color32::from_rgb(0x2E, 0xA0, 0x43),
+        Stroke::NONE,
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(badge.min + Vec2::new(8.0, 3.0), alpha, Color32::WHITE);
+    ui.interact(badge, ui.id().with("about_alpha"), Sense::hover())
+        .rich_tip(tr("dialog.alpha_tip"));
 }
 
 /// One row of the facts list: a dim label and its value.
@@ -130,6 +151,15 @@ pub fn about_dialog(ctx: &Context, close: &mut bool) {
             ))
             .size(12.0)
             .color(Tokens::text_dim()),
+        );
+        ui.add_space(6.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(tr("dialog.about_trademark"))
+                    .size(11.0)
+                    .color(Tokens::text_dim()),
+            )
+            .wrap(),
         );
         if crate::ui::chrome::button_row(ui, &[&tr("dialog.close")], false).is_some() {
             *close = true;

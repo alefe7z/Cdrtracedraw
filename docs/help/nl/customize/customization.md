@@ -1,5 +1,7 @@
 # Aanpassingsopties
 
+> *Machinevertaling: deze pagina kan achterlopen op de Engelse versie.*
+
 [[menu.tools > menu.tools.options > menu.tools.options_customization]] stelt
 het uiterlijk van de interface in, uw eigen sneltoetsen, welke balken zichtbaar
 zijn en hoe het kleurenpalet zich gedraagt.
@@ -11,8 +13,13 @@ zijn en hoe het kleurenpalet zich gedraagt.
 - [[options.center_dialogs]]: dialoogvensters openen in het midden van het
   venster; uitgeschakeld openen ze waar u ze hebt achtergelaten.
 - [[options.ui_shadows]] (minder schaduwen helpen bij tragere grafische
+- [[options.translucent_menus]]: open menus let the drawing show through them, at the [[options.menu_opacity]] beside the box (off by default).
   kaarten).
 - [[options.colored_icons]]: elke groep gereedschappen krijgt een eigen kleur.
+- [[options.docker_tabs_icons_only]]: de paneeltabbladen aan de zijkanten
+  van het venster tonen alleen hun afbeelding, met de naam in de tip. Uit
+  tonen ze afbeelding en naam, en een kolom met meer tabbladen dan er passen
+  schuift.
 - [[options.ui_size]]: hoe groot menu's, balken, pictogrammen en panelen zijn,
   ten opzichte van de schaal die uw systeem aan de monitor geeft (in het begin
   100%). [[options.reset_to_default]] gaat terug naar 100%. De grootte van de
@@ -44,6 +51,15 @@ naar de standaardwaarden verwijdert ze allemaal. Gereedschapstoetsen zijn een
 letter of <kbd>Shift</kbd> en een letter. Zie
 [Sneltoetsen](../reference/keyboard-shortcuts.md).
 
+Een opdracht kan meerdere sneltoetsen hebben: een nieuwe toets komt bij de
+toetsen die er al zijn (een ingebouwde toets blijft ernaast werken), en elke
+toets heeft een eigen verwijderknop. Knoppen van de balken die een menuopdracht
+uitvoeren (Nieuw, Openen, Opslaan, Ongedaan maken, Inzoomen en andere) krijgen
+ook sneltoetsen, dezelfde als hun menuopdracht, net als regels die de menu's
+alleen soms tonen. Een lijst **Werkbalkknoppen** bevat alle knoppen van de
+werkbalken Standaard en Zoom: sleep van daaruit een verwijderde knop terug naar
+de balk.
+
 ## Opdrachtbalken {#command-bars}
 
 ![De pagina Opdrachtbalken van de aanpassingsopties](../../img/customize-customization-command-bars.png)
@@ -56,14 +72,31 @@ letter of <kbd>Shift</kbd> en een letter. Zie
 [[options.reset]] zet de balken terug. Onder [[options.other]]:
 [[bars.lock]] en [[options.show_outline_flyout]].
 
+[[options.toolbar_drag_hint]]
+
 ## Kleurenpalet {#color-palette}
 
 ![De pagina Kleurenpalet van de aanpassingsopties](../../img/customize-customization-color-palette.png)
 
 - [[options.palette_auto_update]] en [[options.palette_show_document]] (beide
   aan).
+- [[options.palette_position]] (Boven, Onder, Links, Rechts of Zwevend) van
+  het standaardpalet, zoals het eigen menu van het palet die instelt; die
+  verandert niet zolang de werkbalken vergrendeld zijn.
 - [[options.palette_swatches]]: [[options.palette_no_color]] (aan), en wat de
   [[options.palette_right_button]] doet: [[options.palette_set_outline]] (in
   het begin) of het [[options.palette_context_menu]] openen.
 
 Zie [Kleurenpaletten](../color/palettes.md).
+
+## Contextmenu's {#context-menus}
+
+Kies onder Aanpassing [[options.context_menus]] om de 32 locaties van contextmenu's afzonderlijk te beheren. Selecteer een locatie met [[options.context_menu_scene]], gebruik [[options.context_menu_search]] om een bewerking te zoeken en schakel het selectievakje uit om die bewerking op die locatie te verbergen. Bewerkingen blijven in deze lijst staan als de huidige selectie ze niet kan gebruiken.
+
+Standaard zijn alle bewerkingen zichtbaar. Elke locatie heeft eigen keuzes: een objectbewerking op het canvas verbergen verbergt deze niet in het paneel Objecten. Dynamische lijsten, zoals doellagen en lettertypecollecties, worden als één bewerking beheerd, zodat gewijzigde namen uw keuzes niet terugzetten.
+
+[[options.context_menu_reset]] herstelt het geselecteerde menu en [[options.context_menu_reset_all]] herstelt alle menu's. [[dialog.ok]] slaat de keuzes op in de toepassingsinstellingen; [[dialog.cancel]], Escape of de sluitknop herstelt de keuzes van toen Opties werd geopend. Hoofdmenu's, sneltoetsen en het zoeken naar opdrachten blijven de oorspronkelijke opdrachten aanbieden.
+
+Vouw een submenu uit om de ingesprongen onderliggende items te zien. Sleep de greep van een rij, of gebruik [[options.context_menu_move_up]] en [[options.context_menu_move_down]], om items op hetzelfde niveau te rangschikken. Een bovenliggend menu neemt zijn onderliggende items mee; items kunnen niet naar een ander bovenliggend menu worden verplaatst. Bij zoeken blijven de bovenliggende menu’s van overeenkomende items zichtbaar. Herstellen zet zowel zichtbaarheid als volgorde terug; annuleren van Opties herstelt beide naar de toestand bij het openen van het dialoogvenster.
+
+Het menu van de kleurstalen van het documentpalet en de vermelding in Paletbeheer hebben afzonderlijke instellingen. Dynamische doelen behouden hun eigen volgorde; de lijst met documentstijlen blijft tussen de vaste acties in Objectstijlen staan. Nieuwe bewerkingen uit een latere versie blijven zichtbaar en volgen op de opgeslagen items van hetzelfde niveau.

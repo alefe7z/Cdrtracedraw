@@ -2,15 +2,39 @@
 
 ## Zoom tool (Z, F2)
 
-- Click zooms in by 2 at the point; Shift+click or right-click zooms
-  out by 2 (with this tool the right button never opens the context
-  menu). Dragging a marquee zooms to fit that rectangle.
+- Click zooms in by 2 and brings the point clicked to the middle of
+  the window; Shift+click or right-click zooms out by 2 the same way
+  (with this tool the right button never opens the context menu). So a
+  click near the page's edge shows that edge with room round it, even
+  where the edge sat at the window's edge (#2898,
+  `pick_drag_tests::the_zoom_tool_brings_the_point_clicked_to_the_middle`).
+  Dragging a marquee zooms to fit that rectangle.
 - Zooming to a rectangle (marquee, selection, all objects, page) centres
   that rectangle in the window, wherever it lies on the page, with a
-  40 px margin: `zoom = min((W - 80) / w, (H - 80) / h)`.
+  40 px margin: `zoom = min((W - 80) / w, (H - 80) / h)`. Zoom to fit
+  (F4) takes what the page draws, objects with their shadows, contours
+  and other live effects (`App::drawn_bounds`), 5 % wider on each side,
+  so a shadow keeps a margin too (#2898).
+- The zoom box (Standard toolbar, Zoom tool bar) shows the zoom as it
+  is, also while it has the focus and the wheel zooms on; what it shows
+  is applied when it lets go only if something was typed into it.
+  Before, a level shown when it was clicked stayed and was put back when
+  the box lost the focus (#2898). Below 10 % it shows a decimal.
 - Double-clicking the tool button zooms to fit all objects (F4).
-- F2 picks the tool; Shift+F2 zooms to the selection; F4 zooms to fit
+- F2 picks the tool for one zoom: after a click, a right click or a
+  marquee the tool before it comes back (#1039,
+  `pick_drag_tests::f2_zooms_once_and_gives_the_tool_back`); Z or the
+  toolbox button keeps it until another tool is chosen. Shift+F2 zooms
+  to the selection; F4 zooms to fit
   all objects; Shift+F4 zooms to the page.
+- View > Zoom 1:1 shows the drawing at its real size, the zoom box's
+  100 % (Options > Zoom/Pan's calibration counts). It has no key at
+  first; Options > Customization > Commands gives it one, Ctrl+1 for
+  instance (#3103,
+  `pick_drag_tests::field_focus_tests::zoom_1to1_takes_a_key_and_shows_the_real_size`).
+- These keys work while a text is being edited too, and the editing
+  goes on: after F2's one zoom the text is edited on where it was
+  (#1699, `pick_drag_tests::zoom_keys_work_while_editing_text`).
 - `+`/`=` and `-` zoom by 1.25 about the canvas centre (except that `+`
   duplicates the selection in place with a Pick tool, and with the Shape
   tool and nodes chosen `+` and `-` add and delete nodes); the zoom combo
@@ -48,8 +72,73 @@
 ## Mouse wheel
 
 - Default (Options > Tools > Default action for mouse wheel: Zoom): the
-  wheel zooms by 1.15 per notch about the pointer; Ctrl+wheel scrolls
-  vertically; Alt+wheel scrolls horizontally.
+  wheel zooms by the zoom step per notch about the pointer, in a glide
+  over a few frames, not in one jump (#766,
+  `pick_drag_tests::a_wheel_notch_zooms_in_a_glide`). Ctrl+wheel and
+  Shift+wheel scroll horizontally; Alt+wheel scrolls vertically. A
+  touchpad's fine steps or a pinch with Ctrl held still zoom (#3087,
+  `pick_drag_tests::ctrl_and_shift_wheel_scroll_sideways_alt_wheel_up_and_down`).
+  Options > Tools > Zoom/Pan > Ctrl+wheel zooms (off at first,
+  `settings.ctrl_wheel_zooms`) makes Ctrl+wheel zoom about the pointer as
+  the plain wheel does, for those used to zooming that way (#3473,
+  `pick_drag_tests::ctrl_wheel_zooms_when_the_option_is_ticked`); it
+  applies only while the wheel zooms.
+- Zoom step (Options > Tools > Zoom/Pan > Zoom per wheel notch, #895):
+  1 to 100 %, 15 % at first (a factor of 1.15 a notch). A notch is a line of the
+  wheel on the desktop, three lines or 100 pixels in the browser
+  (`smooth_wheel_notch`); a touchpad's small pixel steps (under 8
+  points) zoom their share of a notch at once, unsmoothed.
+- The glide follows the wheel's speed (#1648, `view_motion.rs`): the
+  zoom still to come is kept as a logarithm and each frame takes
+  `1 - 0.1^(dt / T)` of it, `T` the time to reach 90 %. A notch after a
+  pause (speed up to 8 notches a second) glides with `T = 0.10 s`;
+  faster turns, the notches of an event over the time since the last
+  one (at most 0.25 s), shorten it in proportion,
+  `T = 0.10 * 8 / speed`, down to 0.03 s. What is left under 0.0001 goes
+  at once, so a glide always ends; it goes on about its point when the
+  pointer leaves the canvas, and a repaint is asked only while it moves
+  (`view_motion::tests::faster_wheel_turns_glide_shorter`,
+  `view_motion::tests::a_glide_adds_up_to_the_steps_and_ends`,
+  `pick_drag_tests::a_fast_wheel_turn_glides_shorter`).
+- Smooth zoom (Options > Tools > Zoom/Pan, on at first): off, every notch
+  zooms its whole step at once
+  (`pick_drag_tests::smooth_zoom_off_zooms_the_fixed_step_at_once`).
+- Light zoom (Options > Tools > Zoom/Pan, off at first; Help >
+  Benchmark turns it on when the score is under 4.0, see `benchmark.md`):
+  for slow computers. A notch zooms its whole step at once, without the
+  glide, and the canvas keeps the last picture scaled while the zoom
+  goes on, drawing the drawing anew once the view has rested 0.3 s
+  (`raster::LIGHT_SETTLE_SECONDS`), for the zoom the wheel stopped at
+  (`raster::tests::light_zoom_renders_once_when_the_zoom_stops`,
+  `pick_drag_tests::light_zoom_draws_once_per_wheel_turn`).
+  A turn of one notch starts 1 render with the glide, 1 with Light
+  zoom. With the glide the picture on the way is drawn for the
+  view the glide lands at (`raster::zoom_target`, from
+  `ZoomGlide::target_view`), not for the zoom the frames are passing
+  through: the turn's render is not spent on a zoom the glide has
+  already passed, and when the glide ends the view is put at that same
+  view (`ZoomGlide::land`), the picture fitting the landing to the bit
+  (`view_motion::tests::the_glide_lands_on_the_view_it_was_aimed_at`,
+  `raster::tests::the_picture_of_a_glide_is_drawn_for_the_view_it_lands_at`).
+  A pan while the glide goes folds the glide's aim into the panned
+  view, the point the pan put under the anchor staying there
+  (`view_motion::tests::a_pan_while_the_glide_goes_folds_into_its_landing`).
+  The first step of a zoom renders at once; the steps after it are
+  skipped while that render is on its way, the running render keeping
+  its turn
+  (`raster::tests::the_latest_zoom_wins_without_restarting_renders`),
+  and when it is done, for a zoom the view has already left, the next
+  render starts at once, for the view the glide lands at then, or,
+  without the glide, the zoom the view is at, the turn not left
+  idle for the wheel to rest
+  (`raster::tests::a_zoom_burst_skips_steps_until_the_view_settles`).
+  A render still on its way when the wheel has rested is asked to give
+  up at its next object, after a wait that follows the wheel's own
+  pace: one and a half the gap between the last two notches, at the
+  least 0.04 s (`raster::ZOOM_SETTLE_MIN`), at most 0.12 s
+  (`raster::SETTLE_SECONDS`), so a wheel that has stopped is told from
+  one that goes on a few frames later, and a slow turn's render lands
+  between the notches.
 - With the Scroll setting: the wheel scrolls vertically; Shift+wheel
   scrolls horizontally; Ctrl+wheel zooms.
 - A trackpad pinch zooms by the gesture's factor with either setting.
@@ -60,6 +149,50 @@
 
 - Drag moves the view; the middle button pans with any tool. Pan never
   changes the document.
+- The middle button also pans while a shape (rectangle, ellipse,
+  polygon, star, and the other drag-to-draw shapes) is being drawn with
+  the left button held: the shape's far corner stays under the pointer
+  as the page moves, the drag goes on after the middle button is let
+  go, and releasing the left button makes the shape. Changing the tool
+  drops an unfinished shape drag (#1923).
+- Pan inertia (Options > Tools > Zoom/Pan, off at first, #831): a pan
+  drag (the Pan tool, the middle button, two fingers) let go while
+  moving keeps the view sliding the same way and easing out. The drag's
+  speed is smoothed over its last frames (`0.4 * before + 0.6 * now`);
+  let go at 150 points a second or faster, with the pointer moved in the
+  last 0.06 s, the view slides on at that speed (at most 8000 points a
+  second), which falls by `exp(-dt / 0.3 s)` a frame; under 15 points a
+  second it stops, so a flick slides about 0.3 s worth of its speed. A
+  press, a wheel turn or a new pan drag stops it. A few float
+  operations a frame, and a repaint is asked only while it slides
+  (`view_motion::tests::a_flick_slides_on_and_eases_out`,
+  `view_motion::tests::no_slide_when_off_held_still_slow_or_stopped`,
+  `pick_drag_tests::a_flicked_pan_slides_on_with_pan_inertia`).
+
+## Scrolling at the edge during a drag
+
+- While the left button drags objects (moving, sizing), draws (a shape
+  dragged out, Freehand, a connector, a text frame), selects (a
+  selection box or freehand selection, of objects or of nodes) or drags
+  nodes and handles with the Shape tool, a pointer within 24 interface
+  points of the drawing window's edge, or past it, scrolls the view
+  toward that edge: up to 900 points a second, from nothing at 24
+  points in to the full speed at the edge, along each axis on its own
+  (a corner scrolls both ways). It goes on while the pointer rests
+  there (each frame asks for the next), and the drag follows the pointer
+  in the scrolled view, so a box grows and a moved object travels over
+  what comes in (#2051, `interaction::edge_scroll_step`,
+  `pick_drag_tests::a_drag_at_the_window_edge_scrolls_the_view`). A drag
+  that has left the window keeps following the pointer.
+- The dimension tools scroll the same way: while a dimension is dragged
+  from its first point to its second, and between its clicks, with the
+  pointer resting in the band inside the window (no button held), so
+  the next point can be put on a part of the drawing out of view; the
+  point lands where the pointer is in the scrolled view
+  (`pick_drag_tests::a_dimension_scrolls_the_view_at_the_window_edge`).
+- The cost a frame is a few comparisons; nothing scrolls without a drag
+  or a dimension being placed, or in a drawing window smaller than four
+  bands.
 
 ## Navigator and scrollbars
 
@@ -72,6 +205,35 @@
   thumbnail centres the view on that point; releasing closes the pop-up.
   The thumbnail is rendered once per opening at
   `dpi = 220 / page width in mm * 25.4`.
+- View > Navigator has the key N (live test of 0.41; free in the shortcut
+  table, `options::tests::no_two_default_commands_share_a_shortcut`).
+  The key held over the drawing does what the held button does: the
+  pop-up shows while it is down and the view follows the pointer over
+  the thumbnail; it does nothing while a text field or text editing has
+  the keys or a dialog is open. The key can be changed or removed in
+  Options > Customization > Commands like any menu command's; a key of
+  the user's replaces N. The menu row itself opens the pop-up until a
+  click: passing over the thumbnail moves nothing, a press on it centres
+  the view there (and follows the pointer while held) and its release
+  closes the pop-up; a press anywhere else or Esc closes it. Check:
+  `ui::window_bars::tests::view_navigator_has_the_key_n`.
+
+## Progressive preview memory
+
+The desktop canvas assembles completed render bands directly into one
+output picture. Finished bands are released after their preview callback;
+they do not accumulate into another whole picture before assembly. The
+assembly lock is released before the callback, so a slow consumer does
+not hold up workers copying other bands. Cancellation discards the
+incomplete output and never returns it as a finished picture (#3883).
+
+This reduces temporary band storage; it does not cap image decoding,
+effect buffers, or the interface's queued texture uploads. The synthetic
+`progressive_memory::progressive_assembly_does_not_retain_a_second_picture`
+regression measures live allocations, checks the pixels, and exercises
+cancellation before rendering and from a preview callback. Run that test
+binary alone on at least two CPUs, preferably in a memory-limited
+container.
 
 ## Checks
 

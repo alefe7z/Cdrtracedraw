@@ -31,7 +31,19 @@ to it. Its buttons [[menu.layout.insert_page]], [[menu.layout.delete_page]] and
 
 ![The Insert Page dialog box](../../img/pages-layout-pages-insert-page.png)
 
-[[menu.layout.delete_page]] deletes pages.
+To bring in the pages of other drawings, choose File > Combine Files and
+pick one or more `.tdraw`, `.cdr` or `.cmx` files: their pages are added
+after the last page, with their names, sizes and objects. File > Save Pages
+as Files does the opposite: each page is saved as a drawing of its own,
+named after the file name you give with the page number.
+
+## Deleting pages {#delete-page}
+
+[[menu.layout.delete_page]] asks which pages to delete: the page number in
+[[dialog.delete_page_from]] (the current page to start with), and to delete a
+range, [[dialog.delete_through]] with the last page of it. All of them go in
+one step, which [[menu.edit.undo]] brings back. A drawing keeps at least one
+page. [[page_tab.delete]] on a page tab's menu deletes that page at once.
 
 ## Duplicating a page {#duplicate-page}
 
@@ -71,8 +83,16 @@ box:
 
 [[menu.layout.switch_orientation]] turns the page between portrait and
 landscape. With nothing selected, the property bar of the [[tool.pick]] tool
-also sets the page size and orientation. The full page settings are in
+also sets the page size and orientation. Its page size list has A4, Letter,
+A5, A3 and Legal first, then the sizes you saved, then about 130 sizes in
+groups (ISO A, ISO B and JIS B, North American, print shop, posters and
+banners, envelopes, cards and postcards, photo, screen and social media, web
+ads). **Custom...** opens the Page Size dialog box, and **Edit This List...**
+opens the document options at the page size, where you can save a size under
+a name. The full page settings are in
 [Document options](document-options.md#page-size).
+
+Pages you add, and their first layer, are named in the interface language.
 
 ## Page numbers {#page-numbers}
 

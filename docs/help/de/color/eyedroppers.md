@@ -8,6 +8,10 @@ Werkzeug zu Anwenden; klicken Sie auf die Schaltfläche Auswählen, um erneut
 eine Probe zu nehmen. <kbd>Esc</kbd> verwirft die Probe und kehrt zum Werkzeug
 [[tool.pick]] zurück.
 
+Der Zeiger ist eine Pipette, während das Werkzeug eine Probe nimmt, und ein
+Farbeimer, während es anwendet. Bilder geben ihre Farbe auch in einer Gruppe
+oder einem Rahmen.
+
 ## Farbpipette {#color-eyedropper}
 
 1. Wählen Sie das Werkzeug [[tool.color_eyedropper]].
@@ -22,6 +26,12 @@ eine Probe zu nehmen. <kbd>Esc</kbd> verwirft die Probe und kehrt zum Werkzeug
    einen dünnen). Ein Klick in eine leere geschlossene Form füllt sie.
 
 Die Eigenschaftsleiste zeigt die aufgenommene Farbe.
+
+Während Sie den Zeiger bewegen, um eine Farbe aufzunehmen, zeigt ein kleines
+Feld daneben die Farbe darunter: ein Farbfeld, den Namen der Farbe, wenn sie
+eine Palettenfarbe oder eine Schmuckfarbe ist, ihre Werte im Farbmodus der
+Zeichnung (CMYK oder RGB) und ihren Hex-Wert. Die Pipette einer Farbauswahl
+zeigt dasselbe Feld.
 
 ## Attributpipette {#attributes-eyedropper}
 
